@@ -1,0 +1,104 @@
+name: Go
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    # The source and sink suite covers hardlinks and xattrs, where linux and
+    # darwin differ, so both run it.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      # The pattern spans all three workspace modules, ./... stops at the root module.
+      # CGO off proves the binary needs no C toolchain, the sqlite driver is pure Go.
+      - name: Build
+        run: go build github.com/alexjoedt/ark/...
+        env:
+          CGO_ENABLED: "0"
+
+      - name: Vet
+        run: go vet github.com/alexjoedt/ark/...
+
+      # The sftp conformance run needs a real server. The authorized key has to
+      # exist before sshd starts, which a services: block cannot arrange, so the
+      # container runs as a step. Without ARK_SFTP_TEST_URI the run skips, which
+      # is what keeps the macOS leg and a laptop green.
+      - name: Start an sftp server
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/sftp"
+          mkdir -p "$dir/keys"
+          ssh-keygen -t ed25519 -N '' -f "$dir/id_ed25519" -q
+          cp "$dir/id_ed25519.pub" "$dir/keys/ark.pub"
+          docker run -d --name ark-sftp -p 2222:22 \
+            -v "$dir/keys:/home/ark/.ssh/keys:ro" \
+            atmoz/sftp:alpine ark::1001:1001:repo
+          for _ in $(seq 30); do
+            ssh-keyscan -p 2222 -H 127.0.0.1 > "$dir/known_hosts" 2>/dev/null || true
+            if [ -s "$dir/known_hosts" ]; then break; fi
+            sleep 1
+          done
+          if [ ! -s "$dir/known_hosts" ]; then
+            docker logs ark-sftp
+            echo "sftp server did not come up" >&2
+            exit 1
+          fi
+          echo "ARK_SFTP_TEST_URI=sftp://ark@127.0.0.1:2222/repo?identity=$dir/id_ed25519&known_hosts=$dir/known_hosts" >> "$GITHUB_ENV"
+
+      # The arkdocker tests run against the runner's daemon and skip where
+      # there is none, which keeps the macOS leg green. Pulling the helper
+      # image up front keeps the first test from paying for it.
+      - name: Pull the arkdocker helper image
+        if: matrix.os == 'ubuntu-latest'
+        run: docker pull busybox:stable
+
+      - name: Test
+        run: go test github.com/alexjoedt/ark/...
+
+      # The exit codes the CLI promises, driven through the binary.
+      - name: Exit code contract
+        if: matrix.os == 'ubuntu-latest'
+        run: sh cmd/ark/test/exitcodes.sh
+
+      # The binary still serves the web UI. The UI is rebuilt from source first so the
+      # embedded build matches the tree, not the last committed one.
+      - name: Set up Node
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: cmd/ark/web/package-lock.json
+
+      - name: Build the UI
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -eu
+          npm ci --prefix cmd/ark/web
+          npm run build --prefix cmd/ark/web
+          static=cmd/ark/internal/ui/server/static
+          rm -rf "$static"/*
+          cp -r cmd/ark/web/dist/. "$static"/
+          echo ".gitkeep" > "$static/.gitkeep"
+
+      - name: Serve smoke test
+        if: matrix.os == 'ubuntu-latest'
+        run: sh cmd/ark/test/serve-smoke.sh
+
+      - name: Verify modules
+        run: go mod verify

@@ -1,0 +1,12 @@
+scheme: semver
+prefix: v
+default_branch: main
+
+# Node.js integration - automatically sync version to package.json
+nodejs:
+    enabled: true
+    # Optional: specify custom path to package.json
+    # Leave empty to use ./package.json in repo root
+    package_path: "./cmd/ark/web/package.json"
+    # For monorepos, you might use:
+    # package_path: "frontend/package.json"

@@ -1,0 +1,62 @@
+# .github/workflows/release.yml
+name: release
+
+on:
+  push:
+    # root tags only, arkdocker/v* and cmd/ark/v* do not match
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency: release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      # main may only be ahead of the tag by the bump commits of an earlier,
+      # failed run of this workflow; anything else means the tag is stale.
+      - name: Check the tag is the tip of main
+        run: |
+          extra=$(git log --format=%s "$GITHUB_REF_NAME..HEAD" | grep -Ev '^chore\((arkdocker|cmd/ark|examples)\): require ' || true)
+          if ! git merge-base --is-ancestor "$GITHUB_REF_NAME" HEAD || [ -n "$extra" ]; then
+            echo "::error::$GITHUB_REF_NAME is not the tip of main, delete it and tag the tip"
+            exit 1
+          fi
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Tag arkdocker and cmd/ark
+        run: scripts/release.sh --push "${GITHUB_REF_NAME#v}"
+      # Tags pushed with GITHUB_TOKEN start no workflow, so the build runs here,
+      # from the cmd/ark tag. goreleaser OSS cannot strip the cmd/ark/ prefix and
+      # releases under the root tag instead; validate would reject it, it does
+      # not point at HEAD.
+      - name: Check out the cmd/ark tag
+        run: git checkout "cmd/ark/$GITHUB_REF_NAME"
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          workdir: cmd/ark
+          args: release --clean --skip=validate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}

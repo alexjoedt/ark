@@ -1,0 +1,62 @@
+version: 2
+
+# Runs inside cmd/ark. The module tag cmd/ark/vX.Y.Z is not semver, so a release
+# sets GORELEASER_CURRENT_TAG=vX.Y.Z (the root tag of the same release) and skips
+# validate; see the release tasks in Taskfile.yml and .github/workflows/release.yml.
+project_name: ark
+
+git:
+  # Previous tag and snapshot version come from root tags only.
+  ignore_tags:
+    - "*/*"
+
+before:
+  hooks:
+    - npm ci --prefix web
+    - npm run build --prefix web
+    - sh -c "rm -rf internal/ui/server/static/* && cp -r web/dist/. internal/ui/server/static/ && echo .gitkeep > internal/ui/server/static/.gitkeep"
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+      # Build from the tagged requires like go install does, the workspace may
+      # still point examples at an older release.
+      - GOWORK=off
+    main: .
+    binary: ark
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/alexjoedt/ark/cmd/ark/internal/version.ArkVersion={{.Version}}
+      - -X github.com/alexjoedt/ark/cmd/ark/internal/version.BuildDate={{.Date}}
+      - -X github.com/alexjoedt/ark/cmd/ark/internal/version.CommitHash={{.FullCommit}}
+    goos:
+      - linux
+      - darwin
+
+archives:
+  - formats: [tar.gz]
+    # this name template makes the OS and Arch compatible with the results of `uname`.
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  prerelease: auto
+  footer: >-
+
+    ---
+
+    Released by [GoReleaser](https://github.com/goreleaser/goreleaser).

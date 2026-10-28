@@ -1,0 +1,112 @@
+version: '3'
+
+vars:
+  ARK_VERSION:
+    sh: ./scripts/get-version.sh
+  BUILD_DATE:
+    sh: date -u +"%Y-%m-%dT%H:%M:%SZ"
+  COMMIT_HASH:
+    sh: git rev-parse --short=7 HEAD 2>/dev/null || echo "unknown"
+  LDFLAGS: >-
+    -X github.com/alexjoedt/ark/cmd/ark/internal/version.ArkVersion={{.ARK_VERSION}}
+    -X github.com/alexjoedt/ark/cmd/ark/internal/version.BuildDate={{.BUILD_DATE}}
+    -X github.com/alexjoedt/ark/cmd/ark/internal/version.CommitHash={{.COMMIT_HASH}}
+  # Spans all workspace modules, ./... stops at the root module.
+  PKGS: github.com/alexjoedt/ark/...
+  WEB: cmd/ark/web
+  STATIC: cmd/ark/internal/ui/server/static
+
+tasks:
+  tidy:
+    desc: Format and tidy every module in the workspace
+    cmds:
+      - go fmt {{.PKGS}}
+      - go mod tidy
+      - cd arkdocker && go mod tidy
+      - cd cmd/ark && go mod tidy
+      - cd examples && go mod tidy
+      - go work sync
+
+  vet:
+    desc: Vet every module in the workspace
+    cmds:
+      - go vet {{.PKGS}}
+
+  lint:
+    desc: Run golangci-lint in each tagged module
+    cmds:
+      - golangci-lint run
+      - cd arkdocker && golangci-lint run
+      - cd cmd/ark && golangci-lint run
+
+  test:
+    desc: Test every module in the workspace, then verify the module cache
+    cmds:
+      - go test --cover {{.PKGS}}
+      - go mod verify
+
+  bench:
+    desc: Chunker, object codec, backup and restore benchmarks; compare runs with benchstat
+    cmds:
+      - go test -run '^$' -bench . -benchmem -count {{.COUNT | default 1}} github.com/alexjoedt/ark github.com/alexjoedt/ark/chunker
+
+  build:
+    desc: Build the web UI, then bin/ark
+    cmds:
+      - task: build-ui
+      - go mod verify
+      - go build -ldflags "{{.LDFLAGS}}" -o bin/ark ./cmd/ark
+
+  install:
+    desc: Build and copy bin/ark to ~/.local/bin
+    cmds:
+      - task: build
+      - mkdir -p $HOME/.local/bin
+      - cp ./bin/ark $HOME/.local/bin/ark
+
+  npm-install:
+    desc: Install frontend dependencies (skipped when package-lock.json is unchanged)
+    sources:
+      - '{{.WEB}}/package-lock.json'
+    generates:
+      - '{{.WEB}}/node_modules/.package-lock.json'
+    cmds:
+      - npm ci --prefix {{.WEB}}
+
+  build-ui:
+    desc: Build the React frontend and copy output into the Go embed directory (skipped when sources are unchanged)
+    deps: [npm-install]
+    sources:
+      - '{{.WEB}}/src/**/*'
+      - '{{.WEB}}/public/**/*'
+      - '{{.WEB}}/index.html'
+      - '{{.WEB}}/vite.config.ts'
+      - '{{.WEB}}/tsconfig*.json'
+      - '{{.WEB}}/components.json'
+    generates:
+      - '{{.STATIC}}/index.html'
+    cmds:
+      - npm run build --prefix {{.WEB}}
+      - rm -rf ./{{.STATIC}}/*
+      - cp -r {{.WEB}}/dist/. ./{{.STATIC}}/
+      - echo ".gitkeep" > ./{{.STATIC}}/.gitkeep
+
+  release-snapshot:
+    desc: Build the release archives with goreleaser, nothing is published
+    dir: cmd/ark
+    cmds:
+      - goreleaser release --snapshot --clean
+
+  release-publish:
+    desc: Publish the archives for the cmd/ark tag at HEAD (needs GITHUB_TOKEN)
+    dir: cmd/ark
+    cmds:
+      - |
+        test -z "$(git status --porcelain)" || { echo "working tree is dirty" >&2; exit 1; }
+        tag=$(git describe --exact-match --tags --match 'cmd/ark/v*' HEAD)
+        GORELEASER_CURRENT_TAG="v${tag#cmd/ark/v}" goreleaser release --clean --skip=validate
+
+  clean:
+    desc: Remove bin/, the committed web UI build stays
+    cmds:
+      - rm -rf bin
