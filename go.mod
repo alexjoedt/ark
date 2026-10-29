@@ -1,12 +1,12 @@
 module github.com/alexjoedt/ark
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/kevinburke/ssh_config v1.6.0
 	github.com/klauspost/compress v1.18.7
 	github.com/pkg/sftp v1.13.7
-	golang.org/x/crypto v0.53.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/sys v0.47.0
 )
 
