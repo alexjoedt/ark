@@ -1,6 +1,6 @@
 module github.com/alexjoedt/ark/cmd/ark
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/alexedwards/scs/v2 v2.9.0
@@ -14,8 +14,8 @@ require (
 	github.com/moby/moby/client v0.6.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/urfave/cli/v3 v3.6.1
-	golang.org/x/crypto v0.53.0
-	golang.org/x/term v0.44.0
+	golang.org/x/crypto v0.56.0
+	golang.org/x/term v0.45.0
 	golang.org/x/time v0.15.0
 	modernc.org/sqlite v1.58.0
 )
