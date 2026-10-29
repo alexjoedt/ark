@@ -7,7 +7,7 @@ require (
 	github.com/alexjoedt/ark v1.0.0
 	github.com/alexjoedt/ark/arkdocker v1.0.0
 	github.com/alexjoedt/log v1.1.0
-	github.com/go-chi/chi/v5 v5.2.3
+	github.com/go-chi/chi/v5 v5.4.0
 	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
