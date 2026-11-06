@@ -21,7 +21,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       # The pattern spans all three workspace modules, ./... stops at the root module.
       # CGO off proves the binary needs no C toolchain, the sqlite driver is pure Go.
