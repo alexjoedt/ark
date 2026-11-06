@@ -193,6 +193,7 @@ func TestRejectsUnknownTypeAndEscapingNames(t *testing.T) {
 
 // recordSyncs swaps syncFile for one that records each synced path relative
 // to base, with temp files reported as "tmp", and returns err for directories.
+// Ancestors above the parent of base depend on t.TempDir and are left out.
 func recordSyncs(t *testing.T, base string, dirErr error) *[]string {
 	t.Helper()
 	var got []string
@@ -204,7 +205,9 @@ func recordSyncs(t *testing.T, base string, dirErr error) *[]string {
 			got = append(got, "tmp")
 			return nil
 		}
-		got = append(got, filepath.ToSlash(rel))
+		if rel = filepath.ToSlash(rel); !strings.HasPrefix(rel, "../") {
+			got = append(got, rel)
+		}
 		return dirErr
 	}
 	return &got
@@ -222,12 +225,18 @@ func TestPutAndDeleteSync(t *testing.T) {
 		want []string
 	}{
 		{"first Put", func() error { return b.Put(ctx, h, strings.NewReader("x")) },
-			[]string{"chunks/ab", "chunks", ".", "tmp", "chunks/ab/cd"}},
+			[]string{"chunks/ab", "chunks", ".", "..", "tmp", "chunks/ab/cd"}},
 		{"Put into known dir", func() error { return b.Put(ctx, h, strings.NewReader("x")) },
 			[]string{"tmp", "chunks/ab/cd"}},
 		{"Put into new sibling shard", func() error {
 			return b.Put(ctx, ark.Handle{Type: ark.BlobFile, Name: "abff0123"}, strings.NewReader("x"))
 		}, []string{"chunks/ab", "tmp", "chunks/ab/ff"}},
+		{"Put after its shard dir was removed", func() error {
+			if err := os.RemoveAll(filepath.Join(b.BasePath(), "chunks", "ab")); err != nil {
+				return err
+			}
+			return b.Put(ctx, h, strings.NewReader("x"))
+		}, []string{"chunks/ab", "chunks", ".", "..", "tmp", "chunks/ab/cd"}},
 		{"Delete", func() error { return b.Delete(ctx, h) }, []string{"chunks/ab/cd"}},
 		{"Delete missing", func() error { return b.Delete(ctx, h) }, []string{"chunks/ab/cd"}},
 		{"Delete in missing namespace", func() error {

@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -22,6 +23,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/alexjoedt/ark"
@@ -85,8 +87,12 @@ type Backend struct {
 	// posix-rename@openssh.com. See [Backend.rename].
 	posixRename bool
 	// fsync records whether the server announced fsync@openssh.com, which
-	// Put needs to flush a temp file before renaming it into place.
+	// Put needs to flush a temp file before renaming it into place and
+	// Put and Delete need to flush the directories they change.
 	fsync bool
+	// durable holds directories whose entries up to the root this process
+	// has fsynced, so Put pays the parent syncs once per directory.
+	durable sync.Map
 }
 
 // New connects to the SFTP server described by cfg and returns a ready Backend.
@@ -155,8 +161,8 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 	}
 
 	dir := path.Dir(p)
-	if err := b.client.MkdirAll(dir); err != nil {
-		return fmt.Errorf("arksftp: mkdirall %s: %w", dir, err)
+	if err := b.mkdirDurable(dir); err != nil {
+		return err
 	}
 
 	f, tmp, err := b.createTemp(dir)
@@ -171,8 +177,9 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 	if _, err := io.Copy(f, r); err != nil {
 		return fmt.Errorf("arksftp: write %s: %w", tmp, err)
 	}
-	// Without fsync@openssh.com there is no way to flush; the rename then
-	// only survives a process crash, not a power loss on the server.
+	// Without fsync@openssh.com there is no way to flush the file or the
+	// directories; the object then only survives a process crash, not a power
+	// loss on the server.
 	if b.fsync {
 		if err := syncFile(f); err != nil {
 			return fmt.Errorf("arksftp: sync %s: %w", tmp, err)
@@ -185,6 +192,59 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 		return fmt.Errorf("arksftp: rename %s: %w", p, err)
 	}
 
+	return b.syncDir(dir)
+}
+
+// mkdirDurable creates dir and, with fsync@openssh.com, fsyncs the parent of
+// every directory from dir up to the root once per process, so a server power
+// loss cannot drop a directory that a renamed object lives in.
+func (b *Backend) mkdirDurable(dir string) error {
+	if _, ok := b.durable.Load(dir); ok {
+		if _, err := b.client.Stat(dir); err == nil {
+			return nil
+		}
+		b.durable.Clear() // removed behind our back; its parents may be gone too
+	}
+	if err := b.client.MkdirAll(dir); err != nil {
+		return fmt.Errorf("arksftp: mkdirall %s: %w", dir, err)
+	}
+	if !b.fsync {
+		return nil
+	}
+	var synced []string
+	for d := dir; d != path.Dir(d); d = path.Dir(d) {
+		if _, ok := b.durable.Load(d); ok {
+			break
+		}
+		if err := b.syncDir(path.Dir(d)); err != nil {
+			return err
+		}
+		synced = append(synced, d)
+	}
+	for _, d := range synced {
+		b.durable.Store(d, struct{}{})
+	}
+	return nil
+}
+
+// syncDir fsyncs dir on the server so a rename, create or remove inside it
+// survives a server power loss. It is a no-op without fsync@openssh.com. A
+// server that will not open or flush a directory, or an ancestor the user may
+// not read, answers with a status; that counts as unsupported, not as a
+// failure. Transport errors still fail.
+func (b *Backend) syncDir(dir string) error {
+	if !b.fsync {
+		return nil
+	}
+	d, err := b.client.Open(dir)
+	if err == nil {
+		err = syncFile(d)
+		_ = d.Close()
+	}
+	var status *sftp.StatusError
+	if err != nil && !errors.As(err, &status) && !errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("arksftp: sync dir %s: %w", dir, err)
+	}
 	return nil
 }
 
@@ -285,7 +345,12 @@ func (b *Backend) Delete(ctx context.Context, h ark.Handle) error {
 	if err := b.client.Remove(p); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("arksftp: remove %s: %w", h.Name, err)
 	}
-
+	// Sync even when the object was already gone: an earlier Delete may have
+	// died between its remove and its sync. Forget relies on a removed
+	// snapshot staying removed before prune deletes its chunks.
+	if err := b.syncDir(path.Dir(p)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	return nil
 }
 

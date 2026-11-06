@@ -32,7 +32,7 @@ var syncFile = (*os.File).Sync
 // Backend implements ark.Backend backed by a directory tree.
 type Backend struct {
 	basePath string
-	// durable holds directories whose entries up to basePath this process
+	// durable holds directories whose entries up to the root this process
 	// has fsynced, so Put pays the parent syncs once per directory.
 	durable sync.Map
 }
@@ -117,20 +117,23 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 	return syncDir(dir)
 }
 
-// mkdirDurable creates dir and fsyncs the parent of every directory between
-// dir and basePath, so a power loss cannot drop a directory that a renamed
-// object lives in. A directory that already existed may have been created by
-// a process that died before its sync, so it gets the same treatment.
+// mkdirDurable creates dir and fsyncs the parent of every directory from dir
+// up to the filesystem root, so a power loss cannot drop a directory that a
+// renamed object lives in, the backend root included. A directory that already
+// existed may have been created by a process that died before its sync, so it
+// gets the same treatment. The walk runs once per directory and process.
 func (b *Backend) mkdirDurable(dir string) error {
 	if _, ok := b.durable.Load(dir); ok {
-		return nil
+		if _, err := os.Stat(dir); err == nil {
+			return nil
+		}
+		b.durable.Clear() // removed behind our back; its parents may be gone too
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("arklocal: mkdir %s: %w", dir, err)
 	}
-	base := filepath.Clean(b.basePath)
 	var synced []string
-	for d := dir; d != base && d != filepath.Dir(d); d = filepath.Dir(d) {
+	for d := dir; d != filepath.Dir(d); d = filepath.Dir(d) {
 		if _, ok := b.durable.Load(d); ok {
 			break
 		}
@@ -147,9 +150,13 @@ func (b *Backend) mkdirDurable(dir string) error {
 
 // syncDir fsyncs dir so a rename, create or remove inside it is durable.
 // Filesystems that cannot sync a directory (vfat, cifs) answer EINVAL or
-// ENOTSUP; that is treated as unsupported, not as a failure.
+// ENOTSUP, and an ancestor of the backend root may not be readable; both are
+// treated as unsupported, not as a failure.
 func syncDir(dir string) error {
 	d, err := os.Open(dir)
+	if errors.Is(err, fs.ErrPermission) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("arklocal: open dir %s: %w", dir, err)
 	}
