@@ -67,8 +67,13 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: docker pull busybox:stable
 
+      # The kill harness runs in this step too: ARK_KILL_RUNS fixes its count,
+      # the ubuntu leg adds the arksftp variant through ARK_SFTP_TEST_URI (about
+      # 8 s per run). A failure names its seed, rerun with ARK_KILL_SEED.
       - name: Test
         run: go test github.com/alexjoedt/ark/...
+        env:
+          ARK_KILL_RUNS: "10"
 
       # The exit codes the CLI promises, driven through the binary.
       - name: Exit code contract
