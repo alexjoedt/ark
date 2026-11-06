@@ -60,7 +60,7 @@ func TestKillHarness(t *testing.T) {
 	if testing.Short() {
 		t.Skip("kill harness spawns processes")
 	}
-	runKillHarness(t, newKillRepo)
+	runKillHarness(t, newKillRepo, 0)
 }
 
 // TestKillHarnessSFTP is the same run against the sftp server named by
@@ -69,25 +69,51 @@ func TestKillHarnessSFTP(t *testing.T) {
 	if testing.Short() {
 		t.Skip("kill harness spawns processes")
 	}
-	base := os.Getenv("ARK_SFTP_TEST_URI")
-	if base == "" {
+	env := os.Getenv("ARK_SFTP_TEST_URI")
+	if env == "" {
 		t.Skip("ARK_SFTP_TEST_URI is not set, skipping the sftp kill harness")
 	}
+	base, err := url.Parse(env)
+	if err != nil {
+		t.Fatalf("parse ARK_SFTP_TEST_URI: %v", err)
+	}
 	var n int
-	runKillHarness(t, func(ctx context.Context, t *testing.T) (string, ark.Backend) {
+	runKillHarness(t, func(ctx context.Context, t *testing.T) (string, ark.Backend, func() error) {
 		t.Helper()
-		u, err := url.Parse(base)
-		if err != nil {
-			t.Fatalf("parse ARK_SFTP_TEST_URI: %v", err)
-		}
 		n++
-		u.Path = path.Join(u.Path, fmt.Sprintf("kill-%d-%d", time.Now().UnixNano(), n))
-		// ponytail: remote repositories are not removed, the test server is throwaway.
-		return openKillRepo(ctx, t, u.String())
-	})
+		u := *base
+		u.Path = path.Join(base.Path, fmt.Sprintf("kill-%d-%d", time.Now().UnixNano(), n))
+		ref, b := openKillRepo(ctx, t, u.String())
+		// ponytail: removal goes through the Backend, so empty directories and
+		// the temp files of killed Puts stay on the server.
+		return ref, b, func() error {
+			for h := range killListing(ctx, t, b) {
+				if err := b.Delete(ctx, h); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}, killSettleSFTP)
 }
 
-func runKillHarness(t *testing.T, newRepo func(context.Context, *testing.T) (string, ark.Backend)) {
+// killSettleSFTP is the pause between the listings that settleKill compares
+// after a kill over sftp: the server keeps applying the requests a killed
+// child had already sent.
+// ponytail: a stable listing only shows that renames and deletes stopped
+// landing; waiting for the child's session to end on the server would be exact.
+const killSettleSFTP = 200 * time.Millisecond
+
+// runKillHarness runs the harness against the repositories newRepo creates.
+// newRepo returns the reference the child opens, an open backend that the
+// harness closes, and a func that removes the repository once it passed.
+// A non-zero settle makes the harness wait after a kill until the repository
+// stops changing, see settleKill.
+func runKillHarness(
+	t *testing.T,
+	newRepo func(context.Context, *testing.T) (string, ark.Backend, func() error),
+	settle time.Duration,
+) {
 	t.Helper()
 	runs := killEnvInt(t, "ARK_KILL_RUNS", 5)
 	seed := uint64(time.Now().UnixNano())
@@ -118,17 +144,41 @@ func runKillHarness(t *testing.T, newRepo func(context.Context, *testing.T) (str
 	}
 	ceil := map[string]time.Duration{} // kill delay ceiling per op
 	runsOf, kills := map[string]int{}, map[string]int{}
+	// raw is the open backend of the current repository, b wraps it for
+	// ark.Open. A failed run keeps its repository.
 	var repoDir string
-	var b ark.Backend
+	var raw, b ark.Backend
+	var remove func() error
+	t.Cleanup(func() {
+		if raw == nil {
+			return
+		}
+		if t.Failed() {
+			t.Logf("repository kept at %s", repoDir)
+		}
+		_ = raw.Close()
+	})
+	retire := func(point string) {
+		st.fullPass(ctx, t, b, point)
+		if err := remove(); err != nil {
+			t.Fatalf("remove %s: %v", repoDir, err)
+		}
+		err := raw.Close()
+		raw = nil
+		if err != nil {
+			t.Fatalf("close %s: %v", repoDir, err)
+		}
+	}
 
 	for i := range runs {
 		// ponytail: Check verifies every snapshot, so a fresh repository every
 		// killRepoSpan runs keeps the harness linear in runs.
 		if i%killRepoSpan == 0 {
-			if b != nil {
-				st.fullPass(ctx, t, b, fmt.Sprintf("seed %d before iteration %d, full pass", seed, i))
+			if raw != nil {
+				retire(fmt.Sprintf("seed %d before iteration %d, full pass", seed, i))
 			}
-			repoDir, b = newRepo(ctx, t)
+			repoDir, raw, remove = newRepo(ctx, t)
+			b = keepOpen{raw}
 			clear(st.must)
 		}
 		// Every iteration draws the same values from rng whatever the op and
@@ -191,6 +241,9 @@ func runKillHarness(t *testing.T, newRepo func(context.Context, *testing.T) (str
 				}
 			}
 		}
+		if killed && settle > 0 {
+			settleKill(ctx, t, b, settle)
+		}
 		st.check(ctx, t, b, point)
 		switch {
 		case op == "forget" && killed:
@@ -210,7 +263,37 @@ func runKillHarness(t *testing.T, newRepo func(context.Context, *testing.T) (str
 	for _, op := range slices.Compact(slices.Sorted(slices.Values(killOps))) {
 		t.Logf("%s: %d runs, %d killed before finishing", op, runsOf[op], kills[op])
 	}
-	st.fullPass(ctx, t, b, fmt.Sprintf("seed %d final full pass", seed))
+	retire(fmt.Sprintf("seed %d final full pass", seed))
+}
+
+// settleKill returns once two listings of b quiet apart agree. A listing over
+// sftp takes seconds, which is itself time for the server to drain.
+func settleKill(ctx context.Context, t *testing.T, b ark.Backend, quiet time.Duration) {
+	t.Helper()
+	for prev := killListing(ctx, t, b); ; {
+		time.Sleep(quiet)
+		cur := killListing(ctx, t, b)
+		if maps.Equal(prev, cur) {
+			return
+		}
+		prev = cur
+	}
+}
+
+// killListing maps every object of b to its size.
+func killListing(ctx context.Context, t *testing.T, b ark.Backend) map[ark.Handle]int64 {
+	t.Helper()
+	objs := map[ark.Handle]int64{}
+	for _, typ := range allHandleTypes {
+		err := b.List(ctx, typ, func(bi ark.BlobInfo) error {
+			objs[ark.Handle{Type: typ, Name: bi.Name}] = bi.Size
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("list %s: %v", typ, err)
+		}
+	}
+	return objs
 }
 
 // killRepoSpan is the number of runs that share one repository.
@@ -241,37 +324,30 @@ func (st *killState) forgetTargets(pick uint64) []string {
 	return targets
 }
 
-// newKillRepo initialises a repository in a directory that outlives a failed
-// test, so the broken state can be inspected.
-func newKillRepo(ctx context.Context, t *testing.T) (string, ark.Backend) {
+// newKillRepo initialises a repository in a temporary directory that is only
+// removed once the repository passed, so a broken state can be inspected.
+func newKillRepo(ctx context.Context, t *testing.T) (string, ark.Backend, func() error) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "ark-kill-")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
-	t.Cleanup(func() {
-		if t.Failed() {
-			t.Logf("repository kept at %s", dir)
-			return
-		}
-		_ = os.RemoveAll(dir)
-	})
-	return openKillRepo(ctx, t, dir)
+	ref, b := openKillRepo(ctx, t, dir)
+	return ref, b, func() error { return os.RemoveAll(dir) }
 }
 
 // openKillRepo opens and initialises the repository at ref, a directory or an
-// sftp URI.
+// sftp URI. The caller closes the backend.
 func openKillRepo(ctx context.Context, t *testing.T, ref string) (string, ark.Backend) {
 	t.Helper()
-	raw, err := arkuri.Open(ctx, ref)
+	b, err := arkuri.Open(ctx, ref)
 	if err != nil {
 		t.Fatalf("open %s: %v", ref, err)
 	}
-	t.Cleanup(func() { _ = raw.Close() })
-	b := keepOpen{raw}
 	cfg := chunker.Config{MinSize: 4 << 10, AvgSize: 8 << 10, MaxSize: scenarioMaxChunk}
 	if err := ark.Init(ctx, b, testPassword, ark.WithChunkerConfig(cfg)); err != nil {
-		t.Fatalf("Init: %v", err)
+		_ = b.Close()
+		t.Fatalf("Init %s: %v", ref, err)
 	}
 	return ref, b
 }
@@ -288,7 +364,6 @@ func TestKillHarnessChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open %s: %v", repoDir, err)
 	}
-	defer func() { _ = b.Close() }()
 	repo, err := ark.Open(ctx, b, testPassword)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
