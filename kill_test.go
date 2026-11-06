@@ -8,11 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,22 +25,30 @@ import (
 	"github.com/alexjoedt/ark/chunker"
 )
 
-// The kill harness backs up a changing tree into an arklocal repository in a
-// child process, the re-exec'd test binary, and SIGKILLs it after a random
-// delay. After every kill the repository must pass Check, every snapshot
-// must restore to the tree it was taken of, and a backup that finished must
-// have left its snapshot. Restores run once per snapshot and again in a full
-// pass before the repository is replaced; Check covers the rest in between.
+// The kill harness runs backup, forget and prune against an arklocal
+// repository in a child process, the re-exec'd test binary, and SIGKILLs it
+// after a random delay. Backups take a changing tree, forgets remove a few
+// snapshots by ID. After every kill the repository must pass Check, every
+// snapshot must restore to the tree it was taken of, a snapshot that was seen
+// once must stay until a forget names it, and a forget that finished must
+// have removed its targets. A killed prune is rerun and must leave Check
+// clean. Restores run once per snapshot and again in a full pass before the
+// repository is replaced; Check covers the rest in between.
 //
 //	ARK_KILL_RUNS  iterations, default 5
-//	ARK_KILL_SEED  seed of the tree changes and kill delays, printed on every run
+//	ARK_KILL_SEED  seed of the ops, tree changes and kill delays, printed on every run
 const (
+	killEnvOp   = "ARK_KILL_CHILD_OP"
 	killEnvRepo = "ARK_KILL_CHILD_REPO"
 	killEnvSrc  = "ARK_KILL_CHILD_SRC"
 	killEnvTag  = "ARK_KILL_CHILD_TAG"
+	killEnvIDs  = "ARK_KILL_CHILD_IDS"
 )
 
-func TestKillHarnessBackup(t *testing.T) {
+// killOps is drawn uniformly, so backup runs half of the iterations.
+var killOps = []string{"backup", "backup", "forget", "prune"}
+
+func TestKillHarness(t *testing.T) {
 	if testing.Short() {
 		t.Skip("kill harness spawns processes")
 	}
@@ -61,10 +72,15 @@ func TestKillHarnessBackup(t *testing.T) {
 	for i := range killTreeFiles {
 		writeKillFile(t, bytesSrc, src, i, rng.IntN(256<<10))
 	}
-	want := map[string]map[string]string{} // tag -> tree the snapshot was taken of
-	restored := map[string]bool{}          // snapshot ids already compared
-	var full time.Duration
-	kills := 0
+	st := &killState{
+		want:     map[string]map[string]string{},
+		restored: map[string]bool{},
+		must:     map[string]bool{},
+		gone:     map[string]bool{},
+		ids:      map[string]string{},
+	}
+	full := map[string]time.Duration{} // longest finished run per op
+	runsOf, kills := map[string]int{}, map[string]int{}
 	var repoDir string
 	var b ark.Backend
 
@@ -73,45 +89,108 @@ func TestKillHarnessBackup(t *testing.T) {
 		// killRepoSpan runs keeps the harness linear in runs.
 		if i%killRepoSpan == 0 {
 			if b != nil {
-				clear(restored)
-				checkKilledRepo(ctx, t, b, fmt.Sprintf("seed %d before iteration %d, full pass", seed, i),
-					want, restored, false, "")
+				st.fullPass(ctx, t, b, fmt.Sprintf("seed %d before iteration %d, full pass", seed, i))
 			}
 			repoDir, b = newKillRepo(ctx, t)
+			clear(st.must)
+			clear(st.ids)
 		}
+		// Every iteration draws the same values from rng whatever the op and
+		// whatever earlier kills left behind, so a seed replays the sequence.
 		mutateKillTree(t, rng, bytesSrc, src)
-		tag := fmt.Sprintf("kill-%d", i)
-		want[tag] = readTree(t, src)
+		op := killOps[rng.IntN(len(killOps))]
+		frac, pick := rng.Float64(), rng.Uint64()
 
-		// The first backup runs to the end; the longest finished one bounds the
-		// kill delays.
-		var delay time.Duration
-		if i > 0 {
-			delay = time.Duration(rng.Int64N(int64(full)))
+		var targets []string
+		if op == "forget" {
+			if targets = st.forgetTargets(pick); targets == nil {
+				op = "backup"
+			}
 		}
-		took, killed, out, err := runKillChild(repoDir, src, tag, delay)
-		point := fmt.Sprintf("seed %d iteration %d, exited after %v", seed, i, took)
+		tag := fmt.Sprintf("kill-%d", i)
+		env := []string{killEnvOp + "=" + op, killEnvRepo + "=" + repoDir}
+		switch op {
+		case "backup":
+			st.want[tag] = readTree(t, src)
+			env = append(env, killEnvSrc+"="+src, killEnvTag+"="+tag)
+		case "forget":
+			ids := make([]string, len(targets))
+			for j, tg := range targets {
+				ids[j] = st.ids[tg]
+			}
+			env = append(env, killEnvIDs+"="+strings.Join(ids, ","))
+		}
+
+		// The first run of each op goes to the end; the longest finished one
+		// bounds that op's kill delays.
+		delay := time.Duration(frac * float64(full[op]))
+		took, killed, out, err := runKillChild(env, delay)
+		runsOf[op]++
+		point := fmt.Sprintf("seed %d iteration %d, %s exited after %v", seed, i, op, took)
 		if killed {
-			kills++
-			point = fmt.Sprintf("seed %d iteration %d, killed after %v", seed, i, delay)
+			kills[op]++
+			point = fmt.Sprintf("seed %d iteration %d, %s killed after %v", seed, i, op, delay)
 		}
 		if err != nil {
 			t.Fatalf("%s: child: %v\n%s", point, err, out)
 		}
 		if !killed {
-			full = max(full, took)
+			full[op] = max(full[op], took)
 		}
-		checkKilledRepo(ctx, t, b, point, want, restored, !killed, tag)
+
+		switch op {
+		case "backup":
+			if !killed {
+				st.must[tag] = true
+			}
+		case "forget":
+			for _, tg := range targets {
+				delete(st.must, tg)
+				if !killed {
+					st.gone[tg] = true
+				}
+			}
+		}
+		st.check(ctx, t, b, point)
+		if op == "prune" && killed {
+			pruneKillRepo(ctx, t, b, point)
+			st.check(ctx, t, b, point+", after prune rerun")
+		}
 	}
 
-	t.Logf("%d of %d runs killed before the backup finished", kills, runs)
-
-	clear(restored)
-	checkKilledRepo(ctx, t, b, fmt.Sprintf("seed %d final full pass", seed), want, restored, false, "")
+	for _, op := range []string{"backup", "forget", "prune"} {
+		t.Logf("%s: %d runs, %d killed before finishing", op, runsOf[op], kills[op])
+	}
+	st.fullPass(ctx, t, b, fmt.Sprintf("seed %d final full pass", seed))
 }
 
 // killRepoSpan is the number of runs that share one repository.
 const killRepoSpan = 25
+
+// killState is what the parent expects of the repository.
+type killState struct {
+	want     map[string]map[string]string // tag -> tree the snapshot was taken of
+	restored map[string]bool              // snapshot ids already compared
+	must     map[string]bool              // tags that have to be present
+	gone     map[string]bool              // tags a finished forget removed
+	ids      map[string]string            // tag -> snapshot id
+}
+
+// forgetTargets picks one to three tags to forget, always leaving one
+// snapshot. It returns nil when fewer than two snapshots exist.
+func (st *killState) forgetTargets(pick uint64) []string {
+	tags := slices.Sorted(maps.Keys(st.must))
+	if len(tags) < 2 {
+		return nil
+	}
+	r := rand.New(rand.NewPCG(pick, pick))
+	n := 1 + r.IntN(min(3, len(tags)-1))
+	targets := make([]string, n)
+	for j, k := range r.Perm(len(tags))[:n] {
+		targets[j] = tags[k]
+	}
+	return targets
+}
 
 // newKillRepo initialises a repository in a directory that outlives a failed
 // test, so the broken state can be inspected.
@@ -139,12 +218,12 @@ func newKillRepo(ctx context.Context, t *testing.T) (string, ark.Backend) {
 	return dir, b
 }
 
-// TestKillHarnessChild is the child process of TestKillHarnessBackup: one
-// backup of the tree in killEnvSrc into killEnvRepo.
+// TestKillHarnessChild is the child process of TestKillHarness: one backup,
+// forget or prune, named by killEnvOp, against the repository in killEnvRepo.
 func TestKillHarnessChild(t *testing.T) {
 	repoDir := os.Getenv(killEnvRepo)
 	if repoDir == "" {
-		t.Skip("runs only as the child of TestKillHarnessBackup")
+		t.Skip("runs only as the child of TestKillHarness")
 	}
 	ctx := context.Background()
 	b, err := arklocal.New(repoDir)
@@ -156,28 +235,50 @@ func TestKillHarnessChild(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = repo.Close() }()
-	src, err := arkfs.NewSource(os.Getenv(killEnvSrc))
-	if err != nil {
-		t.Fatalf("NewSource: %v", err)
+
+	var run func() error
+	switch op := os.Getenv(killEnvOp); op {
+	case "backup":
+		src, err := arkfs.NewSource(os.Getenv(killEnvSrc))
+		if err != nil {
+			t.Fatalf("NewSource: %v", err)
+		}
+		run = func() error {
+			_, err := repo.Backup(ctx, src, ark.WithTags(os.Getenv(killEnvTag)))
+			return err
+		}
+	case "forget":
+		ids := strings.Split(os.Getenv(killEnvIDs), ",")
+		run = func() error {
+			_, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: ids})
+			return err
+		}
+	case "prune":
+		run = func() error {
+			_, err := repo.Prune(ctx)
+			return err
+		}
+	default:
+		t.Fatalf("unknown op %q", op)
 	}
+
 	// fd 3 is the pipe runKillChild waits on: the kill delay starts here.
 	ready := os.NewFile(3, "ready")
 	if _, err := ready.Write([]byte{1}); err != nil {
 		t.Fatalf("signal ready: %v", err)
 	}
 	_ = ready.Close()
-	if _, err := repo.Backup(ctx, src, ark.WithTags(os.Getenv(killEnvTag))); err != nil {
-		t.Fatalf("Backup: %v", err)
+	if err := run(); err != nil {
+		t.Fatalf("%s: %v", os.Getenv(killEnvOp), err)
 	}
 }
 
-// runKillChild backs up src in a child process and kills it delay after the
-// child reports it is about to call Backup; a zero delay lets it finish. took
-// is the time from that report to the exit. killed is false when the child
-// exited first, err is set when it exited unsuccessfully.
-func runKillChild(
-	repoDir, src, tag string, delay time.Duration,
-) (took time.Duration, killed bool, out []byte, err error) {
+// runKillChild runs one op in a child process with env added to its
+// environment and kills it delay after the child reports it is about to
+// start; a zero delay lets it finish. took is the time from that report to
+// the exit. killed is false when the child exited first, err is set when it
+// exited unsuccessfully.
+func runKillChild(env []string, delay time.Duration) (took time.Duration, killed bool, out []byte, err error) {
 	var buf bytes.Buffer
 	ready, w, err := os.Pipe()
 	if err != nil {
@@ -185,7 +286,7 @@ func runKillChild(
 	}
 	defer func() { _ = ready.Close() }()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestKillHarnessChild$")
-	cmd.Env = append(os.Environ(), killEnvRepo+"="+repoDir, killEnvSrc+"="+src, killEnvTag+"="+tag)
+	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	cmd.ExtraFiles = []*os.File{w}
 	err = cmd.Start()
@@ -198,7 +299,7 @@ func runKillChild(
 	var b [1]byte
 	if _, err := ready.Read(b[:]); err != nil {
 		err = cmd.Wait()
-		return 0, false, buf.Bytes(), fmt.Errorf("child exited before the backup started: %w", err)
+		return 0, false, buf.Bytes(), fmt.Errorf("child exited before the op started: %w", err)
 	}
 	start := time.Now()
 	done := make(chan error, 1)
@@ -220,12 +321,30 @@ func runKillChild(
 	}
 }
 
-// checkKilledRepo opens the repository the way a fresh process would, runs
-// Check and restores every snapshot not in restored. With mustExist, a
-// snapshot tagged tag has to be among them.
-func checkKilledRepo(ctx context.Context, t *testing.T, b ark.Backend, point string,
-	want map[string]map[string]string, restored map[string]bool, mustExist bool, tag string,
-) {
+// pruneKillRepo reruns prune after a killed one.
+func pruneKillRepo(ctx context.Context, t *testing.T, b ark.Backend, point string) {
+	t.Helper()
+	repo, err := ark.Open(ctx, b, testPassword)
+	if err != nil {
+		t.Fatalf("%s: Open: %v", point, err)
+	}
+	defer func() { _ = repo.Close() }()
+	if _, err := repo.Prune(ctx); err != nil {
+		t.Fatalf("%s: prune rerun: %v", point, err)
+	}
+}
+
+// fullPass restores every snapshot again.
+func (st *killState) fullPass(ctx context.Context, t *testing.T, b ark.Backend, point string) {
+	t.Helper()
+	clear(st.restored)
+	st.check(ctx, t, b, point)
+}
+
+// check opens the repository the way a fresh process would, runs Check and
+// restores every snapshot not restored yet. Every tag in must has to be
+// present, none in gone; every present tag joins must.
+func (st *killState) check(ctx context.Context, t *testing.T, b ark.Backend, point string) {
 	t.Helper()
 	repo, err := ark.Open(ctx, b, testPassword)
 	if err != nil {
@@ -245,13 +364,18 @@ func checkKilledRepo(ctx context.Context, t *testing.T, b ark.Backend, point str
 	if err != nil {
 		t.Fatalf("%s: Snapshots: %v", point, err)
 	}
-	found := false
+	found := map[string]bool{}
 	for _, s := range snaps {
-		if len(s.Tags) != 1 || want[s.Tags[0]] == nil {
+		if len(s.Tags) != 1 || st.want[s.Tags[0]] == nil {
 			t.Fatalf("%s: snapshot %s has unknown tags %v", point, s.ID, s.Tags)
 		}
-		found = found || s.Tags[0] == tag
-		if restored[s.ID] {
+		tag := s.Tags[0]
+		if st.gone[tag] {
+			t.Fatalf("%s: snapshot %s (%s) was forgotten but is back", point, s.ID, tag)
+		}
+		found[tag] = true
+		st.ids[tag] = s.ID
+		if st.restored[s.ID] {
 			continue
 		}
 		dst := t.TempDir()
@@ -260,16 +384,19 @@ func checkKilledRepo(ctx context.Context, t *testing.T, b ark.Backend, point str
 			t.Fatalf("NewSink: %v", err)
 		}
 		if _, err := repo.Restore(ctx, s.ID, sink); err != nil {
-			t.Fatalf("%s: Restore %s (%s): %v", point, s.ID, s.Tags[0], err)
+			t.Fatalf("%s: Restore %s (%s): %v", point, s.ID, tag, err)
 		}
-		if diff := diffTree(want[s.Tags[0]], readTree(t, dst)); diff != "" {
-			t.Fatalf("%s: snapshot %s (%s) restores a different tree: %s", point, s.ID, s.Tags[0], diff)
+		if diff := diffTree(st.want[tag], readTree(t, dst)); diff != "" {
+			t.Fatalf("%s: snapshot %s (%s) restores a different tree: %s", point, s.ID, tag, diff)
 		}
-		restored[s.ID] = true
+		st.restored[s.ID] = true
 	}
-	if mustExist && !found {
-		t.Fatalf("%s: the backup finished but left no snapshot tagged %s", point, tag)
+	for _, tag := range slices.Sorted(maps.Keys(st.must)) {
+		if !found[tag] {
+			t.Fatalf("%s: snapshot %s is missing", point, tag)
+		}
 	}
+	maps.Copy(st.must, found)
 }
 
 const killTreeFiles = 24
