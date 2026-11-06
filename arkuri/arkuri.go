@@ -87,12 +87,8 @@ func parse(s string) (string, *url.URL, error) {
 	return u.Scheme, u, nil
 }
 
-// hasScheme reports whether s is a URI rather than a path. A Windows drive
-// letter looks like a one-character scheme, so those stay paths.
-func hasScheme(s string) bool {
-	i := strings.Index(s, "://")
-	return i > 1
-}
+// hasScheme reports whether s is a URI rather than a path.
+func hasScheme(s string) bool { return strings.Contains(s, "://") }
 
 // localPath returns the directory a local location points at. Without a URI,
 // the whole string is the path.
