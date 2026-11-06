@@ -30,13 +30,18 @@ import (
 // after a random delay. Backups take a changing tree, forgets remove a few
 // snapshots by ID. After every kill the repository must pass Check, every
 // snapshot must restore to the tree it was taken of, a snapshot that was seen
-// once must stay until a forget names it, and a forget that finished must
-// have removed its targets. A killed prune is rerun and must leave Check
-// clean. Restores run once per snapshot and again in a full pass before the
+// once must stay until a forget names it, and a snapshot a forget removed,
+// finished or killed, must not come back. A killed prune is rerun in a fresh
+// child and must leave Check clean. Restores run once per snapshot and again in a full pass before the
 // repository is replaced; Check covers the rest in between.
 //
 //	ARK_KILL_RUNS  iterations, default 5
 //	ARK_KILL_SEED  seed of the ops, tree changes and kill delays, printed on every run
+//
+// A seed replays the drawn values, not the kills: whether a child dies before
+// it finishes depends on timing, and the forget targets and kill ceilings
+// depend on earlier kills. A rerun follows the failing run until the first
+// kill that lands differently; the repository of a failed run is kept.
 const (
 	killEnvOp   = "ARK_KILL_CHILD_OP"
 	killEnvRepo = "ARK_KILL_CHILD_REPO"
@@ -45,7 +50,8 @@ const (
 	killEnvIDs  = "ARK_KILL_CHILD_IDS"
 )
 
-// killOps is drawn uniformly, so backup runs half of the iterations.
+// killOps is drawn uniformly, so backup runs at least half of the iterations:
+// a forget with fewer than two snapshots to choose from runs as a backup.
 var killOps = []string{"backup", "backup", "forget", "prune"}
 
 func TestKillHarness(t *testing.T) {
@@ -79,7 +85,7 @@ func TestKillHarness(t *testing.T) {
 		gone:     map[string]bool{},
 		ids:      map[string]string{},
 	}
-	full := map[string]time.Duration{} // longest finished run per op
+	ceil := map[string]time.Duration{} // kill delay ceiling per op
 	runsOf, kills := map[string]int{}, map[string]int{}
 	var repoDir string
 	var b ark.Backend
@@ -93,10 +99,9 @@ func TestKillHarness(t *testing.T) {
 			}
 			repoDir, b = newKillRepo(ctx, t)
 			clear(st.must)
-			clear(st.ids)
 		}
 		// Every iteration draws the same values from rng whatever the op and
-		// whatever earlier kills left behind, so a seed replays the sequence.
+		// whatever earlier kills left behind.
 		mutateKillTree(t, rng, bytesSrc, src)
 		op := killOps[rng.IntN(len(killOps))]
 		frac, pick := rng.Float64(), rng.Uint64()
@@ -121,9 +126,11 @@ func TestKillHarness(t *testing.T) {
 			env = append(env, killEnvIDs+"="+strings.Join(ids, ","))
 		}
 
-		// The first run of each op goes to the end; the longest finished one
-		// bounds that op's kill delays.
-		delay := time.Duration(frac * float64(full[op]))
+		// The first run of each op goes to the end and sets its ceiling. A
+		// finished run resets the ceiling to its duration, a killed one raises
+		// it by half, so the delays keep reaching the end of an op whose work
+		// grows, like a prune that has more to delete than the first one had.
+		delay := time.Duration(frac * float64(ceil[op]))
 		took, killed, out, err := runKillChild(env, delay)
 		runsOf[op]++
 		point := fmt.Sprintf("seed %d iteration %d, %s exited after %v", seed, i, op, took)
@@ -134,8 +141,10 @@ func TestKillHarness(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: child: %v\n%s", point, err, out)
 		}
-		if !killed {
-			full[op] = max(full[op], took)
+		if killed {
+			ceil[op] += ceil[op] / 2
+		} else {
+			ceil[op] = took
 		}
 
 		switch op {
@@ -152,13 +161,22 @@ func TestKillHarness(t *testing.T) {
 			}
 		}
 		st.check(ctx, t, b, point)
-		if op == "prune" && killed {
-			pruneKillRepo(ctx, t, b, point)
+		switch {
+		case op == "forget" && killed:
+			for _, tg := range targets {
+				if !st.must[tg] {
+					st.gone[tg] = true
+				}
+			}
+		case op == "prune" && killed:
+			if _, _, out, err := runKillChild(env, 0); err != nil {
+				t.Fatalf("%s: prune rerun: %v\n%s", point, err, out)
+			}
 			st.check(ctx, t, b, point+", after prune rerun")
 		}
 	}
 
-	for _, op := range []string{"backup", "forget", "prune"} {
+	for _, op := range slices.Compact(slices.Sorted(slices.Values(killOps))) {
 		t.Logf("%s: %d runs, %d killed before finishing", op, runsOf[op], kills[op])
 	}
 	st.fullPass(ctx, t, b, fmt.Sprintf("seed %d final full pass", seed))
@@ -172,8 +190,8 @@ type killState struct {
 	want     map[string]map[string]string // tag -> tree the snapshot was taken of
 	restored map[string]bool              // snapshot ids already compared
 	must     map[string]bool              // tags that have to be present
-	gone     map[string]bool              // tags a finished forget removed
-	ids      map[string]string            // tag -> snapshot id
+	gone     map[string]bool              // tags a forget removed
+	ids      map[string]string            // tag -> snapshot id, as of the last check
 }
 
 // forgetTargets picks one to three tags to forget, always leaving one
@@ -321,19 +339,6 @@ func runKillChild(env []string, delay time.Duration) (took time.Duration, killed
 	}
 }
 
-// pruneKillRepo reruns prune after a killed one.
-func pruneKillRepo(ctx context.Context, t *testing.T, b ark.Backend, point string) {
-	t.Helper()
-	repo, err := ark.Open(ctx, b, testPassword)
-	if err != nil {
-		t.Fatalf("%s: Open: %v", point, err)
-	}
-	defer func() { _ = repo.Close() }()
-	if _, err := repo.Prune(ctx); err != nil {
-		t.Fatalf("%s: prune rerun: %v", point, err)
-	}
-}
-
 // fullPass restores every snapshot again.
 func (st *killState) fullPass(ctx context.Context, t *testing.T, b ark.Backend, point string) {
 	t.Helper()
@@ -365,6 +370,7 @@ func (st *killState) check(ctx context.Context, t *testing.T, b ark.Backend, poi
 		t.Fatalf("%s: Snapshots: %v", point, err)
 	}
 	found := map[string]bool{}
+	clear(st.ids)
 	for _, s := range snaps {
 		if len(s.Tags) != 1 || st.want[s.Tags[0]] == nil {
 			t.Fatalf("%s: snapshot %s has unknown tags %v", point, s.ID, s.Tags)
