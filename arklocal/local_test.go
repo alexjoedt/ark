@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"testing/iotest"
 
@@ -187,5 +188,98 @@ func TestRejectsUnknownTypeAndEscapingNames(t *testing.T) {
 		if err := b.Put(ctx, h, strings.NewReader("x")); err == nil {
 			t.Errorf("Put with name %q: want error, got nil", name)
 		}
+	}
+}
+
+// recordSyncs swaps syncFile for one that records each synced path relative
+// to base, with temp files reported as "tmp", and returns err for directories.
+func recordSyncs(t *testing.T, base string, dirErr error) *[]string {
+	t.Helper()
+	var got []string
+	orig := syncFile
+	t.Cleanup(func() { syncFile = orig })
+	syncFile = func(f *os.File) error {
+		rel, _ := filepath.Rel(base, f.Name())
+		if strings.HasPrefix(filepath.Base(rel), tmpPrefix) {
+			got = append(got, "tmp")
+			return nil
+		}
+		got = append(got, filepath.ToSlash(rel))
+		return dirErr
+	}
+	return &got
+}
+
+func TestPutAndDeleteSync(t *testing.T) {
+	ctx := context.Background()
+	b := newBackend(t)
+	got := recordSyncs(t, b.BasePath(), nil)
+	h := ark.Handle{Type: ark.BlobFile, Name: "abcdef0123456789"}
+
+	steps := []struct {
+		name string
+		run  func() error
+		want []string
+	}{
+		{"first Put", func() error { return b.Put(ctx, h, strings.NewReader("x")) },
+			[]string{"chunks/ab", "chunks", ".", "tmp", "chunks/ab/cd"}},
+		{"Put into known dir", func() error { return b.Put(ctx, h, strings.NewReader("x")) },
+			[]string{"tmp", "chunks/ab/cd"}},
+		{"Put into new sibling shard", func() error {
+			return b.Put(ctx, ark.Handle{Type: ark.BlobFile, Name: "abff0123"}, strings.NewReader("x"))
+		}, []string{"chunks/ab", "tmp", "chunks/ab/ff"}},
+		{"Delete", func() error { return b.Delete(ctx, h) }, []string{"chunks/ab/cd"}},
+		{"Delete missing", func() error { return b.Delete(ctx, h) }, []string{"chunks/ab/cd"}},
+		{"Delete in missing namespace", func() error {
+			return b.Delete(ctx, ark.Handle{Type: ark.TreeFile, Name: "t1"})
+		}, nil},
+	}
+	for _, s := range steps {
+		*got = nil
+		if err := s.run(); err != nil {
+			t.Fatalf("%s: %v", s.name, err)
+		}
+		if strings.Join(*got, " ") != strings.Join(s.want, " ") {
+			t.Errorf("%s synced %v, want %v", s.name, *got, s.want)
+		}
+	}
+}
+
+func TestDirSyncUnsupportedIsTolerated(t *testing.T) {
+	ctx := context.Background()
+	b := newBackend(t)
+	recordSyncs(t, b.BasePath(), syscall.EINVAL)
+	h := ark.Handle{Type: ark.SnapshotFile, Name: "s1"}
+
+	if err := b.Put(ctx, h, strings.NewReader("x")); err != nil {
+		t.Fatalf("Put with EINVAL dir sync: %v", err)
+	}
+	if err := b.Delete(ctx, h); err != nil {
+		t.Fatalf("Delete with EINVAL dir sync: %v", err)
+	}
+}
+
+func TestSyncFailureFailsPut(t *testing.T) {
+	ctx := context.Background()
+	b := newBackend(t)
+	recordSyncs(t, b.BasePath(), syscall.EIO)
+	h := ark.Handle{Type: ark.SnapshotFile, Name: "s1"}
+
+	if err := b.Put(ctx, h, strings.NewReader("x")); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("Put with EIO dir sync = %v, want EIO", err)
+	}
+
+	syncFile = func(f *os.File) error {
+		if strings.HasPrefix(filepath.Base(f.Name()), tmpPrefix) {
+			return syscall.EIO
+		}
+		return nil
+	}
+	err := b.Put(ctx, h, strings.NewReader("x"))
+	if !errors.Is(err, syscall.EIO) || !strings.Contains(err.Error(), "sync s1") {
+		t.Fatalf("Put with EIO file sync = %v, want EIO from the file sync", err)
+	}
+	if ok, _ := b.Exists(ctx, h); ok {
+		t.Error("object exists after a failed file sync")
 	}
 }

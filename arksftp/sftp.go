@@ -35,6 +35,9 @@ const tmpPrefix = ".ark-tmp-"
 // Compile-time check that *Backend satisfies ark.Backend.
 var _ ark.Backend = (*Backend)(nil)
 
+// syncFile flushes f on the server. Tests swap it to observe the calls.
+var syncFile = (*sftp.File).Sync
+
 // Config describes how to reach an SFTP server. Zero values fall back to the
 // documented defaults. It holds no secrets.
 type Config struct {
@@ -81,6 +84,9 @@ type Backend struct {
 	// posixRename records whether the server announced
 	// posix-rename@openssh.com. See [Backend.rename].
 	posixRename bool
+	// fsync records whether the server announced fsync@openssh.com, which
+	// Put needs to flush a temp file before renaming it into place.
+	fsync bool
 }
 
 // New connects to the SFTP server described by cfg and returns a ready Backend.
@@ -111,12 +117,14 @@ func New(cfg Config) (*Backend, error) {
 	}
 
 	_, posixRename := client.HasExtension("posix-rename@openssh.com")
+	_, fsync := client.HasExtension("fsync@openssh.com")
 
 	return &Backend{
 		client:      client,
 		conn:        conn,
 		basePath:    cfg.Path,
 		posixRename: posixRename,
+		fsync:       fsync,
 	}, nil
 }
 
@@ -162,6 +170,13 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 
 	if _, err := io.Copy(f, r); err != nil {
 		return fmt.Errorf("arksftp: write %s: %w", tmp, err)
+	}
+	// Without fsync@openssh.com there is no way to flush; the rename then
+	// only survives a process crash, not a power loss on the server.
+	if b.fsync {
+		if err := syncFile(f); err != nil {
+			return fmt.Errorf("arksftp: sync %s: %w", tmp, err)
+		}
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("arksftp: close %s: %w", tmp, err)

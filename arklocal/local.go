@@ -14,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 
 	"github.com/alexjoedt/ark"
 )
@@ -24,9 +26,15 @@ const tmpPrefix = ".ark-tmp-"
 // Compile-time check that *Backend satisfies ark.Backend.
 var _ ark.Backend = (*Backend)(nil)
 
+// syncFile flushes f to stable storage. Tests swap it to observe the calls.
+var syncFile = (*os.File).Sync
+
 // Backend implements ark.Backend backed by a directory tree.
 type Backend struct {
 	basePath string
+	// durable holds directories whose entries up to basePath this process
+	// has fsynced, so Put pays the parent syncs once per directory.
+	durable sync.Map
 }
 
 // New creates or opens a local backend rooted at dir.
@@ -78,8 +86,8 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 		return err
 	}
 	dir := filepath.Dir(p)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("arklocal: mkdir %s: %w", dir, err)
+	if err := b.mkdirDurable(dir); err != nil {
+		return err
 	}
 
 	f, err := os.CreateTemp(dir, tmpPrefix+"*")
@@ -95,6 +103,9 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 	if _, err := io.Copy(f, r); err != nil {
 		return fmt.Errorf("arklocal: write %s: %w", h.Name, err)
 	}
+	if err := syncFile(f); err != nil {
+		return fmt.Errorf("arklocal: sync %s: %w", h.Name, err)
+	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("arklocal: close %s: %w", h.Name, err)
 	}
@@ -102,6 +113,50 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 	// unix permissions (cifs, vfat) reject the call.
 	if err := os.Rename(tmp, p); err != nil {
 		return fmt.Errorf("arklocal: rename %s: %w", h.Name, err)
+	}
+	return syncDir(dir)
+}
+
+// mkdirDurable creates dir and fsyncs the parent of every directory between
+// dir and basePath, so a power loss cannot drop a directory that a renamed
+// object lives in. A directory that already existed may have been created by
+// a process that died before its sync, so it gets the same treatment.
+func (b *Backend) mkdirDurable(dir string) error {
+	if _, ok := b.durable.Load(dir); ok {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("arklocal: mkdir %s: %w", dir, err)
+	}
+	base := filepath.Clean(b.basePath)
+	var synced []string
+	for d := dir; d != base && d != filepath.Dir(d); d = filepath.Dir(d) {
+		if _, ok := b.durable.Load(d); ok {
+			break
+		}
+		if err := syncDir(filepath.Dir(d)); err != nil {
+			return err
+		}
+		synced = append(synced, d)
+	}
+	for _, d := range synced {
+		b.durable.Store(d, struct{}{})
+	}
+	return nil
+}
+
+// syncDir fsyncs dir so a rename, create or remove inside it is durable.
+// Filesystems that cannot sync a directory (vfat, cifs) answer EINVAL or
+// ENOTSUP; that is treated as unsupported, not as a failure.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("arklocal: open dir %s: %w", dir, err)
+	}
+	err = syncFile(d)
+	_ = d.Close()
+	if err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOTSUP) {
+		return fmt.Errorf("arklocal: sync dir %s: %w", dir, err)
 	}
 	return nil
 }
@@ -154,6 +209,12 @@ func (b *Backend) Delete(ctx context.Context, h ark.Handle) error {
 	}
 	if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("arklocal: remove %s: %w", h.Name, err)
+	}
+	// Sync even when the object was already gone: an earlier Delete may have
+	// died between its remove and its sync. Forget relies on a removed
+	// snapshot staying removed before prune deletes its chunks.
+	if err := syncDir(filepath.Dir(p)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
 	return nil
 }
