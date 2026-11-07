@@ -4,9 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
-	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +24,8 @@ import (
 // shared locks are held at once, so the backups overlap however small they
 // are. The sources share most of their files, so the children Put the same
 // chunk names concurrently.
+//
+//	ARK_CONC_SEED  seed of the file contents, printed on every run
 const (
 	concEnvRepo = "ARK_CONC_CHILD_REPO"
 	concEnvSrc  = "ARK_CONC_CHILD_SRC"
@@ -54,10 +54,8 @@ func runConcurrentBackups(t *testing.T, newRepo func(context.Context, *testing.T
 		_ = raw.Close()
 	})
 
-	seed := uint64(time.Now().UnixNano())
-	var key [32]byte
-	binary.LittleEndian.PutUint64(key[:], seed)
-	bytesSrc := rand.NewChaCha8(key)
+	bytesSrc, seed := seededChaCha8(t, "ARK_CONC_SEED")
+	t.Logf("rerun with ARK_CONC_SEED=%d", seed)
 	shared := make([][]byte, 4)
 	for i := range shared {
 		shared[i] = make([]byte, 96<<10)
@@ -68,62 +66,51 @@ func runConcurrentBackups(t *testing.T, newRepo func(context.Context, *testing.T
 	for i := range children {
 		src := t.TempDir()
 		for j, data := range shared {
-			writeConcFile(t, filepath.Join(src, "shared", fmt.Sprintf("s%d.bin", j)), data)
+			writeTestFile(t, filepath.Join(src, "shared", fmt.Sprintf("s%d.bin", j)), data)
 		}
 		for j := range 2 {
 			data := make([]byte, 64<<10)
 			_, _ = bytesSrc.Read(data)
-			writeConcFile(t, filepath.Join(src, fmt.Sprintf("own%d.bin", j)), data)
+			writeTestFile(t, filepath.Join(src, fmt.Sprintf("own%d.bin", j)), data)
 		}
 		tag := fmt.Sprintf("conc-%d", i)
 		want[tag] = readTree(t, src)
 		env := []string{concEnvRepo + "=" + ref, concEnvSrc + "=" + src, concEnvTag + "=" + tag}
-		children[i] = startConcChild(t, env)
+		children[i] = startConcChild(t, tag, env)
 	}
 
 	events := make(chan concEvent)
 	for i, c := range children {
-		go c.readEvents(i, events)
+		go c.readEvents(t.Context(), i, events)
 	}
 	acquired, released := make([]int, concWriters), make([]int, concWriters)
 	gateOpen, open := false, concWriters
 	timeout := time.After(60 * time.Second)
-	fail := func(format string, args ...any) {
-		t.Helper()
-		for _, c := range children {
-			_ = c.cmd.Process.Kill()
-		}
-		for i, c := range children {
-			_ = c.cmd.Wait()
-			t.Logf("child %d output:\n%s", i, c.out.Bytes())
-		}
-		t.Fatalf(format, args...)
-	}
 	for open > 0 {
 		var ev concEvent
 		select {
 		case ev = <-events:
 		case <-timeout:
-			fail("timed out, %d children still running, gate open %v", open, gateOpen)
+			t.Fatalf("timed out, %d children still running, gate open %v", open, gateOpen)
 		}
 		switch {
 		case ev.event == "":
 			open--
 			if !gateOpen {
-				fail("child %d stopped reporting before every child held its lock", ev.child)
+				t.Fatalf("child %d stopped reporting before every child held its lock", ev.child)
 			}
 			continue
 		case ev.exclusive:
-			fail("child %d reported an exclusive lock: %s", ev.child, ev.event)
-		case ev.event == "acquired":
+			t.Fatalf("child %d reported an exclusive lock: %s", ev.child, ev.event)
+		case ev.event == ark.LockAcquired:
 			acquired[ev.child]++
-		case ev.event == "released":
+		case ev.event == ark.LockReleased:
 			if !gateOpen {
-				fail("child %d released its lock before every child held one", ev.child)
+				t.Fatalf("child %d released its lock before every child held one", ev.child)
 			}
 			released[ev.child]++
 		default:
-			fail("child %d reported %s", ev.child, ev.event)
+			t.Fatalf("child %d reported %s", ev.child, ev.event)
 		}
 		if !gateOpen && countPositive(acquired) == concWriters {
 			gateOpen = true
@@ -134,7 +121,7 @@ func runConcurrentBackups(t *testing.T, newRepo func(context.Context, *testing.T
 	}
 	for i, c := range children {
 		if err := c.cmd.Wait(); err != nil {
-			t.Fatalf("child %d: %v\n%s", i, err, c.out.Bytes())
+			t.Fatalf("child %d: %v", i, err)
 		}
 		if acquired[i] != 1 || released[i] != 1 {
 			t.Fatalf("child %d acquired %d and released %d locks, want 1 each", i, acquired[i], released[i])
@@ -191,16 +178,6 @@ func countPositive(ns []int) int {
 	return n
 }
 
-func writeConcFile(t *testing.T, path string, data []byte) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
-}
-
 // concChild is a running child: events is the read end of its fd 3, gate the
 // write end of its fd 4.
 type concChild struct {
@@ -217,7 +194,10 @@ type concEvent struct {
 	exclusive bool
 }
 
-func startConcChild(t *testing.T, env []string) *concChild {
+// startConcChild starts the child named name. A cleanup kills it, waits for
+// it and logs its output when the test failed, so a child never outlives the
+// test.
+func startConcChild(t *testing.T, name string, env []string) *concChild {
 	t.Helper()
 	evR, evW, err := os.Pipe()
 	if err != nil {
@@ -225,33 +205,44 @@ func startConcChild(t *testing.T, env []string) *concChild {
 	}
 	gateR, gateW, err := os.Pipe()
 	if err != nil {
+		_, _ = evR.Close(), evW.Close()
 		t.Fatalf("pipe: %v", err)
 	}
 	c := &concChild{events: evR, gate: gateW}
-	c.cmd = exec.Command(os.Args[0], "-test.run=^TestConcurrentBackupChild$")
-	c.cmd.Env = append(os.Environ(), env...)
-	c.cmd.Stdout, c.cmd.Stderr = &c.out, &c.out
-	c.cmd.ExtraFiles = []*os.File{evW, gateR}
-	err = c.cmd.Start()
-	_ = evW.Close()
-	_ = gateR.Close()
+	c.cmd, err = startChild("TestConcurrentBackupChild", env, &c.out, evW, gateR)
 	if err != nil {
-		t.Fatalf("start child: %v", err)
+		_, _ = evR.Close(), gateW.Close()
+		t.Fatalf("start child %s: %v", name, err)
 	}
 	t.Cleanup(func() {
-		_ = evR.Close()
-		_ = gateW.Close()
+		_ = c.cmd.Process.Kill()
+		_ = c.cmd.Wait()
+		_, _ = evR.Close(), gateW.Close()
+		if t.Failed() {
+			t.Logf("child %s output:\n%s", name, c.out.Bytes())
+		}
 	})
 	return c
 }
 
-func (c *concChild) readEvents(i int, events chan<- concEvent) {
+// readEvents sends the events of child i until its fd 3 closes or ctx ends.
+func (c *concChild) readEvents(ctx context.Context, i int, events chan<- concEvent) {
+	send := func(ev concEvent) bool {
+		select {
+		case events <- ev:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
 	sc := bufio.NewScanner(c.events)
 	for sc.Scan() {
 		event, kind, _ := strings.Cut(sc.Text(), " ")
-		events <- concEvent{child: i, event: event, exclusive: kind == "exclusive"}
+		if !send(concEvent{child: i, event: event, exclusive: kind == "exclusive"}) {
+			return
+		}
 	}
-	events <- concEvent{child: i}
+	send(concEvent{child: i})
 }
 
 // TestConcurrentBackupChild is a child of TestConcurrentBackups: one Backup of
@@ -286,7 +277,7 @@ func TestConcurrentBackupChild(t *testing.T) {
 		if _, err := fmt.Fprintf(events, "%s %s\n", event, kind); err != nil {
 			t.Errorf("report %s: %v", event, err)
 		}
-		if event == "acquired" {
+		if event == ark.LockAcquired {
 			// The read returns EOF once the parent closes the gate, at once
 			// on every later call.
 			_, _ = gate.Read(make([]byte, 1))

@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"math/rand/v2"
@@ -116,18 +117,8 @@ func runKillHarness(
 ) {
 	t.Helper()
 	runs := killEnvInt(t, "ARK_KILL_RUNS", 5)
-	seed := uint64(time.Now().UnixNano())
-	if s := os.Getenv("ARK_KILL_SEED"); s != "" {
-		var err error
-		if seed, err = strconv.ParseUint(s, 10, 64); err != nil {
-			t.Fatalf("ARK_KILL_SEED: %v", err)
-		}
-	}
+	bytesSrc, seed := seededChaCha8(t, "ARK_KILL_SEED")
 	t.Logf("kill harness: %d runs, rerun with ARK_KILL_SEED=%d", runs, seed)
-
-	var key [32]byte
-	binary.LittleEndian.PutUint64(key[:], seed)
-	bytesSrc := rand.NewChaCha8(key)
 	rng := rand.New(bytesSrc)
 
 	ctx := context.Background()
@@ -419,12 +410,7 @@ func runKillChild(env []string, delay time.Duration) (took time.Duration, killed
 		return 0, false, nil, err
 	}
 	defer func() { _ = ready.Close() }()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestKillHarnessChild$")
-	cmd.Env = append(os.Environ(), env...)
-	cmd.Stdout, cmd.Stderr = &buf, &buf
-	cmd.ExtraFiles = []*os.File{w}
-	err = cmd.Start()
-	_ = w.Close()
+	cmd, err := startChild("TestKillHarnessChild", env, &buf, w)
 	if err != nil {
 		return 0, false, nil, err
 	}
@@ -453,6 +439,37 @@ func runKillChild(env []string, delay time.Duration) (took time.Duration, killed
 		<-done
 		return time.Since(start), true, buf.Bytes(), nil
 	}
+}
+
+// startChild re-execs the test binary to run only the test named run, with
+// env added to its environment, its output in out and extra as its fds from 3
+// on. It closes extra in this process once the child holds them.
+func startChild(run string, env []string, out io.Writer, extra ...*os.File) (*exec.Cmd, error) {
+	cmd := exec.Command(os.Args[0], "-test.run=^"+run+"$")
+	cmd.Env = append(os.Environ(), env...)
+	cmd.Stdout, cmd.Stderr = out, out
+	cmd.ExtraFiles = extra
+	err := cmd.Start()
+	for _, f := range extra {
+		_ = f.Close()
+	}
+	return cmd, err
+}
+
+// seededChaCha8 returns a source seeded from the environment variable env, or
+// from the clock when it is unset, and the seed that replays it.
+func seededChaCha8(t *testing.T, env string) (*rand.ChaCha8, uint64) {
+	t.Helper()
+	seed := uint64(time.Now().UnixNano())
+	if s := os.Getenv(env); s != "" {
+		var err error
+		if seed, err = strconv.ParseUint(s, 10, 64); err != nil {
+			t.Fatalf("%s: %v", env, err)
+		}
+	}
+	var key [32]byte
+	binary.LittleEndian.PutUint64(key[:], seed)
+	return rand.NewChaCha8(key), seed
 }
 
 // fullPass restores every snapshot again.
@@ -532,6 +549,11 @@ func writeKillFile(t *testing.T, bytesSrc *rand.ChaCha8, root string, i, size in
 	path := killFilePath(root, i)
 	data := make([]byte, size)
 	_, _ = bytesSrc.Read(data)
+	writeTestFile(t, path, data)
+}
+
+func writeTestFile(t *testing.T, path string, data []byte) {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

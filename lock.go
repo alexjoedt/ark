@@ -41,8 +41,9 @@ const (
 )
 
 // lockEvent, when set, is called when this process acquires a lock, gives up
-// an attempt on a conflicting one, and releases one. Only the test binary sets
-// it, to order and observe locks across processes; it may block.
+// an attempt on a conflicting one, and releases one; a release whose delete
+// failed is not reported. Only the test binary sets it, to order and observe
+// locks across processes; it may block.
 var lockEvent func(event string, exclusive bool)
 
 func reportLock(event string, exclusive bool) {
@@ -362,14 +363,19 @@ func (l *repoLock) keepAlive(ctx context.Context) {
 func (l *repoLock) release(ctx context.Context) {
 	l.cancel()
 	<-l.done
-	l.repo.removeLock(context.WithoutCancel(ctx), l.name)
-	reportLock(lockReleased, l.exclusive)
+	if l.repo.removeLock(context.WithoutCancel(ctx), l.name) {
+		reportLock(lockReleased, l.exclusive)
+	}
 }
 
-func (r *Repository) removeLock(ctx context.Context, name string) {
+// removeLock deletes the lock object name and reports whether it is gone. A
+// failure is only logged: the lock goes stale and Unlock removes it.
+func (r *Repository) removeLock(ctx context.Context, name string) bool {
 	if err := r.backend.Delete(ctx, Handle{Type: LockFile, Name: name}); err != nil {
 		r.logger.WarnContext(ctx, "failed to remove lock", "lock", name, "error", err)
+		return false
 	}
+	return true
 }
 
 // Locks lists the lock objects in the repository, newest first, stale ones
