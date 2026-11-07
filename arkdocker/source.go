@@ -129,7 +129,7 @@ func (s *dockerVolumeSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 			ModTime: hdr.ModTime,
 		}
 
-		var r io.Reader
+		var open func() (io.ReadCloser, error)
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			entry.Type = ark.FileTypeDirectory
@@ -143,11 +143,13 @@ func (s *dockerVolumeSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 		case tar.TypeReg:
 			entry.Type = ark.FileTypeRegular
 			entry.Size = hdr.Size
-			r = io.LimitReader(tr, hdr.Size)
+			// tr.Next skips what the caller leaves unread, so a file
+			// the parent snapshot holds unchanged costs no copy here.
+			open = func() (io.ReadCloser, error) { return io.NopCloser(io.LimitReader(tr, hdr.Size)), nil }
 		default:
 			entry.Type = ark.FileTypeUnsupported
 		}
-		if err := fn(entry, r); err != nil {
+		if err := fn(entry, open); err != nil {
 			return err
 		}
 	}

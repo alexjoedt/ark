@@ -136,14 +136,17 @@ func (s *fileSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 		}
 
 		uid, gid := fileOwner(fi)
+		ctime, ino := changeID(fi)
 		entry := ark.FileInfo{
-			Path:    rel,
-			Type:    ark.FileTypeRegular,
-			Size:    fi.Size(),
-			Mode:    fi.Mode().Perm(),
-			ModTime: fi.ModTime(),
-			UID:     uid,
-			GID:     gid,
+			Path:       rel,
+			Type:       ark.FileTypeRegular,
+			Size:       fi.Size(),
+			Mode:       fi.Mode().Perm(),
+			ModTime:    fi.ModTime(),
+			UID:        uid,
+			GID:        gid,
+			ChangeTime: ctime,
+			Inode:      ino,
 		}
 
 		// Devices, fifos and sockets: the core counts them and drops them.
@@ -167,12 +170,24 @@ func (s *fileSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 			return err
 		}
 
-		f, err := os.Open(path)
-		if err != nil {
-			return fmt.Errorf("arkfs: open %s: %w", path, err)
-		}
-		defer f.Close()
-
-		return fn(entry, io.LimitReader(f, entry.Size))
+		// The file is opened only when the core reads it, which it skips
+		// for a file the parent snapshot holds unchanged. The close here
+		// guards against a caller that does not close.
+		var f *os.File
+		defer func() {
+			if f != nil {
+				_ = f.Close()
+			}
+		}()
+		return fn(entry, func() (io.ReadCloser, error) {
+			var err error
+			if f, err = os.Open(path); err != nil {
+				return nil, fmt.Errorf("arkfs: open %s: %w", path, err)
+			}
+			return struct {
+				io.Reader
+				io.Closer
+			}{io.LimitReader(f, entry.Size), f}, nil
+		})
 	})
 }

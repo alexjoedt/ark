@@ -18,11 +18,13 @@ type Snapshot struct {
 
 // SnapshotStats holds deduplication and compression statistics for a snapshot.
 // Skipped counts entries the source yielded that the v1 format does not model:
-// device nodes, fifos and sockets.
+// device nodes, fifos and sockets. FilesUnchanged counts the regular files a
+// backup took from the parent snapshot without reading them.
 type SnapshotStats struct {
 	FileCount          int           `json:"total_files"`
 	DirCount           int           `json:"total_dirs"`
 	Skipped            int           `json:"skipped"`
+	FilesUnchanged     int           `json:"files_unchanged"`
 	TotalSize          int64         `json:"total_size"`
 	StoredSize         int64         `json:"stored_size"`
 	NewChunksRawSize   int64         `json:"new_chunks_raw_size"`

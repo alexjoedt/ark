@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,6 +74,7 @@ func RunSourceSinkTests(
 	t.Run("Hardlink", func(t *testing.T) { testHardlink(t, newSource, write) })
 	t.Run("Symlink", func(t *testing.T) { testSymlink(t, newSource, write) })
 	t.Run("Xattrs", func(t *testing.T) { testXattrs(t, newSource, write) })
+	t.Run("WalkWithoutOpen", func(t *testing.T) { testWalkWithoutOpen(t, newSource, write) })
 	t.Run("IncompatibleSourceType", func(t *testing.T) { testIncompatibleSourceType(t, newSink) })
 }
 
@@ -122,7 +124,7 @@ func read(t *testing.T, newSource func(t *testing.T, location string) ark.Source
 	ctx := context.Background()
 
 	got := make(map[string]Entry)
-	err := newSource(t, location).Walk(ctx, func(info ark.FileInfo, r io.Reader) error {
+	err := newSource(t, location).Walk(ctx, func(info ark.FileInfo, open func() (io.ReadCloser, error)) error {
 		e := Entry{
 			Path:     info.Path,
 			Type:     info.Type,
@@ -130,7 +132,7 @@ func read(t *testing.T, newSource func(t *testing.T, location string) ark.Source
 			LinkDest: info.LinkDest,
 			Xattrs:   info.Xattrs,
 		}
-		content, err := readEntry(t, info, r)
+		content, err := readEntry(t, info, open)
 		if err != nil {
 			return err
 		}
@@ -144,23 +146,28 @@ func read(t *testing.T, newSource func(t *testing.T, location string) ark.Source
 	return got
 }
 
-// readEntry consumes the reader a Source handed out, checking the contract
-// that only regular files get one.
-func readEntry(t *testing.T, info ark.FileInfo, r io.Reader) (string, error) {
+// readEntry opens and reads what a Source handed out, checking the contract
+// that only regular files get an open func.
+func readEntry(t *testing.T, info ark.FileInfo, open func() (io.ReadCloser, error)) (string, error) {
 	t.Helper()
 
 	if info.Type != ark.FileTypeRegular {
-		if r != nil {
-			t.Errorf("Source yielded a reader for %s, which is a %s", info.Path, info.Type)
+		if open != nil {
+			t.Errorf("Source yielded an open func for %s, which is a %s", info.Path, info.Type)
 		}
 		return "", nil
 	}
-	if r == nil {
-		t.Errorf("Source yielded a nil reader for the regular file %s", info.Path)
+	if open == nil {
+		t.Errorf("Source yielded a nil open func for the regular file %s", info.Path)
 		return "", nil
 	}
 
-	data, err := io.ReadAll(r)
+	rc, err := open()
+	if err != nil {
+		return "", fmt.Errorf("arktest: opening %s: %w", info.Path, err)
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(rc)
 	if err != nil {
 		return "", fmt.Errorf("arktest: reading %s: %w", info.Path, err)
 	}
@@ -328,6 +335,60 @@ func testXattrs(
 	}
 	if string(e.Xattrs["user.ark"]) != "value" {
 		t.Errorf("user.ark came back as %q, want %q", e.Xattrs["user.ark"], "value")
+	}
+}
+
+// testWalkWithoutOpen checks that a walk succeeds when the caller never opens
+// a file, as a backup does for files its parent holds unchanged, and that
+// opening only some of them still yields the right bytes for those.
+func testWalkWithoutOpen(
+	t *testing.T,
+	newSource func(t *testing.T, location string) ark.Source,
+	write writeFunc,
+) {
+	entries := []Entry{
+		{Path: "a.txt", Type: ark.FileTypeRegular, Mode: modeFile, Content: strings.Repeat("a", 3000)},
+		{Path: "b.txt", Type: ark.FileTypeRegular, Mode: modeFile, Content: "bravo"},
+		{Path: "c.txt", Type: ark.FileTypeRegular, Mode: modeFile, Content: strings.Repeat("c", 700)},
+		{Path: "d.txt", Type: ark.FileTypeRegular, Mode: modeFile, Content: "delta"},
+	}
+	location := write(t, entries)
+	want := make(map[string]string, len(entries))
+	for _, e := range entries {
+		want[e.Path] = e.Content
+	}
+	ctx := context.Background()
+
+	seen := 0
+	err := newSource(t, location).Walk(ctx, func(info ark.FileInfo, _ func() (io.ReadCloser, error)) error {
+		if _, ok := want[info.Path]; ok {
+			seen++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Source.Walk without open: %v", err)
+	}
+	if seen != len(entries) {
+		t.Errorf("walk without open yielded %d of %d files", seen, len(entries))
+	}
+
+	// Open b and d only: the skipped a and c must not shift the stream.
+	err = newSource(t, location).Walk(ctx, func(info ark.FileInfo, open func() (io.ReadCloser, error)) error {
+		if info.Path != "b.txt" && info.Path != "d.txt" {
+			return nil
+		}
+		got, err := readEntry(t, info, open)
+		if err != nil {
+			return err
+		}
+		if got != want[info.Path] {
+			t.Errorf("%s read %q after skipped files, want %q", info.Path, got, want[info.Path])
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Source.Walk opening some files: %v", err)
 	}
 }
 

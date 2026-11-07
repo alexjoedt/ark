@@ -46,6 +46,7 @@ type statsJSON struct {
 	FileCount          int     `json:"total_files"`
 	DirCount           int     `json:"total_dirs"`
 	Skipped            int     `json:"skipped"`
+	FilesUnchanged     int     `json:"files_unchanged,omitempty"`
 	TotalSize          int64   `json:"total_size"`
 	StoredSize         int64   `json:"stored_size"`
 	NewChunksRawSize   int64   `json:"new_chunks_raw_size"`
@@ -64,6 +65,7 @@ func (s SnapshotStats) MarshalJSON() ([]byte, error) {
 		FileCount:          s.FileCount,
 		DirCount:           s.DirCount,
 		Skipped:            s.Skipped,
+		FilesUnchanged:     s.FilesUnchanged,
 		TotalSize:          s.TotalSize,
 		StoredSize:         s.StoredSize,
 		NewChunksRawSize:   s.NewChunksRawSize,
@@ -95,6 +97,7 @@ func (s *SnapshotStats) UnmarshalJSON(data []byte) error {
 		FileCount:          raw.FileCount,
 		DirCount:           raw.DirCount,
 		Skipped:            raw.Skipped,
+		FilesUnchanged:     raw.FilesUnchanged,
 		TotalSize:          raw.TotalSize,
 		StoredSize:         raw.StoredSize,
 		NewChunksRawSize:   raw.NewChunksRawSize,

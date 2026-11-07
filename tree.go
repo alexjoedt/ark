@@ -34,6 +34,11 @@ type treeEntry struct {
 	// Xattrs maps an extended attribute name to its value. encoding/json
 	// writes the values base64 encoded, which is the v1 wire format.
 	Xattrs map[string][]byte `json:"xattrs,omitempty"`
+
+	// ChangeTime and Inode are what a later backup compares to skip the
+	// file; snapshots from older builds and tar sources carry neither.
+	ChangeTime time.Time `json:"ctime,omitzero"`
+	Inode      uint64    `json:"inode,omitempty"`
 }
 
 // storeTreeNode canonicalises node and writes it to the trees namespace.
@@ -120,6 +125,9 @@ func buildTree(ctx context.Context, trees *objectStore, entries []fileEntry) (st
 				LinkDest: child.LinkDest,
 				Chunks:   child.Chunks,
 				Xattrs:   child.Xattrs,
+
+				ChangeTime: child.ChangeTime,
+				Inode:      child.Inode,
 			}
 			if child.Type == FileTypeDirectory {
 				hash, err := buildNode(norm)
@@ -233,6 +241,9 @@ func visitTreeEntry(
 		Size:     e.Size,
 		LinkDest: e.LinkDest,
 		Xattrs:   e.Xattrs,
+
+		ChangeTime: e.ChangeTime,
+		Inode:      e.Inode,
 	}
 
 	switch e.Type {

@@ -43,7 +43,7 @@ func (s multiSource) Walk(_ context.Context, fn ark.WalkFunc) error {
 			Mode: 0o644,
 			Type: ark.FileTypeRegular,
 		}
-		if err := fn(info, strings.NewReader(content)); err != nil {
+		if err := fn(info, openReader(strings.NewReader(content))); err != nil {
 			return err
 		}
 	}

@@ -70,7 +70,7 @@ func (s benchSource) Walk(_ context.Context, fn ark.WalkFunc) error {
 	}
 	for path, data := range s.files {
 		info := ark.FileInfo{Path: path, Type: ark.FileTypeRegular, Mode: 0o644, Size: int64(len(data)), ModTime: mtime}
-		if err := fn(info, bytes.NewReader(data)); err != nil {
+		if err := fn(info, openReader(bytes.NewReader(data))); err != nil {
 			return err
 		}
 	}

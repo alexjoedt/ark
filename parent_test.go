@@ -2,6 +2,7 @@ package ark_test
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -30,7 +31,12 @@ func (s stubSource) Walk(_ context.Context, fn ark.WalkFunc) error {
 		Mode: 0o644,
 		Type: ark.FileTypeRegular,
 	}
-	return fn(info, strings.NewReader(s.content))
+	return fn(info, openReader(strings.NewReader(s.content)))
+}
+
+// openReader wraps r as the open func a Source hands out for a regular file.
+func openReader(r io.Reader) func() (io.ReadCloser, error) {
+	return func() (io.ReadCloser, error) { return io.NopCloser(r), nil }
 }
 
 // openRepo initialises a repository in b and opens it.

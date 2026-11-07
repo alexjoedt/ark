@@ -697,7 +697,7 @@ func (volumeSource) Meta() ark.SourceMeta {
 func (volumeSource) Walk(_ context.Context, fn ark.WalkFunc) error {
 	body := "x"
 	return fn(ark.FileInfo{Path: "pg.conf", Size: 1, Mode: 0o644, Type: ark.FileTypeRegular},
-		strings.NewReader(body))
+		func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(body)), nil })
 }
 
 func TestRestoreRefusesVolumeSnapshot(t *testing.T) {
