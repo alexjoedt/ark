@@ -31,3 +31,7 @@ require (
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 )
+
+// Published before the API and the on-disk format had settled; v0.x is the
+// development line and v1.0.0 and v1.0.1 must not be used.
+retract [v1.0.0, v1.0.1]

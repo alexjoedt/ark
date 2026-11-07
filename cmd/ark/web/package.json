@@ -1,7 +1,7 @@
 {
   "name": "arkUI WebApp",
   "private": true,
-  "version": "1.2.0-alpha.1",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "export VITE_API_URL=http://localhost:8080 && vite",

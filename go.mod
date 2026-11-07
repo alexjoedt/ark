@@ -15,3 +15,7 @@ require (
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 )
+
+// Published before the API and the on-disk format had settled; v0.x is the
+// development line and v1.0.0 and v1.0.1 must not be used.
+retract [v1.0.0, v1.0.1]
