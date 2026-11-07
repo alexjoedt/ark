@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -70,8 +71,47 @@ func loadTreeNode(ctx context.Context, trees *objectStore, hash string) (*treeNo
 }
 
 // buildTree organises the flat fileEntry list into a Merkle directory tree,
-// stores every treeNode blob in the CAS, and returns the root tree hash.
-func buildTree(ctx context.Context, trees *objectStore, entries []fileEntry) (string, error) {
+// stores every treeNode blob in the CAS with at most workers Puts in flight,
+// and returns the root tree hash.
+func buildTree(ctx context.Context, trees *objectStore, entries []fileEntry, workers int) (string, error) {
+	dirChildren := treeChildren(entries)
+
+	// Every directory reachable from the root, by depth. A directory held by
+	// a non-directory entry is not reachable and is not stored.
+	levels := [][]string{{""}}
+	seen := map[string]struct{}{"": {}}
+	for {
+		var next []string
+		for _, dir := range levels[len(levels)-1] {
+			for _, child := range dirChildren[dir] {
+				norm := normEntryPath(child.Path)
+				if _, ok := seen[norm]; ok || child.Type != FileTypeDirectory {
+					continue
+				}
+				seen[norm] = struct{}{}
+				next = append(next, norm)
+			}
+		}
+		if len(next) == 0 {
+			break
+		}
+		levels = append(levels, next)
+	}
+
+	// The deepest level is stored first, so every node is stored after its
+	// children and the root last. Within a level the nodes are independent.
+	hashes := make(map[string]string, len(seen))
+	for _, level := range slices.Backward(levels) {
+		if err := storeTreeLevel(ctx, trees, level, dirChildren, hashes, workers); err != nil {
+			return "", err
+		}
+	}
+	return hashes[""], nil
+}
+
+// treeChildren groups entries by their parent directory, "" for the root,
+// and adds the directories a source left out.
+func treeChildren(entries []fileEntry) map[string][]fileEntry {
 	present := make(map[string]struct{}, len(entries))
 	for _, e := range entries {
 		if norm := normEntryPath(e.Path); norm != "" {
@@ -108,41 +148,96 @@ func buildTree(ctx context.Context, trees *objectStore, entries []fileEntry) (st
 			}})
 		}
 	}
+	return dirChildren
+}
 
-	var buildNode func(dirPath string) (string, error)
-	buildNode = func(dirPath string) (string, error) {
-		node := &treeNode{Entries: make([]treeEntry, 0, len(dirChildren[dirPath]))}
-		for _, child := range dirChildren[dirPath] {
-			norm := normEntryPath(child.Path)
-			te := treeEntry{
-				Name:     filepath.Base(norm),
-				Type:     child.Type,
-				Mode:     child.Mode,
-				UID:      child.UID,
-				GID:      child.GID,
-				ModTime:  child.ModTime,
-				Size:     child.Size,
-				LinkDest: child.LinkDest,
-				Chunks:   child.Chunks,
-				Xattrs:   child.Xattrs,
+// storeTreeLevel stores the nodes of dirs with at most workers Puts in flight
+// and records their hashes. The hashes of their child directories must be in
+// hashes already. The first error cancels the rest; every goroutine has
+// finished when it returns.
+func storeTreeLevel(
+	ctx context.Context,
+	trees *objectStore,
+	dirs []string,
+	dirChildren map[string][]fileEntry,
+	hashes map[string]string,
+	workers int,
+) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-				ChangeTime: child.ChangeTime,
-				Inode:      child.Inode,
-			}
-			if child.Type == FileTypeDirectory {
-				hash, err := buildNode(norm)
-				if err != nil {
-					return "", err
-				}
-				te.TreeHash = hash
-				te.Chunks = nil
-			}
-			node.Entries = append(node.Entries, te)
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
+	sem := make(chan struct{}, max(workers, 1))
+	stored := make([]string, len(dirs))
+	for i, dir := range dirs {
+		node := &treeNode{Entries: make([]treeEntry, 0, len(dirChildren[dir]))}
+		for _, child := range dirChildren[dir] {
+			node.Entries = append(node.Entries, newTreeEntry(child, hashes))
 		}
-		return storeTreeNode(ctx, trees, node)
-	}
 
-	return buildNode("")
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			hash, err := storeTreeNode(ctx, trees, node)
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+					cancel()
+				}
+				mu.Unlock()
+				return
+			}
+			stored[i] = hash
+		})
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for i, dir := range dirs {
+		hashes[dir] = stored[i]
+	}
+	return nil
+}
+
+// newTreeEntry is the tree entry of child. A directory gets the hash of its
+// node from hashes.
+func newTreeEntry(child fileEntry, hashes map[string]string) treeEntry {
+	norm := normEntryPath(child.Path)
+	te := treeEntry{
+		Name:     filepath.Base(norm),
+		Type:     child.Type,
+		Mode:     child.Mode,
+		UID:      child.UID,
+		GID:      child.GID,
+		ModTime:  child.ModTime,
+		Size:     child.Size,
+		LinkDest: child.LinkDest,
+		Chunks:   child.Chunks,
+		Xattrs:   child.Xattrs,
+
+		ChangeTime: child.ChangeTime,
+		Inode:      child.Inode,
+	}
+	if child.Type == FileTypeDirectory {
+		te.TreeHash = hashes[norm]
+		te.Chunks = nil
+	}
+	return te
 }
 
 // pathFilter restricts a tree walk to a set of path prefixes. The zero value

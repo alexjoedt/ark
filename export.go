@@ -283,7 +283,7 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader) (*manifest
 	}
 
 	// Rebuild the Merkle tree from the re-chunked entries.
-	rootHash, err := buildTree(ctx, r.trees, collectedEntries)
+	rootHash, err := buildTree(ctx, r.trees, collectedEntries, r.concurrency)
 	if err != nil {
 		return nil, fmt.Errorf("import: failed to build snapshot tree: %w", err)
 	}

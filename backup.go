@@ -130,7 +130,7 @@ func (r *Repository) runBackup(ctx context.Context, src Source, opts backupOptio
 
 	opts.progress(ProgressEvent{Phase: PhaseFinalize, FilesDone: stats.FileCount, BytesDone: stats.TotalSize})
 
-	rootHash, err := buildTree(ctx, r.trees, scannedEntries)
+	rootHash, err := buildTree(ctx, r.trees, scannedEntries, r.concurrency)
 	if err != nil {
 		return nil, fmt.Errorf("backup: failed to build snapshot tree: %w", err)
 	}
