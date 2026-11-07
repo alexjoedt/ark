@@ -1,6 +1,6 @@
 // Command bench builds the seeded benchmark dataset that ark is timed against
 // restic on: gen writes it, mutate applies the incremental change set in
-// place, hash prints a digest of a tree.
+// place, hash prints a digest of a tree, run times ark against restic.
 package main
 
 import (
@@ -27,19 +27,21 @@ func main() {
 	}
 }
 
-const usage = "usage: bench gen|mutate|hash -dir DIR [-seed N] [-small]"
+const usage = "usage: bench gen|mutate|hash|run -dir DIR [-seed N] [-small] [-ark BIN] [-restic BIN]"
 
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return errors.New(usage)
 	}
-	if !slices.Contains([]string{"gen", "mutate", "hash"}, args[0]) {
+	if !slices.Contains([]string{"gen", "mutate", "hash", "run"}, args[0]) {
 		return fmt.Errorf("unknown subcommand %q, %s", args[0], usage)
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	dir := fs.String("dir", "", "dataset directory (required)")
 	seed := fs.Int64("seed", 1, "seed")
 	small := fs.Bool("small", false, "scaled-down dataset (~120 MiB) for a smoke run")
+	arkBin := fs.String("ark", "bin/ark", "run: ark binary")
+	resticBin := fs.String("restic", "restic", "run: restic binary")
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -68,6 +70,8 @@ func run(ctx context.Context, args []string) error {
 			return err
 		}
 		_, _ = fmt.Fprintf(os.Stdout, "%s  %d files, %d bytes\n", sum, files, n)
+	case "run":
+		return runBench(ctx, os.Stdout, *dir, sp, *small, *seed, *arkBin, *resticBin)
 	}
 	return nil
 }

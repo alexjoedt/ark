@@ -50,6 +50,12 @@ tasks:
     cmds:
       - go test -run '^$' -bench . -benchmem -count {{.COUNT | default 1}} github.com/alexjoedt/ark github.com/alexjoedt/ark/chunker
 
+  bench:restic:
+    desc: 'Time ark against restic on the 10 GiB dataset, never in CI; task bench:restic DIR=/path [-- -small]'
+    cmds:
+      - go build -ldflags "{{.LDFLAGS}}" -o bin/ark ./cmd/ark
+      - go run ./scripts/bench run -dir "{{.DIR}}" {{.CLI_ARGS}}
+
   build:
     desc: Build the web UI, then bin/ark
     cmds:
