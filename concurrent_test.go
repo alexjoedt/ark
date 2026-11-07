@@ -62,6 +62,15 @@ func TestConcurrentBackups(t *testing.T) {
 	runConcurrentBackups(t, newKillRepo)
 }
 
+// TestConcurrentBackupsSFTP is the same run against the sftp server named by
+// ARK_SFTP_TEST_URI.
+func TestConcurrentBackupsSFTP(t *testing.T) {
+	if testing.Short() {
+		t.Skip("concurrent backup test spawns processes")
+	}
+	runConcurrentBackups(t, newSFTPKillRepo(t, "conc"))
+}
+
 // runConcurrentBackups runs the concurrent backup test ARK_CONC_RUNS times
 // against the repositories newRepo creates, stopping at the first failure.
 func runConcurrentBackups(t *testing.T, newRepo func(context.Context, *testing.T) (string, ark.Backend, func() error)) {

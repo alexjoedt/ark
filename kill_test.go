@@ -70,20 +70,30 @@ func TestKillHarnessSFTP(t *testing.T) {
 	if testing.Short() {
 		t.Skip("kill harness spawns processes")
 	}
+	runKillHarness(t, newSFTPKillRepo(t, "kill"), killSettleSFTP)
+}
+
+// newSFTPKillRepo returns a repository factory for the sftp server named by
+// ARK_SFTP_TEST_URI, one fresh remote directory per repository. It skips t
+// when the variable is unset.
+func newSFTPKillRepo(
+	t *testing.T, prefix string,
+) func(context.Context, *testing.T) (string, ark.Backend, func() error) {
+	t.Helper()
 	env := os.Getenv("ARK_SFTP_TEST_URI")
 	if env == "" {
-		t.Skip("ARK_SFTP_TEST_URI is not set, skipping the sftp kill harness")
+		t.Skip("ARK_SFTP_TEST_URI is not set, skipping the sftp run")
 	}
 	base, err := url.Parse(env)
 	if err != nil {
 		t.Fatalf("parse ARK_SFTP_TEST_URI: %v", err)
 	}
 	var n int
-	runKillHarness(t, func(ctx context.Context, t *testing.T) (string, ark.Backend, func() error) {
+	return func(ctx context.Context, t *testing.T) (string, ark.Backend, func() error) {
 		t.Helper()
 		n++
 		u := *base
-		u.Path = path.Join(base.Path, fmt.Sprintf("kill-%d-%d", time.Now().UnixNano(), n))
+		u.Path = path.Join(base.Path, fmt.Sprintf("%s-%d-%d", prefix, time.Now().UnixNano(), n))
 		ref, b := openKillRepo(ctx, t, u.String())
 		// ponytail: removal goes through the Backend, so empty directories and
 		// the temp files of killed Puts stay on the server.
@@ -95,7 +105,7 @@ func TestKillHarnessSFTP(t *testing.T) {
 			}
 			return nil
 		}
-	}, killSettleSFTP)
+	}
 }
 
 // killSettleSFTP is the pause between the listings that settleKill compares
