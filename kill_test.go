@@ -88,12 +88,10 @@ func newSFTPKillRepo(
 	if err != nil {
 		t.Fatalf("parse ARK_SFTP_TEST_URI: %v", err)
 	}
-	var n int
 	return func(ctx context.Context, t *testing.T) (string, ark.Backend, func() error) {
 		t.Helper()
-		n++
 		u := *base
-		u.Path = path.Join(base.Path, fmt.Sprintf("%s-%d-%d", prefix, time.Now().UnixNano(), n))
+		u.Path = path.Join(base.Path, fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()))
 		ref, b := openKillRepo(ctx, t, u.String())
 		// ponytail: removal goes through the Backend, so empty directories and
 		// the temp files of killed Puts stay on the server.
