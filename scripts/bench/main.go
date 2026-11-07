@@ -4,32 +4,46 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	err := run(ctx, os.Args[1:])
+	stop()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "bench:", err)
 		os.Exit(1)
 	}
 }
 
-func run(args []string) error {
+const usage = "usage: bench gen|mutate|hash -dir DIR [-seed N] [-small]"
+
+func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: bench gen|mutate|hash -dir DIR [-seed N] [-small]")
+		return errors.New(usage)
+	}
+	if !slices.Contains([]string{"gen", "mutate", "hash"}, args[0]) {
+		return fmt.Errorf("unknown subcommand %q, %s", args[0], usage)
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	dir := fs.String("dir", "", "dataset directory (required)")
 	seed := fs.Int64("seed", 1, "seed")
 	small := fs.Bool("small", false, "scaled-down dataset (~120 MiB) for a smoke run")
 	if err := fs.Parse(args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if *dir == "" {
@@ -41,26 +55,24 @@ func run(args []string) error {
 	}
 	switch args[0] {
 	case "gen":
-		files, n, err := generate(*dir, sp, *seed)
+		files, n, err := generate(ctx, *dir, sp, *seed)
 		if err != nil {
 			return err
 		}
 		_, _ = fmt.Fprintf(os.Stdout, "%d files, %.2f GiB\n", files, float64(n)/(1<<30))
 	case "mutate":
-		return mutate(*dir, *seed)
+		return mutate(ctx, *dir, *seed)
 	case "hash":
-		sum, files, n, err := hashTree(*dir)
+		sum, files, n, err := hashTree(ctx, *dir)
 		if err != nil {
 			return err
 		}
 		_, _ = fmt.Fprintf(os.Stdout, "%s  %d files, %d bytes\n", sum, files, n)
-	default:
-		return fmt.Errorf("unknown subcommand %q", args[0])
 	}
 	return nil
 }
 
-func parallel(n int, fn func(i int) error) error {
+func parallel(ctx context.Context, n int, fn func(i int) error) error {
 	var next atomic.Int64
 	var failed atomic.Bool
 	var mu sync.Mutex
@@ -68,7 +80,7 @@ func parallel(n int, fn func(i int) error) error {
 	var wg sync.WaitGroup
 	for range runtime.NumCPU() {
 		wg.Go(func() {
-			for !failed.Load() {
+			for !failed.Load() && ctx.Err() == nil {
 				i := int(next.Add(1)) - 1
 				if i >= n {
 					return
@@ -85,6 +97,9 @@ func parallel(n int, fn func(i int) error) error {
 		})
 	}
 	wg.Wait()
+	if first == nil {
+		return ctx.Err()
+	}
 	return first
 }
 
@@ -103,5 +118,8 @@ func listFiles(root string) ([]string, error) {
 		}
 		return nil
 	})
-	return files, err
+	if err != nil {
+		return nil, fmt.Errorf("listing %s: %w", root, err)
+	}
+	return files, nil
 }

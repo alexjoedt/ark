@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -32,8 +33,22 @@ type spec struct {
 }
 
 var (
-	fullSpec  = spec{smallN: 200000, medN: 120, medMin: 1 << 20, medMax: 50 << 20, largeN: 2, largeSize: 512 << 20}
-	smallSpec = spec{smallN: 2000, medN: 4, medMin: 1 << 20, medMax: 10 << 20, largeN: 2, largeSize: 16 << 20}
+	fullSpec = spec{
+		smallN:    200000,
+		medN:      120,
+		medMin:    1 << 20,
+		medMax:    50 << 20,
+		largeN:    2,
+		largeSize: 512 << 20,
+	}
+	smallSpec = spec{
+		smallN:    2000,
+		medN:      4,
+		medMin:    1 << 20,
+		medMax:    10 << 20,
+		largeN:    2,
+		largeSize: 16 << 20,
+	}
 )
 
 var bufPool = sync.Pool{New: func() any { b := make([]byte, bufSize); return &b }}
@@ -71,39 +86,60 @@ func fillText(b []byte, r *rand.Rand, vocab [][]byte) {
 }
 
 // content writes size bytes: words from the vocabulary when text, else random.
-func content(w io.Writer, c *rand.ChaCha8, vocab [][]byte, size int64, text bool) error {
+func content(
+	ctx context.Context,
+	w io.Writer,
+	c *rand.ChaCha8,
+	vocab [][]byte,
+	size int64,
+	text bool,
+) error {
 	bp := bufPool.Get().(*[]byte) //nolint:errcheck // pool only holds *[]byte
 	defer bufPool.Put(bp)
 	buf := *bp
 	r := rand.New(c)
 	for size > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		b := buf[:min(int64(len(buf)), size)]
 		if text {
 			fillText(b, r, vocab)
 		} else if _, err := c.Read(b); err != nil {
-			return err
+			return fmt.Errorf("generating bytes: %w", err)
 		}
 		if _, err := w.Write(b); err != nil {
-			return err
+			return fmt.Errorf("writing content: %w", err)
 		}
 		size -= int64(len(b))
 	}
 	return nil
 }
 
-func writeFile(path string, mode int, c *rand.ChaCha8, vocab [][]byte, size int64, text bool) error {
+func writeFile(
+	ctx context.Context,
+	path string,
+	mode int,
+	c *rand.ChaCha8,
+	vocab [][]byte,
+	size int64,
+	text bool,
+) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+		return fmt.Errorf("creating directory: %w", err)
 	}
 	f, err := os.OpenFile(path, mode, 0o644)
 	if err != nil {
-		return err
+		return fmt.Errorf("opening file: %w", err)
 	}
-	if err := content(f, c, vocab, size, text); err != nil {
+	if err := content(ctx, f, c, vocab, size, text); err != nil {
 		_ = f.Close()
-		return err
+		return fmt.Errorf("%s: %w", path, err)
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("closing %s: %w", path, err)
+	}
+	return nil
 }
 
 // leafDir places file i of n below band: leaves of perDir files, alternating
@@ -155,17 +191,18 @@ func (s spec) jobs() []job {
 }
 
 // generate writes the dataset into dir, which must be empty or absent, and
-// returns the file count and total bytes.
-func generate(dir string, sp spec, seed int64) (int, int64, error) {
+// returns the file count and total bytes. A failed or cancelled run removes
+// what it wrote, so the next run starts from an empty directory.
+func generate(ctx context.Context, dir string, sp spec, seed int64) (int, int64, error) {
 	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
-		return 0, 0, fmt.Errorf("%s is not empty", dir)
+		return 0, 0, fmt.Errorf("gen: %s is not empty", dir)
 	} else if err != nil && !os.IsNotExist(err) {
-		return 0, 0, err
+		return 0, 0, fmt.Errorf("gen: reading %s: %w", dir, err)
 	}
 	vocab := vocabulary(seed)
 	jobs := sp.jobs()
 	sizes := make([]int64, len(jobs))
-	err := parallel(len(jobs), func(k int) error {
+	err := parallel(ctx, len(jobs), func(k int) error {
 		j := jobs[k]
 		c := stream(seed, fmt.Sprintf("%s/%d/0", j.band, j.i))
 		size := int64(j.min)
@@ -179,35 +216,46 @@ func generate(dir string, sp spec, seed int64) (int, int64, error) {
 		}
 		name := filepath.Join(dir, leafDir(j.band, j.i, j.n), fmt.Sprintf("f%06d%s", j.i, ext))
 		sizes[k] = size
-		return writeFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, c, vocab, size, text)
+		return writeFile(ctx, name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, c, vocab, size, text)
 	})
+	if err != nil {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			_ = os.RemoveAll(filepath.Join(dir, e.Name()))
+		}
+		return 0, 0, fmt.Errorf("gen: %w", err)
+	}
 	var total int64
 	for _, s := range sizes {
 		total += s
 	}
-	return len(jobs), total, err
+	return len(jobs), total, nil
 }
 
 // mutate applies the incremental change set in place, deterministic from
-// seed: rewrite 5% of the non-large files, delete and add len/200 files, and
-// append to 1% (at least one) of the large ones.
-func mutate(dir string, seed int64) error {
+// seed and the current tree: rewrite 5% of the non-large files, delete and add
+// len/200 small files, and append to 1% (at least one) of the large ones. dir
+// must be the dataset root. Names and content depend on a digest of the file
+// list, so repeated rounds change different files instead of repeating.
+func mutate(ctx context.Context, dir string, seed int64) error {
 	files, err := listFiles(dir)
 	if err != nil {
-		return err
+		return fmt.Errorf("mutate: %w", err)
 	}
 	if len(files) == 0 {
-		return fmt.Errorf("%s holds no files", dir)
+		return fmt.Errorf("mutate: %s holds no files", dir)
 	}
-	var cand, large []string
-	var smallDirs []string
+	var cand, small, large, smallDirs []string
 	seen := map[string]bool{}
+	tagSum := sha256.New()
 	for _, f := range files {
+		_, _ = io.WriteString(tagSum, f+"\n")
 		switch {
 		case strings.HasPrefix(f, bandLarge+"/"):
 			large = append(large, f)
 			continue
 		case strings.HasPrefix(f, bandSmall+"/"):
+			small = append(small, f)
 			if d := filepath.ToSlash(filepath.Dir(f)); !seen[d] {
 				seen[d] = true
 				smallDirs = append(smallDirs, d)
@@ -215,35 +263,70 @@ func mutate(dir string, seed int64) error {
 		}
 		cand = append(cand, f)
 	}
-	vocab := vocabulary(seed)
-	r := rand.New(stream(seed, "mutate"))
-	order := r.Perm(len(cand))
+	if len(small) == 0 || len(large) == 0 {
+		return fmt.Errorf(
+			"mutate: %s has no %s/ or %s/ files, -dir must be the dataset root",
+			dir,
+			bandSmall,
+			bandLarge,
+		)
+	}
+	tag := hex.EncodeToString(tagSum.Sum(nil))[:8]
 	changes := max(1, len(files)/changeShare)
 	rewrites := max(1, len(cand)*5/100)
-	if rewrites+changes > len(cand) {
-		return fmt.Errorf("%s holds too few files to mutate", dir)
+	if changes >= len(small) || rewrites+changes > len(cand) {
+		return fmt.Errorf("mutate: %s holds too few files to mutate", dir)
 	}
 
-	err = parallel(rewrites, func(k int) error {
-		rel := cand[order[k]]
+	vocab := vocabulary(seed)
+	r := rand.New(stream(seed, "mutate/"+tag))
+	deleted := make(map[string]bool, changes)
+	toDelete := make([]string, 0, changes)
+	for _, i := range r.Perm(len(small))[:changes] {
+		deleted[small[i]] = true
+		toDelete = append(toDelete, small[i])
+	}
+	toRewrite := make([]string, 0, rewrites)
+	for _, i := range r.Perm(len(cand)) {
+		if len(toRewrite) == rewrites {
+			break
+		}
+		if !deleted[cand[i]] {
+			toRewrite = append(toRewrite, cand[i])
+		}
+	}
+
+	err = parallel(ctx, len(toRewrite), func(k int) error {
+		rel := toRewrite[k]
 		path := filepath.Join(dir, rel)
 		st, err := os.Stat(path)
 		if err != nil {
-			return err
+			return fmt.Errorf("rewrite: %w", err)
 		}
-		c := stream(seed, "rewrite/"+rel)
-		return writeFile(path, os.O_WRONLY|os.O_TRUNC, c, vocab, st.Size(), strings.HasSuffix(rel, extText))
+		c := stream(seed, "rewrite/"+tag+"/"+rel)
+		if err := writeFile(
+			ctx,
+			path,
+			os.O_WRONLY|os.O_TRUNC,
+			c,
+			vocab,
+			st.Size(),
+			strings.HasSuffix(rel, extText),
+		); err != nil {
+			return fmt.Errorf("rewrite: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("mutate: %w", err)
 	}
-	for _, k := range order[rewrites : rewrites+changes] {
-		if err := os.Remove(filepath.Join(dir, cand[k])); err != nil {
-			return err
+	for _, rel := range toDelete {
+		if err := os.Remove(filepath.Join(dir, rel)); err != nil {
+			return fmt.Errorf("mutate: delete: %w", err)
 		}
 	}
-	err = parallel(changes, func(k int) error {
-		c := stream(seed, fmt.Sprintf("add/%d", k))
+	err = parallel(ctx, changes, func(k int) error {
+		c := stream(seed, fmt.Sprintf("add/%s/%d", tag, k))
 		rr := rand.New(c)
 		d := smallDirs[rr.IntN(len(smallDirs))]
 		size := int64(smallMin + rr.IntN(smallMax-smallMin+1))
@@ -252,51 +335,54 @@ func mutate(dir string, seed int64) error {
 		if text {
 			ext = extText
 		}
-		return writeFile(filepath.Join(dir, d, fmt.Sprintf("m%06d%s", k, ext)),
-			os.O_WRONLY|os.O_CREATE|os.O_TRUNC, c, vocab, size, text)
+		path := filepath.Join(dir, d, fmt.Sprintf("m%s_%06d%s", tag, k, ext))
+		if err := writeFile(ctx, path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, c, vocab, size, text); err != nil {
+			return fmt.Errorf("add: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("mutate: %w", err)
 	}
 	for _, k := range r.Perm(len(large))[:min(len(large), max(1, len(large)/100))] {
 		path := filepath.Join(dir, large[k])
 		st, err := os.Stat(path)
 		if err != nil {
-			return err
+			return fmt.Errorf("mutate: append: %w", err)
 		}
-		c := stream(seed, "append/"+large[k])
-		if err := writeFile(path, os.O_WRONLY|os.O_APPEND, c, vocab, st.Size()/32, false); err != nil {
-			return err
+		c := stream(seed, "append/"+tag+"/"+large[k])
+		if err := writeFile(ctx, path, os.O_WRONLY|os.O_APPEND, c, vocab, st.Size()/32, false); err != nil {
+			return fmt.Errorf("mutate: append: %w", err)
 		}
 	}
 	return nil
 }
 
 // hashTree digests relative paths, sizes and contents of every regular file.
-func hashTree(dir string) (string, int, int64, error) {
+func hashTree(ctx context.Context, dir string) (string, int, int64, error) {
 	files, err := listFiles(dir)
 	if err != nil {
-		return "", 0, 0, err
+		return "", 0, 0, fmt.Errorf("hash: %w", err)
 	}
 	sums := make([][sha256.Size]byte, len(files))
 	sizes := make([]int64, len(files))
-	err = parallel(len(files), func(k int) error {
+	err = parallel(ctx, len(files), func(k int) error {
 		f, err := os.Open(filepath.Join(dir, files[k]))
 		if err != nil {
-			return err
+			return fmt.Errorf("hash: opening file: %w", err)
 		}
 		defer f.Close()
 		h := sha256.New()
 		n, err := io.Copy(h, f)
 		if err != nil {
-			return err
+			return fmt.Errorf("hash: reading %s: %w", files[k], err)
 		}
 		sizes[k] = n
 		h.Sum(sums[k][:0])
 		return nil
 	})
 	if err != nil {
-		return "", 0, 0, err
+		return "", 0, 0, fmt.Errorf("hash: %w", err)
 	}
 	h := sha256.New()
 	var total int64
