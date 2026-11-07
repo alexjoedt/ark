@@ -1,54 +1,30 @@
-package arksftp
+package arksftp_test
 
 import (
 	"bytes"
 	"context"
 	"io"
-	"net/url"
-	"os"
-	"path"
 	"strconv"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/arksftp"
 	"github.com/alexjoedt/ark/arktest"
 )
 
-// openServerBackend connects to ARK_SFTP_TEST_URI with a fresh directory. It
-// parses the URI itself because arkuri imports this package.
-func openServerBackend(t *testing.T) *Backend {
+// openPlainRename opens a fresh backend under root with posix-rename forced
+// off.
+func openPlainRename(t *testing.T, root string) *arksftp.Backend {
 	t.Helper()
-	raw := os.Getenv("ARK_SFTP_TEST_URI")
-	if raw == "" {
-		t.Skip("ARK_SFTP_TEST_URI is not set, skipping the sftp run")
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatalf("parse ARK_SFTP_TEST_URI: %v", err)
-	}
-	port, _ := strconv.Atoi(u.Port())
-	q := u.Query()
-	b, err := New(Config{
-		Host:           u.Hostname(),
-		Port:           port,
-		User:           u.User.Username(),
-		Path:           path.Join(u.Path, "rename-"+strconv.FormatInt(time.Now().UnixNano(), 10)),
-		IdentityFile:   q.Get("identity"),
-		KnownHostsFile: q.Get("known_hosts"),
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { _ = b.Close() })
+	b := openTestBackend(t, root).(*arksftp.Backend)
+	b.DisablePosixRename()
 	return b
 }
 
 func TestConcurrentPutWithoutPosixRename(t *testing.T) {
 	ctx := context.Background()
-	b := openServerBackend(t)
-	b.posixRename = false
+	b := openPlainRename(t, testRoot(t))
 
 	payload := bytes.Repeat([]byte("ark"), 20<<10)
 	for round := range 30 {
@@ -80,10 +56,8 @@ func TestConcurrentPutWithoutPosixRename(t *testing.T) {
 }
 
 func TestBackendConformanceWithoutPosixRename(t *testing.T) {
-	openServerBackend(t) // skips without a server
+	root := testRoot(t)
 	arktest.RunBackendTests(t, func(t *testing.T) ark.Backend {
-		b := openServerBackend(t)
-		b.posixRename = false
-		return b
+		return openPlainRename(t, root)
 	})
 }

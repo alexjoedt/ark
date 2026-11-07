@@ -270,31 +270,37 @@ func (b *Backend) createTemp(dir string) (*sftp.File, string, error) {
 	return nil, "", fmt.Errorf("arksftp: no free temporary name in %s", dir)
 }
 
+// renameAttempts bounds the remove-and-rename retries of [Backend.rename]. A
+// retry is only needed when another Put of the same name landed in between,
+// and each such Put lands once, so this is the number of concurrent writers of
+// one name the plain-rename path tolerates.
+const renameAttempts = 16
+
 // rename moves tmp onto p. It prefers posix-rename@openssh.com, which replaces
 // an existing target atomically as the Backend contract requires. A server
-// that does not announce the extension gets a plain rename, which has to
-// remove the target first: a concurrent reader can then observe the object as
-// missing for the width of one round trip. Put only ever writes identical
-// content under a given name, so that window costs a retry, never wrong data.
-// A Rename that loses against another writer's rename counts as success.
+// that does not announce the extension gets a plain SFTP v3 rename, which
+// fails with SSH_FX_FAILURE when the target exists. The rename is tried first,
+// so storing a new object never removes anything; only that failure removes p
+// and tries again, and every nil return means our bytes landed at p.
+//
+// ponytail: replacing an existing object without the extension removes it
+// first, so a reader sees it missing for one round trip, and a crash or a
+// dropped link in that round trip loses it. SFTP v3 has no atomic replace;
+// a server with posix-rename closes the window.
 func (b *Backend) rename(tmp, p string) error {
 	if b.posixRename {
 		return b.client.PosixRename(tmp, p)
 	}
-	if err := b.client.Remove(p); err != nil && !os.IsNotExist(err) {
-		return err
-	}
 	err := b.client.Rename(tmp, p)
-	if err == nil {
-		return nil
-	}
-	// Another writer renamed onto p between our Remove and Rename. Every
-	// same-name concurrent Put in ark writes identical content (chunks and trees
-	// by hash, locks and snapshots by unique ULID, keys and config under the
-	// exclusive lock), so the winner's object is as good as ours.
-	if _, serr := b.client.Stat(p); serr == nil {
-		_ = b.client.Remove(tmp)
-		return nil
+	for range renameAttempts {
+		var status *sftp.StatusError
+		if err == nil || !errors.As(err, &status) || status.FxCode() != sftp.ErrSSHFxFailure {
+			return err
+		}
+		if rerr := b.client.Remove(p); rerr != nil && !os.IsNotExist(rerr) {
+			return rerr
+		}
+		err = b.client.Rename(tmp, p)
 	}
 	return err
 }

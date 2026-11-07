@@ -1,6 +1,8 @@
 package arksftp_test
 
 import (
+	"context"
+	"errors"
 	"net/url"
 	"os"
 	"path"
@@ -10,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/arksftp"
 	"github.com/alexjoedt/ark/arktest"
 	"github.com/alexjoedt/ark/arkuri"
 )
@@ -26,25 +29,50 @@ var seq atomic.Uint64
 // server. Unit tests cover host keys, auth and ssh_config; this is the only
 // place where atomic rename and concurrency meet an actual server.
 func TestBackendConformance(t *testing.T) {
-	base := os.Getenv(EnvTestURI)
-	if base == "" {
-		t.Skipf("%s is not set, skipping the sftp conformance run", EnvTestURI)
-	}
-
+	root := testRoot(t)
 	arktest.RunBackendTests(t, func(t *testing.T) ark.Backend {
-		uri := subdir(t, base)
-		b, err := arkuri.Open(t.Context(), uri)
-		if err != nil {
-			t.Fatalf("open %s: %v", uri, err)
-		}
-		t.Cleanup(func() { _ = b.Close() })
-		return b
+		return openTestBackend(t, root)
 	})
 }
 
-// subdir returns base with a fresh directory appended to its path, so each
-// backend in the suite starts empty. The sftp backend creates the directory on
-// the first Put.
+// testRoot returns EnvTestURI with a fresh directory appended and removes
+// that directory, with every backend opened under it, when t ends. It skips t
+// when EnvTestURI is unset.
+func testRoot(t *testing.T) string {
+	t.Helper()
+	base := os.Getenv(EnvTestURI)
+	if base == "" {
+		t.Skipf("%s is not set, skipping the sftp run", EnvTestURI)
+	}
+	root := subdir(t, base)
+	t.Cleanup(func() {
+		b, err := arkuri.Open(context.Background(), root)
+		if err != nil {
+			t.Errorf("open %s for cleanup: %v", root, err)
+			return
+		}
+		defer func() { _ = b.Close() }()
+		if err := b.(*arksftp.Backend).RemoveRoot(); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("remove %s: %v", root, err)
+		}
+	})
+	return root
+}
+
+// openTestBackend opens a backend in a fresh directory under root and closes
+// it when t ends. The directory is created on the first Put.
+func openTestBackend(t *testing.T, root string) ark.Backend {
+	t.Helper()
+	uri := subdir(t, root)
+	b, err := arkuri.Open(t.Context(), uri)
+	if err != nil {
+		t.Fatalf("open %s: %v", uri, err)
+	}
+	t.Cleanup(func() { _ = b.Close() })
+	return b
+}
+
+// subdir returns base with a fresh directory appended to its path.
 func subdir(t *testing.T, base string) string {
 	t.Helper()
 	u, err := url.Parse(base)
