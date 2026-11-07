@@ -266,6 +266,25 @@ func TestErrRepoLockedNamesTheHolder(t *testing.T) {
 	}
 }
 
+func TestLockBackoffAddsJitterUpToTheInterval(t *testing.T) {
+	for _, tc := range []struct {
+		attempt int
+		base    time.Duration
+	}{{0, lockBackoffFloor}, {1, 2 * lockBackoffFloor}, {4, lockBackoffMax}, {1 << 20, lockBackoffMax}} {
+		seen := map[time.Duration]bool{}
+		for range 50 {
+			d := lockBackoff(tc.attempt)
+			if d < tc.base || d >= 2*tc.base {
+				t.Fatalf("lockBackoff(%d) = %v, want in [%v, %v)", tc.attempt, d, tc.base, 2*tc.base)
+			}
+			seen[d] = true
+		}
+		if len(seen) < 2 {
+			t.Errorf("lockBackoff(%d) returned only %v in 50 calls, want jitter", tc.attempt, seen)
+		}
+	}
+}
+
 func TestLockWaitRetriesUntilTheLockIsFree(t *testing.T) {
 	ctx := context.Background()
 	repo, _, _ := lockRepo(t)

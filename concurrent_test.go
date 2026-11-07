@@ -18,21 +18,38 @@ import (
 )
 
 // The concurrent backup test starts concWriters children, the re-exec'd test
-// binary, that each open the same repository and run one Backup. Every child
-// reports its lock events on fd 3 and, once it holds its shared lock, blocks
-// until the parent has seen all children acquire theirs and closes fd 4: all
-// shared locks are held at once, so the backups overlap however small they
-// are. The sources share most of their files, so the children Put the same
-// chunk names concurrently. The base snapshot is taken afterwards.
+// binary, that each open the same repository and run one Backup. The sources
+// share most of their files, so the children Put the same chunk names
+// concurrently. Every child reports its lock events on fd 3 and blocks after
+// each until the parent acks it with a byte on fd 4, so the parent sees every
+// release before the lock object goes and can order the children:
 //
+//  1. the backups hold their shared locks until all of them hold one, so they
+//     overlap however small they are;
+//  2. a prune child, started then with WithLockWait, is rejected at least once
+//     before the backups go on, and acquires its exclusive lock after them;
+//  3. it holds that lock until a late backup, started with WithLockWait, was
+//     rejected; the late backup completes after the prune.
+//
+// No two children may hold conflicting locks at once. The base snapshot is
+// taken afterwards.
+//
+//	ARK_CONC_RUNS  iterations, default 1
 //	ARK_CONC_SEED  seed of the file contents, printed on every run
 const (
 	concEnvRepo = "ARK_CONC_CHILD_REPO"
+	concEnvOp   = "ARK_CONC_CHILD_OP" // backup or prune
 	concEnvSrc  = "ARK_CONC_CHILD_SRC"
 	concEnvTag  = "ARK_CONC_CHILD_TAG"
 )
 
 const concWriters = 8
+
+// Child indexes after the concWriters backups.
+const (
+	concPruner = concWriters
+	concLate   = concWriters + 1
+)
 
 func TestConcurrentBackups(t *testing.T) {
 	if testing.Short() {
@@ -41,8 +58,19 @@ func TestConcurrentBackups(t *testing.T) {
 	runConcurrentBackups(t, newKillRepo)
 }
 
+// runConcurrentBackups runs the concurrent backup test ARK_CONC_RUNS times
+// against the repositories newRepo creates, stopping at the first failure.
 func runConcurrentBackups(t *testing.T, newRepo func(context.Context, *testing.T) (string, ark.Backend, func() error)) {
 	t.Helper()
+	runs := killEnvInt(t, "ARK_CONC_RUNS", 1)
+	for i := range runs {
+		if !t.Run(fmt.Sprintf("run%d", i+1), func(t *testing.T) { runConcurrentOnce(t, newRepo) }) {
+			return
+		}
+	}
+}
+
+func runConcurrentOnce(t *testing.T, newRepo func(context.Context, *testing.T) (string, ark.Backend, func() error)) {
 	ctx := context.Background()
 	ref, raw, remove := newRepo(ctx, t)
 	t.Cleanup(func() {
@@ -68,8 +96,7 @@ func runConcurrentBackups(t *testing.T, newRepo func(context.Context, *testing.T
 	defer func() { _ = repo.Close() }()
 
 	want := map[string]map[string]string{}
-	children := make([]*concChild, concWriters)
-	for i := range children {
+	backupEnv := func(tag string) []string {
 		src := t.TempDir()
 		writeSharedTree(t, src, shared)
 		for j := range 2 {
@@ -77,58 +104,100 @@ func runConcurrentBackups(t *testing.T, newRepo func(context.Context, *testing.T
 			_, _ = bytesSrc.Read(data)
 			writeTestFile(t, filepath.Join(src, fmt.Sprintf("own%d.bin", j)), data)
 		}
-		tag := fmt.Sprintf("conc-%d", i)
 		want[tag] = readTree(t, src)
-		env := []string{concEnvRepo + "=" + ref, concEnvSrc + "=" + src, concEnvTag + "=" + tag}
-		children[i] = startConcChild(t, tag, env)
+		return []string{concEnvRepo + "=" + ref, concEnvOp + "=backup", concEnvSrc + "=" + src, concEnvTag + "=" + tag}
+	}
+	lateEnv := backupEnv("late")
+
+	children := make([]*concChild, concWriters+2)
+	events := make(chan concEvent)
+	start := func(i int, name string, env []string) {
+		children[i] = startConcChild(t, name, env)
+		go children[i].readEvents(t.Context(), i, events)
+	}
+	for i := range concWriters {
+		tag := fmt.Sprintf("conc-%d", i)
+		start(i, tag, backupEnv(tag))
+	}
+	ack := func(i int) {
+		if _, err := children[i].gate.Write([]byte{1}); err != nil {
+			t.Fatalf("ack child %d: %v", i, err)
+		}
 	}
 
-	events := make(chan concEvent)
-	for i, c := range children {
-		go c.readEvents(t.Context(), i, events)
-	}
-	acquired, released := make([]int, concWriters), make([]int, concWriters)
-	gateOpen, open := false, concWriters
+	n := len(children)
+	acquired, released, rejected := make([]int, n), make([]int, n), make([]int, n)
+	held := map[int]bool{} // child -> exclusive
+	open := concWriters
 	timeout := time.After(60 * time.Second)
 	for open > 0 {
 		var ev concEvent
 		select {
 		case ev = <-events:
 		case <-timeout:
-			t.Fatalf("timed out, %d children still running, gate open %v", open, gateOpen)
+			t.Fatalf("timed out, %d children still running, holders %v", open, held)
 		}
-		switch {
-		case ev.event == "":
+		i := ev.child
+		if ev.event == "" {
 			open--
-			if !gateOpen {
-				t.Fatalf("child %d stopped reporting before every child held its lock", ev.child)
+			if acquired[i] != 1 || released[i] != 1 {
+				t.Fatalf("child %d stopped reporting after %d acquired and %d released locks, want 1 each",
+					i, acquired[i], released[i])
 			}
 			continue
-		case ev.exclusive:
-			t.Fatalf("child %d reported an exclusive lock: %s", ev.child, ev.event)
-		case ev.event == ark.LockAcquired:
-			acquired[ev.child]++
-		case ev.event == ark.LockReleased:
-			if !gateOpen {
-				t.Fatalf("child %d released its lock before every child held one", ev.child)
+		}
+		if ev.exclusive != (i == concPruner) {
+			t.Fatalf("child %d reported %s with exclusive %v", i, ev.event, ev.exclusive)
+		}
+		switch ev.event {
+		case ark.LockAcquired:
+			for j, exclusive := range held {
+				if exclusive || ev.exclusive {
+					t.Fatalf("child %d acquired a lock while child %d held a conflicting one", i, j)
+				}
 			}
-			released[ev.child]++
+			held[i] = ev.exclusive
+			acquired[i]++
+		case ark.LockReleased:
+			if _, ok := held[i]; !ok {
+				t.Fatalf("child %d released a lock it does not hold", i)
+			}
+			delete(held, i)
+			released[i]++
+		case ark.LockRejected:
+			if i < concWriters {
+				t.Fatalf("backup child %d was rejected", i)
+			}
+			rejected[i]++
 		default:
-			t.Fatalf("child %d reported %s", ev.child, ev.event)
+			t.Fatalf("child %d reported %s", i, ev.event)
 		}
-		if !gateOpen && countPositive(acquired) == concWriters {
-			gateOpen = true
-			for _, c := range children {
-				_ = c.gate.Close()
+
+		switch {
+		case i < concWriters && ev.event == ark.LockAcquired:
+			// Held until the pruner was rejected.
+			if countPositive(acquired[:concWriters]) == concWriters {
+				start(concPruner, "prune", []string{concEnvRepo + "=" + ref, concEnvOp + "=prune"})
+				open++
 			}
+			continue
+		case i == concPruner && ev.event == ark.LockRejected && rejected[i] == 1:
+			for j := range concWriters {
+				ack(j)
+			}
+		case i == concPruner && ev.event == ark.LockAcquired:
+			// Held until the late backup was rejected.
+			start(concLate, "late", lateEnv)
+			open++
+			continue
+		case i == concLate && ev.event == ark.LockRejected && rejected[i] == 1:
+			ack(concPruner)
 		}
+		ack(i)
 	}
 	for i, c := range children {
 		if err := c.cmd.Wait(); err != nil {
 			t.Fatalf("child %d: %v", i, err)
-		}
-		if acquired[i] != 1 || released[i] != 1 {
-			t.Fatalf("child %d acquired %d and released %d locks, want 1 each", i, acquired[i], released[i])
 		}
 	}
 
@@ -162,14 +231,15 @@ func runConcurrentBackups(t *testing.T, newRepo func(context.Context, *testing.T
 	}
 	// base.bin's chunks, which no child shares, plus the base root tree.
 	if wantMin := base.Stats.ChunksNew + 1; base.Stats.ChunksNew < 1 || pruned.BlobsRemoved < wantMin {
-		t.Fatalf("Prune removed %d objects, want at least %d (%d base-only chunks and a tree)", pruned.BlobsRemoved, wantMin, base.Stats.ChunksNew)
+		t.Fatalf("Prune removed %d objects, want at least %d (%d base-only chunks and a tree)",
+			pruned.BlobsRemoved, wantMin, base.Stats.ChunksNew)
 	}
 	snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{})
 	if err != nil {
 		t.Fatalf("Snapshots: %v", err)
 	}
-	if len(snaps) != concWriters {
-		t.Fatalf("got %d snapshots, want %d", len(snaps), concWriters)
+	if len(snaps) != len(want) {
+		t.Fatalf("got %d snapshots, want %d", len(snaps), len(want))
 	}
 	seen := map[string]bool{}
 	for _, s := range snaps {
@@ -188,6 +258,9 @@ func runConcurrentBackups(t *testing.T, newRepo func(context.Context, *testing.T
 		}
 		if diff := diffTree(want[tag], readTree(t, dst)); diff != "" {
 			t.Fatalf("snapshot %s (%s) restores a different tree: %s", s.ID, tag, diff)
+		}
+		if v, err := repo.Verify(ctx, s.ID); err != nil || !v.OK {
+			t.Fatalf("Verify %s (%s): %v, %+v", s.ID, tag, err, v)
 		}
 	}
 	check, err := repo.Check(ctx)
@@ -217,7 +290,7 @@ func countPositive(ns []int) int {
 }
 
 // concChild is a running child: events is the read end of its fd 3, gate the
-// write end of its fd 4.
+// write end of its fd 4, which acks its events.
 type concChild struct {
 	cmd    *exec.Cmd
 	out    bytes.Buffer
@@ -247,7 +320,7 @@ func startConcChild(t *testing.T, name string, env []string) *concChild {
 		t.Fatalf("pipe: %v", err)
 	}
 	c := &concChild{events: evR, gate: gateW}
-	c.cmd, err = startChild("TestConcurrentBackupChild", env, &c.out, evW, gateR)
+	c.cmd, err = startChild("TestConcurrentChild", env, &c.out, evW, gateR)
 	if err != nil {
 		_, _ = evR.Close(), gateW.Close()
 		t.Fatalf("start child %s: %v", name, err)
@@ -283,9 +356,10 @@ func (c *concChild) readEvents(ctx context.Context, i int, events chan<- concEve
 	send(concEvent{child: i})
 }
 
-// TestConcurrentBackupChild is a child of TestConcurrentBackups: one Backup of
-// concEnvSrc into the repository at concEnvRepo.
-func TestConcurrentBackupChild(t *testing.T) {
+// TestConcurrentChild is a child of TestConcurrentBackups: one Backup of
+// concEnvSrc or one Prune, as concEnvOp says, of the repository at
+// concEnvRepo, waiting for a blocked lock.
+func TestConcurrentChild(t *testing.T) {
 	ref := os.Getenv(concEnvRepo)
 	if ref == "" {
 		t.Skip("runs only as a child of TestConcurrentBackups")
@@ -295,15 +369,11 @@ func TestConcurrentBackupChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open %s: %v", ref, err)
 	}
-	repo, err := ark.Open(ctx, b, testPassword)
+	repo, err := ark.Open(ctx, b, testPassword, ark.WithLockWait(time.Minute))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = repo.Close() }()
-	src, err := arkfs.NewSource(os.Getenv(concEnvSrc))
-	if err != nil {
-		t.Fatalf("NewSource: %v", err)
-	}
 
 	events, gate := os.NewFile(3, "events"), os.NewFile(4, "gate")
 	defer func() { _ = events.Close() }()
@@ -315,13 +385,23 @@ func TestConcurrentBackupChild(t *testing.T) {
 		if _, err := fmt.Fprintf(events, "%s %s\n", event, kind); err != nil {
 			t.Errorf("report %s: %v", event, err)
 		}
-		if event == ark.LockAcquired {
-			// The read returns EOF once the parent closes the gate, at once
-			// on every later call.
-			_, _ = gate.Read(make([]byte, 1))
-		}
+		// The parent's ack; EOF once it is gone.
+		_, _ = gate.Read(make([]byte, 1))
 	})
-	if _, err := repo.Backup(ctx, src, ark.WithTags(os.Getenv(concEnvTag))); err != nil {
-		t.Fatalf("Backup: %v", err)
+	switch op := os.Getenv(concEnvOp); op {
+	case "backup":
+		src, err := arkfs.NewSource(os.Getenv(concEnvSrc))
+		if err != nil {
+			t.Fatalf("NewSource: %v", err)
+		}
+		if _, err := repo.Backup(ctx, src, ark.WithTags(os.Getenv(concEnvTag))); err != nil {
+			t.Fatalf("Backup: %v", err)
+		}
+	case "prune":
+		if _, err := repo.Prune(ctx); err != nil {
+			t.Fatalf("Prune: %v", err)
+		}
+	default:
+		t.Fatalf("%s=%q: want backup or prune", concEnvOp, op)
 	}
 }
