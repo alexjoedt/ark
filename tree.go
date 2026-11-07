@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/alexjoedt/ark/chunker"
 )
 
 // treeNode is a directory node in the snapshot Merkle tree. It lives in the
@@ -42,20 +44,25 @@ type treeEntry struct {
 	Inode      uint64    `json:"inode,omitempty"`
 }
 
-// storeTreeNode canonicalises node and writes it to the trees namespace.
-// Sorting here rather than at every call site keeps the canonical form an
-// invariant of the write path.
-func storeTreeNode(ctx context.Context, trees *objectStore, node *treeNode) (string, error) {
+// marshalTreeNode is the canonical JSON of the node holding children, the
+// bytes buildTree stores and the input of the node's name. Sorting here rather
+// than at every call site keeps the canonical form an invariant of the write
+// path.
+func marshalTreeNode(children []fileEntry, hashes map[string]string) ([]byte, error) {
+	node := treeNode{Entries: make([]treeEntry, 0, len(children))}
+	for _, child := range children {
+		te, err := newTreeEntry(child, hashes)
+		if err != nil {
+			return nil, err
+		}
+		node.Entries = append(node.Entries, te)
+	}
 	slices.SortFunc(node.Entries, func(a, b treeEntry) int { return strings.Compare(a.Name, b.Name) })
 	data, err := json.Marshal(node)
 	if err != nil {
-		return "", fmt.Errorf("tree: failed to marshal node: %w", err)
+		return nil, fmt.Errorf("tree: failed to marshal node: %w", err)
 	}
-	hash, _, err := trees.Put(ctx, data)
-	if err != nil {
-		return "", fmt.Errorf("tree: failed to store node: %w", err)
-	}
-	return hash, nil
+	return data, nil
 }
 
 func loadTreeNode(ctx context.Context, trees *objectStore, hash string) (*treeNode, error) {
@@ -151,10 +158,10 @@ func treeChildren(entries []fileEntry) map[string][]fileEntry {
 	return dirChildren
 }
 
-// storeTreeLevel stores the nodes of dirs with at most workers Puts in flight
-// and records their hashes. The hashes of their child directories must be in
-// hashes already. The first error cancels the rest; every goroutine has
-// finished when it returns.
+// storeTreeLevel stores the nodes of dirs through a chunkWriter, which bounds
+// the Puts in flight, stores identical nodes once and stops the rest on the
+// first error. The hashes of their child directories must be in hashes
+// already; the level's own hashes land there once every node is stored.
 func storeTreeLevel(
 	ctx context.Context,
 	trees *objectStore,
@@ -163,60 +170,31 @@ func storeTreeLevel(
 	hashes map[string]string,
 	workers int,
 ) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	var (
-		wg       sync.WaitGroup
-		mu       sync.Mutex
-		firstErr error
-	)
-	sem := make(chan struct{}, max(workers, 1))
-	stored := make([]string, len(dirs))
-	for i, dir := range dirs {
-		node := &treeNode{Entries: make([]treeEntry, 0, len(dirChildren[dir]))}
-		for _, child := range dirChildren[dir] {
-			node.Entries = append(node.Entries, newTreeEntry(child, hashes))
+	w := newChunkWriter(ctx, trees, workers)
+	stored := make(map[string]string, len(dirs))
+	for _, dir := range dirs {
+		data, err := marshalTreeNode(dirChildren[dir], hashes)
+		if err == nil {
+			name := trees.name(data)
+			stored[dir] = name
+			err = w.put(chunker.Chunk{Hash: name, Data: data})
 		}
-
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
-		}
-		if ctx.Err() != nil {
+		if err != nil {
+			_ = w.fail(err)
 			break
 		}
-		wg.Go(func() {
-			defer func() { <-sem }()
-			hash, err := storeTreeNode(ctx, trees, node)
-			if err != nil {
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = err
-					cancel()
-				}
-				mu.Unlock()
-				return
-			}
-			stored[i] = hash
-		})
 	}
-	wg.Wait()
-	if firstErr != nil {
-		return firstErr
+	if err := w.wait(); err != nil {
+		return fmt.Errorf("tree: failed to store node: %w", err)
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	for i, dir := range dirs {
-		hashes[dir] = stored[i]
-	}
+	maps.Copy(hashes, stored)
 	return nil
 }
 
 // newTreeEntry is the tree entry of child. A directory gets the hash of its
-// node from hashes.
-func newTreeEntry(child fileEntry, hashes map[string]string) treeEntry {
+// node from hashes; a directory without one would leave an empty TreeHash in
+// the snapshot, so it is an error here rather than a finding at restore time.
+func newTreeEntry(child fileEntry, hashes map[string]string) (treeEntry, error) {
 	norm := normEntryPath(child.Path)
 	te := treeEntry{
 		Name:     filepath.Base(norm),
@@ -234,10 +212,14 @@ func newTreeEntry(child fileEntry, hashes map[string]string) treeEntry {
 		Inode:      child.Inode,
 	}
 	if child.Type == FileTypeDirectory {
-		te.TreeHash = hashes[norm]
+		hash, ok := hashes[norm]
+		if !ok {
+			return treeEntry{}, fmt.Errorf("tree: directory %s has no stored node", norm)
+		}
+		te.TreeHash = hash
 		te.Chunks = nil
 	}
-	return te
+	return te, nil
 }
 
 // pathFilter restricts a tree walk to a set of path prefixes. The zero value

@@ -14,7 +14,8 @@ import (
 )
 
 // treeFixture is a three level directory tree of 84 directories with a file
-// in each, plus an entry without its parents and a directory held by a file.
+// in each, four empty directories whose nodes are byte-identical, an entry
+// without its parents and a directory held by a file.
 func treeFixture() []fileEntry {
 	mtime := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	entry := func(path string, typ FileType) fileEntry {
@@ -39,6 +40,9 @@ func treeFixture() []fileEntry {
 		}
 	}
 	add(".", 0)
+	for i := range 4 {
+		entries = append(entries, entry(fmt.Sprintf("e%d", i), FileTypeDirectory))
+	}
 	return append(entries,
 		entry("x/y/z.txt", FileTypeRegular),
 		entry("f", FileTypeRegular),
@@ -54,7 +58,6 @@ func buildTreeSequential(ctx context.Context, trees *objectStore, entries []file
 	hashes := make(map[string]string)
 	var build func(dir string) (string, error)
 	build = func(dir string) (string, error) {
-		node := &treeNode{}
 		for _, child := range dirChildren[dir] {
 			if child.Type == FileTypeDirectory {
 				norm := normEntryPath(child.Path)
@@ -64,12 +67,21 @@ func buildTreeSequential(ctx context.Context, trees *objectStore, entries []file
 				}
 				hashes[norm] = hash
 			}
-			node.Entries = append(node.Entries, newTreeEntry(child, hashes))
 		}
-		return storeTreeNode(ctx, trees, node)
+		data, err := marshalTreeNode(dirChildren[dir], hashes)
+		if err != nil {
+			return "", err
+		}
+		hash, _, err := trees.Put(ctx, data)
+		return hash, err
 	}
 	return build("")
 }
+
+// 84 fixture directories, one node for the 4 empty ones, x, x/y and f/g,
+// plus the root. f/g is held by a file and is not reachable, so it is not
+// stored.
+const treeFixtureNodes = 88
 
 func TestBuildTreeMatchesSequential(t *testing.T) {
 	ctx := context.Background()
@@ -77,30 +89,34 @@ func TestBuildTreeMatchesSequential(t *testing.T) {
 	defer codec.Close()
 	key := newMasterKey("repo")
 
-	seqBackend, parBackend := newStubBackend(), newStubBackend()
+	seqBackend := newStubBackend()
 	want, err := buildTreeSequential(ctx, newObjectStore(seqBackend, TreeFile, codec, key), treeFixture())
 	if err != nil {
 		t.Fatalf("sequential build: %v", err)
 	}
+	seq := slices.Sorted(maps.Keys(seqBackend.objects))
+	if len(seq) != treeFixtureNodes {
+		t.Fatalf("sequential build stored %d tree nodes, want %d", len(seq), treeFixtureNodes)
+	}
+
 	for _, workers := range []int{1, 8} {
-		trees := newObjectStore(parBackend, TreeFile, codec, key)
-		got, err := buildTree(ctx, trees, treeFixture(), workers)
+		b := &gatedBackend{stubBackend: newStubBackend(), hook: func(context.Context, int32) error { return nil }}
+		got, err := buildTree(ctx, newObjectStore(b, TreeFile, codec, key), treeFixture(), workers)
 		if err != nil {
 			t.Fatalf("workers %d: %v", workers, err)
 		}
 		if got != want {
 			t.Errorf("workers %d: root %s, sequential root %s", workers, got, want)
 		}
-	}
-	// Same objects, so a check of either repository reports the same.
-	seq, par := slices.Sorted(maps.Keys(seqBackend.objects)), slices.Sorted(maps.Keys(parBackend.objects))
-	if !slices.Equal(seq, par) {
-		t.Errorf("stored %d tree nodes, sequential build stored %d", len(par), len(seq))
-	}
-	// 84 fixture directories, x, x/y and f/g, plus the root. f/g is held by
-	// a file and is not reachable, so it is not stored.
-	if len(par) != 87 {
-		t.Errorf("stored %d tree nodes, want 87", len(par))
+		// Same objects, so a check of either repository reports the same.
+		if par := slices.Sorted(maps.Keys(b.objects)); !slices.Equal(seq, par) {
+			t.Errorf("workers %d: stored %d tree nodes, sequential build stored %d", workers, len(par), len(seq))
+		}
+		// Identical nodes in one level are stored once, not Put at the same
+		// time to the same handle.
+		if calls := b.calls.Load(); calls != treeFixtureNodes {
+			t.Errorf("workers %d: %d Puts for %d distinct nodes", workers, calls, treeFixtureNodes)
+		}
 	}
 }
 
@@ -109,7 +125,7 @@ func TestBuildTreeMatchesSequential(t *testing.T) {
 type gatedBackend struct {
 	*stubBackend
 	inFlight, calls atomic.Int32
-	hook            func(call int32) error
+	hook            func(ctx context.Context, call int32) error
 
 	mu   sync.Mutex
 	peak int32
@@ -121,7 +137,7 @@ func (b *gatedBackend) Put(ctx context.Context, h Handle, r io.Reader) error {
 	b.mu.Lock()
 	b.peak = max(b.peak, n)
 	b.mu.Unlock()
-	if err := b.hook(b.calls.Add(1)); err != nil {
+	if err := b.hook(ctx, b.calls.Add(1)); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -147,17 +163,19 @@ func TestBuildTreeStopsOnFirstError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			var once sync.Once
 			b := &gatedBackend{stubBackend: newStubBackend()}
-			b.hook = func(call int32) error {
-				// Fail in the middle of the deepest level, while other Puts
-				// are running.
-				var err error
-				if call == 20 {
-					once.Do(func() { err = tc.fail(cancel) })
+			b.hook = func(ctx context.Context, call int32) error {
+				if call == 2 {
+					return tc.fail(cancel)
 				}
-				time.Sleep(time.Millisecond)
-				return err
+				// Every other Put stays in flight until buildTree cancels
+				// it, so the count below does not depend on timing.
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(5 * time.Second):
+					return errors.New("Put was not cancelled")
+				}
 			}
 
 			_, err := buildTree(ctx, newObjectStore(b, TreeFile, codec, key), treeFixture(), 4)
@@ -167,14 +185,10 @@ func TestBuildTreeStopsOnFirstError(t *testing.T) {
 			if n := b.inFlight.Load(); n != 0 {
 				t.Errorf("%d Puts still running after return", n)
 			}
-			calls := b.calls.Load()
-			time.Sleep(10 * time.Millisecond)
-			if b.calls.Load() != calls {
-				t.Error("Puts started after buildTree returned")
-			}
-			// The failing call, the 3 others in flight and one scheduled
-			// as it failed; the deepest level alone has 64 nodes.
-			if calls > 28 {
+			// The 4 workers, plus the one put that may already be waiting
+			// for a slot when the error lands; the deepest level alone has
+			// 64 nodes.
+			if calls := b.calls.Load(); calls > 5 {
 				t.Errorf("%d Puts ran, the error did not stop the rest", calls)
 			}
 			if p := b.peak; p > 4 {
