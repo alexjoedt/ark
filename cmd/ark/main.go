@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/pprof"
 	"slices"
 	"syscall"
 
@@ -32,6 +33,15 @@ func run(args []string) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	if path := os.Getenv("ARK_CPUPROFILE"); path != "" {
+		stop, err := startCPUProfile(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ark: ARK_CPUPROFILE: %v\n", err)
+		} else {
+			defer stop()
+		}
+	}
+
 	// Load --env-file before app.Run so the flag env sources see the values.
 	err := config.PreloadEnvFile(args)
 	if err == nil {
@@ -52,6 +62,20 @@ func run(args []string) int {
 		fmt.Fprintf(os.Stderr, "ark: %v\n", err)
 	}
 	return code
+}
+
+// startCPUProfile writes a CPU profile of the whole run to path, for
+// finding bottlenecks with go tool pprof. The returned func ends it.
+func startCPUProfile(path string) (func(), error) {
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return func() { pprof.StopCPUProfile(); _ = f.Close() }, nil
 }
 
 func newApp() *cli.Command {
