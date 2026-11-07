@@ -28,13 +28,17 @@ their meaning and `--json` output only gains fields.
 | 2 | `arkdocker/vX.Y.Z` | Requires the root at `vX.Y.Z`; its tidy fetches that tag from the remote. |
 | 3 | `cmd/ark/vX.Y.Z` | Requires both. The tag triggers the release build. |
 
-`examples/` gets its requires bumped too but is never tagged. Every bump is its own commit, so the
-three tags sit on three different commits.
+Every bump is its own commit, so the three tags sit on three different commits. `main` is
+protected (pull requests and status checks, admins may bypass), so the bump commits never land on
+it: they sit on a detached HEAD, kept alive by the tags. The requires on `main` stay at the
+previous release until a normal PR bumps them (`go mod edit -require` plus `task tidy`), which the
+workspace makes optional.
 
-`scripts/release.sh` does all of it: tag the root, bump and tidy `arkdocker` outside the workspace,
-commit, tag, then the same for `cmd/ark` and `examples`. Each tidy resolves the previous tag from
-the remote, so a real run needs `--push`: it pushes `main` and each tag before the next step.
-Existing tags are skipped, so after a failure you fix the cause and rerun the same command.
+`scripts/release.sh` does all of it: tag the root, detach, bump and tidy `arkdocker` outside the
+workspace, commit, tag, then the same for `cmd/ark`, and return to `main`. Each tidy resolves the
+previous tag from the remote, so a real run needs `--push`: it pushes each tag before the next
+step, never `main`. Existing tags are skipped, so after a failure you fix the cause and rerun the
+same command.
 
 ## Cutting a release
 
@@ -47,7 +51,7 @@ git tag -a v0.1.0 -m "ark v0.1.0" && git push origin v0.1.0
 The `release` workflow (`.github/workflows/release.yml`) takes it from there. It checks that the tag
 is the tip of `main`, runs `scripts/release.sh --push 0.1.0` for the two nested tags, then builds
 and publishes the archives from the `cmd/ark` tag. If a step fails, fix the cause and re-run the
-job: tags that exist are skipped, and the bump commits of the failed run pass the tip check.
+job: tags that exist are skipped.
 
 Majors from 2 on are refused, since the module paths carry no `/vN` suffix.
 

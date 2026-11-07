@@ -21,12 +21,9 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-      # main may only be ahead of the tag by the bump commits of an earlier,
-      # failed run of this workflow; anything else means the tag is stale.
       - name: Check the tag is the tip of main
         run: |
-          extra=$(git log --format=%s "$GITHUB_REF_NAME..HEAD" | grep -Ev '^chore\((arkdocker|cmd/ark|examples)\): require ' || true)
-          if ! git merge-base --is-ancestor "$GITHUB_REF_NAME" HEAD || [ -n "$extra" ]; then
+          if [ "$(git rev-parse "$GITHUB_REF_NAME^{commit}")" != "$(git rev-parse HEAD)" ]; then
             echo "::error::$GITHUB_REF_NAME is not the tip of main, delete it and tag the tip"
             exit 1
           fi
@@ -42,6 +39,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      # main is protected (pull requests only), so the script pushes tags only;
+      # the bump commits hang off the tags, not off main.
       - name: Tag arkdocker and cmd/ark
         run: scripts/release.sh --push "${GITHUB_REF_NAME#v}"
       # Tags pushed with GITHUB_TOKEN start no workflow, so the build runs here,

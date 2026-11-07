@@ -2,9 +2,11 @@
 # release.sh - Tag ark, arkdocker and cmd/ark in lockstep
 # Usage: ./scripts/release.sh [--dry-run] [--push] <X.Y.Z | X.Y.Z-rc.N>
 #
-# Order: tag vX.Y.Z, bump arkdocker's require, tidy, commit, tag arkdocker/vX.Y.Z,
-# then cmd/ark with both requires, then examples (untagged). Each tidy resolves the
-# previous tag from the remote, so a real run pushes main and the tag after each step.
+# Order: tag vX.Y.Z at the tip of main, bump arkdocker's require, tidy, commit, tag
+# arkdocker/vX.Y.Z, then cmd/ark with both requires. Each tidy resolves the previous
+# tag from the remote, so a real run pushes each tag before the next step. main is
+# protected (pull requests only), so the bump commits sit on a detached HEAD next to
+# main and only the tags reach the remote; main's requires follow in a normal PR.
 # Existing tags are skipped: after a failure, fix the cause and rerun the same command.
 
 set -Eeuo pipefail
@@ -76,6 +78,7 @@ on_error() {
     done
     echo "discard uncommitted go.mod/go.sum changes (git checkout -- <files>), fix the cause, then resume:" >&2
     echo "  $resume" >&2
+    git checkout -q main 2>/dev/null || true
 }
 trap on_error ERR
 
@@ -103,7 +106,7 @@ tag() {
         run git tag -a "$name" -m "$msg"
     fi
     if (( push )); then
-        run git push --atomic origin main "$name"
+        run git push origin "$name"
     fi
 }
 
@@ -126,16 +129,16 @@ bump() {
 
 tag "v$version" "ark v$version"
 
+# The bump commits never land on main: tags keep them alive.
+run git checkout -q --detach
+
 bump arkdocker "chore(arkdocker): require ark v$version" "$ROOT_MOD"
 tag "arkdocker/v$version" "arkdocker v$version"
 
 bump cmd/ark "chore(cmd/ark): require ark and arkdocker v$version" "$ROOT_MOD" "$DOCKER_MOD"
 tag "cmd/ark/v$version" "cmd/ark v$version"
 
-bump examples "chore(examples): require ark and arkdocker v$version" "$ROOT_MOD" "$DOCKER_MOD"
-if (( push )); then
-    run git push origin main
-fi
+run git checkout -q main
 
 if (( dry_run )); then
     echo "dry run, nothing tagged, committed or pushed"
