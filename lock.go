@@ -33,6 +33,24 @@ var lockRefreshInterval = 5 * time.Minute
 // package can.
 var lockSettleDelay = 200 * time.Millisecond
 
+// Lock events reported to lockEvent.
+const (
+	lockAcquired = "acquired"
+	lockRejected = "rejected"
+	lockReleased = "released"
+)
+
+// lockEvent, when set, is called when this process acquires a lock, gives up
+// an attempt on a conflicting one, and releases one. Only the test binary sets
+// it, to order and observe locks across processes; it may block.
+var lockEvent func(event string, exclusive bool)
+
+func reportLock(event string, exclusive bool) {
+	if lockEvent != nil {
+		lockEvent(event, exclusive)
+	}
+}
+
 // lockObject is the JSON body of a lock, frozen by the v1 format.
 type lockObject struct {
 	Time      time.Time `json:"time"`
@@ -208,10 +226,11 @@ func lockedError(h LockInfo, now time.Time) error {
 // repoLock is a held lock. Its refresh goroutine keeps the object young and
 // cancels the operation's context when it cannot.
 type repoLock struct {
-	repo   *Repository
-	name   string
-	cancel context.CancelFunc
-	done   chan struct{}
+	repo      *Repository
+	name      string
+	exclusive bool
+	cancel    context.CancelFunc
+	done      chan struct{}
 }
 
 // acquire takes a lock of the requested class and returns it together with a
@@ -272,6 +291,7 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 		r.logger.WarnContext(ctx, "ignoring a lock that does not open, Unlock with WithForce removes it", "lock", name)
 	}
 	if held := conflict(locks, "", exclusive, now); held != nil {
+		reportLock(lockRejected, exclusive)
 		return nil, nil, lockedError(*held, now)
 	}
 
@@ -292,12 +312,14 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 	}
 	if held := conflict(locks, name, exclusive, r.now()); held != nil {
 		r.removeLock(context.WithoutCancel(ctx), name)
+		reportLock(lockRejected, exclusive)
 		return nil, nil, lockedError(*held, r.now())
 	}
 
 	lockCtx, cancel := context.WithCancel(ctx)
-	l := &repoLock{repo: r, name: name, cancel: cancel, done: make(chan struct{})}
-	go l.keepAlive(lockCtx, exclusive)
+	l := &repoLock{repo: r, name: name, exclusive: exclusive, cancel: cancel, done: make(chan struct{})}
+	go l.keepAlive(lockCtx)
+	reportLock(lockAcquired, exclusive)
 	return lockCtx, l, nil
 }
 
@@ -305,7 +327,7 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 // refresh has succeeded for lockRefreshTimeout it cancels the operation: past
 // that point another process may consider the lock stale and prune underneath
 // it.
-func (l *repoLock) keepAlive(ctx context.Context, exclusive bool) {
+func (l *repoLock) keepAlive(ctx context.Context) {
 	defer close(l.done)
 
 	t := time.NewTicker(lockRefreshInterval)
@@ -320,7 +342,7 @@ func (l *repoLock) keepAlive(ctx context.Context, exclusive bool) {
 		}
 
 		now := l.repo.now()
-		if err := l.repo.putLock(ctx, l.name, newLockObject(now, exclusive)); err != nil {
+		if err := l.repo.putLock(ctx, l.name, newLockObject(now, l.exclusive)); err != nil {
 			l.repo.logger.WarnContext(ctx, "lock refresh failed", "lock", l.name, "error", err)
 			if now.Sub(lastOK) >= lockRefreshTimeout {
 				l.repo.logger.ErrorContext(ctx, "lock could not be refreshed, aborting operation",
@@ -341,6 +363,7 @@ func (l *repoLock) release(ctx context.Context) {
 	l.cancel()
 	<-l.done
 	l.repo.removeLock(context.WithoutCancel(ctx), l.name)
+	reportLock(lockReleased, l.exclusive)
 }
 
 func (r *Repository) removeLock(ctx context.Context, name string) {

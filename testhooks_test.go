@@ -29,3 +29,7 @@ func UnsealObject(r *Repository, h Handle, obj []byte) ([]byte, error) {
 
 // ObjectName returns the name r stores a chunk or tree of this content under.
 func ObjectName(r *Repository, data []byte) string { return r.chunks.name(data) }
+
+// SetLockEvent installs f as the lock event hook of this process, see
+// lockEvent. Set it before the first lock is taken.
+func SetLockEvent(f func(event string, exclusive bool)) { lockEvent = f }
