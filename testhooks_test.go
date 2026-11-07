@@ -50,3 +50,11 @@ func RootTree(ctx context.Context, r *Repository, id string) (string, error) {
 	}
 	return m.RootTree, nil
 }
+
+// SetMinPrefetchBytes lowers the floor of the restore prefetch budget for a
+// test and returns the function that restores it.
+func SetMinPrefetchBytes(n int64) func() {
+	old := minPrefetchBytes
+	minPrefetchBytes = n
+	return func() { minPrefetchBytes = old }
+}
