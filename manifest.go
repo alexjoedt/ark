@@ -114,7 +114,6 @@ func (s *SnapshotStats) UnmarshalJSON(data []byte) error {
 // chunkRef references a content-addressable chunk in the CAS.
 type chunkRef struct {
 	ID     string `json:"id"`
-	Size   int    `json:"size"`
 	Length int64  `json:"length"`
 	Offset int64  `json:"offset"`
 }

@@ -277,10 +277,7 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader) (*manifest
 	if err := w.wait(); err != nil {
 		return nil, fmt.Errorf("import: failed to store chunks: %w", err)
 	}
-	w.fill(collectedEntries)
-	for _, e := range collectedEntries {
-		stats.countChunks(e.Chunks)
-	}
+	w.stats(&stats, collectedEntries)
 
 	// Rebuild the Merkle tree from the re-chunked entries.
 	rootHash, err := buildTree(ctx, r.trees, collectedEntries, r.concurrency)

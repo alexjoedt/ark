@@ -2,6 +2,7 @@ package ark
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,7 +23,7 @@ func treeFixture() []fileEntry {
 		e := fileEntry{FileInfo: FileInfo{Path: path, Type: typ, Mode: 0o644, ModTime: mtime}}
 		if typ == FileTypeRegular {
 			e.Size = int64(len(path))
-			e.Chunks = []chunkRef{{ID: "chunk-" + path, Size: len(path)}}
+			e.Chunks = []chunkRef{{ID: "chunk-" + path, Length: int64(len(path))}}
 		}
 		return e
 	}
@@ -195,5 +196,42 @@ func TestBuildTreeStopsOnFirstError(t *testing.T) {
 				t.Errorf("%d Puts ran at once, limit 4", p)
 			}
 		})
+	}
+}
+
+// TestTreeNodeChunkRefsCarryNoStoredSize pins the node format: a chunk
+// reference is id, length and offset, so a node of unchanged files is
+// byte-identical to the one the parent snapshot stored. Nodes older builds
+// wrote with a size per reference still load.
+func TestTreeNodeChunkRefsCarryNoStoredSize(t *testing.T) {
+	entries := []fileEntry{{
+		FileInfo: FileInfo{Path: "f", Type: FileTypeRegular, Size: 3},
+		Chunks:   []chunkRef{{ID: "c", Length: 3, Offset: 0}},
+	}}
+	data, err := marshalTreeNode(entries, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Entries []struct {
+			Chunks []map[string]any `json:"chunks"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	got := slices.Sorted(maps.Keys(raw.Entries[0].Chunks[0]))
+	if want := []string{"id", "length", "offset"}; !slices.Equal(got, want) {
+		t.Errorf("chunk ref keys %v, want %v", got, want)
+	}
+
+	legacy := `{"entries":[{"name":"f","type":"regular","mode":420,"uid":0,"gid":0,"mtime":"2026-01-02T03:04:05Z",` +
+		`"size":3,"chunks":[{"id":"c","size":40,"length":3,"offset":0}]}]}`
+	var node treeNode
+	if err := json.Unmarshal([]byte(legacy), &node); err != nil {
+		t.Fatalf("legacy node: %v", err)
+	}
+	if len(node.Entries) != 1 || len(node.Entries[0].Chunks) != 1 || node.Entries[0].Chunks[0].ID != "c" {
+		t.Errorf("legacy node loaded as %+v", node)
 	}
 }

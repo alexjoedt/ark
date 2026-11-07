@@ -320,3 +320,92 @@ func TestForgetAndPruneOfParentDuringChildBackup(t *testing.T) {
 		t.Errorf("Check: %v %v", err, res)
 	}
 }
+
+// putCountingBackend counts the Puts per object type.
+type putCountingBackend struct {
+	ark.Backend
+
+	mu   sync.Mutex
+	puts map[ark.HandleType]int
+}
+
+func (b *putCountingBackend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
+	b.mu.Lock()
+	b.puts[h.Type]++
+	b.mu.Unlock()
+	return b.Backend.Put(ctx, h, r)
+}
+
+func rootTree(t *testing.T, repo *ark.Repository, id string) string {
+	t.Helper()
+	root, err := ark.RootTree(context.Background(), repo, id)
+	if err != nil {
+		t.Fatalf("RootTree %s: %v", id, err)
+	}
+	return root
+}
+
+// take returns the counts so far and starts over.
+func (b *putCountingBackend) take() map[ark.HandleType]int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	puts := b.puts
+	b.puts = map[ark.HandleType]int{}
+	return puts
+}
+
+func TestBackupStoresOnlyChangedTreeNodes(t *testing.T) {
+	ctx := context.Background()
+	b := &putCountingBackend{Backend: arkmem.New(), puts: map[ark.HandleType]int{}}
+	repo := openRepo(t, b)
+
+	t0 := time.Date(2026, 1, 2, 3, 4, 5, 600, time.UTC)
+	files := map[string]statFile{
+		"top.txt":          {content: "top", mtime: t0, ctime: t0, inode: 1},
+		"a/one.txt":        {content: "one", mtime: t0, ctime: t0, inode: 2},
+		"a/deep/two.txt":   {content: "two", mtime: t0, ctime: t0, inode: 3},
+		"b/three.txt":      {content: "three", mtime: t0, ctime: t0, inode: 4},
+		"b/other/four.txt": {content: payload(4), mtime: t0, ctime: t0, inode: 5},
+		"b/other/five.txt": {content: payload(5), mtime: t0, ctime: t0, inode: 6},
+	}
+	parent, err := repo.Backup(ctx, newStatSource("app", files))
+	if err != nil {
+		t.Fatalf("first backup: %v", err)
+	}
+	if got := b.take(); got[ark.TreeFile] != 5 {
+		t.Fatalf("first backup stored %d tree nodes, want 5 (%v)", got[ark.TreeFile], got)
+	}
+
+	// Nothing changed: the nodes are in the repository under the same names.
+	same, err := repo.Backup(ctx, newStatSource("app", maps.Clone(files)))
+	if err != nil {
+		t.Fatalf("second backup: %v", err)
+	}
+	got := b.take()
+	if got[ark.TreeFile] != 0 || got[ark.BlobFile] != 0 || got[ark.SnapshotFile] != 1 {
+		t.Errorf("unchanged backup stored %v, want only the manifest", got)
+	}
+	if sameRoot, parentRoot := rootTree(t, repo, same.ID), rootTree(t, repo, parent.ID); sameRoot != parentRoot {
+		t.Errorf("root tree %s differs from the parent's %s", sameRoot, parentRoot)
+	}
+
+	// One file changed: its directory, the parents up to the root and the
+	// root itself are rewritten, the other subtrees are not.
+	t1 := t0.Add(time.Hour)
+	files["a/deep/two.txt"] = statFile{content: "two!", mtime: t1, ctime: t1, inode: 3}
+	child, err := repo.Backup(ctx, newStatSource("app", files))
+	if err != nil {
+		t.Fatalf("third backup: %v", err)
+	}
+	got = b.take()
+	if got[ark.TreeFile] != 3 || got[ark.BlobFile] != 1 {
+		t.Errorf("changed backup stored %v, want 3 tree nodes and 1 blob", got)
+	}
+	st := child.Stats
+	if st.ChunksNew != 1 || st.ChunksReused != parent.Stats.ChunksTotal-1 || st.StoredSize == 0 ||
+		st.NewChunksRawSize != 4 {
+		t.Errorf("stats: new %d, reused %d, stored %d, raw %d; want 1, %d, >0, 4",
+			st.ChunksNew, st.ChunksReused, st.StoredSize, st.NewChunksRawSize, parent.Stats.ChunksTotal-1)
+	}
+	checkRestore(t, repo, child.ID, files)
+}

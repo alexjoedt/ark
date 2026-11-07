@@ -36,21 +36,6 @@ type SnapshotStats struct {
 	Duration           time.Duration `json:"-"`
 }
 
-// countChunks folds one file's chunk references into the statistics. A
-// reference with a zero stored size is a chunk the CAS already held.
-func (s *SnapshotStats) countChunks(chunks []chunkRef) {
-	for _, c := range chunks {
-		s.ChunksTotal++
-		if c.Size > 0 {
-			s.ChunksNew++
-			s.StoredSize += int64(c.Size)
-			s.NewChunksRawSize += c.Length
-		} else {
-			s.ChunksReused++
-		}
-	}
-}
-
 // computeRatios derives the two ratios from the counters, once they are final.
 func (s *SnapshotStats) computeRatios() {
 	if s.TotalSize > 0 {

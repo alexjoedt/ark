@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"time"
 
 	"github.com/alexjoedt/ark/chunker"
@@ -73,10 +72,7 @@ func (r *Repository) runBackup(ctx context.Context, src Source, opts backupOptio
 			if prev, ok := parent[normEntryPath(entry.Path)]; ok && unchanged(entry, prev.FileInfo) {
 				// The chunks are in the repository already, so they are
 				// reused, exactly as a re-read would have found them.
-				fe.Chunks = slices.Clone(prev.Chunks)
-				for i := range fe.Chunks {
-					fe.Chunks[i].Size = 0
-				}
+				fe.Chunks = prev.Chunks
 				stats.FilesUnchanged++
 			} else {
 				chunks, err := chunkFile(w, cr, open)
@@ -123,10 +119,7 @@ func (r *Repository) runBackup(ctx context.Context, src Source, opts backupOptio
 	if werr != nil {
 		return nil, fmt.Errorf("backup: failed to store chunks: %w", werr)
 	}
-	w.fill(scannedEntries)
-	for _, e := range scannedEntries {
-		stats.countChunks(e.Chunks)
-	}
+	w.stats(&stats, scannedEntries)
 
 	opts.progress(ProgressEvent{Phase: PhaseFinalize, FilesDone: stats.FileCount, BytesDone: stats.TotalSize})
 
@@ -226,9 +219,8 @@ func chunkFile(w *chunkWriter, cr *chunker.Chunker, open func() (io.ReadCloser, 
 }
 
 // chunkFileData reads r through cr, hands every chunk to w, and returns the
-// chunk references. Their stored sizes are set by w.fill once w is drained. cr is built from the repository config, never
-// from the code defaults, so a later change to the defaults keeps
-// deduplication working.
+// chunk references. cr is built from the repository config, never from the
+// code defaults, so a later change to the defaults keeps deduplication working.
 func chunkFileData(w *chunkWriter, cr *chunker.Chunker, r io.Reader) ([]chunkRef, error) {
 	cr.Reset(r)
 	var refs []chunkRef
