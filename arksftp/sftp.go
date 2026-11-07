@@ -276,6 +276,7 @@ func (b *Backend) createTemp(dir string) (*sftp.File, string, error) {
 // remove the target first: a concurrent reader can then observe the object as
 // missing for the width of one round trip. Put only ever writes identical
 // content under a given name, so that window costs a retry, never wrong data.
+// A Rename that loses against another writer's rename counts as success.
 func (b *Backend) rename(tmp, p string) error {
 	if b.posixRename {
 		return b.client.PosixRename(tmp, p)
@@ -283,7 +284,19 @@ func (b *Backend) rename(tmp, p string) error {
 	if err := b.client.Remove(p); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return b.client.Rename(tmp, p)
+	err := b.client.Rename(tmp, p)
+	if err == nil {
+		return nil
+	}
+	// Another writer renamed onto p between our Remove and Rename. Every
+	// same-name concurrent Put in ark writes identical content (chunks and trees
+	// by hash, locks and snapshots by unique ULID, keys and config under the
+	// exclusive lock), so the winner's object is as good as ours.
+	if _, serr := b.client.Stat(p); serr == nil {
+		_ = b.client.Remove(tmp)
+		return nil
+	}
+	return err
 }
 
 // Get returns a ReadCloser for the object stored under h.
