@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 
 	"github.com/alexjoedt/ark/chunker"
@@ -26,7 +27,7 @@ func (r *Repository) runBackup(ctx context.Context, src Source, opts backupOptio
 		}
 	}
 
-	parent, err := r.parentFiles(ctx, parentID)
+	parent, err := r.parentFiles(ctx, parentID, meta.Name)
 	if err != nil {
 		logger.WarnContext(ctx, "failed to load the parent snapshot, reading every file",
 			"parent", parentID, "error", err)
@@ -72,10 +73,10 @@ func (r *Repository) runBackup(ctx context.Context, src Source, opts backupOptio
 			if prev, ok := parent[normEntryPath(entry.Path)]; ok && unchanged(entry, prev.FileInfo) {
 				// The chunks are in the repository already, so they are
 				// reused, exactly as a re-read would have found them.
-				for i := range prev.Chunks {
-					prev.Chunks[i].Size = 0
+				fe.Chunks = slices.Clone(prev.Chunks)
+				for i := range fe.Chunks {
+					fe.Chunks[i].Size = 0
 				}
-				fe.Chunks = prev.Chunks
 				stats.FilesUnchanged++
 			} else {
 				chunks, err := chunkFile(w, cr, open)
@@ -161,9 +162,11 @@ func (r *Repository) runBackup(ctx context.Context, src Source, opts backupOptio
 	return m, nil
 }
 
-// parentFiles loads the regular files of snapshot id, keyed by path. An empty
-// id has no parent and returns no files.
-func (r *Repository) parentFiles(ctx context.Context, id string) (map[string]fileEntry, error) {
+// parentFiles loads the regular files of snapshot id that a backup of source
+// may take unread, keyed by path. An empty id has no parent and returns no
+// files. A parent of another source is refused: with only Size and ModTime to
+// compare, its files could match another volume's by accident.
+func (r *Repository) parentFiles(ctx context.Context, id, source string) (map[string]fileEntry, error) {
 	if id == "" {
 		return map[string]fileEntry{}, nil
 	}
@@ -171,9 +174,17 @@ func (r *Repository) parentFiles(ctx context.Context, id string) (map[string]fil
 	if err != nil {
 		return nil, err
 	}
+	if m.SourceName != source {
+		return nil, fmt.Errorf("parent %s belongs to source %q", id, m.SourceName)
+	}
+	// A rewrite in the same timestamp tick as the parent's read leaves the
+	// stat unchanged, so a file whose mtime is not clearly older than the
+	// parent's start is read again. Two seconds cover 1 s ticks (tar headers,
+	// ext3, NFS) and 2 s ticks (FAT).
+	racy := m.CreatedAt.Add(-2 * time.Second)
 	files := make(map[string]fileEntry)
 	err = walkTree(ctx, r.trees, m.RootTree, func(e fileEntry) error {
-		if e.Type == FileTypeRegular {
+		if e.Type == FileTypeRegular && e.ModTime.Before(racy) {
 			files[e.Path] = e
 		}
 		return nil

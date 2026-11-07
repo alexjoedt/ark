@@ -237,6 +237,44 @@ func TestBackupComparesChangeTimeOnlyWhenBothSidesHaveIt(t *testing.T) {
 	}
 }
 
+// A file whose mtime falls in the tick the parent read it in may have been
+// rewritten after that read without a visible stat change, so it is read
+// again; a parent of another source lends no files at all.
+func TestBackupRereadsRacyAndForeignParentFiles(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+
+	// Whole seconds and no ctime or inode, as a tar header reports them.
+	now := time.Now().Truncate(time.Second)
+	if _, err := repo.Backup(ctx, newStatSource("vol", map[string]statFile{
+		"db": {content: "page-1", mtime: now},
+	})); err != nil {
+		t.Fatalf("first backup: %v", err)
+	}
+	files := map[string]statFile{"db": {content: "page-2", mtime: now}}
+	src := newStatSource("vol", files)
+	snap, err := repo.Backup(ctx, src)
+	if err != nil {
+		t.Fatalf("second backup: %v", err)
+	}
+	if src.opens["db"] != 1 {
+		t.Error("a file modified in the parent's tick was taken from the parent")
+	}
+	checkRestore(t, repo, snap.ID, files)
+
+	other, err := repo.Backup(ctx, newStatSource("other", baseFiles()))
+	if err != nil {
+		t.Fatalf("backup of the other source: %v", err)
+	}
+	foreign := newStatSource("app", baseFiles())
+	if _, err := repo.Backup(ctx, foreign, ark.WithParent(other.ID)); err != nil {
+		t.Fatalf("backup with a foreign parent: %v", err)
+	}
+	if len(foreign.opens) != len(foreign.files) {
+		t.Errorf("with a foreign parent opened %v, want every file", foreign.opened())
+	}
+}
+
 // A forget and prune of the parent while the child still reuses its chunks:
 // forget only removes the manifest, and prune needs the exclusive lock the
 // running backup's shared lock blocks.

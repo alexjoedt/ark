@@ -136,17 +136,14 @@ func (s *fileSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 		}
 
 		uid, gid := fileOwner(fi)
-		ctime, ino := changeID(fi)
 		entry := ark.FileInfo{
-			Path:       rel,
-			Type:       ark.FileTypeRegular,
-			Size:       fi.Size(),
-			Mode:       fi.Mode().Perm(),
-			ModTime:    fi.ModTime(),
-			UID:        uid,
-			GID:        gid,
-			ChangeTime: ctime,
-			Inode:      ino,
+			Path:    rel,
+			Type:    ark.FileTypeRegular,
+			Size:    fi.Size(),
+			Mode:    fi.Mode().Perm(),
+			ModTime: fi.ModTime(),
+			UID:     uid,
+			GID:     gid,
 		}
 
 		// Devices, fifos and sockets: the core counts them and drops them.
@@ -165,6 +162,9 @@ func (s *fileSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 			}
 			linked[key] = rel
 		}
+
+		// Only a file with content uses them, so only it carries them.
+		entry.ChangeTime, entry.Inode = changeID(fi)
 
 		if entry.Xattrs, err = readXattrs(path); err != nil {
 			return err

@@ -82,9 +82,14 @@ func TestIncrementalBackupCatchesMtimePreservingRewrite(t *testing.T) {
 
 	src := t.TempDir()
 	same, edited := filepath.Join(src, "same.txt"), filepath.Join(src, "edited.txt")
+	// An hour old, so neither file is racy against the first backup's start.
+	old := time.Now().Add(-time.Hour)
 	for _, p := range []string{same, edited} {
 		if err := os.WriteFile(p, []byte("before"), 0o644); err != nil {
 			t.Fatalf("write: %v", err)
+		}
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatalf("chtimes: %v", err)
 		}
 	}
 	if _, err := arkfs.Backup(ctx, repo, src); err != nil {

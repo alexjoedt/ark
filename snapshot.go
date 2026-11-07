@@ -24,7 +24,7 @@ type SnapshotStats struct {
 	FileCount          int           `json:"total_files"`
 	DirCount           int           `json:"total_dirs"`
 	Skipped            int           `json:"skipped"`
-	FilesUnchanged     int           `json:"files_unchanged"`
+	FilesUnchanged     int           `json:"files_unchanged,omitempty"`
 	TotalSize          int64         `json:"total_size"`
 	StoredSize         int64         `json:"stored_size"`
 	NewChunksRawSize   int64         `json:"new_chunks_raw_size"`
@@ -116,7 +116,8 @@ func WithHost(h string) BackupOption {
 }
 
 // WithParent names the parent snapshot explicitly, as a full id or a unique
-// prefix. Without it the parent is the newest snapshot of the same source.
+// prefix. Without it the parent is the newest snapshot of the same source. A
+// parent of another source is recorded but no file is taken from it unread.
 func WithParent(id string) BackupOption {
 	return func(o *backupOptions) { o.parent = id }
 }
