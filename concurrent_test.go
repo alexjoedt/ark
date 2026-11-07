@@ -23,7 +23,7 @@ import (
 // until the parent has seen all children acquire theirs and closes fd 4: all
 // shared locks are held at once, so the backups overlap however small they
 // are. The sources share most of their files, so the children Put the same
-// chunk names concurrently.
+// chunk names concurrently. The base snapshot is taken afterwards.
 //
 //	ARK_CONC_SEED  seed of the file contents, printed on every run
 const (
@@ -67,31 +67,11 @@ func runConcurrentBackups(t *testing.T, newRepo func(context.Context, *testing.T
 	}
 	defer func() { _ = repo.Close() }()
 
-	// The base snapshot shares the children's chunks and owns one file they
-	// lack, so forgetting it leaves chunks for Prune to remove.
-	baseSrc := t.TempDir()
-	for j, data := range shared {
-		writeTestFile(t, filepath.Join(baseSrc, "shared", fmt.Sprintf("s%d.bin", j)), data)
-	}
-	baseOnly := make([]byte, 64<<10)
-	_, _ = bytesSrc.Read(baseOnly)
-	writeTestFile(t, filepath.Join(baseSrc, "base.bin"), baseOnly)
-	fsSrc, err := arkfs.NewSource(baseSrc)
-	if err != nil {
-		t.Fatalf("NewSource: %v", err)
-	}
-	base, err := repo.Backup(ctx, fsSrc, ark.WithTags("base"))
-	if err != nil {
-		t.Fatalf("Backup base: %v", err)
-	}
-
 	want := map[string]map[string]string{}
 	children := make([]*concChild, concWriters)
 	for i := range children {
 		src := t.TempDir()
-		for j, data := range shared {
-			writeTestFile(t, filepath.Join(src, "shared", fmt.Sprintf("s%d.bin", j)), data)
-		}
+		writeSharedTree(t, src, shared)
 		for j := range 2 {
 			data := make([]byte, 64<<10)
 			_, _ = bytesSrc.Read(data)
@@ -152,15 +132,37 @@ func runConcurrentBackups(t *testing.T, newRepo func(context.Context, *testing.T
 		}
 	}
 
-	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{base.ID}}); err != nil {
+	// The base snapshot is taken last: it shares the children's chunks and
+	// owns one file they lack, so forgetting it leaves chunks for Prune to
+	// remove.
+	baseSrc := t.TempDir()
+	writeSharedTree(t, baseSrc, shared)
+	baseOnly := make([]byte, 64<<10)
+	_, _ = bytesSrc.Read(baseOnly)
+	writeTestFile(t, filepath.Join(baseSrc, "base.bin"), baseOnly)
+	fsSrc, err := arkfs.NewSource(baseSrc)
+	if err != nil {
+		t.Fatalf("NewSource: %v", err)
+	}
+	base, err := repo.Backup(ctx, fsSrc, ark.WithTags("base"))
+	if err != nil {
+		t.Fatalf("Backup base: %v", err)
+	}
+
+	forgot, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{base.ID}})
+	if err != nil {
 		t.Fatalf("Forget base: %v", err)
+	}
+	if len(forgot.Remove) != 1 || forgot.Remove[0].ID != base.ID {
+		t.Fatalf("Forget removed %d snapshots, want only the base snapshot", len(forgot.Remove))
 	}
 	pruned, err := repo.Prune(ctx)
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
-	if pruned.BlobsRemoved < 1 {
-		t.Fatalf("Prune removed %d objects, want at least 1", pruned.BlobsRemoved)
+	// base.bin's chunks, which no child shares, plus the base root tree.
+	if wantMin := base.Stats.ChunksNew + 1; base.Stats.ChunksNew < 1 || pruned.BlobsRemoved < wantMin {
+		t.Fatalf("Prune removed %d objects, want at least %d (%d base-only chunks and a tree)", pruned.BlobsRemoved, wantMin, base.Stats.ChunksNew)
 	}
 	snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{})
 	if err != nil {
@@ -187,13 +189,6 @@ func runConcurrentBackups(t *testing.T, newRepo func(context.Context, *testing.T
 		if diff := diffTree(want[tag], readTree(t, dst)); diff != "" {
 			t.Fatalf("snapshot %s (%s) restores a different tree: %s", s.ID, tag, diff)
 		}
-		res, err := repo.Verify(ctx, s.ID)
-		if err != nil {
-			t.Fatalf("Verify %s (%s): %v", s.ID, tag, err)
-		}
-		if !res.OK {
-			t.Fatalf("Verify %s (%s): missing %v, corrupt %v", s.ID, tag, res.MissingChunks, res.CorruptChunks)
-		}
 	}
 	check, err := repo.Check(ctx)
 	if err != nil {
@@ -201,6 +196,13 @@ func runConcurrentBackups(t *testing.T, newRepo func(context.Context, *testing.T
 	}
 	if len(check.Errors) > 0 {
 		t.Fatalf("Check: %v", check.Errors)
+	}
+}
+
+func writeSharedTree(t *testing.T, dir string, shared [][]byte) {
+	t.Helper()
+	for j, data := range shared {
+		writeTestFile(t, filepath.Join(dir, "shared", fmt.Sprintf("s%d.bin", j)), data)
 	}
 }
 
