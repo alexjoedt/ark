@@ -61,6 +61,30 @@ func runConcurrentBackups(t *testing.T, newRepo func(context.Context, *testing.T
 		shared[i] = make([]byte, 96<<10)
 		_, _ = bytesSrc.Read(shared[i])
 	}
+	repo, err := ark.Open(ctx, keepOpen{raw}, testPassword)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = repo.Close() }()
+
+	// The base snapshot shares the children's chunks and owns one file they
+	// lack, so forgetting it leaves chunks for Prune to remove.
+	baseSrc := t.TempDir()
+	for j, data := range shared {
+		writeTestFile(t, filepath.Join(baseSrc, "shared", fmt.Sprintf("s%d.bin", j)), data)
+	}
+	baseOnly := make([]byte, 64<<10)
+	_, _ = bytesSrc.Read(baseOnly)
+	writeTestFile(t, filepath.Join(baseSrc, "base.bin"), baseOnly)
+	fsSrc, err := arkfs.NewSource(baseSrc)
+	if err != nil {
+		t.Fatalf("NewSource: %v", err)
+	}
+	base, err := repo.Backup(ctx, fsSrc, ark.WithTags("base"))
+	if err != nil {
+		t.Fatalf("Backup base: %v", err)
+	}
+
 	want := map[string]map[string]string{}
 	children := make([]*concChild, concWriters)
 	for i := range children {
@@ -128,11 +152,16 @@ func runConcurrentBackups(t *testing.T, newRepo func(context.Context, *testing.T
 		}
 	}
 
-	repo, err := ark.Open(ctx, keepOpen{raw}, testPassword)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
+	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{base.ID}}); err != nil {
+		t.Fatalf("Forget base: %v", err)
 	}
-	defer func() { _ = repo.Close() }()
+	pruned, err := repo.Prune(ctx)
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	if pruned.BlobsRemoved < 1 {
+		t.Fatalf("Prune removed %d objects, want at least 1", pruned.BlobsRemoved)
+	}
 	snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{})
 	if err != nil {
 		t.Fatalf("Snapshots: %v", err)
@@ -165,6 +194,13 @@ func runConcurrentBackups(t *testing.T, newRepo func(context.Context, *testing.T
 		if !res.OK {
 			t.Fatalf("Verify %s (%s): missing %v, corrupt %v", s.ID, tag, res.MissingChunks, res.CorruptChunks)
 		}
+	}
+	check, err := repo.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(check.Errors) > 0 {
+		t.Fatalf("Check: %v", check.Errors)
 	}
 }
 
