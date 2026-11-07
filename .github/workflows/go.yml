@@ -70,8 +70,9 @@ jobs:
 
       # The kill harness runs in this step too: ARK_KILL_RUNS fixes its count,
       # the ubuntu leg adds the arksftp variant through ARK_SFTP_TEST_URI (about
-      # 11 s per run, 2 min for both variants locally). A failure names its
-      # seed, rerun with ARK_KILL_SEED.
+      # 11 s per run, 2 min for both variants locally). The concurrent-writers
+      # test runs here too, never under -short: about 2 s on arklocal, about
+      # 22 s on arksftp. A failure names its seed, rerun with ARK_KILL_SEED.
       - name: Test
         run: go test github.com/alexjoedt/ark/...
         env:
