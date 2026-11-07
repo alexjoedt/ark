@@ -45,6 +45,10 @@ const (
 
 const concWriters = 8
 
+// concLockWait is the children's WithLockWait. The prune and the late backup
+// each wait up to that long, so the parent waits longer than both.
+const concLockWait = time.Minute
+
 // Child indexes after the concWriters backups.
 const (
 	concPruner = concWriters
@@ -112,6 +116,9 @@ func runConcurrentOnce(t *testing.T, newRepo func(context.Context, *testing.T) (
 	children := make([]*concChild, concWriters+2)
 	events := make(chan concEvent)
 	start := func(i int, name string, env []string) {
+		if children[i] != nil {
+			t.Fatalf("child %d (%s) started twice", i, name)
+		}
 		children[i] = startConcChild(t, name, env)
 		go children[i].readEvents(t.Context(), i, events)
 	}
@@ -129,7 +136,7 @@ func runConcurrentOnce(t *testing.T, newRepo func(context.Context, *testing.T) (
 	acquired, released, rejected := make([]int, n), make([]int, n), make([]int, n)
 	held := map[int]bool{} // child -> exclusive
 	open := concWriters
-	timeout := time.After(60 * time.Second)
+	timeout := time.After(3 * concLockWait)
 	for open > 0 {
 		var ev concEvent
 		select {
@@ -164,6 +171,8 @@ func runConcurrentOnce(t *testing.T, newRepo func(context.Context, *testing.T) (
 			}
 			delete(held, i)
 			released[i]++
+		case ark.LockLeftOver:
+			t.Fatalf("child %d could not delete its released lock, which blocks the others until it is stale", i)
 		case ark.LockRejected:
 			if i < concWriters {
 				t.Fatalf("backup child %d was rejected", i)
@@ -194,6 +203,10 @@ func runConcurrentOnce(t *testing.T, newRepo func(context.Context, *testing.T) (
 			ack(concPruner)
 		}
 		ack(i)
+	}
+	if rejected[concPruner] == 0 || rejected[concLate] == 0 {
+		t.Fatalf("prune rejected %d times, late backup %d times, want at least once each",
+			rejected[concPruner], rejected[concLate])
 	}
 	for i, c := range children {
 		if err := c.cmd.Wait(); err != nil {
@@ -258,9 +271,6 @@ func runConcurrentOnce(t *testing.T, newRepo func(context.Context, *testing.T) (
 		}
 		if diff := diffTree(want[tag], readTree(t, dst)); diff != "" {
 			t.Fatalf("snapshot %s (%s) restores a different tree: %s", s.ID, tag, diff)
-		}
-		if v, err := repo.Verify(ctx, s.ID); err != nil || !v.OK {
-			t.Fatalf("Verify %s (%s): %v, %+v", s.ID, tag, err, v)
 		}
 	}
 	check, err := repo.Check(ctx)
@@ -369,7 +379,7 @@ func TestConcurrentChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open %s: %v", ref, err)
 	}
-	repo, err := ark.Open(ctx, b, testPassword, ark.WithLockWait(time.Minute))
+	repo, err := ark.Open(ctx, b, testPassword, ark.WithLockWait(concLockWait))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

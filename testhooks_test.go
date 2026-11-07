@@ -39,4 +39,5 @@ const (
 	LockAcquired = lockAcquired
 	LockRejected = lockRejected
 	LockReleased = lockReleased
+	LockLeftOver = lockLeftOver
 )

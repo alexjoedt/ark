@@ -39,12 +39,14 @@ const (
 	lockAcquired = "acquired"
 	lockRejected = "rejected"
 	lockReleased = "released"
+	lockLeftOver = "left-over"
 )
 
 // lockEvent, when set, is called when this process acquires a lock, gives up
 // an attempt on a conflicting one, and releases one. A release is reported
 // once the operation is done and before its object is deleted, so an observer
-// that blocks the call orders the release before any acquire it allows. Only
+// that blocks the call orders the release before any acquire it allows; a
+// failed delete is reported as left-over after the release. Only
 // the test binary sets it, to order and observe locks across processes; it
 // may block.
 var lockEvent func(event string, exclusive bool)
@@ -250,17 +252,19 @@ func (r *Repository) acquire(ctx context.Context, exclusive bool) (context.Conte
 		if err == nil {
 			return lockCtx, l, nil
 		}
-		if !errors.Is(err, ErrRepoLocked) || !r.now().Before(deadline) {
+		left := deadline.Sub(r.now())
+		if !errors.Is(err, ErrRepoLocked) || left <= 0 {
 			return nil, nil, err
 		}
-		if waitErr := sleepCtx(ctx, lockBackoff(attempt)); waitErr != nil {
+		if waitErr := sleepCtx(ctx, min(lockBackoff(attempt), left)); waitErr != nil {
 			return nil, nil, waitErr
 		}
 	}
 }
 
 // Backoff bounds for a waiting acquire, so a queue of waiters spreads out
-// instead of hammering the backend.
+// instead of hammering the backend. With jitter a sleep lasts up to twice the
+// bound; acquire never sleeps past its deadline.
 const (
 	lockBackoffFloor = 500 * time.Millisecond
 	lockBackoffMax   = 8 * time.Second
@@ -369,15 +373,19 @@ func (l *repoLock) release(ctx context.Context) {
 	l.cancel()
 	<-l.done
 	reportLock(lockReleased, l.exclusive)
-	l.repo.removeLock(context.WithoutCancel(ctx), l.name)
+	if !l.repo.removeLock(context.WithoutCancel(ctx), l.name) {
+		reportLock(lockLeftOver, l.exclusive)
+	}
 }
 
-// removeLock deletes the lock object name. A failure is only logged: the lock
-// goes stale and Unlock removes it.
-func (r *Repository) removeLock(ctx context.Context, name string) {
+// removeLock deletes the lock object name and reports whether it is gone. A
+// failure is only logged: the lock goes stale and Unlock removes it.
+func (r *Repository) removeLock(ctx context.Context, name string) bool {
 	if err := r.backend.Delete(ctx, Handle{Type: LockFile, Name: name}); err != nil {
 		r.logger.WarnContext(ctx, "failed to remove lock", "lock", name, "error", err)
+		return false
 	}
+	return true
 }
 
 // Locks lists the lock objects in the repository, newest first, stale ones

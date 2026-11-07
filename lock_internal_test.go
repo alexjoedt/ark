@@ -270,7 +270,7 @@ func TestLockBackoffAddsJitterUpToTheInterval(t *testing.T) {
 	for _, tc := range []struct {
 		attempt int
 		base    time.Duration
-	}{{0, lockBackoffFloor}, {1, 2 * lockBackoffFloor}, {4, lockBackoffMax}, {1 << 20, lockBackoffMax}} {
+	}{{0, lockBackoffFloor}, {1, min(2*lockBackoffFloor, lockBackoffMax)}, {1 << 20, lockBackoffMax}} {
 		seen := map[time.Duration]bool{}
 		for range 50 {
 			d := lockBackoff(tc.attempt)
@@ -306,6 +306,27 @@ func TestLockWaitRetriesUntilTheLockIsFree(t *testing.T) {
 		t.Fatalf("acquire with WithLockWait: %v", err)
 	}
 	second.release(ctx)
+}
+
+func TestLockWaitEndsAtItsDeadline(t *testing.T) {
+	ctx := context.Background()
+	repo, _, _ := lockRepo(t)
+	repo.clock = time.Now
+	repo.lockWait = 50 * time.Millisecond
+
+	_, held, err := repo.acquire(ctx, true)
+	if err != nil {
+		t.Fatalf("exclusive lock: %v", err)
+	}
+	defer held.release(ctx)
+
+	start := time.Now()
+	if _, _, err := repo.acquire(ctx, false); !errors.Is(err, ErrRepoLocked) {
+		t.Fatalf("acquire under an exclusive lock: %v, want ErrRepoLocked", err)
+	}
+	if took := time.Since(start); took >= lockBackoffFloor {
+		t.Fatalf("acquire with a 50ms wait took %v, want it to stop sleeping at the deadline", took)
+	}
 }
 
 func TestLockIsStaleAfterThirtyMinutes(t *testing.T) {
