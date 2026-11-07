@@ -8,10 +8,10 @@ import (
 	"sync"
 )
 
-// minPrefetchBytes is the floor of the bytes a chunkFetcher holds fetched but
-// not yet read. The budget rises to one maximal chunk per worker when the
+// defaultPrefetchBytes is the floor of the bytes a chunkFetcher holds fetched
+// but not yet read. The budget rises to one maximal chunk per worker when the
 // chunker is configured larger, so a big file still keeps every worker busy.
-var minPrefetchBytes int64 = 64 << 20
+const defaultPrefetchBytes int64 = 64 << 20
 
 // chunkFetcher reads chunk content, serving repeats from a cache. The zero
 // cache is allowed and simply never hits.
@@ -33,6 +33,11 @@ type chunkFetcher struct {
 	turnMu sync.Mutex
 	turn   chan struct{}
 
+	// flights are the cache misses being fetched right now, so streams of
+	// files sharing a chunk take one GET between them instead of one each.
+	flightMu sync.Mutex
+	flights  map[string]*flight
+
 	// mu serialises onRead, so a progress handler is never called from two
 	// fetches at once even though the fetches themselves run in parallel.
 	mu     sync.Mutex
@@ -40,12 +45,22 @@ type chunkFetcher struct {
 	onRead func(read int)
 }
 
+type flight struct {
+	done chan struct{}
+	data []byte
+	err  error
+}
+
 func (r *Repository) newChunkFetcher(cache *chunkCache) *chunkFetcher {
 	workers := r.concurrency
 	if workers < 1 {
 		workers = runtime.NumCPU() * 2
 	}
-	budget := max(minPrefetchBytes, int64(workers)*int64(r.chunker.MaxSize))
+	floor := r.prefetchBytes
+	if floor <= 0 {
+		floor = defaultPrefetchBytes
+	}
+	budget := max(floor, int64(workers)*int64(r.chunker.MaxSize))
 	turn := make(chan struct{})
 	close(turn)
 	return &chunkFetcher{
@@ -55,6 +70,7 @@ func (r *Repository) newChunkFetcher(cache *chunkCache) *chunkFetcher {
 		sem:     make(chan struct{}, workers),
 		budget:  newByteBudget(budget),
 		turn:    turn,
+		flights: make(map[string]*flight),
 	}
 }
 
@@ -62,13 +78,44 @@ func (f *chunkFetcher) get(ctx context.Context, id string) ([]byte, error) {
 	data, ok := f.cache.get(id)
 	if !ok {
 		var err error
-		if data, err = f.store.Get(ctx, id); err != nil {
+		if data, err = f.fetch(ctx, id); err != nil {
 			return nil, err
 		}
-		f.cache.put(id, data)
 	}
 	f.count()
 	return data, nil
+}
+
+// fetch reads one chunk from the store, merging concurrent misses for the same
+// id into one GET. A follower whose leader failed fetches on its own: a stream
+// closed early cancels only its own GET, never the streams sharing the chunk.
+func (f *chunkFetcher) fetch(ctx context.Context, id string) ([]byte, error) {
+	f.flightMu.Lock()
+	if fl, ok := f.flights[id]; ok {
+		f.flightMu.Unlock()
+		select {
+		case <-fl.done:
+			if fl.err == nil {
+				return fl.data, nil
+			}
+			return f.fetch(ctx, id)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	fl := &flight{done: make(chan struct{})}
+	f.flights[id] = fl
+	f.flightMu.Unlock()
+
+	fl.data, fl.err = f.store.Get(ctx, id)
+	if fl.err == nil {
+		f.cache.put(id, fl.data)
+	}
+	f.flightMu.Lock()
+	delete(f.flights, id)
+	f.flightMu.Unlock()
+	close(fl.done)
+	return fl.data, fl.err
 }
 
 // count reports one more chunk read, cache hits included, so progress tracks
@@ -111,8 +158,14 @@ func (f *chunkFetcher) reader(ctx context.Context, refs []chunkRef) *chunkStream
 	f.turnMu.Unlock()
 
 	go func() {
+		// A stream that stopped early passes its turn on only after the one
+		// before it, or a later file could take the whole budget ahead of the
+		// file being read. pending closes first, so Close never waits for it.
+		defer func() {
+			<-prev
+			close(done)
+		}()
 		defer close(s.pending)
-		defer close(done)
 
 		select {
 		case <-prev:
@@ -199,38 +252,36 @@ func (s *chunkStream) Close() error {
 // byteBudget bounds the bytes held between fetch and read. A request larger
 // than the whole budget is granted once nothing else is held, so one oversized
 // chunk slows a stream down instead of stopping it.
+//
+// The turn chain lets one producer acquire at a time, so a single buffered
+// signal is enough to wake it: a release that nobody waits for leaves the
+// signal behind, and the next acquire just rechecks once.
 type byteBudget struct {
 	mu    sync.Mutex
-	cond  *sync.Cond
 	limit int64
 	used  int64
+	freed chan struct{}
 }
 
 func newByteBudget(limit int64) *byteBudget {
-	b := &byteBudget{limit: limit}
-	b.cond = sync.NewCond(&b.mu)
-	return b
+	return &byteBudget{limit: limit, freed: make(chan struct{}, 1)}
 }
 
 func (b *byteBudget) acquire(ctx context.Context, n int64) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.used > 0 && b.used+n > b.limit {
-		stop := context.AfterFunc(ctx, func() {
-			b.mu.Lock()
-			b.cond.Broadcast()
+	for {
+		b.mu.Lock()
+		if b.used == 0 || b.used+n <= b.limit {
+			b.used += n
 			b.mu.Unlock()
-		})
-		defer stop()
-		for b.used > 0 && b.used+n > b.limit {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			b.cond.Wait()
+			return nil
+		}
+		b.mu.Unlock()
+		select {
+		case <-b.freed:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
-	b.used += n
-	return nil
 }
 
 func (b *byteBudget) release(n int64) {
@@ -239,6 +290,9 @@ func (b *byteBudget) release(n int64) {
 	}
 	b.mu.Lock()
 	b.used -= n
-	b.cond.Broadcast()
 	b.mu.Unlock()
+	select {
+	case b.freed <- struct{}{}:
+	default:
+	}
 }

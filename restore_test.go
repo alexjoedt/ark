@@ -192,7 +192,6 @@ func TestRestoreDoesNotFetchThatWholeSnapshotUpFront(t *testing.T) {
 
 	// Four workers and a 64 KiB budget over 16 KiB chunks: the restore may
 	// hold a handful of chunks ahead of the sink, never the snapshot.
-	t.Cleanup(ark.SetMinPrefetchBytes(64 << 10))
 	cfg := chunker.Config{MinSize: 4 << 10, AvgSize: 8 << 10, MaxSize: 16 << 10}
 	if err := ark.Init(ctx, b, testPassword, ark.WithChunkerConfig(cfg)); err != nil {
 		t.Fatalf("Init: %v", err)
@@ -202,6 +201,7 @@ func TestRestoreDoesNotFetchThatWholeSnapshotUpFront(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer repo.Close()
+	ark.SetPrefetchBytes(repo, 64<<10)
 
 	snap, err := repo.Backup(ctx, bigFiles(t))
 	if err != nil {
@@ -333,6 +333,11 @@ func TestRestoreCacheServesRepeatedContent(t *testing.T) {
 
 	if cached >= uncached {
 		t.Errorf("the cache saved nothing: %d reads with it, %d without", cached, uncached)
+	}
+	// The two files are fetched at the same time, so a miss of one must wait
+	// for the other's GET instead of repeating it.
+	if unique := snap.Stats.ChunksNew; cached != unique {
+		t.Errorf("the cached restore read %d chunks, the snapshot holds %d unique", cached, unique)
 	}
 }
 

@@ -71,7 +71,8 @@ func (r *Repository) runExport(ctx context.Context, snapshotID string, w io.Writ
 
 	logger.InfoContext(ctx, "exporting snapshot", "files", m.Stats.FileCount, "chunks", m.Stats.ChunksTotal)
 
-	// Same streaming path as restore: chunks of the current file only.
+	// Same streaming path as restore: the chunks of the upcoming files are
+	// fetched while the current one is written to the archive.
 	fetcher := r.newChunkFetcher(newChunkCache(defaultRestoreCache))
 
 	tw := tar.NewWriter(w)
@@ -89,12 +90,8 @@ func (r *Repository) runExport(ctx context.Context, snapshotID string, w io.Writ
 	}
 
 	files := 0
-	err = walkSnapshot(ctx, r.trees, m, pathFilter{}, func(fe fileEntry) error {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
+	err = streamSnapshot(ctx, r.trees, fetcher, m, pathFilter{}, func(entry openEntry) error {
+		fe := entry.fe
 		files++
 		header := &tar.Header{
 			Name:       exportDataPrefix + fe.Path,
@@ -133,9 +130,7 @@ func (r *Repository) runExport(ctx context.Context, snapshotID string, w io.Writ
 			if err := tw.WriteHeader(header); err != nil {
 				return fmt.Errorf("export: failed to write file header %s: %w", fe.Path, err)
 			}
-			stream := fetcher.reader(ctx, fe.Chunks)
-			defer stream.Close() // only cancels fetches still running
-			if _, err := io.Copy(tw, stream); err != nil {
+			if _, err := io.Copy(tw, entry.stream); err != nil {
 				return fmt.Errorf("export: failed to write chunk data for %s: %w", fe.Path, err)
 			}
 		case FileTypeUnsupported:

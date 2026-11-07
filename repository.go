@@ -67,6 +67,10 @@ type Repository struct {
 	keyName string         // name of that key file
 	chunker chunker.Config // chunker parameters of the config, keyed from key
 
+	// prefetchBytes is the floor of the restore prefetch budget, zero for the
+	// default; tests lower it to see the budget at work on small fixtures.
+	prefetchBytes int64
+
 	// clock is time.Now except in tests, which drive the lock staleness
 	// rules through it.
 	clock func() time.Time

@@ -35,7 +35,9 @@ type ProgressEvent struct {
 
 // ProgressFunc receives progress events from one backup or restore operation.
 // It must not block; implementations should drop events when the consumer is
-// slow.
+// slow. Calls never overlap, so a handler may update its state without a
+// lock. The phases of a restore interleave: chunks of upcoming files are
+// fetched while the current file is written.
 //
 // Example with a channel:
 //
