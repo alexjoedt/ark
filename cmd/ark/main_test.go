@@ -23,6 +23,7 @@ import (
 // not a terminal, so no test ever prompts.
 func TestMain(m *testing.M) {
 	os.Setenv("ARK_INSECURE_NO_PASSWORD", "1")
+	os.Unsetenv("ARK_CPUPROFILE")
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
 		panic(err)
@@ -986,5 +987,21 @@ func TestKeyPasswd(t *testing.T) {
 	t.Setenv("ARK_PASSWORD", "")
 	if code, _ := runCapture(t, "--insecure-no-password", "snapshots"); code != 0 {
 		t.Fatalf("open without password after removal: exit %d", code)
+	}
+}
+
+func TestCPUProfileEnv(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cpu.prof")
+	t.Setenv("ARK_CPUPROFILE", path)
+	if code, _ := runCapture(t, "--version"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Size() == 0 {
+		t.Fatalf("profile not written: %v", err)
+	}
+
+	t.Setenv("ARK_CPUPROFILE", filepath.Join(t.TempDir(), "missing", "cpu.prof"))
+	if code, _ := runCapture(t, "--version"); code == 0 {
+		t.Fatal("unwritable profile path exited 0")
 	}
 }

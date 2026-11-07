@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -101,8 +102,7 @@ func serveCommand() *cli.Command {
 			logger.Info("initializing database", "path", dbPath)
 			db, err := database.New(dbPath)
 			if err != nil {
-				logger.Error("failed to initialize database", "error", err)
-				os.Exit(1)
+				return fmt.Errorf("initialize database: %w", err)
 			}
 			defer db.Close()
 
@@ -118,8 +118,7 @@ func serveCommand() *cli.Command {
 			if adminPassword != "" {
 				logger.Info("ensuring admin user exists", "username", adminUsername)
 				if err := userService.EnsureAdminExists(adminUsername, adminPassword); err != nil {
-					logger.Error("failed to create admin user", "error", err)
-					os.Exit(1)
+					return fmt.Errorf("create admin user: %w", err)
 				}
 			} else {
 				logger.Warn(
@@ -144,8 +143,7 @@ func serveCommand() *cli.Command {
 
 			logger.Info("starting scheduler")
 			if err := scheduler.Start(); err != nil {
-				logger.Error("failed to start scheduler", "error", err)
-				os.Exit(1)
+				return fmt.Errorf("start scheduler: %w", err)
 			}
 			defer scheduler.Stop()
 
@@ -181,18 +179,22 @@ func serveCommand() *cli.Command {
 			})
 
 			// Start server in goroutine.
+			srvErr := make(chan error, 1)
 			go func() {
 				logger.Info("HTTP server listening", "addr", serveCfg.HTTPAddr)
 				if err := srv.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-					logger.Error("HTTP server failed", "error", err)
-					os.Exit(1)
+					srvErr <- fmt.Errorf("http server: %w", err)
 				}
 			}()
 
 			// Wait for interrupt signal.
 			sigChan := make(chan os.Signal, 1)
 			signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-			<-sigChan
+			var runErr error
+			select {
+			case <-sigChan:
+			case runErr = <-srvErr:
+			}
 
 			logger.Info("shutting down gracefully")
 			hub.Stop()
@@ -205,7 +207,7 @@ func serveCommand() *cli.Command {
 			}
 
 			logger.Info("ark serve stopped")
-			return nil
+			return runErr
 		},
 	}
 }
