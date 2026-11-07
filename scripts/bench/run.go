@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"os/exec"
@@ -44,11 +46,10 @@ type tool struct {
 	name  string
 	bin   string
 	opts  []string
+	ark   bool
 	local bool
 	repo  func() string
 }
-
-func (t tool) ark() bool { return strings.HasPrefix(t.name, "ark") }
 
 type arkSnap struct {
 	ID    string `json:"id"`
@@ -86,6 +87,8 @@ func runBench(
 	}
 	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
 		return fmt.Errorf("run: %s is not empty", dir)
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("run: reading %s: %w", dir, err)
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("run: %w", err)
@@ -142,27 +145,39 @@ func runBench(
 	localRepo := func(name string) func() string {
 		return func() string { n++; return filepath.Join(dir, fmt.Sprintf("repo-%s-%d", name, n)) }
 	}
-	arkLocal := tool{name: "ark", bin: arkPath, local: true}
+	arkLocal := tool{name: "ark", bin: arkPath, ark: true, local: true}
 	arkLocal.repo = localRepo("ark")
 	resticLocal := tool{name: "restic", bin: resticPath, local: true}
 	resticLocal.repo = localRepo("restic")
 
 	var arkRuns, resticRuns []times
 	for round := 1; ; round++ {
-		at, err := b.once(ctx, w, arkLocal, round)
-		if err != nil {
-			return err
+		// Alternating the order keeps drift and the previous run's cleanup
+		// from always landing on the same tool.
+		order := []tool{arkLocal, resticLocal}
+		if round%2 == 0 {
+			slices.Reverse(order)
 		}
-		rt, err := b.once(ctx, w, resticLocal, round)
-		if err != nil {
-			return err
+		for _, t := range order {
+			r, err := b.once(ctx, w, t, round)
+			if err != nil {
+				return err
+			}
+			if t.ark {
+				arkRuns = append(arkRuns, r)
+			} else {
+				resticRuns = append(resticRuns, r)
+			}
 		}
-		arkRuns, resticRuns = append(arkRuns, at), append(resticRuns, rt)
-		if round == 5 || round == 3 && spread(arkRuns) <= maxSpread && spread(resticRuns) <= maxSpread {
+		if round >= 3 && stable(arkRuns, resticRuns) || round == 5 {
 			break
 		}
 	}
 	_, _ = fmt.Fprintf(w, "\nlocal, median of %d runs\n", len(arkRuns))
+	if !stable(arkRuns, resticRuns) {
+		_, _ = fmt.Fprintf(w, "warning: spread ark %.0f%%, restic %.0f%% is above %.0f%%, the verdict is not stable\n",
+			spread(arkRuns)*100, spread(resticRuns)*100, maxSpread*100)
+	}
 	table(w, median(arkRuns), median(resticRuns), true)
 
 	if uri := os.Getenv("ARK_SFTP_TEST_URI"); uri != "" {
@@ -219,12 +234,12 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (times
 	tag := fmt.Sprintf("%s-%d", t.name, round)
 
 	global := func(a ...string) []string {
-		if t.ark() {
+		if t.ark {
 			return append([]string{"--repo", repo}, a...)
 		}
 		return append(append([]string{"-r", repo}, t.opts...), a...)
 	}
-	if _, _, err := b.exec(ctx, t, tag+"-init", global("init")...); err != nil {
+	if _, _, err := b.exec(ctx, t, tag+"-init", false, global("init")...); err != nil {
 		return res, err
 	}
 	var snaps [2]arkSnap
@@ -236,20 +251,19 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (times
 			syscall.Sync()
 		}
 		args := global("backup", b.data)
-		if t.ark() {
+		if t.ark {
 			args = global("--json", "backup", b.data)
 		}
-		d, out, err := b.exec(ctx, t, fmt.Sprintf("%s-%s", tag, phases[i]), args...)
+		d, out, err := b.exec(ctx, t, fmt.Sprintf("%s-%s", tag, phases[i]), t.ark, args...)
 		if err != nil {
 			return res, err
 		}
 		res[i] = d
-		if t.ark() {
+		if t.ark {
 			if err := json.Unmarshal(out, &snaps[i]); err != nil {
 				return res, fmt.Errorf("run: parsing ark backup output: %w", err)
 			}
 		}
-		syscall.Sync()
 	}
 
 	if err := os.RemoveAll(b.restore); err != nil {
@@ -258,16 +272,15 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (times
 	defer os.RemoveAll(b.restore)
 	args := global("restore", "latest", "--target", b.restore)
 	root := filepath.Join(b.restore, b.data)
-	if t.ark() {
+	if t.ark {
 		args = global("restore", snaps[1].ID, b.restore)
 		root = b.restore
 	}
-	d, _, err := b.exec(ctx, t, tag+"-restore", args...)
+	d, _, err := b.exec(ctx, t, tag+"-restore", false, args...)
 	if err != nil {
 		return res, err
 	}
 	res[2] = d
-	syscall.Sync()
 
 	want, _, _, err := hashTree(ctx, b.data)
 	if err != nil {
@@ -283,7 +296,7 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (times
 
 	_, _ = fmt.Fprintf(w, "%-12s run %d: initial %s, incremental %s, restore %s",
 		t.name, round, secs(res[0]), secs(res[1]), secs(res[2]))
-	if t.ark() {
+	if t.ark {
 		_, _ = fmt.Fprintf(w, "; chunks new/reused %d/%d, %d/%d",
 			snaps[0].Stats.ChunksNew, snaps[0].Stats.ChunksReused,
 			snaps[1].Stats.ChunksNew, snaps[1].Stats.ChunksReused)
@@ -292,9 +305,16 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (times
 	return res, nil
 }
 
-// exec runs one command with its stderr, and its stdout unless it is
-// returned, in a log file named after step, and returns its wall time.
-func (b *bench) exec(ctx context.Context, t tool, step string, args ...string) (time.Duration, []byte, error) {
+// exec runs one command with its output in a log file named after step and
+// returns its wall time, including the writeback of what it left dirty, and,
+// when capture is set, its stdout.
+func (b *bench) exec(
+	ctx context.Context,
+	t tool,
+	step string,
+	capture bool,
+	args ...string,
+) (time.Duration, []byte, error) {
 	log, err := os.Create(filepath.Join(b.logs, step+".log"))
 	if err != nil {
 		return 0, nil, fmt.Errorf("run: %w", err)
@@ -304,11 +324,12 @@ func (b *bench) exec(ctx context.Context, t tool, step string, args ...string) (
 	cmd := exec.CommandContext(ctx, t.bin, args...)
 	cmd.Env = b.env
 	cmd.Stdout, cmd.Stderr = log, log
-	if t.ark() && slices.Contains(args, "--json") {
-		cmd.Stdout = &stdout
+	if capture {
+		cmd.Stdout = io.MultiWriter(log, &stdout)
 	}
 	start := time.Now()
 	err = cmd.Run()
+	syscall.Sync()
 	d := time.Since(start)
 	if err != nil {
 		return 0, nil, fmt.Errorf("run: %s %s: %w, see %s", t.name, step, err, log.Name())
@@ -325,9 +346,9 @@ func sftpTools(uri, arkBin, resticBin string) (tool, *tool, error) {
 		return tool{}, nil, fmt.Errorf("run: ARK_SFTP_TEST_URI %q is not an sftp:// URI", uri)
 	}
 	fresh := func(prefix string) string {
-		return path.Join(u.Path, fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()))
+		return path.Join("/", u.Path, fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()))
 	}
-	a := tool{name: "ark-sftp", bin: arkBin, repo: func() string {
+	a := tool{name: "ark-sftp", bin: arkBin, ark: true, repo: func() string {
 		r := *u
 		r.Path = fresh("bench-ark")
 		return r.String()
@@ -336,15 +357,19 @@ func sftpTools(uri, arkBin, resticBin string) (tool, *tool, error) {
 	if cmd == "" {
 		return a, nil, nil
 	}
-	host := u.Hostname()
-	if user := u.User.Username(); user != "" {
-		host = user + "@" + host
-	}
+	// restic's sftp:host:path form cuts at the first colon, so IPv6 hosts need
+	// the URL form, where a second leading slash makes the path absolute.
 	r := &tool{
 		name: "restic-sftp",
 		bin:  resticBin,
 		opts: []string{"-o", "sftp.command=" + cmd},
-		repo: func() string { return "sftp:" + host + ":" + fresh("bench-restic") },
+		repo: func() string {
+			ru := url.URL{Scheme: "sftp", Host: u.Host, Path: "/" + fresh("bench-restic")}
+			if user := u.User.Username(); user != "" {
+				ru.User = url.User(user)
+			}
+			return ru.String()
+		},
 	}
 	return a, r, nil
 }
@@ -372,7 +397,28 @@ func sftpCommand(u *url.URL) string {
 	if user := u.User.Username(); user != "" {
 		host = user + "@" + host
 	}
-	return strings.Join(append(args, host, "-s", "sftp"), " ")
+	args = append(args, host, "-s", "sftp")
+	for i, a := range args {
+		args[i] = shellQuote(a)
+	}
+	return strings.Join(args, " ")
+}
+
+// shellQuote quotes a for restic's command splitter, which knows single and
+// double quotes but no escapes inside them.
+func shellQuote(a string) string {
+	if a != "" && !strings.ContainsAny(a, " \t\n'\"\\") {
+		return a
+	}
+	if !strings.Contains(a, "'") {
+		return "'" + a + "'"
+	}
+	// ponytail: a path with both quote kinds stays unsupported, restic has no escape for it
+	return `"` + a + `"`
+}
+
+func stable(arkRuns, resticRuns []times) bool {
+	return spread(arkRuns) <= maxSpread && spread(resticRuns) <= maxSpread
 }
 
 func spread(runs []times) float64 {
@@ -461,12 +507,8 @@ func header(ctx context.Context, w io.Writer, arkBin, resticBin string) {
 		runtime.NumCPU(),
 		memTotal(),
 	)
-	_, _ = fmt.Fprintf(
-		w,
-		"ark: %s (commit %s)\n",
-		first(arkBin, "version"),
-		first("git", "rev-parse", "--short", "HEAD"),
-	)
+	// ark's version line carries the commit it was built from.
+	_, _ = fmt.Fprintf(w, "ark: %s\n", first(arkBin, "version"))
 	_, _ = fmt.Fprintf(w, "restic: %s\n", first(resticBin, "version"))
 }
 

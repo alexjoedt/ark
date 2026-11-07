@@ -37,6 +37,8 @@ func TestSFTPCommand(t *testing.T) {
 		"sftp://host/srv?identity=/id&insecure=1": "ssh -p 22 -i /id -o IdentitiesOnly=yes -o BatchMode=yes " +
 			"-o StrictHostKeyChecking=no host -s sftp",
 		"sftp://ark@host/srv": "",
+		"sftp://[::1]:2222/r?identity=/My%20Keys/id": "ssh -p 2222 -i '/My Keys/id' -o IdentitiesOnly=yes " +
+			"-o BatchMode=yes ::1 -s sftp",
 	} {
 		u, err := url.Parse(uri)
 		if err != nil {
@@ -50,11 +52,21 @@ func TestSFTPCommand(t *testing.T) {
 	if err != nil || r == nil {
 		t.Fatalf("sftpTools: %v, restic %v", err, r)
 	}
-	if got := r.repo(); !strings.HasPrefix(got, "sftp:ark@h:/repo/bench-restic-") {
+	if got := r.repo(); !strings.HasPrefix(got, "sftp://ark@h:2222//repo/bench-restic-") {
 		t.Errorf("restic repo = %s", got)
 	}
 	if got := a.repo(); !strings.HasPrefix(got, "sftp://ark@h:2222/repo/bench-ark-") ||
 		!strings.Contains(got, "identity=") {
 		t.Errorf("ark repo = %s", got)
+	}
+	a, r, err = sftpTools("sftp://[::1]?identity=/id", "ark", "restic")
+	if err != nil || r == nil {
+		t.Fatalf("sftpTools: %v, restic %v", err, r)
+	}
+	if got := r.repo(); !strings.HasPrefix(got, "sftp://[::1]//bench-restic-") {
+		t.Errorf("restic repo without path = %s", got)
+	}
+	if got := a.repo(); !strings.HasPrefix(got, "sftp://[::1]/bench-ark-") {
+		t.Errorf("ark repo without path = %s", got)
 	}
 }
