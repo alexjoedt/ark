@@ -101,15 +101,24 @@ func (w *chunkWriter) wait() error {
 }
 
 // stats folds the run into s once wait returned: every reference in entries
-// counts, the distinct chunks this run stored are new, the rest the CAS held.
+// counts, the distinct chunks this run stored and the entries use are new, the
+// rest the CAS held.
 func (w *chunkWriter) stats(s *SnapshotStats, entries []fileEntry) {
+	var added int
+	counted := make(map[string]struct{})
 	for _, e := range entries {
-		s.ChunksTotal += len(e.Chunks)
+		added += len(e.Chunks)
+		for _, c := range e.Chunks {
+			sc, ok := w.stored[c.ID]
+			if _, dup := counted[c.ID]; !ok || dup {
+				continue
+			}
+			counted[c.ID] = struct{}{}
+			s.ChunksNew++
+			s.StoredSize += sc.stored
+			s.NewChunksRawSize += sc.raw
+		}
 	}
-	s.ChunksNew += len(w.stored)
+	s.ChunksTotal += added
 	s.ChunksReused = s.ChunksTotal - s.ChunksNew
-	for _, c := range w.stored {
-		s.StoredSize += c.stored
-		s.NewChunksRawSize += c.raw
-	}
 }
