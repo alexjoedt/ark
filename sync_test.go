@@ -20,7 +20,8 @@ type syncRecordingBackend struct {
 
 func (b *syncRecordingBackend) Sync(ctx context.Context) error {
 	counts := map[ark.HandleType]int{}
-	for _, t := range []ark.HandleType{ark.KeyFile, ark.ConfigFile, ark.SnapshotFile, ark.BlobFile, ark.TreeFile} {
+	types := []ark.HandleType{ark.KeyFile, ark.ConfigFile, ark.SnapshotFile, ark.BlobFile, ark.TreeFile, ark.MarkerFile}
+	for _, t := range types {
 		err := b.Backend.List(ctx, t, func(ark.BlobInfo) error { counts[t]++; return nil })
 		if err != nil {
 			return err
@@ -66,8 +67,13 @@ func TestDurabilityBarriers(t *testing.T) {
 		t.Fatalf("Backup: %v", err)
 	}
 	s := b.take()
-	if len(s) != 2 || s[0][ark.SnapshotFile] != 0 || s[1][ark.SnapshotFile] != 1 || s[0][ark.BlobFile] == 0 {
-		t.Fatalf("Backup synced %v, want once with the chunks before the manifest and once after", s)
+	if len(s) != 3 || s[0][ark.MarkerFile] != 1 || s[0][ark.BlobFile] != 0 ||
+		s[1][ark.SnapshotFile] != 0 || s[1][ark.BlobFile] == 0 || s[2][ark.SnapshotFile] != 1 {
+		t.Fatalf("Backup synced %v, want once after the marker before any chunk, "+
+			"once with the chunks before the manifest and once after", s)
+	}
+	if n := countMarkers(t, b); n != 0 {
+		t.Fatalf("Backup left %d markers, want none", n)
 	}
 
 	if _, err := repo.Snapshots(ctx, ark.SnapshotFilter{}); err != nil {

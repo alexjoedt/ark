@@ -208,7 +208,11 @@ func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOptio
 		}
 		o.parent = parent
 	}
+	if err := r.putMarker(ctx, lock); err != nil {
+		return nil, err
+	}
 	m, err := r.runBackup(ctx, src, *o)
+	r.clearMarker(ctx, lock, err == nil)
 	if err != nil {
 		return nil, err
 	}
@@ -476,7 +480,11 @@ func (r *Repository) Import(ctx context.Context, reader io.Reader) (*Snapshot, e
 	}
 	defer lock.release(ctx)
 
+	if err := r.putMarker(ctx, lock); err != nil {
+		return nil, err
+	}
 	m, err := r.runImport(ctx, reader)
+	r.clearMarker(ctx, lock, err == nil)
 	if err != nil {
 		return nil, err
 	}
@@ -519,7 +527,11 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(ids)))
 
-	result := &CheckResult{SnapshotsChecked: len(ids)}
+	unclean, err := r.uncleanFindings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := &CheckResult{SnapshotsChecked: len(ids), Warnings: unclean}
 	for _, id := range ids {
 		vr, err := r.runVerify(ctx, id)
 		if err != nil {

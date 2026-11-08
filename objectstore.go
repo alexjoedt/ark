@@ -139,6 +139,9 @@ type objectStore struct {
 	idKey   []byte
 	// verify makes Get recompute the name of every object it reads.
 	verify bool
+	// rewrite makes putNamed store every object without asking Exists, so
+	// an object a crash left torn under its name is replaced.
+	rewrite bool
 }
 
 func newObjectStore(b Backend, t HandleType, c *objectCodec, key *masterKey) *objectStore {
@@ -156,6 +159,14 @@ func newObjectStore(b Backend, t HandleType, c *objectCodec, key *masterKey) *ob
 func (s *objectStore) verifying() *objectStore {
 	v := *s
 	v.verify = true
+	return &v
+}
+
+// rewriting returns a copy of s whose putNamed stores every object, present
+// or not.
+func (s *objectStore) rewriting() *objectStore {
+	v := *s
+	v.rewrite = true
 	return &v
 }
 
@@ -180,12 +191,14 @@ func (s *objectStore) Put(ctx context.Context, data []byte) (string, int, error)
 // putNamed is Put for a caller that already holds the name of data.
 func (s *objectStore) putNamed(ctx context.Context, name string, data []byte) (int, error) {
 	h := s.handle(name)
-	exists, err := s.backend.Exists(ctx, h)
-	if err != nil {
-		return 0, fmt.Errorf("ark: failed to check %s object %s: %w", s.typ, name, err)
-	}
-	if exists {
-		return 0, nil
+	if !s.rewrite {
+		exists, err := s.backend.Exists(ctx, h)
+		if err != nil {
+			return 0, fmt.Errorf("ark: failed to check %s object %s: %w", s.typ, name, err)
+		}
+		if exists {
+			return 0, nil
+		}
 	}
 
 	obj := s.codec.seal(s.dataKey, objectAAD(h), data)

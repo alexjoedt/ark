@@ -37,6 +37,7 @@ var conformanceTypes = []ark.HandleType{
 	ark.SnapshotFile,
 	ark.LockFile,
 	ark.KeyFile,
+	ark.MarkerFile,
 }
 
 // chunkNameLen is the length of a chunk name the suite generates: a content

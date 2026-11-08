@@ -14,7 +14,8 @@ func checkCommand() *cli.Command {
 		Usage: "verify every snapshot",
 		UsageText: `ark check
 
-   Verifies every snapshot and reports missing or corrupt objects. Exit 5 on problems.`,
+   Verifies every snapshot and reports missing or corrupt objects. Exit 5 on problems.
+   An unfinished backup is reported as a warning; prune cleans it up.`,
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			repo, err := openRepo(ctx, cmd)
 			if err != nil {
@@ -35,6 +36,7 @@ func checkCommand() *cli.Command {
 				if err := p.JSON(map[string]any{
 					"snapshots_checked": res.SnapshotsChecked,
 					"errors":            nonNil(res.Errors),
+					"warnings":          nonNil(res.Warnings),
 				}); err != nil {
 					return err
 				}
@@ -42,6 +44,9 @@ func checkCommand() *cli.Command {
 					return exitcode.Reported()
 				}
 				return nil
+			}
+			for _, w := range res.Warnings {
+				p.Warnf("%s", w)
 			}
 			for _, e := range res.Errors {
 				p.Linef("%s", e)

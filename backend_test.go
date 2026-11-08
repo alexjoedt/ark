@@ -10,6 +10,7 @@ func TestHandleTypeString(t *testing.T) {
 		SnapshotFile:    "snapshots",
 		LockFile:        "locks",
 		KeyFile:         "keys",
+		MarkerFile:      "markers",
 		HandleType(0):   "unknown",
 		HandleType(200): "unknown",
 	}

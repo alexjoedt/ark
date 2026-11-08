@@ -151,6 +151,10 @@ func (r *Repository) runExport(ctx context.Context, snapshotID string, w io.Writ
 
 func (r *Repository) runImport(ctx context.Context, reader io.Reader) (*manifest, error) {
 	logger := r.logger.With("component", "import")
+	chunks, trees, err := r.writeStores(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("import: %w", err)
+	}
 
 	rd, closeGzip, err := maybeGunzip(reader)
 	if err != nil {
@@ -162,7 +166,7 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader) (*manifest
 
 	var m *manifest
 	cr := chunker.New(nil, r.chunker)
-	w := newChunkWriter(ctx, r.chunks, r.concurrency)
+	w := newChunkWriter(ctx, chunks, r.concurrency)
 	defer func() { _ = w.wait() }()
 	var collectedEntries []fileEntry
 	var stats SnapshotStats
@@ -275,7 +279,7 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader) (*manifest
 	w.stats(&stats, collectedEntries)
 
 	// Rebuild the Merkle tree from the re-chunked entries.
-	rootHash, err := buildTree(ctx, r.trees, collectedEntries, r.concurrency)
+	rootHash, err := buildTree(ctx, trees, collectedEntries, r.concurrency)
 	if err != nil {
 		return nil, fmt.Errorf("import: failed to build snapshot tree: %w", err)
 	}

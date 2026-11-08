@@ -25,6 +25,10 @@ const (
 	LockFile
 	// KeyFile holds the master key sealed under one password.
 	KeyFile
+	// MarkerFile marks a backup in progress, named like its lock. One left
+	// behind by a backup that never finished makes later backups distrust
+	// Exists until Prune.
+	MarkerFile
 )
 
 // UnknownNamespace is the namespace name String returns for a handle type this
@@ -47,6 +51,8 @@ func (t HandleType) String() string {
 		return "locks"
 	case KeyFile:
 		return "keys"
+	case MarkerFile:
+		return "markers"
 	default:
 		return UnknownNamespace
 	}

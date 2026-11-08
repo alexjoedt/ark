@@ -17,6 +17,10 @@ func (r *Repository) runBackup(ctx context.Context, src Source, opts backupOptio
 
 	meta := src.Meta()
 	logger := r.logger.With("component", "backup", "source", meta.Name, "host", opts.host)
+	chunks, trees, err := r.writeStores(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("backup: %w", err)
+	}
 	parentID := opts.parent
 	if parentID == "" {
 		var err error
@@ -47,7 +51,7 @@ func (r *Repository) runBackup(ctx context.Context, src Source, opts backupOptio
 	}
 
 	cr := chunker.New(nil, r.chunker)
-	w := newChunkWriter(ctx, r.chunks, r.concurrency)
+	w := newChunkWriter(ctx, chunks, r.concurrency)
 	var scannedEntries []fileEntry
 	var stats SnapshotStats
 
@@ -123,7 +127,7 @@ func (r *Repository) runBackup(ctx context.Context, src Source, opts backupOptio
 
 	opts.progress(ProgressEvent{Phase: PhaseFinalize, FilesDone: stats.FileCount, BytesDone: stats.TotalSize})
 
-	rootHash, err := buildTree(ctx, r.trees, scannedEntries, r.concurrency)
+	rootHash, err := buildTree(ctx, trees, scannedEntries, r.concurrency)
 	if err != nil {
 		return nil, fmt.Errorf("backup: failed to build snapshot tree: %w", err)
 	}
