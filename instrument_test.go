@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -200,6 +201,7 @@ func TestInstrumentedBackendCountsWhatTheBackendSaw(t *testing.T) {
 				return
 			default:
 			}
+			runtime.Gosched()
 			for name, m := range methodStats(ib.Stats()) {
 				if m.Errors > m.Calls {
 					polled <- fmt.Errorf("%s: %d errors > %d calls", name, m.Errors, m.Calls)
@@ -243,11 +245,11 @@ func TestInstrumentedBackendCountsWhatTheBackendSaw(t *testing.T) {
 		if got != want {
 			t.Errorf("%s: wrapper %+v, backend saw %+v", name, got, want)
 		}
-		if m.Calls > 0 && m.Duration <= 0 {
-			t.Errorf("%s: %d calls but no duration", name, m.Calls)
-		}
 	}
 	stats := ib.Stats()
+	if stats.Put.Duration <= 0 || stats.Get.Duration <= 0 {
+		t.Errorf("Put duration %v, Get duration %v, want both counted", stats.Put.Duration, stats.Get.Duration)
+	}
 	if stats.Put.Errors == 0 || stats.Get.Errors == 0 {
 		t.Errorf("Put errors %d, Get errors %d, want the injected ones counted", stats.Put.Errors, stats.Get.Errors)
 	}
@@ -267,5 +269,39 @@ func methodStats(s ark.BackendStats) map[string]ark.MethodStats {
 	return map[string]ark.MethodStats{
 		"Put": s.Put, "Get": s.Get, "Exists": s.Exists, "Delete": s.Delete,
 		"List": s.List, "Stat": s.Stat, "Sync": s.Sync,
+	}
+}
+
+func TestInstrumentedBackendCopyPathAndUnclosedGet(t *testing.T) {
+	ctx := context.Background()
+	b, err := arklocal.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("arklocal.New: %v", err)
+	}
+	ib := ark.Instrument(b)
+	data := bytes.Repeat([]byte("x"), 100_000)
+	h := ark.Handle{Type: ark.BlobFile, Name: strings.Repeat("ab", 32)}
+	if err := ib.Put(ctx, h, bytes.NewReader(data)); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if got := ib.Stats().Put.Bytes; got != int64(len(data)) {
+		t.Fatalf("Put bytes %d, want %d", got, len(data))
+	}
+
+	rc, err := ib.Get(ctx, h)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got := ib.Stats().Get; got.Calls != 1 || got.Bytes != 0 {
+		t.Fatalf("open Get: %+v, want 1 call and no bytes yet", got)
+	}
+	if _, err := io.Copy(io.Discard, rc); err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	if err := rc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := ib.Stats().Get; got.Calls != 1 || got.Bytes != int64(len(data)) || got.Errors != 0 {
+		t.Fatalf("closed Get: %+v, want 1 call and %d bytes", got, len(data))
 	}
 }

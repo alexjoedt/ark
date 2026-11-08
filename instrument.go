@@ -28,9 +28,10 @@ type BackendStats struct {
 
 // MethodStats holds the counters of one Backend method. They only grow.
 //
-// A call counts once it returns; a Get counts once its reader is closed, so
-// its Duration covers reading the object and an error while reading counts as
-// a Get error. Errors counts calls that returned a non-nil error, including
+// A call counts once it returns. A Get adds its Duration, Bytes and error once
+// its reader is closed, so its Duration covers reading the object and an error
+// while reading counts as a Get error; a reader that is never closed shows in
+// Calls only. Errors counts calls that returned a non-nil error, including
 // ErrNotFound and an error a List callback returned. Duration is the sum over
 // all calls, so concurrent calls can make it exceed wall time. Bytes is set
 // for Put (bytes the backend read from the caller) and Get (bytes the caller
@@ -71,8 +72,8 @@ func (ib *InstrumentedBackend) Put(ctx context.Context, h Handle, r io.Reader) e
 	return err
 }
 
-// Get forwards to the wrapped backend. The call is recorded when the returned
-// reader is closed, or right away when Get fails.
+// Get forwards to the wrapped backend. The call counts when Get returns; its
+// Duration, Bytes and read error are added when the returned reader is closed.
 func (ib *InstrumentedBackend) Get(ctx context.Context, h Handle) (io.ReadCloser, error) {
 	start := time.Now()
 	rc, err := ib.b.Get(ctx, h)
@@ -80,6 +81,7 @@ func (ib *InstrumentedBackend) Get(ctx context.Context, h Handle) (io.ReadCloser
 		ib.get.record(start, 0, err)
 		return nil, err
 	}
+	ib.get.calls.Add(1)
 	return &instrumentedReader{rc: rc, c: &ib.get, start: start}, nil
 }
 
@@ -136,8 +138,13 @@ type methodCounters struct {
 // record counts calls before errors and snapshot loads them in reverse, so a
 // snapshot never shows more errors than calls.
 func (c *methodCounters) record(start time.Time, n int64, err error) {
-	d := time.Since(start)
 	c.calls.Add(1)
+	c.finish(start, n, err)
+}
+
+// finish adds the rest of a call whose Calls was already counted.
+func (c *methodCounters) finish(start time.Time, n int64, err error) {
+	d := time.Since(start)
 	if err != nil {
 		c.errors.Add(1)
 	}
@@ -166,7 +173,15 @@ func (cr *countingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// instrumentedReader records its Get on the first Close, with the bytes read
+// WriteTo keeps the [io.WriterTo] and [io.ReaderFrom] fast paths of r and the
+// destination that wrapping r would otherwise hide from [io.Copy].
+func (cr *countingReader) WriteTo(w io.Writer) (int64, error) {
+	n, err := io.Copy(w, cr.r)
+	cr.n += n
+	return n, err
+}
+
+// instrumentedReader finishes its Get on the first Close, with the bytes read
 // and the first read error other than [io.EOF].
 type instrumentedReader struct {
 	rc     io.ReadCloser
@@ -186,6 +201,15 @@ func (r *instrumentedReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+func (r *instrumentedReader) WriteTo(w io.Writer) (int64, error) {
+	n, err := io.Copy(w, r.rc)
+	r.n += n
+	if err != nil && r.err == nil {
+		r.err = err
+	}
+	return n, err
+}
+
 func (r *instrumentedReader) Close() error {
 	err := r.rc.Close()
 	if r.closed {
@@ -196,6 +220,6 @@ func (r *instrumentedReader) Close() error {
 	if recErr == nil {
 		recErr = err
 	}
-	r.c.record(r.start, r.n, recErr)
+	r.c.finish(r.start, r.n, recErr)
 	return err
 }

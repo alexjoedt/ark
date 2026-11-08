@@ -84,6 +84,7 @@ type Backend interface {
 	// object. Implementations write to a temporary name in the same
 	// namespace and rename it into place. Put is idempotent, an existing
 	// object is replaced. Put need not make the object durable; Sync does.
+	// Put must not read r after it returns.
 	Put(ctx context.Context, h Handle, r io.Reader) error
 
 	// Get retrieves a reader for the object stored under h.
