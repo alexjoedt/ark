@@ -121,6 +121,6 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           set -eu
-          for dir in . arkdocker cmd/ark; do
+          for dir in . arkdocker cmd/ark examples; do
             go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -C "$dir" ./...
           done
