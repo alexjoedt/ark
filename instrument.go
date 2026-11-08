@@ -1,0 +1,201 @@
+package ark
+
+import (
+	"context"
+	"errors"
+	"io"
+	"sync/atomic"
+	"time"
+)
+
+var _ Backend = (*InstrumentedBackend)(nil)
+
+// InstrumentedBackend wraps a Backend and counts calls, errors, durations and
+// bytes per method. It adds no dependency: an embedder reads Stats and feeds
+// the numbers to its own metrics system. Create it with [Instrument] and pass
+// it to [Init] or [Open] like any Backend.
+type InstrumentedBackend struct {
+	b Backend
+
+	put, get, exists, del, list, stat, sync methodCounters
+}
+
+// BackendStats is a snapshot of the counters of an [InstrumentedBackend], one
+// entry per Backend method. Close is not counted.
+type BackendStats struct {
+	Put, Get, Exists, Delete, List, Stat, Sync MethodStats
+}
+
+// MethodStats holds the counters of one Backend method. They only grow.
+//
+// A call counts once it returns; a Get counts once its reader is closed, so
+// its Duration covers reading the object and an error while reading counts as
+// a Get error. Errors counts calls that returned a non-nil error, including
+// ErrNotFound and an error a List callback returned. Duration is the sum over
+// all calls, so concurrent calls can make it exceed wall time. Bytes is set
+// for Put (bytes the backend read from the caller) and Get (bytes the caller
+// read from the object) only.
+type MethodStats struct {
+	Calls    int64
+	Errors   int64
+	Duration time.Duration
+	Bytes    int64
+}
+
+// Instrument returns b wrapped in an [InstrumentedBackend] with zeroed
+// counters. Closing the wrapper closes b.
+func Instrument(b Backend) *InstrumentedBackend {
+	return &InstrumentedBackend{b: b}
+}
+
+// Stats returns the current counters. It is safe to call from any goroutine,
+// also while operations run; Errors never exceeds Calls in the snapshot.
+func (ib *InstrumentedBackend) Stats() BackendStats {
+	return BackendStats{
+		Put:    ib.put.snapshot(),
+		Get:    ib.get.snapshot(),
+		Exists: ib.exists.snapshot(),
+		Delete: ib.del.snapshot(),
+		List:   ib.list.snapshot(),
+		Stat:   ib.stat.snapshot(),
+		Sync:   ib.sync.snapshot(),
+	}
+}
+
+// Put forwards to the wrapped backend and counts the bytes it reads from r.
+func (ib *InstrumentedBackend) Put(ctx context.Context, h Handle, r io.Reader) error {
+	start := time.Now()
+	cr := &countingReader{r: r}
+	err := ib.b.Put(ctx, h, cr)
+	ib.put.record(start, cr.n, err)
+	return err
+}
+
+// Get forwards to the wrapped backend. The call is recorded when the returned
+// reader is closed, or right away when Get fails.
+func (ib *InstrumentedBackend) Get(ctx context.Context, h Handle) (io.ReadCloser, error) {
+	start := time.Now()
+	rc, err := ib.b.Get(ctx, h)
+	if err != nil {
+		ib.get.record(start, 0, err)
+		return nil, err
+	}
+	return &instrumentedReader{rc: rc, c: &ib.get, start: start}, nil
+}
+
+// Exists forwards to the wrapped backend.
+func (ib *InstrumentedBackend) Exists(ctx context.Context, h Handle) (bool, error) {
+	start := time.Now()
+	ok, err := ib.b.Exists(ctx, h)
+	ib.exists.record(start, 0, err)
+	return ok, err
+}
+
+// Delete forwards to the wrapped backend.
+func (ib *InstrumentedBackend) Delete(ctx context.Context, h Handle) error {
+	start := time.Now()
+	err := ib.b.Delete(ctx, h)
+	ib.del.record(start, 0, err)
+	return err
+}
+
+// Sync forwards to the wrapped backend.
+func (ib *InstrumentedBackend) Sync(ctx context.Context) error {
+	start := time.Now()
+	err := ib.b.Sync(ctx)
+	ib.sync.record(start, 0, err)
+	return err
+}
+
+// List forwards to the wrapped backend. Its Duration includes the time fn
+// takes.
+func (ib *InstrumentedBackend) List(ctx context.Context, t HandleType, fn func(BlobInfo) error) error {
+	start := time.Now()
+	err := ib.b.List(ctx, t, fn)
+	ib.list.record(start, 0, err)
+	return err
+}
+
+// Stat forwards to the wrapped backend.
+func (ib *InstrumentedBackend) Stat(ctx context.Context, h Handle) (BlobInfo, error) {
+	start := time.Now()
+	info, err := ib.b.Stat(ctx, h)
+	ib.stat.record(start, 0, err)
+	return info, err
+}
+
+// Close closes the wrapped backend.
+func (ib *InstrumentedBackend) Close() error {
+	return ib.b.Close()
+}
+
+type methodCounters struct {
+	calls, errors, nanos, bytes atomic.Int64
+}
+
+// record counts calls before errors and snapshot loads them in reverse, so a
+// snapshot never shows more errors than calls.
+func (c *methodCounters) record(start time.Time, n int64, err error) {
+	d := time.Since(start)
+	c.calls.Add(1)
+	if err != nil {
+		c.errors.Add(1)
+	}
+	c.nanos.Add(int64(d))
+	c.bytes.Add(n)
+}
+
+func (c *methodCounters) snapshot() MethodStats {
+	s := MethodStats{
+		Errors:   c.errors.Load(),
+		Duration: time.Duration(c.nanos.Load()),
+		Bytes:    c.bytes.Load(),
+	}
+	s.Calls = c.calls.Load()
+	return s
+}
+
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (cr *countingReader) Read(p []byte) (int, error) {
+	n, err := cr.r.Read(p)
+	cr.n += int64(n)
+	return n, err
+}
+
+// instrumentedReader records its Get on the first Close, with the bytes read
+// and the first read error other than [io.EOF].
+type instrumentedReader struct {
+	rc     io.ReadCloser
+	c      *methodCounters
+	start  time.Time
+	n      int64
+	err    error
+	closed bool
+}
+
+func (r *instrumentedReader) Read(p []byte) (int, error) {
+	n, err := r.rc.Read(p)
+	r.n += int64(n)
+	if err != nil && !errors.Is(err, io.EOF) && r.err == nil {
+		r.err = err
+	}
+	return n, err
+}
+
+func (r *instrumentedReader) Close() error {
+	err := r.rc.Close()
+	if r.closed {
+		return err
+	}
+	r.closed = true
+	recErr := r.err
+	if recErr == nil {
+		recErr = err
+	}
+	r.c.record(r.start, r.n, recErr)
+	return err
+}

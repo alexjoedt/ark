@@ -89,8 +89,13 @@ func (s benchSource) size() int64 {
 // library's CPU cost without disk or network.
 func benchRepo(b *testing.B) *ark.Repository {
 	b.Helper()
+	return benchRepoOn(b, arkmem.New())
+}
+
+// benchRepoOn opens a fresh repository on backend.
+func benchRepoOn(b *testing.B, backend ark.Backend) *ark.Repository {
+	b.Helper()
 	ctx := context.Background()
-	backend := arkmem.New()
 	if err := ark.Init(ctx, backend, ark.WithoutPassword()); err != nil {
 		b.Fatalf("Init: %v", err)
 	}
@@ -108,11 +113,11 @@ func BenchmarkBackup(b *testing.B) {
 	ctx := context.Background()
 	src := benchSource{files: benchFiles()}
 
-	b.Run("first", func(b *testing.B) {
+	first := func(b *testing.B, backend func() ark.Backend) {
 		b.SetBytes(src.size())
 		for b.Loop() {
 			b.StopTimer()
-			repo := benchRepo(b)
+			repo := benchRepoOn(b, backend())
 			b.StartTimer()
 			if _, err := repo.Backup(ctx, src); err != nil {
 				b.Fatalf("Backup: %v", err)
@@ -121,6 +126,17 @@ func BenchmarkBackup(b *testing.B) {
 			_ = repo.Close()
 			b.StartTimer()
 		}
+	}
+	b.Run("first", func(b *testing.B) {
+		first(b, func() ark.Backend { return arkmem.New() })
+	})
+	// The instrumented run shows the wrapper's overhead: two clock reads and a
+	// few atomics per backend call, about 640 calls here, so well below 1% of
+	// "first". On a host without a vDSO clock (clocksource acpi_pm) every
+	// clock read is a syscall of several microseconds and the gap grows to
+	// about 1%.
+	b.Run("first-instrumented", func(b *testing.B) {
+		first(b, func() ark.Backend { return ark.Instrument(arkmem.New()) })
 	})
 
 	b.Run("unchanged", func(b *testing.B) {
