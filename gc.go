@@ -106,8 +106,9 @@ func (r *Repository) sweep(
 
 func (r *Repository) sweepOne(ctx context.Context, store *objectStore, name string, dryRun bool, result *PruneResult) {
 	size, err := store.StoredSize(ctx, name)
-	if err == nil {
-		result.BytesFreed += size
+	if err != nil {
+		r.logger.WarnContext(ctx, "gc: failed to size orphaned object, freed bytes undercounted",
+			"name", name, "error", err)
 	}
 
 	if !dryRun {
@@ -117,4 +118,5 @@ func (r *Repository) sweepOne(ctx context.Context, store *objectStore, name stri
 		}
 	}
 	result.BlobsRemoved++
+	result.BytesFreed += size
 }

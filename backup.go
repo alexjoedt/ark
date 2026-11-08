@@ -180,8 +180,6 @@ func (r *Repository) runBackup(
 	}
 	w.stats(&stats, scannedEntries)
 
-	opts.progress(ProgressEvent{Phase: PhaseFinalize, FilesDone: stats.FileCount, BytesDone: stats.TotalSize})
-
 	rootHash, err := buildTree(ctx, trees, scannedEntries, r.concurrency)
 	if err != nil {
 		return nil, fmt.Errorf("backup: failed to build snapshot tree: %w", err)
@@ -197,6 +195,7 @@ func (r *Repository) runBackup(
 	if err := r.saveManifest(ctx, m); err != nil {
 		return nil, err
 	}
+	opts.progress(ProgressEvent{Phase: PhaseFinalize, FilesDone: stats.FileCount, BytesDone: stats.TotalSize})
 
 	logger.InfoContext(ctx, "backup completed",
 		"id", m.ID,

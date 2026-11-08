@@ -5,16 +5,16 @@ package ark
 // is the caller's job.
 //
 // The phases per operation, in order. Forget, prune, verify and check emit
-// their first event before any I/O and exactly one PhaseFinalize event, last
-// and only on success. Backup emits PhaseFinalize before it writes the tree
-// and the manifest, so a failed backup may have sent it; restore sends none.
+// their first event before any I/O. Every operation but restore emits exactly
+// one PhaseFinalize event, last and only on success; restore sends none.
 //
 //   - backup: PhaseScan, PhaseStore, PhaseFinalize
 //   - restore: PhaseLoad, PhaseFetch and PhaseWrite interleaved
 //   - forget: PhaseLoad, PhaseFinalize with FilesDone = manifests removed
 //   - prune: PhaseLoad, PhaseSweep with ChunksDone/ChunksTotal over the
 //     chunks and trees listed, PhaseFinalize
-//   - verify: PhaseLoad, PhaseFetch per chunk reference, PhaseFinalize
+//   - verify: PhaseLoad, PhaseFetch per chunk reference, PhaseFinalize;
+//     CurrentPath is the resolved snapshot ID, empty on PhaseLoad
 //   - check: PhaseLoad, then per snapshot the PhaseFetch events of its verify
 //     and one PhaseFetch with FilesDone = snapshots checked, PhaseFinalize;
 //     CurrentPath is the snapshot ID
@@ -23,7 +23,7 @@ type Phase string
 const (
 	PhaseScan     Phase = "scan"     // walking the source
 	PhaseStore    Phase = "store"    // chunking and writing
-	PhaseFinalize Phase = "finalize" // tree and manifest, or the closing event
+	PhaseFinalize Phase = "finalize" // the closing event of a successful operation
 	PhaseLoad     Phase = "load"     // manifests and trees
 	PhaseFetch    Phase = "fetch"    // chunks
 	PhaseWrite    Phase = "write"    // sink

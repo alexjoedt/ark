@@ -220,7 +220,7 @@ func TestPruneReportsProgress(t *testing.T) {
 
 func TestVerifyReportsProgress(t *testing.T) {
 	repo, rec, snaps := openRecorded(t)
-	if _, err := repo.Verify(context.Background(), snaps[1].ID); err != nil {
+	if _, err := repo.Verify(context.Background(), snaps[1].ID[:12]); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 	got := rec.take(t, ark.OperationVerify, true)
@@ -237,9 +237,12 @@ func TestVerifyReportsProgress(t *testing.T) {
 				i, e.Phase, e.ChunksDone, e.ChunksTotal, i+1, len(fetches))
 		}
 	}
-	for _, e := range got {
+	if got[0].CurrentPath != "" {
+		t.Errorf("load event carries CurrentPath %q, want none before the prefix is resolved", got[0].CurrentPath)
+	}
+	for _, e := range got[1:] {
 		if e.CurrentPath != snaps[1].ID {
-			t.Errorf("%s event carries CurrentPath %q, want the snapshot ID", e.Phase, e.CurrentPath)
+			t.Errorf("%s event carries CurrentPath %q, want the resolved snapshot ID", e.Phase, e.CurrentPath)
 		}
 	}
 }
@@ -317,4 +320,112 @@ func TestFailedOperationsReportNoFinalize(t *testing.T) {
 		}
 		rec.take(t, o.op, false)
 	}
+}
+
+// faultBackend fails Put and Delete for one handle type once fail is set.
+type faultBackend struct {
+	ark.Backend
+	fail ark.HandleType
+}
+
+var errInjected = errors.New("injected fault")
+
+func (b *faultBackend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
+	if h.Type == b.fail {
+		return errInjected
+	}
+	return b.Backend.Put(ctx, h, r)
+}
+
+func (b *faultBackend) Delete(ctx context.Context, h ark.Handle) error {
+	if h.Type == b.fail {
+		return errInjected
+	}
+	return b.Backend.Delete(ctx, h)
+}
+
+// openFaulty is openRecorded over a faultBackend that starts failing once the
+// returned function names a handle type.
+func openFaulty(t *testing.T) (*ark.Repository, *recorder, []*ark.Snapshot, func(ark.HandleType)) {
+	t.Helper()
+	ctx := context.Background()
+	fb := &faultBackend{Backend: arkmem.New()}
+	b := &ioBackend{Backend: fb}
+	if err := ark.Init(ctx, b, testPassword); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	rec := &recorder{b: b}
+	repo, err := ark.Open(ctx, b, testPassword, ark.WithProgress(rec.observe))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	var snaps []*ark.Snapshot
+	for _, content := range []string{"one", "two"} {
+		s, err := repo.Backup(ctx, stubSource{name: "app", content: content})
+		if err != nil {
+			t.Fatalf("Backup: %v", err)
+		}
+		snaps = append(snaps, s)
+	}
+	rec.reset()
+	return repo, rec, snaps, func(h ark.HandleType) { fb.fail = h }
+}
+
+func TestBackendFaultsFailTheOperation(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("forget", func(t *testing.T) {
+		repo, rec, snaps, fail := openFaulty(t)
+		fail(ark.SnapshotFile)
+		_, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{snaps[0].ID}})
+		if !errors.Is(err, errInjected) {
+			t.Fatalf("Forget with a failing delete: %v, want the backend error", err)
+		}
+		rec.take(t, ark.OperationForget, false)
+	})
+
+	t.Run("backup", func(t *testing.T) {
+		repo, rec, _, fail := openFaulty(t)
+		fail(ark.SnapshotFile)
+		if _, err := repo.Backup(ctx, stubSource{name: "app", content: "three"}); !errors.Is(err, errInjected) {
+			t.Fatalf("Backup with a failing manifest write: %v, want the backend error", err)
+		}
+		for _, e := range rec.events {
+			if e.Phase == ark.PhaseFinalize {
+				t.Fatal("backup emitted finalize although its manifest was never written")
+			}
+		}
+	})
+
+	t.Run("prune", func(t *testing.T) {
+		repo, _, snaps, fail := openFaulty(t)
+		if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{snaps[0].ID}}); err != nil {
+			t.Fatalf("Forget: %v", err)
+		}
+		before, err := repo.Prune(ctx, ark.WithPruneDryRun())
+		if err != nil {
+			t.Fatalf("Prune dry run: %v", err)
+		}
+		fail(ark.BlobFile)
+		res, err := repo.Prune(ctx)
+		if err != nil {
+			t.Fatalf("Prune: %v", err)
+		}
+		after, err := repo.Prune(ctx, ark.WithPruneDryRun())
+		if err != nil {
+			t.Fatalf("Prune dry run: %v", err)
+		}
+		// The trees go, the chunks stay: what stays is neither removed nor freed.
+		if res.BlobsRemoved == 0 || after.BlobsRemoved == 0 {
+			t.Fatalf("removed %d, %d left, the test needs both trees and chunks orphaned",
+				res.BlobsRemoved, after.BlobsRemoved)
+		}
+		if res.BlobsRemoved+after.BlobsRemoved != before.BlobsRemoved ||
+			res.BytesFreed+after.BytesFreed != before.BytesFreed {
+			t.Errorf("prune removed %d blobs / %d bytes, %d / %d left, of %d / %d orphaned",
+				res.BlobsRemoved, res.BytesFreed, after.BlobsRemoved, after.BytesFreed,
+				before.BlobsRemoved, before.BytesFreed)
+		}
+	})
 }

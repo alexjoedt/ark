@@ -406,9 +406,11 @@ func (r *Repository) Forget(
 		return result, nil
 	}
 
+	// A failed removal does not stop the others; Forget still fails.
+	var errs []error
 	for _, s := range result.Remove {
 		if err := r.deleteSnapshot(ctx, s.ID); err != nil {
-			r.logger.WarnContext(ctx, "forget: failed to delete snapshot", "id", s.ID, "error", err)
+			errs = append(errs, err)
 			continue
 		}
 		done.FilesDone++
@@ -417,6 +419,9 @@ func (r *Repository) Forget(
 	// objects, so the removals are durable before Forget returns.
 	if err := r.backend.Sync(ctx); err != nil {
 		return nil, fmt.Errorf("forget: failed to sync snapshot removals: %w", err)
+	}
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("forget: %w", errors.Join(errs...))
 	}
 	progress(done)
 	return result, nil
@@ -526,7 +531,7 @@ func (r *Repository) Import(ctx context.Context, reader io.Reader) (*Snapshot, e
 // id is a full snapshot id or a unique prefix.
 func (r *Repository) Verify(ctx context.Context, id string) (*VerifyResult, error) {
 	progress := r.observer(OperationVerify, nil)
-	progress(ProgressEvent{Phase: PhaseLoad, CurrentPath: id})
+	progress(ProgressEvent{Phase: PhaseLoad})
 
 	ctx, lock, err := r.acquire(ctx, false)
 	if err != nil {
