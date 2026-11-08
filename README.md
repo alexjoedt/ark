@@ -216,7 +216,8 @@ number.
 covered by the compatibility promise.
 
 The server speaks plain HTTP and has no TLS flags. It listens on loopback by default and warns at
-start when `--addr`, `ARK_HTTP_ADDR` or `httpAddr` binds anything else, and when `--no-csrf` is set.
+start when `--addr`, `ARK_HTTP_ADDR` or `httpAddr` binds anything but a loopback IP (`localhost`
+counts as a name, not loopback), and when CSRF is off (`--no-csrf` or `csrfEnabled: false`).
 Use any other address only behind a TLS reverse proxy.
 
 ```bash
@@ -230,7 +231,7 @@ environment, `ARK_PASSWORD` or `ARK_PASSWORD_FILE`, and the repository is create
 The SQLite database next to it is a cache for the UI. The repository stays the source of truth.
 
 `scripts/install.sh` installs `ark serve` as a systemd service with its settings in
-`/etc/ark/daemon.json`; the unit sets `ARK_HTTP_ADDR=127.0.0.1:8080`, which overrides `httpAddr` there.
+`/etc/ark/daemon.json`, where `httpAddr` is `127.0.0.1:8080` on a fresh install.
 The admin password only ever comes from `ARK_ADMIN_PASSWORD`, never from a
 file.
 

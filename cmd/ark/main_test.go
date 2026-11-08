@@ -36,17 +36,32 @@ func TestMain(m *testing.M) {
 // runCapture runs the CLI and returns the exit code and what it wrote to stdout.
 func runCapture(t *testing.T, args ...string) (int, string) {
 	t.Helper()
+	var code int
+	out := capture(t, &os.Stdout, func() { code = run(append([]string{"ark"}, args...)) })
+	return code, out
+}
+
+// capture points *f at a pipe while fn runs and returns what was written to
+// it. The pipe is drained while fn runs, so output beyond the pipe buffer
+// does not block the writer.
+func capture(t *testing.T, f **os.File, fn func()) string {
+	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := os.Stdout
-	os.Stdout = w
-	code := run(append([]string{"ark"}, args...))
-	os.Stdout = old
+	defer r.Close()
+	done := make(chan []byte)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- b
+	}()
+	old := *f
+	*f = w
+	fn()
+	*f = old
 	w.Close()
-	out, _ := io.ReadAll(r)
-	return code, string(out)
+	return string(<-done)
 }
 
 func initRepo(t *testing.T) string {

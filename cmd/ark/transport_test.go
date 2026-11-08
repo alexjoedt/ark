@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,7 +36,7 @@ func TestServeWarnsOnANonLoopbackAddress(t *testing.T) {
 	for addr, warns := range map[string]bool{
 		"127.0.0.1:8080": false,
 		"[::1]:8080":     false,
-		"localhost:8080": false,
+		"localhost:8080": true,
 		":8080":          true,
 		"0.0.0.0:8080":   true,
 		"[::]:8080":      true,
@@ -67,8 +66,8 @@ func TestServeWarnsWhenCSRFIsOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := serveWarnings(cfg)
-	if len(w) != 1 || !strings.Contains(w[0], "--no-csrf") {
-		t.Errorf("warnings with --no-csrf = %q, want one naming the flag", w)
+	if len(w) != 1 || !strings.Contains(w[0], "--no-csrf") || !strings.Contains(w[0], "csrfEnabled") {
+		t.Errorf("warnings with --no-csrf = %q, want one naming the flag and the setting", w)
 	}
 }
 
@@ -81,8 +80,6 @@ func TestNoPasswordFlag(t *testing.T) {
 		"new-password-file":        true,
 		"insecure-no-password":     true,
 		"new-insecure-no-password": true,
-		// the web UI login, env var only per its usage text
-		"admin-password": true,
 	}
 	var walk func(cmd *cli.Command)
 	walk = func(cmd *cli.Command) {
@@ -138,15 +135,8 @@ func TestPassphraseNeverInTheLogs(t *testing.T) {
 // stderr, where the logger and the error message go.
 func runCaptureAll(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	old := os.Stderr
-	os.Stderr = w
-	code, out := runCapture(t, args...)
-	os.Stderr = old
-	w.Close()
-	logs, _ := io.ReadAll(r)
-	return code, out, string(logs)
+	var code int
+	var out string
+	logs := capture(t, &os.Stderr, func() { code, out = runCapture(t, args...) })
+	return code, out, logs
 }

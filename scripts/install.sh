@@ -157,10 +157,9 @@ ProtectSystem=strict
 ReadWritePaths=${DATA_DIR}
 
 # Environment
-# Loopback: the server speaks plain HTTP. Any other address only behind a TLS
-# reverse proxy. This variable overrides httpAddr in daemon.json.
+# The bind address is httpAddr in daemon.json (loopback by default): the
+# server speaks plain HTTP, any other address only behind a TLS reverse proxy.
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
-Environment="ARK_HTTP_ADDR=127.0.0.1:8080"
 ${ENV_BLOCK}
 
 [Install]

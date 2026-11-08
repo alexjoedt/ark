@@ -35,7 +35,7 @@ const (
 // ServeConfig holds all configuration for `ark serve`.
 //
 // AdminPassword is intentionally absent — it must be supplied via the
-// ARK_ADMIN_PASSWORD environment variable or the --admin-password CLI flag.
+// ARK_ADMIN_PASSWORD environment variable, never as a flag value.
 // Writing passwords to disk in a config file is not supported.
 type ServeConfig struct {
 	// RepoPath is the repository the daemon serves when --repo and

@@ -31,7 +31,8 @@ func serveCommand() *cli.Command {
 		UsageText: `ark serve [options]
 
    Serves the web UI on --addr. The repository comes from --repo, else from
-   /etc/ark/daemon.json. Docker is reached through --docker-host or DOCKER_HOST.`,
+   /etc/ark/daemon.json. Docker is reached through --docker-host or DOCKER_HOST.
+   The admin password comes from ARK_ADMIN_PASSWORD only, never from a flag.`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "docker-host",
@@ -46,11 +47,6 @@ func serveCommand() *cli.Command {
 			&cli.StringFlag{
 				Name:  "db",
 				Usage: "Path to SQLite database file (overrides config and ARK_DB_PATH)",
-			},
-			&cli.StringFlag{
-				Name:    "admin-password",
-				Usage:   "Admin user password — env var only, never written to disk (ARK_ADMIN_PASSWORD)",
-				Sources: cli.EnvVars("ARK_ADMIN_PASSWORD"),
 			},
 			&cli.StringFlag{
 				Name:  "admin-username",
@@ -119,7 +115,7 @@ func serveCommand() *cli.Command {
 			historyService := services.NewJobHistoryService(db.DB())
 
 			// Seed admin user if password is provided.
-			adminPassword := cmd.String("admin-password")
+			adminPassword := os.Getenv("ARK_ADMIN_PASSWORD")
 			adminUsername := serveCfg.AdminUsername
 			if adminPassword != "" {
 				logger.Info("ensuring admin user exists", "username", adminUsername)
@@ -128,7 +124,7 @@ func serveCommand() *cli.Command {
 				}
 			} else {
 				logger.Warn(
-					"no admin password provided (--admin-password / ARK_ADMIN_PASSWORD), skipping admin creation",
+					"no admin password provided (ARK_ADMIN_PASSWORD), skipping admin creation",
 				)
 			}
 
@@ -225,24 +221,22 @@ func serveWarnings(cfg *config.ServeConfig) []string {
 	var warnings []string
 	if !isLoopbackAddr(cfg.HTTPAddr) {
 		warnings = append(warnings, fmt.Sprintf(
-			"listening on %s, not a loopback address: the server speaks plain HTTP, "+
+			"listening on %s, not a loopback IP address: the server speaks plain HTTP, "+
 				"expose it only behind a TLS reverse proxy", cfg.HTTPAddr))
 	}
 	if !cfg.CSRFEnabled {
-		warnings = append(warnings, "CSRF protection is disabled (--no-csrf)")
+		warnings = append(warnings, "CSRF protection is disabled (--no-csrf or csrfEnabled false in daemon.json)")
 	}
 	return warnings
 }
 
 // isLoopbackAddr reports whether a listen address binds to loopback only. An
-// empty host (":8080") binds every interface.
+// empty host (":8080") binds every interface. A name, localhost included,
+// counts as not loopback: /etc/hosts can map it anywhere.
 func isLoopbackAddr(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil || host == "" {
 		return false
-	}
-	if host == "localhost" {
-		return true
 	}
 	ip, err := netip.ParseAddr(host)
 	return err == nil && ip.IsLoopback()
