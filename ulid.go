@@ -2,6 +2,7 @@ package ark
 
 import (
 	"crypto/rand"
+	"strings"
 	"time"
 )
 
@@ -50,4 +51,22 @@ func encodeBase32(data []byte) string {
 		result[idx] = chars[(bits<<uint(5-bitsLen))&0x1F]
 	}
 	return string(result)
+}
+
+// idTime returns the time generateID encoded in the prefix of id, false when
+// id does not start with one.
+func idTime(id string) (time.Time, bool) {
+	const chars = "0123456789abcdefghjkmnpqrstvwxyz"
+	if len(id) < 10 {
+		return time.Time{}, false
+	}
+	var ms int64
+	for i := range 10 {
+		v := strings.IndexByte(chars, id[i])
+		if v < 0 {
+			return time.Time{}, false
+		}
+		ms = ms*32 + int64(v)
+	}
+	return time.UnixMilli(ms), true
 }

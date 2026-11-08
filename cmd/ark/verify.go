@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
-	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
 	"github.com/urfave/cli/v3"
 )
@@ -42,11 +40,7 @@ func verifyCommand() *cli.Command {
 			res, err := repo.Verify(ctx, cmd.Args().First())
 			if err != nil {
 				pr.Fail()
-				err = fmt.Errorf("verify %s: %w", cmd.Args().First(), err)
-				if errors.Is(err, ark.ErrCorruptManifest) || errors.Is(err, ark.ErrCorruptTree) {
-					return exitcode.Verify(err)
-				}
-				return err
+				return fmt.Errorf("verify %s: %w", cmd.Args().First(), err)
 			}
 			pr.Donef("verified %d chunks of %s", res.ChunksChecked, res.SnapshotID)
 

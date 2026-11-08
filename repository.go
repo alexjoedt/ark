@@ -539,17 +539,12 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, unreadable, err := r.loadLocks(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, name := range unreadable {
-		unclean = append(unclean,
-			fmt.Sprintf("lock %s does not open and is ignored, Unlock with WithForce removes it", name))
-	}
 	result := &CheckResult{SnapshotsChecked: len(ids), Warnings: unclean}
 	for _, id := range ids {
 		vr, err := r.runVerify(ctx, id)
+		if ctx.Err() != nil {
+			return nil, ctx.Err() //nolint:wrapcheck // the caller's own cancellation
+		}
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("snapshot %s: %v", id, err))
 			continue

@@ -195,7 +195,7 @@ set. `--json` prints results on stdout and logs on stderr. `ark <command> --help
 | 2 | usage error |
 | 3 | repository locked |
 | 4 | snapshot not found, or an id prefix matches several |
-| 5 | verify or check found damage |
+| 5 | verify or check found damage, or a read hit a corrupt object |
 | 6 | wrong password |
 
 ## Compatibility

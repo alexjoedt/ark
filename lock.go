@@ -149,11 +149,18 @@ func (r *Repository) putLock(ctx context.Context, name string, l lockObject) err
 //
 // A zero-byte object is another writer's Put in flight, not a lock, and is
 // skipped; so is one that does not open or parse, which would otherwise block
-// the repository forever. Those are returned by name for Unlock WithForce.
+// the repository forever. Those are returned by name for Unlock WithForce,
+// and so is a zero-byte object named older than lockStaleAge or not named
+// like a lock: that is a truncated lock (or, briefly, a refresh in flight on
+// a backend whose Put is not atomic).
 func (r *Repository) loadLocks(ctx context.Context) (map[string]lockObject, []string, error) {
-	var names []string
+	now := r.now()
+	var names, unreadable []string
 	err := r.backend.List(ctx, LockFile, func(info BlobInfo) error {
 		if info.Size == 0 {
+			if t, ok := idTime(info.Name); !ok || now.Sub(t) >= lockStaleAge {
+				unreadable = append(unreadable, info.Name)
+			}
 			return nil
 		}
 		names = append(names, info.Name)
@@ -164,7 +171,6 @@ func (r *Repository) loadLocks(ctx context.Context) (map[string]lockObject, []st
 	}
 
 	locks := make(map[string]lockObject, len(names))
-	var unreadable []string
 	for _, name := range names {
 		l, err := r.loadLock(ctx, name)
 		switch {

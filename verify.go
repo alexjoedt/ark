@@ -2,6 +2,7 @@ package ark
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -75,8 +76,10 @@ func verifyChunk(ctx context.Context, chunks *objectStore, id string, result *Ve
 	}
 
 	// A chunk that fails its tag or does not hash to its name is corrupt.
-	//nolint:nilerr // a corrupt chunk is a result, not an error
 	if _, err := chunks.Get(ctx, id); err != nil {
+		if !errors.Is(err, ErrCorruptChunk) {
+			return fmt.Errorf("verify: failed to read chunk %s: %w", id, err)
+		}
 		result.CorruptChunks = append(result.CorruptChunks, id)
 		result.OK = false
 		return nil

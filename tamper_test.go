@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -452,5 +453,60 @@ func assertCheckWarning(t *testing.T, f *tamperFixture, name, detail string) {
 		return strings.Contains(w, name) && strings.Contains(w, detail)
 	}) {
 		t.Errorf("Check warnings %q have none naming %s with %q", res.Warnings, name, detail)
+	}
+}
+
+// blobGetBackend runs onGet before every chunk read; a non-nil error fails it.
+type blobGetBackend struct {
+	ark.Backend
+	onGet func() error
+}
+
+func (b *blobGetBackend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error) {
+	if h.Type == ark.BlobFile {
+		if err := b.onGet(); err != nil {
+			return nil, err
+		}
+	}
+	return b.Backend.Get(ctx, h)
+}
+
+func TestVerifyReturnsAChunkReadFailure(t *testing.T) {
+	ctx := context.Background()
+	flaky := errors.New("flaky backend")
+	b := &blobGetBackend{Backend: arkmem.New(), onGet: func() error { return nil }}
+	repo := openRepo(t, b)
+	snap, err := repo.Backup(ctx, stubSource{name: "victim", content: victimContent})
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+
+	b.onGet = func() error { return flaky }
+	res, err := repo.Verify(ctx, snap.ID)
+	if !errors.Is(err, flaky) {
+		t.Errorf("Verify = %v, want %v", err, flaky)
+	}
+	if res != nil && len(res.CorruptChunks) != 0 {
+		t.Errorf("Verify reported %q corrupt after a read failure", res.CorruptChunks)
+	}
+}
+
+func TestCheckReturnsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := newTamperFixture(t)
+	b := &blobGetBackend{Backend: f.b, onGet: func() error {
+		cancel()
+		return context.Canceled
+	}}
+	repo, err := ark.Open(context.Background(), b, testPassword)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer repo.Close()
+
+	res, err := repo.Check(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Check = %+v, %v, want %v", res, err, context.Canceled)
 	}
 }

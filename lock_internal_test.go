@@ -512,3 +512,24 @@ func TestOperationAbortsWhenTheLockCannotBeRefreshed(t *testing.T) {
 		t.Fatal("the operation was not aborted after the refresh deadline passed")
 	}
 }
+
+func TestCheckWarnsAboutAnOldZeroByteLock(t *testing.T) {
+	ctx := context.Background()
+	repo, b, clock := lockRepo(t)
+
+	fresh := generateID(clock.now)
+	old := generateID(clock.now.Add(-lockStaleAge))
+	for _, name := range []string{fresh, old} {
+		if err := b.Put(ctx, Handle{Type: LockFile, Name: name}, strings.NewReader("")); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	}
+
+	res, err := repo.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "lock "+old+" does not open") {
+		t.Errorf("Check warnings %q, want one naming %s", res.Warnings, old)
+	}
+}
