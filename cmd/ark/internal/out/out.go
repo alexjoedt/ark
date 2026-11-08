@@ -90,10 +90,7 @@ func (p *Printer) Notef(format string, args ...any) {
 // Warnf writes a line to stderr unless --quiet is set. Warnings are for
 // humans and do not corrupt --json output on stdout.
 func (p *Printer) Warnf(format string, args ...any) {
-	if p.mode.Quiet {
-		return
-	}
-	fmt.Fprintf(p.stderr, "warning: "+format+"\n", args...)
+	p.Notef("warning: "+format, args...)
 }
 
 // Linef writes a line of human output to stdout. Nothing is written with

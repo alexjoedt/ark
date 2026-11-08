@@ -21,6 +21,7 @@ type Progress struct {
 	phase ark.Phase
 	seen  bool
 	note  string
+	ended bool
 
 	stop chan struct{}
 	done chan struct{}
@@ -51,6 +52,10 @@ func (pr *Progress) Func() ark.ProgressFunc {
 
 func (pr *Progress) handle(ev ark.ProgressEvent) {
 	pr.mu.Lock()
+	if pr.ended {
+		pr.mu.Unlock()
+		return
+	}
 	prev, prevPhase, seen := pr.last, pr.phase, pr.seen
 	pr.last, pr.phase, pr.seen = ev, ev.Phase, true
 	pr.mu.Unlock()
@@ -83,19 +88,22 @@ func (pr *Progress) spin() {
 			fmt.Fprint(pr.p.stderr, "\r\033[K")
 			return
 		case <-t.C:
-			pr.mu.Lock()
-			ev, seen, note := pr.last, pr.seen, pr.note
-			pr.mu.Unlock()
-			line := pr.label
-			if seen {
-				line += ": " + Line(ev)
-			}
-			if note != "" {
-				line = note
-			}
-			fmt.Fprintf(pr.p.stderr, "\r\033[K%s %s", frames[i%len(frames)], line)
+			fmt.Fprintf(pr.p.stderr, "\r\033[K%s %s", frames[i%len(frames)], pr.current())
 		}
 	}
+}
+
+// current is the spinner line: the wait note, else the label and last event.
+func (pr *Progress) current() string {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	if pr.note != "" {
+		return pr.note
+	}
+	if pr.seen {
+		return pr.label + ": " + Line(pr.last)
+	}
+	return pr.label
 }
 
 // Wait replaces the spinner label with msg until Resume. Without a spinner
@@ -118,6 +126,9 @@ func (pr *Progress) Resume() {
 }
 
 func (pr *Progress) stopSpinner() {
+	pr.mu.Lock()
+	pr.ended = true
+	pr.mu.Unlock()
 	if pr.stop == nil {
 		return
 	}
@@ -126,7 +137,7 @@ func (pr *Progress) stopSpinner() {
 	pr.stop = nil
 }
 
-// Donef stops rendering and prints the summary line, unless --json or
+// Donef stops rendering, drops later events, and prints the summary line, unless --json or
 // --quiet is set.
 func (pr *Progress) Donef(format string, args ...any) {
 	pr.stopSpinner()

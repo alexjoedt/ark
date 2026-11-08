@@ -59,7 +59,6 @@ func backupCommand() *cli.Command {
 				ark.WithComment(cmd.String("comment")),
 				ark.WithHost(cmd.String("host")),
 				ark.WithParent(cmd.String("parent")),
-				ark.WithBackupProgress(pr.Func()),
 			)
 			if err != nil {
 				pr.Fail()

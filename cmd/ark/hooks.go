@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	ark "github.com/alexjoedt/ark"
@@ -25,6 +26,8 @@ func startProgress(p *out.Printer, label string) *out.Progress {
 // hookOptions are the library hooks every command opens its repository with.
 func hookOptions(cmd *cli.Command) []ark.Option {
 	p := printer(cmd)
+	// With no lock wait a rejection is final: the locked error says it all.
+	waits := cmd.Root().Duration("lock-wait") > 0
 	return []ark.Option{
 		ark.WithProgress(func(ev ark.ProgressEvent) {
 			if pr := activeProgress.Load(); pr != nil {
@@ -35,6 +38,9 @@ func hookOptions(cmd *cli.Command) []ark.Option {
 			pr := activeProgress.Load()
 			switch ev.Kind {
 			case ark.LockRejected:
+				if !waits {
+					return
+				}
 				if pr != nil {
 					pr.Wait(lockWaitMessage(ev))
 				} else {
@@ -54,10 +60,13 @@ func lockWaitMessage(ev ark.LockEvent) string {
 	if len(ev.Holders) == 0 {
 		return "waiting for lock"
 	}
-	h := ev.Holders[0]
-	class := "shared"
-	if h.Exclusive {
-		class = "exclusive"
+	held := make([]string, len(ev.Holders))
+	for i, h := range ev.Holders {
+		class := "shared"
+		if h.Exclusive {
+			class = "exclusive"
+		}
+		held[i] = fmt.Sprintf("%s:%d (%s)", h.Hostname, h.PID, class)
 	}
-	return fmt.Sprintf("waiting for lock held by %s:%d (%s)", h.Hostname, h.PID, class)
+	return "waiting for lock held by " + strings.Join(held, ", ")
 }

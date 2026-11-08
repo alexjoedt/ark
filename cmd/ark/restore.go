@@ -78,7 +78,6 @@ func restoreCommand() *cli.Command {
 			res, err := repo.Restore(ctx, snap.ID, sink,
 				ark.WithRestorePaths(paths...),
 				ark.WithRestoreCache(cache),
-				ark.WithRestoreProgress(pr.Func()),
 			)
 			if err != nil {
 				pr.Fail()

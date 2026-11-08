@@ -15,4 +15,8 @@ func TestLockWaitMessage(t *testing.T) {
 	if got, want := lockWaitMessage(ev), "waiting for lock held by h:7 (shared)"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
+	ev.Holders = append(ev.Holders, ark.LockInfo{Hostname: "g", PID: 9})
+	if got, want := lockWaitMessage(ev), "waiting for lock held by h:7 (shared), g:9 (shared)"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
 }

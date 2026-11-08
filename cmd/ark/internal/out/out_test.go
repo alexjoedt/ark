@@ -187,18 +187,29 @@ func TestProgressWait(t *testing.T) {
 		t.Fatalf("stderr %q", se.String())
 	}
 
-	p, _, se = newTest(Mode{}, "")
+	p, _, _ = newTest(Mode{}, "")
 	p.SetTTY(true)
 	pr := p.Progress("prune")
+	defer pr.Fail()
 	pr.Wait("waiting for lock held by h:1 (exclusive)")
-	time.Sleep(250 * time.Millisecond)
+	if got := pr.current(); got != "waiting for lock held by h:1 (exclusive)" {
+		t.Fatalf("waiting line %q", got)
+	}
 	pr.Resume()
-	time.Sleep(250 * time.Millisecond)
+	if got := pr.current(); got != "prune" {
+		t.Fatalf("resumed line %q", got)
+	}
+}
+
+func TestProgressDropsEventsAfterEnd(t *testing.T) {
+	p, _, se := newTest(Mode{}, "")
+	pr := p.Progress("forget")
 	pr.Fail()
-	s := se.String()
-	i := strings.Index(s, "waiting for lock held by h:1 (exclusive)")
-	if i < 0 || !strings.Contains(s[i:], "prune") || strings.Contains(s[:i], "waiting") {
-		t.Fatalf("label not replaced then restored: %q", s)
+	f := pr.Func()
+	f(ark.ProgressEvent{Phase: ark.PhaseFetch})
+	f(ark.ProgressEvent{Phase: ark.PhaseFinalize})
+	if se.String() != "" {
+		t.Fatalf("stderr %q", se.String())
 	}
 }
 

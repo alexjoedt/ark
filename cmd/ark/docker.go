@@ -158,7 +158,6 @@ func dockerBackupCommand() *cli.Command {
 			snap, err := e.BackupVolume(ctx, volume,
 				ark.WithTags(cmd.StringSlice("tag")...),
 				ark.WithComment(cmd.String("comment")),
-				ark.WithBackupProgress(pr.Func()),
 			)
 			if err != nil {
 				pr.Fail()
@@ -256,7 +255,6 @@ func dockerRestoreCommand() *cli.Command {
 			start := time.Now()
 			res, err := e.RestoreVolume(ctx, snap.ID, volume,
 				ark.WithRestorePaths(paths...),
-				ark.WithRestoreProgress(pr.Func()),
 			)
 			if err != nil {
 				pr.Fail()
