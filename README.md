@@ -139,6 +139,8 @@ restoring garbage.
   already leaked.
 - `Open` derives the key with argon2id and needs 64 MiB of memory for it. Size containers accordingly.
 
+The threat model, the accepted risks and how to report a vulnerability: [docs/SECURITY.md](docs/SECURITY.md).
+
 ## CLI
 
 ```bash

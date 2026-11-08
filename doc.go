@@ -40,6 +40,10 @@
 // memory, so a container that opens a repository needs that much on top of
 // the restore cache.
 //
+// What the encryption protects against, what it leaks and which risks are
+// accepted is written down in docs/SECURITY.md
+// (https://github.com/alexjoedt/ark/blob/main/docs/SECURITY.md).
+//
 // # Memory
 //
 // Restore, Export and Verify stream: they walk the snapshot in order and read
