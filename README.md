@@ -46,6 +46,9 @@ if err != nil {
 _, err = arkfs.Restore(ctx, repo, snap.ID, "/tmp/docs")
 ```
 
+Your own data source or restore target: [Writing a Source or Sink](https://pkg.go.dev/github.com/alexjoedt/ark#hdr-Writing_a_Source_or_Sink)
+states the contract and the `arktest` suites that prove it.
+
 `Open` never creates a repository, so a mistyped path fails with `ark.ErrNotInitialized` instead of
 starting a second one. Restore, export and verify stream the snapshot: memory stays at the chunk cache
 (256 MiB by default) no matter how large the snapshot is.

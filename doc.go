@@ -44,6 +44,48 @@
 // accepted is written down in docs/SECURITY.md
 // (https://github.com/alexjoedt/ark/blob/main/docs/SECURITY.md).
 //
+// # Writing a Source or Sink
+//
+// A program that backs up something other than a directory implements Source
+// and, to restore, Sink. The rules the core relies on:
+//
+// Source.Walk calls fn once per entry. Entries may come in any order, the core
+// sorts every tree node by name; the one ordering rule is that a hardlink
+// target comes before the FileTypeHardlink entries naming it. Walk should stop
+// with ctx's error when ctx is cancelled.
+//
+// The open func passed to fn is nil for everything but a regular file. For a
+// regular file it yields at most entry.Size bytes and does no work until it
+// is called. The core calls it at most once, never when the parent snapshot
+// already holds the file unchanged, and closes the reader it returns. A
+// source that cannot serve an open after fn returned (a tar stream, a single
+// connection) simply returns; the next fn call advances it past the entry.
+//
+// A source whose opens may run after fn returned, on any goroutine and
+// concurrently, also implements ConcurrentSource with ConcurrentOpen
+// returning true. Backup then reads its files in parallel. Implement it only
+// when every open is independent of the walk's position; a wrapper that embeds
+// a Source hides the method and must forward it.
+//
+// A zero FileInfo.ModTime means "unknown": the file never counts as unchanged
+// and is read on every backup. Set ModTime, and ChangeTime and Inode where the
+// medium has them, as soon as unchanged files should be skipped.
+//
+// A Sink sees Open once with the snapshot's SourceMeta, where it rejects a
+// type it cannot restore with ErrIncompatibleSourceType; then Receive once per
+// entry in walk order, parents before children, a hardlink after its target,
+// r nil for everything but a regular file, which Receive reads to the end;
+// then Close exactly once, also after a failed Receive or a cancelled restore.
+//
+// Prove both with the conformance suites in package arktest, which a foreign
+// Source and Sink are expected to pass:
+//
+//	arktest.RunSourceSinkTests(t, myType, newSource, newSink)
+//	arktest.RunStreamTests(t, newStreamSource, newStreamSink) // one-file streams only
+//
+// For a single byte stream, NewStreamSource and NewStreamSink already
+// implement the contract.
+//
 // # Memory
 //
 // Restore, Export and Verify stream: they walk the snapshot in order and read
