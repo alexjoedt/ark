@@ -10,7 +10,7 @@ package ark
 //
 //   - backup: PhaseScan, PhaseStore, PhaseFinalize
 //   - restore: PhaseLoad, PhaseFetch and PhaseWrite interleaved, PhaseFinalize
-//     with FilesDone and BytesDone restored
+//     with the totals and the files, bytes and chunks restored
 //   - forget: PhaseLoad, PhaseFinalize with FilesDone = manifests removed
 //   - prune: PhaseLoad, PhaseSweep with ChunksDone/ChunksTotal over the
 //     chunks and trees listed, PhaseFinalize

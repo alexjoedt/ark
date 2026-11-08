@@ -92,22 +92,31 @@ func (r *recorder) take(t *testing.T, op ark.Operation, succeeded bool) []observ
 	if got[0].calls != 0 {
 		t.Errorf("%s: first event after %d backend calls, want before any I/O", op, got[0].calls)
 	}
-	finals := 0
 	for i, e := range got {
 		if e.Operation != op {
 			t.Errorf("%s: event %d carries operation %q", op, i, e.Operation)
 		}
-		if e.Phase == ark.PhaseFinalize {
+	}
+	checkFinalize(t, op, phaseList(got), succeeded)
+	return got
+}
+
+// checkFinalize asserts the finalize rule of one operation's phases: exactly
+// one PhaseFinalize, last, on success and none on failure.
+func checkFinalize(t *testing.T, op ark.Operation, phases []ark.Phase, succeeded bool) {
+	t.Helper()
+	finals := 0
+	for _, p := range phases {
+		if p == ark.PhaseFinalize {
 			finals++
 		}
 	}
 	switch {
 	case !succeeded && finals != 0:
 		t.Errorf("%s: failed operation emitted %d finalize events", op, finals)
-	case succeeded && (finals != 1 || got[len(got)-1].Phase != ark.PhaseFinalize):
-		t.Errorf("%s: want exactly one finalize event, last; got %v", op, phaseList(got))
+	case succeeded && (finals != 1 || phases[len(phases)-1] != ark.PhaseFinalize):
+		t.Errorf("%s: want exactly one finalize event, last; got %v", op, phases)
 	}
-	return got
 }
 
 func phaseList(events []observed) []ark.Phase {

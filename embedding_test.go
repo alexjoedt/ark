@@ -122,8 +122,8 @@ func (r *opRecorder) take() []ark.ProgressEvent {
 	return got
 }
 
-// checkOp asserts that op reported at least one event before its finalize and
-// exactly one PhaseFinalize, its last event.
+// checkOp asserts that op, among interleaved events, reported at least one
+// event before its finalize and follows the finalize rule.
 func checkOp(t *testing.T, events []ark.ProgressEvent, op ark.Operation) {
 	t.Helper()
 	var phases []ark.Phase
@@ -132,16 +132,17 @@ func checkOp(t *testing.T, events []ark.ProgressEvent, op ark.Operation) {
 			phases = append(phases, e.Phase)
 		}
 	}
-	finals := 0
-	for _, p := range phases {
-		if p == ark.PhaseFinalize {
-			finals++
-		}
+	if len(phases) < 2 {
+		t.Errorf("%s: want events before the finalize, got %v", op, phases)
+		return
 	}
-	if len(phases) < 2 || finals != 1 || phases[len(phases)-1] != ark.PhaseFinalize {
-		t.Errorf("%s: want events ending in exactly one finalize, got %v", op, phases)
-	}
+	checkFinalize(t, op, phases, true)
 }
+
+// noClose shares a backend with a second handle whose Close must not close it.
+type noClose struct{ ark.Backend }
+
+func (noClose) Close() error { return nil }
 
 // gateSource is a stubSource whose Walk waits for release first.
 type gateSource struct {
@@ -188,7 +189,9 @@ func TestEmbeddingObservesEveryOperation(t *testing.T) {
 		rec := &opRecorder{}
 		repo, err := ark.Open(ctx, ib, testPassword,
 			ark.WithProgress(rec.observe),
-			ark.WithLockWait(5*time.Second),
+			// Far above the holder's tiny backup, so a slow box still
+			// sees the prune through instead of a lock error.
+			ark.WithLockWait(time.Minute),
 			ark.WithLockEvent(func(e ark.LockEvent) {
 				lockMu.Lock()
 				lockEvents = append(lockEvents, e)
@@ -213,7 +216,12 @@ func TestEmbeddingObservesEveryOperation(t *testing.T) {
 		if _, err := repo.Restore(ctx, snap.ID, ark.NewStreamSink(&restored)); err != nil {
 			t.Fatalf("Restore: %v", err)
 		}
-		checkOp(t, rec.take(), ark.OperationRestore)
+		events := rec.take()
+		checkOp(t, events, ark.OperationRestore)
+		if last := events[len(events)-1]; last.FilesTotal == 0 || last.FilesDone != last.FilesTotal ||
+			last.BytesDone != last.BytesTotal || last.ChunksTotal == 0 || last.ChunksDone != last.ChunksTotal {
+			t.Errorf("restore finalize %+v, want the totals reached", last)
+		}
 		if restored.String() != blob {
 			t.Errorf("stream restored %d bytes, not the %d backed up", restored.Len(), len(blob))
 		}
@@ -229,11 +237,10 @@ func TestEmbeddingObservesEveryOperation(t *testing.T) {
 		checkOp(t, rec.take(), ark.OperationForget)
 
 		// A second handle on the same backend holds a shared lock until the
-		// prune has been rejected once. It is never closed: Close would close
-		// the shared backend.
+		// prune has been rejected once.
 		held := make(chan struct{})
 		var heldOnce sync.Once
-		holder, err := ark.Open(ctx, ib, testPassword, ark.WithLockEvent(func(e ark.LockEvent) {
+		holder, err := ark.Open(ctx, noClose{ib}, testPassword, ark.WithLockEvent(func(e ark.LockEvent) {
 			if e.Kind == ark.LockAcquired {
 				heldOnce.Do(func() { close(held) })
 			}
@@ -241,6 +248,7 @@ func TestEmbeddingObservesEveryOperation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open holder: %v", err)
 		}
+		t.Cleanup(func() { _ = holder.Close() })
 		holderDone := make(chan error, 1)
 		go func() {
 			_, err := holder.Backup(ctx, gateSource{stubSource{name: "app", content: "held"}, release})

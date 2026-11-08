@@ -13,6 +13,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"sync"
 
 	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arklocal"
@@ -41,10 +42,29 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	if err := ark.Init(ctx, backend, ark.WithoutPassword()); err != nil {
 		return err
 	}
+	// Per-chunk and per-file events go to Debug; Info gets the first event
+	// of each phase and the finalize with the operation's totals.
+	type opPhase struct {
+		op    ark.Operation
+		phase ark.Phase
+	}
+	var mu sync.Mutex
+	seen := map[opPhase]bool{}
 	repo, err := ark.Open(ctx, backend, ark.WithoutPassword(),
 		ark.WithLogger(logger),
 		ark.WithProgress(func(e ark.ProgressEvent) {
-			logger.InfoContext(ctx, "progress", "op", e.Operation, "phase", e.Phase, "path", e.CurrentPath,
+			key := opPhase{e.Operation, e.Phase}
+			mu.Lock()
+			level := slog.LevelDebug
+			if !seen[key] {
+				seen[key] = true
+				level = slog.LevelInfo
+			}
+			if e.Phase == ark.PhaseFinalize {
+				clear(seen)
+			}
+			mu.Unlock()
+			logger.Log(ctx, level, "progress", "op", e.Operation, "phase", e.Phase, "path", e.CurrentPath,
 				"files", e.FilesDone, "bytes", e.BytesDone, "chunks", e.ChunksDone, "chunks_total", e.ChunksTotal)
 		}),
 		ark.WithLockEvent(func(e ark.LockEvent) {
