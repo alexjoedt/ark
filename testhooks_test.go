@@ -45,3 +45,6 @@ func RootTree(ctx context.Context, r *Repository, id string) (string, error) {
 // SetPrefetchBytes lowers the floor of the restore prefetch budget of r for
 // a test.
 func SetPrefetchBytes(r *Repository, n int64) { r.prefetchBytes = n }
+
+// LockClass names the class of a lock as lock errors do.
+func LockClass(exclusive bool) string { return lockClass(exclusive) }

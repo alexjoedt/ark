@@ -34,38 +34,25 @@ var lockRefreshInterval = 5 * time.Minute
 // package can.
 var lockSettleDelay = 200 * time.Millisecond
 
-// LockEventKind says what happened to a lock, see LockEvent.
-type LockEventKind int
+// LockEventKind says what happened to a lock, see LockEvent. Its value is
+// the kind's name.
+type LockEventKind string
 
 // The lock events WithLockEvent reports.
 const (
 	// LockAcquired: the operation holds its lock and starts.
-	LockAcquired LockEventKind = iota + 1
+	LockAcquired LockEventKind = "acquired"
 	// LockRejected: an attempt found conflicting locks and backed off. Under
 	// WithLockWait every attempt reports one.
-	LockRejected
+	LockRejected LockEventKind = "rejected"
 	// LockReleased: the operation is done, its lock object is about to be
 	// deleted.
-	LockReleased
-	// LockLeftOver: deleting the released lock object failed; it blocks others
-	// until it is stale or Unlock removes it.
-	LockLeftOver
+	LockReleased LockEventKind = "released"
+	// LockLeftOver: deleting this repository's lock object failed, after a
+	// release or an attempt that backed off; it blocks others until it is
+	// stale or Unlock removes it.
+	LockLeftOver LockEventKind = "left-over"
 )
-
-func (k LockEventKind) String() string {
-	switch k {
-	case LockAcquired:
-		return "acquired"
-	case LockRejected:
-		return "rejected"
-	case LockReleased:
-		return "released"
-	case LockLeftOver:
-		return "left-over"
-	default:
-		return fmt.Sprintf("LockEventKind(%d)", int(k))
-	}
-}
 
 // LockEvent is one change of a lock this repository takes, see WithLockEvent.
 type LockEvent struct {
@@ -246,10 +233,9 @@ func conflict(locks map[string]lockObject, own string, exclusive bool, now time.
 		if !exclusive && !l.Exclusive {
 			continue
 		}
-		if l.stale(now) {
-			continue
+		if info := l.info(name, now); !info.Stale {
+			held = append(held, info)
 		}
-		held = append(held, l.info(name, now))
 	}
 	return held
 }
@@ -257,12 +243,16 @@ func conflict(locks map[string]lockObject, own string, exclusive bool, now time.
 // lockedError wraps ErrRepoLocked with the holder's identity, so an operator
 // reading the message knows which process to look at.
 func lockedError(h LockInfo, now time.Time) error {
-	kind := "shared"
-	if h.Exclusive {
-		kind = "exclusive"
-	}
 	return fmt.Errorf("%w: %s lock held by %s pid %d for %s",
-		ErrRepoLocked, kind, h.Hostname, h.PID, now.Sub(h.Time).Round(time.Second))
+		ErrRepoLocked, lockClass(h.Exclusive), h.Hostname, h.PID, now.Sub(h.Time).Round(time.Second))
+}
+
+// lockClass names the class of a lock.
+func lockClass(exclusive bool) string {
+	if exclusive {
+		return "exclusive"
+	}
+	return "shared"
 }
 
 // repoLock is a held lock. Its refresh goroutine keeps the object young and
@@ -337,8 +327,9 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 		r.logger.WarnContext(ctx, "ignoring a lock that does not open, Unlock with WithForce removes it", "lock", name)
 	}
 	if held := conflict(locks, "", exclusive, now); held != nil {
+		err := lockedError(held[0], now)
 		r.reportLock(LockEvent{Kind: LockRejected, Exclusive: exclusive, Holders: held})
-		return nil, nil, lockedError(held[0], now)
+		return nil, nil, err
 	}
 
 	name := generateID(now)
@@ -347,19 +338,24 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 	}
 
 	if err := sleepCtx(ctx, lockSettleDelay); err != nil {
-		r.removeLock(context.WithoutCancel(ctx), name)
+		r.dropLock(ctx, name, exclusive)
 		return nil, nil, err
 	}
 
 	locks, _, err = r.loadLocks(ctx)
 	if err != nil {
-		r.removeLock(context.WithoutCancel(ctx), name)
+		r.dropLock(ctx, name, exclusive)
 		return nil, nil, err
 	}
-	if held := conflict(locks, name, exclusive, r.now()); held != nil {
-		r.removeLock(context.WithoutCancel(ctx), name)
+	now = r.now()
+	if held := conflict(locks, name, exclusive, now); held != nil {
+		err := lockedError(held[0], now)
+		gone := r.removeLock(context.WithoutCancel(ctx), name)
 		r.reportLock(LockEvent{Kind: LockRejected, Exclusive: exclusive, LockID: name, Holders: held})
-		return nil, nil, lockedError(held[0], r.now())
+		if !gone {
+			r.reportLock(LockEvent{Kind: LockLeftOver, Exclusive: exclusive, LockID: name})
+		}
+		return nil, nil, err
 	}
 
 	lockCtx, cancel := context.WithCancel(ctx)
@@ -408,11 +404,15 @@ func (l *repoLock) keepAlive(ctx context.Context) {
 func (l *repoLock) release(ctx context.Context) {
 	l.cancel()
 	<-l.done
-	ev := LockEvent{Kind: LockReleased, Exclusive: l.exclusive, LockID: l.name}
-	l.repo.reportLock(ev)
-	if !l.repo.removeLock(context.WithoutCancel(ctx), l.name) {
-		ev.Kind = LockLeftOver
-		l.repo.reportLock(ev)
+	l.repo.reportLock(LockEvent{Kind: LockReleased, Exclusive: l.exclusive, LockID: l.name})
+	l.repo.dropLock(ctx, l.name, l.exclusive)
+}
+
+// dropLock removes our lock object name outside the operation's context and
+// reports LockLeftOver when it stays behind.
+func (r *Repository) dropLock(ctx context.Context, name string, exclusive bool) {
+	if !r.removeLock(context.WithoutCancel(ctx), name) {
+		r.reportLock(LockEvent{Kind: LockLeftOver, Exclusive: exclusive, LockID: name})
 	}
 }
 

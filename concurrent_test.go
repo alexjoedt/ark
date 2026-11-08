@@ -166,7 +166,7 @@ func runConcurrentOnce(t *testing.T, newRepo func(context.Context, *testing.T) (
 			t.Fatalf("child %d reported %s with exclusive %v", i, ev.event, ev.exclusive)
 		}
 		switch ev.event {
-		case ark.LockAcquired.String():
+		case string(ark.LockAcquired):
 			for j, exclusive := range held {
 				if exclusive || ev.exclusive {
 					t.Fatalf("child %d acquired a lock while child %d held a conflicting one", i, j)
@@ -174,15 +174,15 @@ func runConcurrentOnce(t *testing.T, newRepo func(context.Context, *testing.T) (
 			}
 			held[i] = ev.exclusive
 			acquired[i]++
-		case ark.LockReleased.String():
+		case string(ark.LockReleased):
 			if _, ok := held[i]; !ok {
 				t.Fatalf("child %d released a lock it does not hold", i)
 			}
 			delete(held, i)
 			released[i]++
-		case ark.LockLeftOver.String():
+		case string(ark.LockLeftOver):
 			t.Fatalf("child %d could not delete its released lock, which blocks the others until it is stale", i)
-		case ark.LockRejected.String():
+		case string(ark.LockRejected):
 			if i < concWriters {
 				t.Fatalf("backup child %d was rejected", i)
 			}
@@ -192,23 +192,23 @@ func runConcurrentOnce(t *testing.T, newRepo func(context.Context, *testing.T) (
 		}
 
 		switch {
-		case i < concWriters && ev.event == ark.LockAcquired.String():
+		case i < concWriters && ev.event == string(ark.LockAcquired):
 			// Held until the pruner was rejected.
 			if countPositive(acquired[:concWriters]) == concWriters {
 				start(concPruner, "prune", []string{concEnvRepo + "=" + ref, concEnvOp + "=prune"})
 				open++
 			}
 			continue
-		case i == concPruner && ev.event == ark.LockRejected.String() && rejected[i] == 1:
+		case i == concPruner && ev.event == string(ark.LockRejected) && rejected[i] == 1:
 			for j := range concWriters {
 				ack(j)
 			}
-		case i == concPruner && ev.event == ark.LockAcquired.String():
+		case i == concPruner && ev.event == string(ark.LockAcquired):
 			// Held until the late backup was rejected.
 			start(concLate, "late", lateEnv)
 			open++
 			continue
-		case i == concLate && ev.event == ark.LockRejected.String() && rejected[i] == 1:
+		case i == concLate && ev.event == string(ark.LockRejected) && rejected[i] == 1:
 			ack(concPruner)
 		}
 		ack(i)
@@ -391,11 +391,7 @@ func TestConcurrentChild(t *testing.T) {
 	events, gate := os.NewFile(3, "events"), os.NewFile(4, "gate")
 	defer func() { _ = events.Close() }()
 	report := func(ev ark.LockEvent) {
-		kind := "shared"
-		if ev.Exclusive {
-			kind = "exclusive"
-		}
-		if _, err := fmt.Fprintf(events, "%s %s\n", ev.Kind, kind); err != nil {
+		if _, err := fmt.Fprintf(events, "%s %s\n", ev.Kind, ark.LockClass(ev.Exclusive)); err != nil {
 			t.Errorf("report %s: %v", ev.Kind, err)
 		}
 		// The parent's ack; EOF once it is gone.

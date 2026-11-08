@@ -3,6 +3,7 @@ package ark
 import (
 	"context"
 	"errors"
+	"io"
 	"slices"
 	"sync"
 	"testing"
@@ -32,11 +33,7 @@ func (e *lockEvents) take() []LockEvent {
 func eventKinds(evs []LockEvent) []string {
 	out := make([]string, len(evs))
 	for i, ev := range evs {
-		class := "shared"
-		if ev.Exclusive {
-			class = "exclusive"
-		}
-		out[i] = ev.Kind.String() + " " + class
+		out[i] = string(ev.Kind) + " " + lockClass(ev.Exclusive)
 	}
 	return out
 }
@@ -56,6 +53,21 @@ func (b noLockDeletes) Delete(ctx context.Context, h Handle) error {
 		return errors.New("backend is down")
 	}
 	return b.stubBackend.Delete(ctx, h)
+}
+
+// cancelOnLockPut cancels the operation once its lock object is written, so
+// the attempt aborts during the settle delay.
+type cancelOnLockPut struct {
+	noLockDeletes
+	cancel context.CancelFunc
+}
+
+func (b cancelOnLockPut) Put(ctx context.Context, h Handle, r io.Reader) error {
+	err := b.noLockDeletes.Put(ctx, h, r)
+	if h.Type == LockFile {
+		b.cancel()
+	}
+	return err
 }
 
 func TestLockEventSharedAcquiredThenReleased(t *testing.T) {
@@ -141,12 +153,27 @@ func TestLockEventLeftOverAfterAFailedDelete(t *testing.T) {
 	}
 }
 
+func TestLockEventLeftOverAfterAnAbortedAttempt(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rec := &lockEvents{}
+	repo, b, _ := lockRepo(t, WithLockEvent(rec.add))
+	repo.backend = cancelOnLockPut{noLockDeletes{b}, cancel}
+
+	if _, _, err := repo.acquire(ctx, true); !errors.Is(err, context.Canceled) {
+		t.Fatalf("acquire cancelled while settling: %v, want context.Canceled", err)
+	}
+	got := rec.take()
+	wantKinds(t, got, "left-over exclusive")
+	if names := lockNames(t, b); len(names) != 1 || got[0].LockID != names[0] {
+		t.Errorf("left-over lock ID %q, want the object left behind %v", got[0].LockID, names)
+	}
+}
+
 func TestLockEventEveryWaitAttemptIsRejected(t *testing.T) {
 	ctx := context.Background()
 	rec := &lockEvents{}
-	repo, b, _ := lockRepo(t, WithLockEvent(rec.add))
-	repo.clock = time.Now
-	repo.lockWait = lockBackoffFloor + 100*time.Millisecond // at least two attempts
+	repo, b, clock := lockRepo(t, WithLockEvent(rec.add))
 
 	_, held, err := repo.acquire(ctx, true)
 	if err != nil {
@@ -156,12 +183,18 @@ func TestLockEventEveryWaitAttemptIsRejected(t *testing.T) {
 	holder := lockNames(t, b)
 	rec.take()
 
+	// A rejected attempt reads the clock three times (attempt, listing, time
+	// left), so with a one second step the first leaves 1ms to back off and
+	// the second runs past the deadline.
+	clock.setStep(time.Second)
+	repo.lockWait = 3*time.Second + time.Millisecond
+
 	if _, _, err := repo.acquire(ctx, false); !errors.Is(err, ErrRepoLocked) {
 		t.Fatalf("acquire under an exclusive lock: %v, want ErrRepoLocked", err)
 	}
 	got := rec.take()
-	if len(got) < 2 {
-		t.Fatalf("events %v, want one rejection per attempt, at least two", eventKinds(got))
+	if len(got) != 2 {
+		t.Fatalf("events %v, want one rejection per attempt, two", eventKinds(got))
 	}
 	for _, ev := range got {
 		if ev.Kind != LockRejected || len(ev.Holders) != 1 || ev.Holders[0].ID != holder[0] {
