@@ -103,6 +103,12 @@ func (f *chunkFetcher) fetch(ctx context.Context, id string) ([]byte, error) {
 			return nil, ctx.Err()
 		}
 	}
+	// A leader caches before it leaves flights, so a flight that ended
+	// between the caller's cache miss and this lock left its chunk here.
+	if data, ok := f.cache.get(id); ok {
+		f.flightMu.Unlock()
+		return data, nil
+	}
 	fl := &flight{done: make(chan struct{})}
 	f.flights[id] = fl
 	f.flightMu.Unlock()
