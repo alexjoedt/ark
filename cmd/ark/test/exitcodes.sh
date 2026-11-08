@@ -83,5 +83,6 @@ wait "$held" || true
 for c in "$repo"/chunks/*/*/*; do printf 'garbage' > "$c"; done
 expect 5 "j['ok'] is False and j['corrupt_chunks']" -r "$repo" verify "$id"
 expect 5 "j['errors'] and j['snapshots_checked'] == 1" -r "$repo" check
+expect 5 "j['error']['code'] == 'verify_failed'" -r "$repo" restore "$id" "$tmp/restored"
 
 exit $fail

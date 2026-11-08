@@ -32,11 +32,17 @@
 //
 // ChangePassword seals the same master key under a new password. It does not
 // revoke a master key that leaked, through the old password or a copy of the
-// old key file; a leaked repository needs a new one.
+// old key file; a leaked repository needs a new one. Nor does it revoke the old
+// password against anyone with write access to the backend who kept the old
+// key file: put back, it opens the repository under the old password again.
 //
 // Init, Open and ChangePassword derive the key with argon2id at 64 MiB of
 // memory, so a container that opens a repository needs that much on top of
 // the restore cache.
+//
+// What the encryption protects against, what it leaks and which risks are
+// accepted is written down in docs/SECURITY.md
+// (https://github.com/alexjoedt/ark/blob/main/docs/SECURITY.md).
 //
 // # Memory
 //

@@ -23,6 +23,10 @@ func TestOf(t *testing.T) {
 		{"not found", fmt.Errorf("snapshot: %w", ark.ErrNotFound), NotFound, KindNotFound},
 		{"ambiguous", fmt.Errorf("snapshot: %w", ark.ErrAmbiguousID), NotFound, KindAmbiguousID},
 		{"empty policy", ark.ErrEmptyPolicy, Usage, KindUsage},
+		{"corrupt chunk", fmt.Errorf("restore: %w", ark.ErrCorruptChunk), VerifyFailed, KindVerifyFailed},
+		{"corrupt tree", fmt.Errorf("export: %w", ark.ErrCorruptTree), VerifyFailed, KindVerifyFailed},
+		{"corrupt manifest", fmt.Errorf("verify: %w", ark.ErrCorruptManifest), VerifyFailed, KindVerifyFailed},
+		{"corrupt config", fmt.Errorf("open: %w", ark.ErrCorruptConfig), VerifyFailed, KindVerifyFailed},
 		{"pinned wins", &Error{Code: Usage, Kind: KindUsage, Err: ark.ErrRepoLocked}, Usage, KindUsage},
 		{"pinned wrapped", fmt.Errorf("ctx: %w", Usagef("x")), Usage, KindUsage},
 	}

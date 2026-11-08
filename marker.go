@@ -64,22 +64,20 @@ func (r *Repository) clearMarker(ctx context.Context, lock *repoLock, synced boo
 // the identity of the process that wrote them. Markers are listed before the
 // locks, and a write deletes its marker before its lock, so a marker whose
 // lock went away in between is found gone on reading and skipped. One that
-// does not open is stale with a zero identity.
-func (r *Repository) staleMarkers(ctx context.Context) (map[string]lockObject, error) {
+// does not open is stale with a zero identity. The locks that do not open
+// are returned by name, from the same listing.
+func (r *Repository) staleMarkers(ctx context.Context) (map[string]lockObject, []string, error) {
 	var names []string
 	err := r.backend.List(ctx, MarkerFile, func(info BlobInfo) error {
 		names = append(names, info.Name)
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("marker: failed to list markers: %w", err)
+		return nil, nil, fmt.Errorf("marker: failed to list markers: %w", err)
 	}
-	if len(names) == 0 {
-		return map[string]lockObject{}, nil
-	}
-	locks, _, err := r.loadLocks(ctx)
+	locks, unreadable, err := r.loadLocks(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	now := r.now()
 
@@ -98,7 +96,7 @@ func (r *Repository) staleMarkers(ctx context.Context) (map[string]lockObject, e
 		}
 		stale[name] = l
 	}
-	return stale, nil
+	return stale, unreadable, nil
 }
 
 // writeStores returns the chunk and tree stores a backup or import writes
@@ -127,7 +125,7 @@ func (r *Repository) writeStores(ctx context.Context) (chunks, trees *objectStor
 // sweep is durable: the objects those writes may have torn are gone or
 // rewritten by then.
 func (r *Repository) removeStaleMarkers(ctx context.Context) (int, error) {
-	stale, err := r.staleMarkers(ctx)
+	stale, _, err := r.staleMarkers(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -139,9 +137,10 @@ func (r *Repository) removeStaleMarkers(ctx context.Context) (int, error) {
 	return len(stale), nil
 }
 
-// uncleanFindings describes every stale marker for Check, oldest first.
+// uncleanFindings describes every stale marker for Check, oldest first, then
+// every lock that does not open.
 func (r *Repository) uncleanFindings(ctx context.Context) ([]string, error) {
-	stale, err := r.staleMarkers(ctx)
+	stale, unreadable, err := r.staleMarkers(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -158,6 +157,10 @@ func (r *Repository) uncleanFindings(ctx context.Context) ([]string, error) {
 			who = fmt.Sprintf("host %s pid %d, %s", l.Hostname, l.PID, l.Time.UTC().Format("2006-01-02 15:04:05Z"))
 		}
 		findings = append(findings, fmt.Sprintf("unclean backup %s (%s), prune cleans up", name, who))
+	}
+	for _, name := range unreadable {
+		findings = append(findings,
+			fmt.Sprintf("lock %s does not open and is ignored, Unlock with WithForce removes it", name))
 	}
 	return findings, nil
 }

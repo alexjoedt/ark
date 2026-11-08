@@ -20,8 +20,10 @@ const (
 	// EnvDevMode is the environment variable for enabling dev mode ("true" or "1").
 	EnvDevMode = "ARK_DEV_MODE"
 
-	// DefaultHTTPAddr is the default HTTP server bind address.
-	DefaultHTTPAddr = ":8080"
+	// DefaultHTTPAddr is the default HTTP server bind address. Loopback: the
+	// server speaks plain HTTP, any other address belongs behind a TLS
+	// reverse proxy.
+	DefaultHTTPAddr = "127.0.0.1:8080"
 
 	// DefaultAdminUsername is the default admin login username.
 	DefaultAdminUsername = "admin"
@@ -33,7 +35,7 @@ const (
 // ServeConfig holds all configuration for `ark serve`.
 //
 // AdminPassword is intentionally absent — it must be supplied via the
-// ARK_ADMIN_PASSWORD environment variable or the --admin-password CLI flag.
+// ARK_ADMIN_PASSWORD environment variable, never as a flag value.
 // Writing passwords to disk in a config file is not supported.
 type ServeConfig struct {
 	// RepoPath is the repository the daemon serves when --repo and

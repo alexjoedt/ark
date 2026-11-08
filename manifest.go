@@ -1,12 +1,14 @@
 package ark
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
-	"sort"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -175,8 +177,10 @@ func (r *Repository) readManifests(ctx context.Context) ([]*manifest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("manifest: failed to list snapshots: %w", err)
 	}
-	// Sort newest first (ULID IDs are lexicographically sortable).
-	sort.Slice(manifests, func(i, j int) bool { return manifests[i].ID > manifests[j].ID })
+	// Snapshot IDs are random, so only CreatedAt orders them.
+	slices.SortFunc(manifests, func(a, b *manifest) int {
+		return cmp.Or(b.CreatedAt.Compare(a.CreatedAt), strings.Compare(b.ID, a.ID))
+	})
 	return manifests, nil
 }
 

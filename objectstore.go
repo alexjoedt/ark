@@ -137,6 +137,8 @@ type objectStore struct {
 	codec   *objectCodec
 	dataKey *[32]byte
 	idKey   []byte
+	// corruptErr is the sentinel Get wraps an object that does not open in.
+	corruptErr error
 	// verify makes Get recompute the name of every object it reads.
 	verify bool
 	// repair makes putNamed read an object that exists and store it again
@@ -146,13 +148,25 @@ type objectStore struct {
 	repair bool
 }
 
+// newObjectStore returns the store of the chunk (BlobFile) or tree (TreeFile)
+// namespace. Any other type panics: it has no corruption sentinel.
 func newObjectStore(b Backend, t HandleType, c *objectCodec, key *masterKey) *objectStore {
+	var corruptErr error
+	switch t { //nolint:exhaustive // only chunks and trees are object stores
+	case BlobFile:
+		corruptErr = ErrCorruptChunk
+	case TreeFile:
+		corruptErr = ErrCorruptTree
+	default:
+		panic(fmt.Sprintf("ark: no object store for %s", t))
+	}
 	return &objectStore{
-		backend: b,
-		typ:     t,
-		codec:   c,
-		dataKey: (*[32]byte)(&key.DataKey),
-		idKey:   key.IDKey[:],
+		backend:    b,
+		typ:        t,
+		codec:      c,
+		dataKey:    (*[32]byte)(&key.DataKey),
+		idKey:      key.IDKey[:],
+		corruptErr: corruptErr,
 	}
 }
 
@@ -219,21 +233,25 @@ func (s *objectStore) present(ctx context.Context, name string) (bool, error) {
 	switch {
 	case err == nil:
 		return true, nil
-	case errors.Is(err, ErrNotFound), errors.Is(err, errSealBroken), errors.Is(err, errNameMismatch):
+	case errors.Is(err, ErrNotFound), errors.Is(err, s.corruptErr):
 		return false, nil
 	}
 	return false, err
 }
 
 // Get returns the raw content of the object stored under name. An object that
-// was changed or moved from another name fails to open.
+// was changed or moved from another name fails to open, with ErrCorruptChunk
+// or ErrCorruptTree by namespace.
 func (s *objectStore) Get(ctx context.Context, name string) ([]byte, error) {
 	data, err := readSealed(ctx, s.backend, s.codec, s.dataKey, s.handle(name))
+	if errors.Is(err, errSealBroken) {
+		return nil, fmt.Errorf("%w: %w", s.corruptErr, err)
+	}
 	if err != nil {
 		return nil, err
 	}
 	if s.verify && s.name(data) != name {
-		return nil, fmt.Errorf("ark: %s object %s: %w", s.typ, name, errNameMismatch)
+		return nil, fmt.Errorf("%w: %s object %s: %w", s.corruptErr, s.typ, name, errNameMismatch)
 	}
 	return data, nil
 }

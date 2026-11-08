@@ -25,11 +25,18 @@ var (
 	// by naming its id to Forget without a policy, then Prune.
 	ErrCorruptManifest = errors.New("ark: corrupt snapshot manifest")
 
-	// ErrCorruptTree is returned by Verify when a tree object of the snapshot
-	// does not authenticate or does not match its name.
+	// ErrCorruptConfig is returned by Open when a key file opens but the
+	// repository config is not the one its master key was created with: the
+	// config was changed or replaced, or the key file belongs to another
+	// repository. The message says which of the two the config's id points to.
+	ErrCorruptConfig = errors.New("ark: repository config does not match its master key")
+
+	// ErrCorruptTree is returned by Restore, Export and Verify when a tree
+	// object of the snapshot does not authenticate or does not match its name.
 	ErrCorruptTree = errors.New("ark: corrupt snapshot tree")
 
-	// ErrCorruptChunk is returned when a stored chunk fails its integrity check.
+	// ErrCorruptChunk is returned by Restore and Export when a stored chunk
+	// fails its integrity check. Verify lists such a chunk in CorruptChunks.
 	ErrCorruptChunk = errors.New("ark: corrupt chunk")
 
 	// ErrMissingChunk is returned when a required chunk is absent from the CAS.

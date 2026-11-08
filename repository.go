@@ -94,8 +94,9 @@ func (r *Repository) now() time.Time {
 // Then it unseals the master key with pw before any other object is read. It
 // returns ErrWrongPassword when no key file opens, ErrPasswordRequired for
 // WithoutPassword on a protected repository and ErrNotPasswordProtected for a
-// password on a repository created with WithoutPassword. Unsealing a password
-// protected key file runs argon2id with 64 MiB of memory.
+// password on a repository created with WithoutPassword, and ErrCorruptConfig
+// when a key opens but the config is not the one it was sealed with. Unsealing
+// a password protected key file runs argon2id with 64 MiB of memory.
 func Open(ctx context.Context, b Backend, pw Passphrase, opts ...Option) (*Repository, error) {
 	if err := pw.validate(); err != nil {
 		return nil, err
@@ -108,13 +109,18 @@ func Open(ctx context.Context, b Backend, pw Passphrase, opts ...Option) (*Repos
 		o(cfg)
 	}
 
-	rc, err := loadRepositoryConfig(ctx, b)
+	data, err := readRepositoryConfig(ctx, b)
 	if err != nil {
 		return nil, err
 	}
 
 	codec := newObjectCodec()
-	key, keyName, err := loadMasterKey(ctx, b, codec, rc.ID, pw)
+	key, keyName, err := loadMasterKey(ctx, b, codec, data, pw)
+	if err != nil {
+		codec.Close()
+		return nil, err
+	}
+	rc, err := parseRepositoryConfig(data)
 	if err != nil {
 		codec.Close()
 		return nil, err
@@ -312,7 +318,6 @@ func (r *Repository) Snapshots(ctx context.Context, filter SnapshotFilter) ([]*S
 		}
 		out = append(out, s)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, nil
 }
 
@@ -542,6 +547,9 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 	result := &CheckResult{SnapshotsChecked: len(ids), Warnings: unclean}
 	for _, id := range ids {
 		vr, err := r.runVerify(ctx, id)
+		if ctx.Err() != nil {
+			return nil, ctx.Err() //nolint:wrapcheck // the caller's own cancellation
+		}
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("snapshot %s: %v", id, err))
 			continue

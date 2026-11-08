@@ -39,6 +39,11 @@ tasks:
       - cd arkdocker && golangci-lint run
       - cd cmd/ark && golangci-lint run
 
+  vuln:
+    desc: govulncheck over every module, fails on reachable findings (same command as the CI step)
+    cmds:
+      - for dir in . arkdocker cmd/ark examples; do go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -C "$dir" ./... || exit 1; done
+
   test:
     desc: Test every module in the workspace, then verify the module cache
     cmds:

@@ -139,6 +139,8 @@ restoring garbage.
   already leaked.
 - `Open` derives the key with argon2id and needs 64 MiB of memory for it. Size containers accordingly.
 
+The threat model, the accepted risks and how to report a vulnerability: [docs/SECURITY.md](docs/SECURITY.md).
+
 ## CLI
 
 ```bash
@@ -195,7 +197,7 @@ set. `--json` prints results on stdout and logs on stderr. `ark <command> --help
 | 2 | usage error |
 | 3 | repository locked |
 | 4 | snapshot not found, or an id prefix matches several |
-| 5 | verify or check found damage |
+| 5 | verify or check found damage, or a read hit a corrupt object |
 | 6 | wrong password |
 
 ## Compatibility
@@ -212,8 +214,13 @@ number.
 
 ## Web UI
 
-`ark serve` starts a web UI on `:8080` with scheduled backups and live logs. It is not covered by the
-compatibility promise.
+`ark serve` starts a web UI on `127.0.0.1:8080` with scheduled backups and live logs. It is not
+covered by the compatibility promise.
+
+The server speaks plain HTTP and has no TLS flags. It listens on loopback by default and warns at
+start when `--addr`, `ARK_HTTP_ADDR` or `httpAddr` binds anything but a loopback IP (`localhost`
+counts as a name, not loopback), and when CSRF is off (`--no-csrf` or `csrfEnabled: false`).
+Use any other address only behind a TLS reverse proxy.
 
 ```bash
 ARK_ADMIN_PASSWORD=... ARK_PASSWORD_FILE=/etc/ark/password ark serve --repo /srv/ark
@@ -226,18 +233,19 @@ environment, `ARK_PASSWORD` or `ARK_PASSWORD_FILE`, and the repository is create
 The SQLite database next to it is a cache for the UI. The repository stays the source of truth.
 
 `scripts/install.sh` installs `ark serve` as a systemd service with its settings in
-`/etc/ark/daemon.json`. The admin password only ever comes from `ARK_ADMIN_PASSWORD`, never from a
+`/etc/ark/daemon.json`, where `httpAddr` is `127.0.0.1:8080` on a fresh install.
+The admin password only ever comes from `ARK_ADMIN_PASSWORD`, never from a
 file.
 
 ## Repository layout
 
 ```
 /srv/ark/
-├── config      format version and chunker settings, plaintext
+├── config      format version and chunker settings, plaintext, its hash sealed in the master key
 ├── keys/       the master key, sealed under the password
 ├── chunks/     compressed, encrypted content, named by an HMAC, sharded by prefix
 ├── trees/      one encrypted object per directory, named the same way
-├── snapshots/  one encrypted manifest per snapshot, named by its sortable id
+├── snapshots/  one encrypted manifest per snapshot, named by a random id
 └── locks/      encrypted shared and exclusive locks, stale after 30 minutes without a refresh
 ```
 

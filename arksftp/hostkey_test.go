@@ -1,9 +1,11 @@
 package arksftp
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -124,6 +126,32 @@ func TestHostKeysInsecureAcceptsAnything(t *testing.T) {
 	}
 	if err := cb("example.com:22", &net.TCPAddr{}, newSigner(t).PublicKey()); err != nil {
 		t.Fatalf("insecure callback rejected a key: %v", err)
+	}
+}
+
+// TestHostKeysInsecureWarnsOnce: opting out of host key verification is
+// logged at warn level, once per connection setup, naming the host and not
+// the key.
+func TestHostKeysInsecureWarnsOnce(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	cb, err := hostKeys(Config{Host: "example.com", InsecureIgnoreHostKey: true})
+	if err != nil {
+		t.Fatalf("hostKeys: %v", err)
+	}
+	for range 3 {
+		if err := cb("example.com:22", &net.TCPAddr{}, newSigner(t).PublicKey()); err != nil {
+			t.Fatalf("insecure callback rejected a key: %v", err)
+		}
+	}
+	if n := strings.Count(logs.String(), "level=WARN"); n != 1 {
+		t.Errorf("%d warnings, want 1:\n%s", n, logs.String())
+	}
+	if !strings.Contains(logs.String(), "host=example.com") {
+		t.Errorf("warning does not name the host:\n%s", logs.String())
 	}
 }
 

@@ -3,7 +3,9 @@ package ark
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -131,14 +133,9 @@ func TestOpenDefaultRepositoryUsesTheWrittenDefaults(t *testing.T) {
 	}
 
 	// Rewrite the config with different, still valid parameters, as an older
-	// build with other defaults would have written it.
+	// build with other defaults would have written it, and rebind the key.
 	stored := chunkerParams{Min: 1 << 16, Avg: 1 << 19, Max: 1 << 21}
-	cfg, err := loadRepositoryConfig(ctx, b)
-	if err != nil {
-		t.Fatalf("loadRepositoryConfig: %v", err)
-	}
-	cfg.Chunker = stored
-	writeConfig(t, b, cfg)
+	rebindConfig(t, b, func(cfg *repositoryConfig) { cfg.Chunker = stored })
 
 	repo, err := Open(ctx, b, WithoutPassword())
 	if err != nil {
@@ -153,15 +150,87 @@ func TestOpenDefaultRepositoryUsesTheWrittenDefaults(t *testing.T) {
 	}
 }
 
-// writeConfig replaces the config object of b.
-func writeConfig(t *testing.T, b Backend, cfg repositoryConfig) {
+// rebindConfig rewrites the config object of b with change applied and
+// replaces its key file by one bound to the new bytes, as Init would have
+// written them.
+func rebindConfig(t *testing.T, b Backend, change func(*repositoryConfig)) {
 	t.Helper()
-	data, err := json.Marshal(cfg)
+	ctx := context.Background()
+	repo, err := Open(ctx, b, WithoutPassword())
 	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer repo.Close()
+
+	data, err := readRepositoryConfig(ctx, b)
+	if err != nil {
+		t.Fatalf("readRepositoryConfig: %v", err)
+	}
+	cfg, err := parseRepositoryConfig(data)
+	if err != nil {
+		t.Fatalf("parseRepositoryConfig: %v", err)
+	}
+	change(&cfg)
+	if data, err = json.Marshal(cfg); err != nil {
 		t.Fatalf("marshal config: %v", err)
 	}
-	h := Handle{Type: ConfigFile, Name: configName}
-	if putErr := b.Put(context.Background(), h, bytes.NewReader(data)); putErr != nil {
-		t.Fatalf("write config: %v", putErr)
+	if err := b.Put(ctx, Handle{Type: ConfigFile, Name: configName}, bytes.NewReader(data)); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	repo.key.ConfigHash = configHash(data)
+	if _, err := putKeyFile(ctx, b, repo.codec, repo.key, WithoutPassword()); err != nil {
+		t.Fatalf("putKeyFile: %v", err)
+	}
+	if err := b.Delete(ctx, Handle{Type: KeyFile, Name: repo.keyName}); err != nil {
+		t.Fatalf("delete old key file: %v", err)
+	}
+}
+
+// TestOpenRejectsAMasterKeyWithoutConfigHash pins that there is no legacy
+// path: a master key that carries no config_hash, as format version 1 wrote
+// it, does not open the repository and reports the older format.
+func TestOpenRejectsAMasterKeyWithoutConfigHash(t *testing.T) {
+	ctx := context.Background()
+	b := newStubBackend()
+	if err := Init(ctx, b, WithoutPassword()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	repo, err := Open(ctx, b, WithoutPassword())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer repo.Close()
+
+	blob, err := json.Marshal(repo.key)
+	if err != nil {
+		t.Fatalf("marshal master key: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(blob, &fields); err != nil {
+		t.Fatalf("unmarshal master key: %v", err)
+	}
+	if _, ok := fields["config_hash"]; !ok {
+		t.Fatal("master key has no config_hash field")
+	}
+	delete(fields, "config_hash")
+	if blob, err = json.Marshal(fields); err != nil {
+		t.Fatalf("marshal master key: %v", err)
+	}
+	var wrap [32]byte
+	h := Handle{Type: KeyFile, Name: repo.keyName}
+	kf, err := json.Marshal(keyFile{
+		Version: keyFileVersion,
+		KDF:     kdfNone,
+		Key:     hex.EncodeToString(repo.codec.seal(&wrap, objectAAD(h), blob)),
+	})
+	if err != nil {
+		t.Fatalf("marshal key file: %v", err)
+	}
+	if err := b.Put(ctx, h, bytes.NewReader(kf)); err != nil {
+		t.Fatalf("put key file: %v", err)
+	}
+
+	if _, err := Open(ctx, b, WithoutPassword()); !errors.Is(err, ErrUnsupportedFormat) {
+		t.Errorf("Open = %v, want ErrUnsupportedFormat", err)
 	}
 }

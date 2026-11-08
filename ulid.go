@@ -2,12 +2,22 @@ package ark
 
 import (
 	"crypto/rand"
+	"strings"
 	"time"
 )
 
-// generateID creates a sortable, unique snapshot ID.
+// newSnapshotID returns 128 random bits as 26 Crockford base32 characters.
+// A snapshot name carries no time: the backend listing must not date them.
+func newSnapshotID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return encodeBase32(b)
+}
+
+// generateID creates a sortable, unique lock and marker name.
 // Format: 10-char timestamp prefix (Crockford base32, ms precision) +
 // 16-char random suffix (80 bits of entropy). Total length: 26 characters.
+// The timestamp lets a zero-byte lock age out, see loadLocks.
 func generateID(timestamp time.Time) string {
 	tsMs := uint64(timestamp.UnixNano() / int64(time.Millisecond))
 	tsPart := encodeTimestampBase32(tsMs, 10)
@@ -50,4 +60,22 @@ func encodeBase32(data []byte) string {
 		result[idx] = chars[(bits<<uint(5-bitsLen))&0x1F]
 	}
 	return string(result)
+}
+
+// idTime returns the time generateID encoded in the prefix of id, false when
+// id does not start with one.
+func idTime(id string) (time.Time, bool) {
+	const chars = "0123456789abcdefghjkmnpqrstvwxyz"
+	if len(id) < 10 {
+		return time.Time{}, false
+	}
+	var ms int64
+	for i := range 10 {
+		v := strings.IndexByte(chars, id[i])
+		if v < 0 {
+			return time.Time{}, false
+		}
+		ms = ms*32 + int64(v)
+	}
+	return time.UnixMilli(ms), true
 }

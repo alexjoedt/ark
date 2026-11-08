@@ -266,7 +266,7 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader, chunks, tr
 	}
 	if m.ID == "" {
 		// A v1.1.0 archive may name only its volume.
-		m.ID = generateID(time.Now())
+		m.ID = newSnapshotID()
 	}
 
 	if err := w.wait(); err != nil {

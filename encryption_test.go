@@ -4,29 +4,48 @@ package ark_test
 // the list points at it instead of repeating it:
 //
 //	no plaintext in any object name or body   TestBackendHoldsNoPlaintext
+//	key file plaintext is exactly its fields   TestInitWritesOneKeyFile (keys_test.go)
+//	config plaintext is exactly its fields     TestConfigHoldsOnlyItsPlaintextFields
+//	keyed names, none shared across repos      TestChunksAndTreesAreSealedUnderKeyedNames,
+//	                                          TestSameFilesInTwoRepositoriesShareNoNames (format_test.go)
+//	snapshot names carry no time               TestSnapshotIDsCarryNoTimestamp
 //	wrong password fails before data reads    TestWrongPasswordReadsOnlyConfigAndKeys (keys_test.go)
+//	every sealed namespace x every mutation   TestTamperedObjectsAreRejected (tamper_test.go)
 //	tampered chunk, tree, manifest            TestScenarioVerifyFindsACorruptChunk, TestScenarioVerifyFindsACorruptTree,
 //	                                          TestScenarioTamperedManifestIsRefused (scenario_test.go)
 //	tampered key file                         TestEveryFlippedKeyFileByteFailsOpen
 //	tampered lock                             TestTamperedLockIsIgnoredUntilForced
 //	key file from another repository          TestKeyFileDoesNotOpenElsewhere (keys_test.go)
+//
+// The accepted leaks, pinned so a widening fails:
+//
+//	object sizes and counts per namespace     TestListingRevealsCountsAndSizes
+//	sealed chunk size = zstd frame + overhead TestListingRevealsCountsAndSizes
+//	KDF parameters and config in plaintext    TestInitWritesOneKeyFile, TestConfigHoldsOnlyItsPlaintextFields
+//	ms timestamp in lock and marker names     TestLockAndMarkerNamesCarryTheirTime
 
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkfs"
 	"github.com/alexjoedt/ark/arkmem"
 	"github.com/alexjoedt/ark/chunker"
+	"golang.org/x/sys/unix"
 )
 
 // marker is planted in everything a backup records.
@@ -39,10 +58,11 @@ var allHandleTypes = []ark.HandleType{
 	ark.TreeFile,
 	ark.SnapshotFile,
 	ark.LockFile,
+	ark.MarkerFile,
 }
 
-// scanForMarker fails when an object name or body in b contains marker and
-// returns the number of objects per namespace.
+// scanForMarker fails when an object name, Stat field or body in b contains
+// marker and returns the number of objects per namespace.
 func scanForMarker(t *testing.T, b ark.Backend) map[ark.HandleType]int {
 	t.Helper()
 	seen := make(map[ark.HandleType]int)
@@ -51,6 +71,13 @@ func scanForMarker(t *testing.T, b ark.Backend) map[ark.HandleType]int {
 			seen[typ]++
 			if strings.Contains(name, marker) {
 				t.Errorf("object name %s/%s contains the marker", typ, name)
+			}
+			info, err := b.Stat(context.Background(), ark.Handle{Type: typ, Name: name})
+			if err != nil {
+				t.Fatalf("stat %s/%s: %v", typ, name, err)
+			}
+			if strings.Contains(fmt.Sprint(info), marker) {
+				t.Errorf("stat of %s/%s shows the marker: %+v", typ, name, info)
 			}
 			if bytes.Contains(readObject(t, b, typ, name), []byte(marker)) {
 				t.Errorf("object %s/%s contains the marker", typ, name)
@@ -88,6 +115,13 @@ func TestBackendHoldsNoPlaintext(t *testing.T) {
 			if err := os.Symlink(marker+".txt", filepath.Join(dir, "link")); err != nil {
 				t.Fatal(err)
 			}
+			xattrs := true
+			for _, p := range []string{dir, filepath.Join(dir, marker+".txt")} {
+				if err := unix.Setxattr(p, "user."+marker, []byte("value "+marker), 0); err != nil {
+					t.Logf("xattrs unsupported here, not scanned: %v", err)
+					xattrs = false
+				}
+			}
 
 			b := arkmem.New()
 			cfg := chunker.Config{MinSize: 4 << 10, AvgSize: 8 << 10, MaxSize: scenarioMaxChunk}
@@ -118,11 +152,23 @@ func TestBackendHoldsNoPlaintext(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Backup: %v", err)
 			}
-			if during[ark.LockFile] == 0 {
-				t.Error("no lock seen during the backup, the scan did not cover locks")
+			if during[ark.LockFile] == 0 || during[ark.MarkerFile] == 0 {
+				t.Error("no lock or marker seen during the backup, the scan did not cover them")
 			}
 			if snap.Host != marker+"-host" || !strings.Contains(snap.SourceName, marker) {
 				t.Fatalf("the marker did not reach the snapshot: %+v", snap)
+			}
+			if xattrs {
+				found := 0
+				err := repo.Walk(ctx, snap.ID, func(fi ark.FileInfo) error {
+					if strings.Contains(string(fi.Xattrs["user."+marker]), marker) {
+						found++
+					}
+					return nil
+				})
+				if err != nil || found != 2 {
+					t.Fatalf("Walk found the marker xattr on %d entries, want 2: %v", found, err)
+				}
 			}
 
 			after := scanForMarker(t, b)
@@ -156,7 +202,7 @@ func TestEveryFlippedKeyFileByteFailsOpen(t *testing.T) {
 		for i := range body {
 			tampered := bytes.Clone(body)
 			tampered[i] ^= 0x01
-			putKeyFile(t, b, name, tampered)
+			putObject(t, b, ark.KeyFile, name, tampered)
 
 			repo, err := ark.Open(ctx, b, pw)
 			if err == nil {
@@ -226,5 +272,187 @@ func TestTamperedLockIsIgnoredUntilForced(t *testing.T) {
 	}
 	if names := objectNames(t, b, ark.LockFile); len(names) != 0 {
 		t.Errorf("locks left after Unlock WithForce: %v", names)
+	}
+}
+
+// TestConfigHoldsOnlyItsPlaintextFields pins the config, which is read before
+// any key: a new plaintext field fails here.
+func TestConfigHoldsOnlyItsPlaintextFields(t *testing.T) {
+	b := initRepo(t, testPassword)
+	names := objectNames(t, b, ark.ConfigFile)
+	if len(names) != 1 {
+		t.Fatalf("config objects %v, want one", names)
+	}
+	body := readObject(t, b, ark.ConfigFile, names[0])
+	var cfg map[string]json.RawMessage
+	if err := json.Unmarshal(body, &cfg); err != nil {
+		t.Fatalf("config is not plain JSON: %v", err)
+	}
+	var chunkerFields map[string]json.RawMessage
+	if err := json.Unmarshal(cfg["chunker"], &chunkerFields); err != nil {
+		t.Fatalf("config chunker: %v", err)
+	}
+	for _, tc := range []struct {
+		fields map[string]json.RawMessage
+		want   []string
+	}{
+		{cfg, []string{"chunker", "compression", "created_at", "id", "version"}},
+		{chunkerFields, []string{"avg", "max", "min"}},
+	} {
+		if got := slices.Sorted(maps.Keys(tc.fields)); !slices.Equal(got, tc.want) {
+			t.Errorf("config fields %v, want exactly %v: %s", got, tc.want, body)
+		}
+	}
+}
+
+// idPrefixTime decodes the first 10 Crockford base32 characters of id as
+// milliseconds since the epoch, the layout of a timestamped ID.
+func idPrefixTime(t *testing.T, id string) time.Time {
+	t.Helper()
+	const chars = "0123456789abcdefghjkmnpqrstvwxyz"
+	if len(id) != 26 {
+		t.Fatalf("id %q has %d characters, want 26", id, len(id))
+	}
+	var ms int64
+	for i := range 26 {
+		v := strings.IndexByte(chars, id[i])
+		if v < 0 {
+			t.Fatalf("id %q is not Crockford base32", id)
+		}
+		if i < 10 {
+			ms = ms*32 + int64(v)
+		}
+	}
+	return time.UnixMilli(ms)
+}
+
+// TestSnapshotIDsCarryNoTimestamp: a snapshot ID is random, so the listing
+// does not date a snapshot; prefixes still resolve and the parent is still the
+// newest snapshot of the source.
+func TestSnapshotIDsCarryNoTimestamp(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+	var prev string
+	for i := range 5 {
+		snap, err := repo.Backup(ctx, stubSource{name: "app", content: fmt.Sprint("contents ", i)})
+		if err != nil {
+			t.Fatalf("Backup: %v", err)
+		}
+		if d := idPrefixTime(t, snap.ID).Sub(snap.CreatedAt).Abs(); d < 24*time.Hour {
+			t.Errorf("snapshot %s decodes to %s off its CreatedAt, want no timestamp in it", snap.ID, d)
+		}
+		if snap.ParentID != prev {
+			t.Errorf("backup %d has parent %q, want the newest snapshot %q", i, snap.ParentID, prev)
+		}
+		got, err := repo.Snapshot(ctx, snap.ID[:8])
+		if err != nil || got.ID != snap.ID {
+			t.Errorf("Snapshot(%q) = %v, %v, want %s", snap.ID[:8], got, err, snap.ID)
+		}
+		prev = snap.ID
+	}
+}
+
+// TestLockAndMarkerNamesCarryTheirTime pins an accepted leak: lock and marker
+// names start with the millisecond they were taken, so a zero-byte lock can
+// age out without a key.
+func TestLockAndMarkerNamesCarryTheirTime(t *testing.T) {
+	ctx := context.Background()
+	b := arkmem.New()
+	repo := openRepo(t, b)
+	var locks, markers []string
+	var once sync.Once
+	start := time.Now().Truncate(time.Millisecond)
+	_, err := repo.Backup(ctx, stubSource{name: "app", content: "contents"},
+		ark.WithBackupProgress(func(ark.ProgressEvent) {
+			once.Do(func() {
+				locks = objectNames(t, b, ark.LockFile)
+				markers = objectNames(t, b, ark.MarkerFile)
+			})
+		}))
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	end := time.Now()
+	if len(locks) != 1 || !slices.Equal(locks, markers) {
+		t.Fatalf("locks %v and markers %v during the backup, want one each under the same name", locks, markers)
+	}
+	if at := idPrefixTime(t, locks[0]); at.Before(start) || at.After(end) {
+		t.Errorf("lock %s decodes to %s, want a time between %s and %s", locks[0], at, start, end)
+	}
+}
+
+// TestListingRevealsCountsAndSizes pins the accepted leaks of a listing: one
+// tree per directory, one object per new chunk, one per snapshot and key
+// file, every size as stored, and a sealed chunk only a fixed overhead plus
+// its zstd frame larger than its content. Padding would narrow this; anything
+// that widens it fails.
+func TestListingRevealsCountsAndSizes(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	for name, size := range map[string]int{"top.bin": 3 << 10, "a/one.bin": 20 << 10, "b/two.bin": 50 << 10} {
+		data := make([]byte, size)
+		_, _ = rand.Read(data)
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, name), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := arkmem.New()
+	cfg := chunker.Config{MinSize: 4 << 10, AvgSize: 8 << 10, MaxSize: scenarioMaxChunk}
+	if err := ark.Init(ctx, b, testPassword, ark.WithChunkerConfig(cfg)); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	repo, err := ark.Open(ctx, b, testPassword)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer repo.Close()
+	src, err := arkfs.NewSource(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := repo.Backup(ctx, src)
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+
+	want := map[ark.HandleType]int{
+		ark.ConfigFile: 1, ark.KeyFile: 1, ark.SnapshotFile: 1, ark.TreeFile: 3,
+		ark.BlobFile: snap.Stats.ChunksNew, ark.LockFile: 0, ark.MarkerFile: 0,
+	}
+	var plain int64
+	for _, typ := range allHandleTypes {
+		var infos []ark.BlobInfo
+		if err := b.List(ctx, typ, func(info ark.BlobInfo) error {
+			infos = append(infos, info)
+			return nil
+		}); err != nil {
+			t.Fatalf("list %s: %v", typ, err)
+		}
+		if len(infos) != want[typ] {
+			t.Errorf("%s holds %d objects, want %d", typ, len(infos), want[typ])
+		}
+		for _, info := range infos {
+			if n := int64(len(readObject(t, b, typ, info.Name))); info.Size != n {
+				t.Errorf("%s/%s listed at %d bytes, stored %d", typ, info.Name, info.Size, n)
+			}
+			if typ != ark.BlobFile {
+				continue
+			}
+			// zstd stores random data in raw blocks behind a frame header
+			// and checksum, a few bytes per chunk.
+			const zstdFrameSlack = 24
+			p := int64(len(openObject(t, repo, typ, info.Name)))
+			plain += p
+			if extra := info.Size - ark.SealOverhead - p; extra < 0 || extra > zstdFrameSlack {
+				t.Errorf("chunk of %d bytes sealed at %d, want %d plus at most %d",
+					p, info.Size, p+ark.SealOverhead, zstdFrameSlack)
+			}
+		}
+	}
+	if plain != snap.Stats.TotalSize {
+		t.Errorf("chunks hold %d bytes, the snapshot %d", plain, snap.Stats.TotalSize)
 	}
 }

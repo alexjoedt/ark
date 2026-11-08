@@ -129,18 +129,31 @@ func TestChunksAndTreesAreSealedUnderKeyedNames(t *testing.T) {
 			}
 		}
 	}
+	for _, name := range objectNames(t, b, ark.SnapshotFile) {
+		sum := sha256.Sum256(openObject(t, repo, ark.SnapshotFile, name))
+		if name == hex.EncodeToString(sum[:]) {
+			t.Errorf("snapshot %s is named by the plain sha256 of its content", name)
+		}
+	}
 }
 
 // TestSameFilesInTwoRepositoriesShareNoNames is the point of the keyed names:
 // nobody holding one repository's names can test whether a known file sits
 // in another.
+// The config is the one fixed name, the same in every repository.
 func TestSameFilesInTwoRepositoriesShareNoNames(t *testing.T) {
 	one, two := arkmem.New(), arkmem.New()
 	backupFixture(t, one)
 	backupFixture(t, two)
 
-	for _, typ := range []ark.HandleType{ark.BlobFile, ark.TreeFile} {
+	for _, typ := range allHandleTypes {
+		if typ == ark.ConfigFile {
+			continue
+		}
 		names := objectNames(t, one, typ)
+		if len(names) == 0 && typ != ark.LockFile && typ != ark.MarkerFile {
+			t.Errorf("namespace %s is empty", typ)
+		}
 		for _, name := range objectNames(t, two, typ) {
 			if slices.Contains(names, name) {
 				t.Errorf("%s object %s is in both repositories", typ, name)

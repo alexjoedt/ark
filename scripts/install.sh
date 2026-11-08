@@ -108,7 +108,7 @@ if [[ ! -f "${DAEMON_CONFIG}" ]]; then
     cat > "${DAEMON_CONFIG}" << EODAEMON
 {
   "repoPath": "${REPO_DIR}",
-  "httpAddr": ":8080",
+  "httpAddr": "127.0.0.1:8080",
   "adminUsername": "admin",
   "csrfEnabled": true,
   "devMode": false
@@ -157,6 +157,8 @@ ProtectSystem=strict
 ReadWritePaths=${DATA_DIR}
 
 # Environment
+# The bind address is httpAddr in daemon.json (loopback by default): the
+# server speaks plain HTTP, any other address only behind a TLS reverse proxy.
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 ${ENV_BLOCK}
 

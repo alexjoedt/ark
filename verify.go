@@ -42,11 +42,11 @@ func (r *Repository) runVerify(ctx context.Context, snapshotID string) (*VerifyR
 		}
 		return nil
 	})
-	// verifyChunk records chunk failures, so a broken object here is a tree.
-	if errors.Is(err, errSealBroken) || errors.Is(err, errNameMismatch) {
-		return result, fmt.Errorf("%w: %w", ErrCorruptTree, err)
-	}
+	// verifyChunk records chunk failures, so an error here wrapping
+	// ErrCorruptTree is a tree that does not open or match its name. A walk
+	// that did not finish verified nothing past where it stopped.
 	if err != nil {
+		result.OK = false
 		return result, err
 	}
 
@@ -76,8 +76,10 @@ func verifyChunk(ctx context.Context, chunks *objectStore, id string, result *Ve
 	}
 
 	// A chunk that fails its tag or does not hash to its name is corrupt.
-	//nolint:nilerr // a corrupt chunk is a result, not an error
 	if _, err := chunks.Get(ctx, id); err != nil {
+		if !errors.Is(err, ErrCorruptChunk) {
+			return fmt.Errorf("verify: failed to read chunk %s: %w", id, err)
+		}
 		result.CorruptChunks = append(result.CorruptChunks, id)
 		result.OK = false
 		return nil
