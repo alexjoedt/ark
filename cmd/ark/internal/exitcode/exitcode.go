@@ -93,7 +93,8 @@ func Of(err error) (int, string) {
 		return WrongPassword, KindWrongPassword
 	case errors.Is(err, ark.ErrCorruptChunk),
 		errors.Is(err, ark.ErrCorruptTree),
-		errors.Is(err, ark.ErrCorruptManifest):
+		errors.Is(err, ark.ErrCorruptManifest),
+		errors.Is(err, ark.ErrCorruptConfig):
 		return VerifyFailed, KindVerifyFailed
 	case errors.Is(err, ark.ErrEmptyPolicy),
 		errors.Is(err, ark.ErrPasswordRequired),

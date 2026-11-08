@@ -25,6 +25,12 @@ var (
 	// by naming its id to Forget without a policy, then Prune.
 	ErrCorruptManifest = errors.New("ark: corrupt snapshot manifest")
 
+	// ErrCorruptConfig is returned by Open when a key file opens but the
+	// repository config is not the one its master key was created with: the
+	// config was changed or replaced, or the key file belongs to another
+	// repository.
+	ErrCorruptConfig = errors.New("ark: repository config does not match its master key")
+
 	// ErrCorruptTree is returned by Restore, Export and Verify when a tree
 	// object of the snapshot does not authenticate or does not match its name.
 	ErrCorruptTree = errors.New("ark: corrupt snapshot tree")

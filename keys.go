@@ -107,8 +107,10 @@ type masterKey struct {
 	IDKey        secretKey `json:"id_key"`
 	ChunkerSeed  secretKey `json:"chunker_seed"`
 	RepositoryID string    `json:"repository_id"`
-	Created      time.Time `json:"created"`
-	Label        string    `json:"label,omitempty"`
+	// ConfigHash is configHash of the config object Init stored.
+	ConfigHash string    `json:"config_hash"`
+	Created    time.Time `json:"created"`
+	Label      string    `json:"label,omitempty"`
 }
 
 // secretKey is 32 bytes of key material, hex in JSON.
@@ -176,14 +178,16 @@ func randomHex(n int) string {
 var errStopList = errors.New("stop listing")
 
 // loadMasterKey tries the first maxKeyFiles key files in listing order and
-// returns the master key of the first that opens under pw and belongs to the
-// repository repoID, with the name of that key file. Nothing but the key
-// files is read.
+// returns the master key of the first that opens under pw and is bound to the
+// config with hash cfgHash, with the name of that key file. A key that opens
+// but is bound to another config, or to none, is ErrCorruptConfig: the config
+// was changed or the key file belongs to another repository. Nothing but the
+// key files is read.
 func loadMasterKey(
 	ctx context.Context,
 	b Backend,
 	codec *objectCodec,
-	repoID string,
+	cfgHash string,
 	pw Passphrase,
 ) (*masterKey, string, error) {
 	var names []string
@@ -201,7 +205,7 @@ func loadMasterKey(
 	// Precedence when nothing opens: a file that was tried with a matching
 	// kind of passphrase, then a password or no-password mismatch, then an
 	// unreadable header.
-	var tried bool
+	var tried, unbound bool
 	var mismatch, unsupported error
 	for _, name := range names {
 		kf, err := readKeyFile(ctx, b, name)
@@ -224,12 +228,19 @@ func loadMasterKey(
 			continue
 		}
 		tried = true
-		if mk := kf.open(codec, name, pw, repoID); mk != nil {
+		mk := kf.open(codec, name, pw)
+		if mk == nil {
+			continue
+		}
+		if mk.ConfigHash == cfgHash {
 			return mk, name, nil
 		}
+		unbound = true
 	}
 
 	switch {
+	case unbound:
+		return nil, "", ErrCorruptConfig
 	case tried:
 		return nil, "", ErrWrongPassword
 	case mismatch != nil:
@@ -280,9 +291,9 @@ func readKeyFile(ctx context.Context, b Backend, name string) (*keyFile, error) 
 }
 
 // open unseals the master key of kf, the key file name, under pw. It returns
-// nil when the key does not open or belongs to another repository; a wrong
-// password and a tampered key are indistinguishable by design.
-func (kf *keyFile) open(codec *objectCodec, name string, pw Passphrase, repoID string) *masterKey {
+// nil when the key does not open; a wrong password and a tampered key are
+// indistinguishable by design.
+func (kf *keyFile) open(codec *objectCodec, name string, pw Passphrase) *masterKey {
 	sealed, err := hex.DecodeString(kf.Key)
 	if err != nil {
 		return nil
@@ -298,7 +309,7 @@ func (kf *keyFile) open(codec *objectCodec, name string, pw Passphrase, repoID s
 		return nil
 	}
 	var mk masterKey
-	if err := json.Unmarshal(blob, &mk); err != nil || mk.RepositoryID != repoID {
+	if err := json.Unmarshal(blob, &mk); err != nil {
 		return nil
 	}
 	return &mk

@@ -20,7 +20,8 @@ import (
 // format as one matrix: every sealed namespace times every way an attacker
 // with write access to the backend can change an object. Each cell mutates
 // the victim object of its namespace and asserts what every consumer of that
-// namespace sees. The config object is plaintext and not part of it.
+// namespace sees. The config object is plaintext and has its own row,
+// TestTamperedConfigIsRejected.
 //
 // Consumers per namespace:
 //
@@ -52,6 +53,64 @@ func TestTamperedObjectsAreRejected(t *testing.T) {
 				ns.rejected(t, f, victim)
 			})
 		}
+	}
+}
+
+// TestTamperedConfigIsRejected is the config row of the integrity matrix.
+// The master key carries the SHA-256 of the config bytes Init stored, so
+// every change to them fails Open with ErrCorruptConfig. The password is
+// changed first: the binding survives ChangePassword. A changed version is
+// read before any key and stays ErrUnsupportedFormat.
+func TestTamperedConfigIsRejected(t *testing.T) {
+	ctx := context.Background()
+	pw := ark.WithPassword("changed password")
+	cells := []struct {
+		name   string
+		mutate func(t *testing.T, cfg []byte) []byte
+		want   error
+	}{
+		{"unchanged", nil, nil},
+		{"flipped id byte", func(_ *testing.T, cfg []byte) []byte {
+			cfg[bytes.Index(cfg, []byte(`"id":"`))+len(`"id":"`)] ^= 0x01
+			return cfg
+		}, ark.ErrCorruptConfig},
+		{"flipped chunker byte", func(_ *testing.T, cfg []byte) []byte {
+			cfg[bytes.Index(cfg, []byte(`"min":`))+len(`"min":`)] ^= 0x01
+			return cfg
+		}, ark.ErrCorruptConfig},
+		{"truncated", func(_ *testing.T, cfg []byte) []byte { return cfg[:len(cfg)/2] }, ark.ErrCorruptConfig},
+		{"whitespace", func(_ *testing.T, cfg []byte) []byte { return append(cfg, '\n') }, ark.ErrCorruptConfig},
+		{"other repository", func(t *testing.T, _ []byte) []byte {
+			b2 := initRepo(t, pw)
+			return readObject(t, b2, ark.ConfigFile, "config")
+		}, ark.ErrCorruptConfig},
+		{"flipped version byte", func(_ *testing.T, cfg []byte) []byte {
+			cfg[bytes.Index(cfg, []byte(`"version":`))+len(`"version":`)] ^= 0x01
+			return cfg
+		}, ark.ErrUnsupportedFormat},
+	}
+	for _, c := range cells {
+		t.Run(c.name, func(t *testing.T) {
+			b := arkmem.New()
+			repo := openRepo(t, b)
+			if err := repo.ChangePassword(ctx, pw); err != nil {
+				t.Fatalf("ChangePassword: %v", err)
+			}
+			if c.mutate != nil {
+				cfg := c.mutate(t, readObject(t, b, ark.ConfigFile, "config"))
+				h := ark.Handle{Type: ark.ConfigFile, Name: "config"}
+				if err := b.Put(ctx, h, bytes.NewReader(cfg)); err != nil {
+					t.Fatalf("put config: %v", err)
+				}
+			}
+			got, err := ark.Open(ctx, b, pw)
+			if err == nil {
+				got.Close()
+			}
+			if !errors.Is(err, c.want) {
+				t.Errorf("Open = %v, want %v", err, c.want)
+			}
+		})
 	}
 }
 
@@ -167,7 +226,7 @@ const (
 
 // foreignNamespace is where the cross-namespace cell seals the victim's
 // content before copying it into the victim's namespace. The config object is
-// plaintext and has no cell.
+// plaintext; TestTamperedConfigIsRejected covers it.
 //
 //nolint:exhaustive // see above
 var foreignNamespace = map[ark.HandleType]ark.HandleType{

@@ -227,8 +227,10 @@ func TestKeyFileDoesNotOpenElsewhere(t *testing.T) {
 		b := initRepo(t, pw)
 		deleteKeyFiles(t, b)
 		putKeyFile(t, b, name, body)
-		if _, err := ark.Open(ctx, b, pw); !errors.Is(err, ark.ErrWrongPassword) {
-			t.Errorf("Open with a transplanted key file = %v, want ark.ErrWrongPassword", err)
+		// Same password, so the key opens; its master key is bound to the
+		// donor's config, which is what Open reports.
+		if _, err := ark.Open(ctx, b, pw); !errors.Is(err, ark.ErrCorruptConfig) {
+			t.Errorf("Open with a transplanted key file = %v, want ark.ErrCorruptConfig", err)
 		}
 	})
 	t.Run("renamed", func(t *testing.T) {

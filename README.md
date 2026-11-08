@@ -239,7 +239,7 @@ file.
 
 ```
 /srv/ark/
-├── config      format version and chunker settings, plaintext
+├── config      format version and chunker settings, plaintext, its hash sealed in the master key
 ├── keys/       the master key, sealed under the password
 ├── chunks/     compressed, encrypted content, named by an HMAC, sharded by prefix
 ├── trees/      one encrypted object per directory, named the same way
