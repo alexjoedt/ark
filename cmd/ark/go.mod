@@ -1,11 +1,11 @@
 module github.com/alexjoedt/ark/cmd/ark
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/alexedwards/scs/v2 v2.9.0
-	github.com/alexjoedt/ark v1.0.0
-	github.com/alexjoedt/ark/arkdocker v1.0.0
+	github.com/alexjoedt/ark v0.3.0
+	github.com/alexjoedt/ark/arkdocker v0.3.0
 	github.com/alexjoedt/log v1.1.0
 	github.com/go-chi/chi/v5 v5.4.0
 	github.com/golang-migrate/migrate/v4 v4.20.1
@@ -42,7 +42,7 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
-	github.com/pkg/sftp v1.13.7 // indirect
+	github.com/pkg/sftp v1.13.12 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
