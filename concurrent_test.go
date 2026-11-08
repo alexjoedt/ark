@@ -166,7 +166,7 @@ func runConcurrentOnce(t *testing.T, newRepo func(context.Context, *testing.T) (
 			t.Fatalf("child %d reported %s with exclusive %v", i, ev.event, ev.exclusive)
 		}
 		switch ev.event {
-		case ark.LockAcquired:
+		case ark.LockAcquired.String():
 			for j, exclusive := range held {
 				if exclusive || ev.exclusive {
 					t.Fatalf("child %d acquired a lock while child %d held a conflicting one", i, j)
@@ -174,15 +174,15 @@ func runConcurrentOnce(t *testing.T, newRepo func(context.Context, *testing.T) (
 			}
 			held[i] = ev.exclusive
 			acquired[i]++
-		case ark.LockReleased:
+		case ark.LockReleased.String():
 			if _, ok := held[i]; !ok {
 				t.Fatalf("child %d released a lock it does not hold", i)
 			}
 			delete(held, i)
 			released[i]++
-		case ark.LockLeftOver:
+		case ark.LockLeftOver.String():
 			t.Fatalf("child %d could not delete its released lock, which blocks the others until it is stale", i)
-		case ark.LockRejected:
+		case ark.LockRejected.String():
 			if i < concWriters {
 				t.Fatalf("backup child %d was rejected", i)
 			}
@@ -192,23 +192,23 @@ func runConcurrentOnce(t *testing.T, newRepo func(context.Context, *testing.T) (
 		}
 
 		switch {
-		case i < concWriters && ev.event == ark.LockAcquired:
+		case i < concWriters && ev.event == ark.LockAcquired.String():
 			// Held until the pruner was rejected.
 			if countPositive(acquired[:concWriters]) == concWriters {
 				start(concPruner, "prune", []string{concEnvRepo + "=" + ref, concEnvOp + "=prune"})
 				open++
 			}
 			continue
-		case i == concPruner && ev.event == ark.LockRejected && rejected[i] == 1:
+		case i == concPruner && ev.event == ark.LockRejected.String() && rejected[i] == 1:
 			for j := range concWriters {
 				ack(j)
 			}
-		case i == concPruner && ev.event == ark.LockAcquired:
+		case i == concPruner && ev.event == ark.LockAcquired.String():
 			// Held until the late backup was rejected.
 			start(concLate, "late", lateEnv)
 			open++
 			continue
-		case i == concLate && ev.event == ark.LockRejected && rejected[i] == 1:
+		case i == concLate && ev.event == ark.LockRejected.String() && rejected[i] == 1:
 			ack(concPruner)
 		}
 		ack(i)
@@ -388,25 +388,25 @@ func TestConcurrentChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open %s: %v", ref, err)
 	}
-	repo, err := ark.Open(ctx, b, testPassword, ark.WithLockWait(concLockWait))
+	events, gate := os.NewFile(3, "events"), os.NewFile(4, "gate")
+	defer func() { _ = events.Close() }()
+	report := func(ev ark.LockEvent) {
+		kind := "shared"
+		if ev.Exclusive {
+			kind = "exclusive"
+		}
+		if _, err := fmt.Fprintf(events, "%s %s\n", ev.Kind, kind); err != nil {
+			t.Errorf("report %s: %v", ev.Kind, err)
+		}
+		// The parent's ack; EOF once it is gone.
+		_, _ = gate.Read(make([]byte, 1))
+	}
+	repo, err := ark.Open(ctx, b, testPassword, ark.WithLockWait(concLockWait), ark.WithLockEvent(report))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = repo.Close() }()
 
-	events, gate := os.NewFile(3, "events"), os.NewFile(4, "gate")
-	defer func() { _ = events.Close() }()
-	ark.SetLockEvent(func(event string, exclusive bool) {
-		kind := "shared"
-		if exclusive {
-			kind = "exclusive"
-		}
-		if _, err := fmt.Fprintf(events, "%s %s\n", event, kind); err != nil {
-			t.Errorf("report %s: %v", event, err)
-		}
-		// The parent's ack; EOF once it is gone.
-		_, _ = gate.Read(make([]byte, 1))
-	})
 	switch op := os.Getenv(concEnvOp); op {
 	case "backup":
 		src, err := arkfs.NewSource(os.Getenv(concEnvSrc))

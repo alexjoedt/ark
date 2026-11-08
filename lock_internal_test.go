@@ -53,14 +53,14 @@ func (c *testClock) setStep(d time.Duration) {
 }
 
 // lockRepo opens a repository over a stub backend with a clock the test drives.
-func lockRepo(t *testing.T) (*Repository, *stubBackend, *testClock) {
+func lockRepo(t *testing.T, opts ...Option) (*Repository, *stubBackend, *testClock) {
 	t.Helper()
 	ctx := context.Background()
 	b := newStubBackend()
 	if err := Init(ctx, b, WithPassword("ark-test")); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	repo, err := Open(ctx, b, WithPassword("ark-test"))
+	repo, err := Open(ctx, b, WithPassword("ark-test"), opts...)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

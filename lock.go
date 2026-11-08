@@ -34,26 +34,55 @@ var lockRefreshInterval = 5 * time.Minute
 // package can.
 var lockSettleDelay = 200 * time.Millisecond
 
-// Lock events reported to lockEvent.
+// LockEventKind says what happened to a lock, see LockEvent.
+type LockEventKind int
+
+// The lock events WithLockEvent reports.
 const (
-	lockAcquired = "acquired"
-	lockRejected = "rejected"
-	lockReleased = "released"
-	lockLeftOver = "left-over"
+	// LockAcquired: the operation holds its lock and starts.
+	LockAcquired LockEventKind = iota + 1
+	// LockRejected: an attempt found conflicting locks and backed off. Under
+	// WithLockWait every attempt reports one.
+	LockRejected
+	// LockReleased: the operation is done, its lock object is about to be
+	// deleted.
+	LockReleased
+	// LockLeftOver: deleting the released lock object failed; it blocks others
+	// until it is stale or Unlock removes it.
+	LockLeftOver
 )
 
-// lockEvent, when set, is called when this process acquires a lock, gives up
-// an attempt on a conflicting one, and releases one. A release is reported
-// once the operation is done and before its object is deleted, so an observer
-// that blocks the call orders the release before any acquire it allows; a
-// failed delete is reported as left-over after the release. Only
-// the test binary sets it, to order and observe locks across processes; it
-// may block.
-var lockEvent func(event string, exclusive bool)
+func (k LockEventKind) String() string {
+	switch k {
+	case LockAcquired:
+		return "acquired"
+	case LockRejected:
+		return "rejected"
+	case LockReleased:
+		return "released"
+	case LockLeftOver:
+		return "left-over"
+	default:
+		return fmt.Sprintf("LockEventKind(%d)", int(k))
+	}
+}
 
-func reportLock(event string, exclusive bool) {
-	if lockEvent != nil {
-		lockEvent(event, exclusive)
+// LockEvent is one change of a lock this repository takes, see WithLockEvent.
+type LockEvent struct {
+	Kind      LockEventKind
+	Exclusive bool // the class of this repository's lock
+	// LockID names this repository's lock object, as Locks lists it. It is
+	// empty on a rejection found before the object was written.
+	LockID string
+	// Holders are the conflicting locks a rejected attempt listed, nil on
+	// every other kind.
+	Holders []LockInfo
+}
+
+// reportLock calls the repository's lock hook, if any.
+func (r *Repository) reportLock(ev LockEvent) {
+	if r.lockEvent != nil {
+		r.lockEvent(ev)
 	}
 }
 
@@ -197,16 +226,18 @@ func (r *Repository) loadLock(ctx context.Context, name string) (lockObject, err
 	return l, nil
 }
 
-// conflict returns the lock that blocks a new one of this class, or nil when
-// none does. An exclusive lock needs an empty namespace; a shared lock only
-// needs no exclusive holder. Stale locks are ignored, ours is skipped by name.
-func conflict(locks map[string]lockObject, own string, exclusive bool, now time.Time) *LockInfo {
+// conflict returns the locks that block a new one of this class, sorted by
+// name, or nil when none does. An exclusive lock needs an empty namespace; a
+// shared lock only needs no exclusive holder. Stale locks are ignored, ours is
+// skipped by name.
+func conflict(locks map[string]lockObject, own string, exclusive bool, now time.Time) []LockInfo {
 	names := make([]string, 0, len(locks))
 	for name := range locks {
 		names = append(names, name)
 	}
 	sort.Strings(names) // a stable answer beats whichever the map yields first
 
+	var held []LockInfo
 	for _, name := range names {
 		if name == own {
 			continue
@@ -218,10 +249,9 @@ func conflict(locks map[string]lockObject, own string, exclusive bool, now time.
 		if l.stale(now) {
 			continue
 		}
-		info := l.info(name, now)
-		return &info
+		held = append(held, l.info(name, now))
 	}
-	return nil
+	return held
 }
 
 // lockedError wraps ErrRepoLocked with the holder's identity, so an operator
@@ -307,8 +337,8 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 		r.logger.WarnContext(ctx, "ignoring a lock that does not open, Unlock with WithForce removes it", "lock", name)
 	}
 	if held := conflict(locks, "", exclusive, now); held != nil {
-		reportLock(lockRejected, exclusive)
-		return nil, nil, lockedError(*held, now)
+		r.reportLock(LockEvent{Kind: LockRejected, Exclusive: exclusive, Holders: held})
+		return nil, nil, lockedError(held[0], now)
 	}
 
 	name := generateID(now)
@@ -328,14 +358,14 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 	}
 	if held := conflict(locks, name, exclusive, r.now()); held != nil {
 		r.removeLock(context.WithoutCancel(ctx), name)
-		reportLock(lockRejected, exclusive)
-		return nil, nil, lockedError(*held, r.now())
+		r.reportLock(LockEvent{Kind: LockRejected, Exclusive: exclusive, LockID: name, Holders: held})
+		return nil, nil, lockedError(held[0], r.now())
 	}
 
 	lockCtx, cancel := context.WithCancel(ctx)
 	l := &repoLock{repo: r, name: name, exclusive: exclusive, cancel: cancel, done: make(chan struct{})}
 	go l.keepAlive(lockCtx)
-	reportLock(lockAcquired, exclusive)
+	r.reportLock(LockEvent{Kind: LockAcquired, Exclusive: exclusive, LockID: name})
 	return lockCtx, l, nil
 }
 
@@ -378,9 +408,11 @@ func (l *repoLock) keepAlive(ctx context.Context) {
 func (l *repoLock) release(ctx context.Context) {
 	l.cancel()
 	<-l.done
-	reportLock(lockReleased, l.exclusive)
+	ev := LockEvent{Kind: LockReleased, Exclusive: l.exclusive, LockID: l.name}
+	l.repo.reportLock(ev)
 	if !l.repo.removeLock(context.WithoutCancel(ctx), l.name) {
-		reportLock(lockLeftOver, l.exclusive)
+		ev.Kind = LockLeftOver
+		l.repo.reportLock(ev)
 	}
 }
 

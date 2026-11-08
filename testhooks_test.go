@@ -33,18 +33,6 @@ const SealOverhead = sealOverhead
 // ObjectName returns the name r stores a chunk or tree of this content under.
 func ObjectName(r *Repository, data []byte) string { return r.chunks.name(data) }
 
-// SetLockEvent installs f as the lock event hook of this process, see
-// lockEvent. Set it before the first lock is taken.
-func SetLockEvent(f func(event string, exclusive bool)) { lockEvent = f }
-
-// The lock events SetLockEvent reports.
-const (
-	LockAcquired = lockAcquired
-	LockRejected = lockRejected
-	LockReleased = lockReleased
-	LockLeftOver = lockLeftOver
-)
-
 // RootTree returns the root tree hash of snapshot id.
 func RootTree(ctx context.Context, r *Repository, id string) (string, error) {
 	m, err := r.loadManifest(ctx, id)

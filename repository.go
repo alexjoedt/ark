@@ -23,6 +23,7 @@ type openConfig struct {
 	concurrency int
 	lockWait    time.Duration
 	progress    ProgressFunc
+	lockEvent   func(LockEvent)
 }
 
 // Option configures a Repository at Open time.
@@ -52,6 +53,17 @@ func WithProgress(fn ProgressFunc) Option {
 	return func(c *openConfig) { c.progress = fn }
 }
 
+// WithLockEvent makes the repository call fn whenever one of its operations
+// acquires a lock, has an attempt rejected by conflicting locks, or releases
+// one. Released fires once the operation is done and before its lock object
+// is deleted, so a consumer that blocks the call orders the release before
+// any acquire it allows elsewhere; a failed delete follows as LockLeftOver.
+// fn runs on the operation's goroutine and may block, which holds up that
+// operation; operations running concurrently call fn concurrently.
+func WithLockEvent(fn func(LockEvent)) Option {
+	return func(c *openConfig) { c.lockEvent = fn }
+}
+
 // WithConcurrency caps how many backend operations run at once. Values below
 // one fall back to the default, twice the number of CPUs.
 func WithConcurrency(n int) Option {
@@ -71,7 +83,8 @@ type Repository struct {
 	logger      *slog.Logger
 	concurrency int
 	lockWait    time.Duration
-	progress    ProgressFunc // repository default observer, may be nil
+	progress    ProgressFunc    // repository default observer, may be nil
+	lockEvent   func(LockEvent) // lock hook from WithLockEvent, may be nil
 
 	id      string         // repository id from the config object
 	key     *masterKey     // unsealed from the key file Open matched
@@ -148,6 +161,7 @@ func Open(ctx context.Context, b Backend, pw Passphrase, opts ...Option) (*Repos
 		concurrency: cfg.concurrency,
 		lockWait:    cfg.lockWait,
 		progress:    cfg.progress,
+		lockEvent:   cfg.lockEvent,
 		id:          rc.ID,
 		key:         key,
 		keyName:     keyName,
