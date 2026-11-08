@@ -194,3 +194,25 @@ func TestParallelBackupStopsAllReaders(t *testing.T) {
 		})
 	}
 }
+
+func TestBackupChunkErrorSameOnBothPaths(t *testing.T) {
+	errOpen := errors.New("open failed")
+	hook := func(i int) error {
+		if i == 7 {
+			return errOpen
+		}
+		return nil
+	}
+	msgs := map[bool]string{}
+	for _, concurrent := range []bool{true, false} {
+		src := &concSource{name: "src", concurrent: concurrent, files: concFiles(10), hook: hook}
+		_, err := openConcRepo(t, 4).Backup(context.Background(), src)
+		if !errors.Is(err, errOpen) {
+			t.Fatalf("concurrent=%v: Backup error %v, want %v", concurrent, err, errOpen)
+		}
+		msgs[concurrent] = err.Error()
+	}
+	if msgs[true] != msgs[false] {
+		t.Errorf("parallel error %q, sequential %q", msgs[true], msgs[false])
+	}
+}

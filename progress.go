@@ -21,8 +21,9 @@ const (
 type ProgressEvent struct {
 	Phase Phase
 
-	// CurrentPath is the entry being processed, empty when the phase works on
-	// no single entry.
+	// CurrentPath is the entry the event reports, empty when the phase works
+	// on no single entry. A backup reports a file once it is stored; files
+	// read in parallel finish, and are reported, out of walk order.
 	CurrentPath string
 
 	FilesTotal  int

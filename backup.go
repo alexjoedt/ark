@@ -52,7 +52,7 @@ func (r *Repository) runBackup(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	cr := chunker.New(nil, r.chunker)
+	var cr *chunker.Chunker
 	w := newChunkWriter(ctx, chunks, r.concurrency)
 	var scannedEntries []fileEntry
 	var stats SnapshotStats
@@ -75,9 +75,14 @@ func (r *Repository) runBackup(
 
 	var readers *fileReaders
 	var pending []pendingFile
+	// chunkErr is the first file that failed to chunk, on either path.
+	var chunkErr error
 	if cs, ok := src.(ConcurrentSource); ok && cs.ConcurrentOpen() {
 		readers = newFileReaders(ctx, cancel, w, r.chunker, r.concurrency, fileDone)
 	}
+	// A wrapper that does not forward ConcurrentOpen silently costs the
+	// parallel read, so the chosen path is logged.
+	logger.DebugContext(ctx, "reading files", "parallel", readers != nil)
 
 	opts.progress(ProgressEvent{Phase: PhaseScan})
 
@@ -114,9 +119,13 @@ func (r *Repository) runBackup(
 				}
 				pending = append(pending, p)
 			default:
+				if cr == nil {
+					cr = chunker.New(nil, r.chunker)
+				}
 				chunks, err := chunkFile(w, cr, open)
 				if err != nil {
-					return fmt.Errorf("failed to chunk file %s: %w", entry.Path, err)
+					chunkErr = fmt.Errorf("failed to chunk file %s: %w", entry.Path, err)
+					return chunkErr
 				}
 				fe.Chunks = chunks
 				fileDone(entry.Path, fe.Chunks)
@@ -136,22 +145,21 @@ func (r *Repository) runBackup(
 		scannedEntries = append(scannedEntries, fe)
 		return nil
 	})
-	// A reader that failed first cancelled the walk and is the cause; a walk
-	// that failed on its own stops the readers.
-	readersFailed := readers != nil && readers.failure() != nil
+	// A file that failed first stopped the walk and is the cause; a walk that
+	// failed on its own stops the readers.
+	fileFailed := chunkErr != nil || readers != nil && readers.failure() != nil
 	if err != nil {
 		cancel()
 	}
-	var rerr error
 	if readers != nil {
-		rerr = readers.wait()
+		chunkErr = readers.wait()
 	}
 	werr := w.wait()
-	if err != nil && !readersFailed {
+	if err != nil && !fileFailed {
 		return nil, fmt.Errorf("backup: walk failed: %w", err)
 	}
-	if rerr != nil {
-		return nil, fmt.Errorf("backup: %w", rerr)
+	if chunkErr != nil {
+		return nil, fmt.Errorf("backup: %w", chunkErr)
 	}
 	if werr != nil {
 		return nil, fmt.Errorf("backup: failed to store chunks: %w", werr)
@@ -323,31 +331,28 @@ type fileJob struct {
 // bounded set of goroutines with one chunker each, so memory stays at workers
 // times the chunker buffer. The first error cancels the backup's context.
 type fileReaders struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	jobs   chan fileJob
-	wg     sync.WaitGroup
-
-	mu  sync.Mutex
-	err error
+	firstError
+	ctx  context.Context
+	jobs chan fileJob
+	wg   sync.WaitGroup
 }
 
 func newFileReaders(
 	ctx context.Context, cancel context.CancelFunc, w *chunkWriter, cfg chunker.Config, workers int,
 	done func(path string, refs []chunkRef),
 ) *fileReaders {
-	fr := &fileReaders{ctx: ctx, cancel: cancel, jobs: make(chan fileJob)}
+	fr := &fileReaders{firstError: firstError{cancel: cancel}, ctx: ctx, jobs: make(chan fileJob)}
 	for range max(workers, 1) {
 		fr.wg.Go(func() {
 			cr := chunker.New(nil, cfg)
 			for job := range fr.jobs {
 				if fr.ctx.Err() != nil {
-					fr.fail(fr.ctx.Err())
+					_ = fr.fail(fr.ctx.Err())
 					continue
 				}
 				refs, err := chunkFile(w, cr, job.open)
 				if err != nil {
-					fr.fail(fmt.Errorf("failed to chunk file %s: %w", job.path, err))
+					_ = fr.fail(fmt.Errorf("failed to chunk file %s: %w", job.path, err))
 					continue
 				}
 				*job.refs = refs
@@ -365,25 +370,7 @@ func (fr *fileReaders) submit(job fileJob) error {
 	case fr.jobs <- job:
 		return nil
 	case <-fr.ctx.Done():
-		fr.fail(fr.ctx.Err())
-		return fr.failure()
-	}
-}
-
-// failure returns the first error a reader hit, nil while none did.
-func (fr *fileReaders) failure() error {
-	fr.mu.Lock()
-	defer fr.mu.Unlock()
-	return fr.err
-}
-
-// fail records the first error and cancels the backup.
-func (fr *fileReaders) fail(err error) {
-	fr.mu.Lock()
-	defer fr.mu.Unlock()
-	if fr.err == nil {
-		fr.err = err
-		fr.cancel()
+		return fr.fail(fr.ctx.Err())
 	}
 }
 
@@ -392,5 +379,5 @@ func (fr *fileReaders) fail(err error) {
 func (fr *fileReaders) wait() error {
 	close(fr.jobs)
 	fr.wg.Wait()
-	return fr.err
+	return fr.failure()
 }

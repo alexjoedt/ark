@@ -14,6 +14,7 @@ import (
 
 	ark "github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkdocker"
+	"github.com/alexjoedt/ark/arkfs"
 	"github.com/alexjoedt/ark/arklocal"
 	dockerclient "github.com/moby/moby/client"
 )
@@ -1003,5 +1004,16 @@ func TestCPUProfileEnv(t *testing.T) {
 	t.Setenv("ARK_CPUPROFILE", filepath.Join(t.TempDir(), "missing", "cpu.prof"))
 	if code, _ := runCapture(t, "--version"); code == 0 {
 		t.Fatal("unwritable profile path exited 0")
+	}
+}
+
+func TestNamedSourceKeepsConcurrentOpen(t *testing.T) {
+	src, err := arkfs.NewSource(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs, ok := ark.Source(namedSource{Source: src, name: "x"}).(ark.ConcurrentSource)
+	if !ok || !cs.ConcurrentOpen() {
+		t.Error("namedSource over an arkfs source does not report ConcurrentOpen")
 	}
 }
