@@ -36,7 +36,7 @@ func verifyCommand() *cli.Command {
 			defer repo.Close()
 
 			p := printer(cmd)
-			pr := p.Progress("verify " + cmd.Args().First())
+			pr := startProgress(p, "verify "+cmd.Args().First())
 			res, err := repo.Verify(ctx, cmd.Args().First())
 			if err != nil {
 				pr.Fail()

@@ -40,7 +40,7 @@ func runPrune(ctx context.Context, cmd *cli.Command, repo *ark.Repository, dryRu
 	} else if err := p.Confirm("delete unreferenced chunks"); err != nil {
 		return err
 	}
-	pr := p.Progress("prune")
+	pr := startProgress(p, "prune")
 	res, err := repo.Prune(ctx, opts...)
 	if err != nil {
 		pr.Fail()

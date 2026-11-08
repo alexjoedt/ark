@@ -42,7 +42,7 @@ func importCommand() *cli.Command {
 			defer repo.Close()
 
 			p := printer(cmd)
-			pr := p.Progress("import " + file)
+			pr := startProgress(p, "import "+file)
 			snap, err := repo.Import(ctx, r)
 			if err != nil {
 				pr.Fail()

@@ -94,10 +94,13 @@ func forgetCommand() *cli.Command {
 			if err := p.Confirm(fmt.Sprintf("remove %d snapshots", len(preview.Remove))); err != nil {
 				return err
 			}
+			pr := startProgress(p, "forget")
 			res, err := repo.Forget(ctx, policy, filter)
 			if err != nil {
+				pr.Fail()
 				return fmt.Errorf("forget: %w", err)
 			}
+			pr.Donef("forgot %d snapshots", len(res.Remove))
 			if err := printForget(cmd, res); err != nil {
 				return err
 			}

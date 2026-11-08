@@ -51,7 +51,7 @@ func exportCommand() *cli.Command {
 			n.w = w
 
 			p := printer(cmd)
-			pr := p.Progress("export " + snap.ID)
+			pr := startProgress(p, "export "+snap.ID)
 			if err := repo.Export(ctx, snap.ID, &n); err != nil {
 				pr.Fail()
 				if file != "" {

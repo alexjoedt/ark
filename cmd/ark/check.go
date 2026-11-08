@@ -24,7 +24,7 @@ func checkCommand() *cli.Command {
 			defer repo.Close()
 
 			p := printer(cmd)
-			pr := p.Progress("check")
+			pr := startProgress(p, "check")
 			res, err := repo.Check(ctx)
 			if err != nil {
 				pr.Fail()

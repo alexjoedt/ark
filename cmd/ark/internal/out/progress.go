@@ -20,6 +20,7 @@ type Progress struct {
 	last  ark.ProgressEvent
 	phase ark.Phase
 	seen  bool
+	note  string
 
 	stop chan struct{}
 	done chan struct{}
@@ -83,15 +84,37 @@ func (pr *Progress) spin() {
 			return
 		case <-t.C:
 			pr.mu.Lock()
-			ev, seen := pr.last, pr.seen
+			ev, seen, note := pr.last, pr.seen, pr.note
 			pr.mu.Unlock()
 			line := pr.label
 			if seen {
 				line += ": " + Line(ev)
 			}
+			if note != "" {
+				line = note
+			}
 			fmt.Fprintf(pr.p.stderr, "\r\033[K%s %s", frames[i%len(frames)], line)
 		}
 	}
+}
+
+// Wait replaces the spinner label with msg until Resume. Without a spinner
+// it prints msg as one line to stderr, unless --quiet is set.
+func (pr *Progress) Wait(msg string) {
+	if pr.stop == nil {
+		pr.p.Notef("%s", msg)
+		return
+	}
+	pr.mu.Lock()
+	pr.note = msg
+	pr.mu.Unlock()
+}
+
+// Resume restores the label after Wait.
+func (pr *Progress) Resume() {
+	pr.mu.Lock()
+	pr.note = ""
+	pr.mu.Unlock()
 }
 
 func (pr *Progress) stopSpinner() {
@@ -119,11 +142,15 @@ func (pr *Progress) Fail() {
 func Line(ev ark.ProgressEvent) string {
 	var b strings.Builder
 	b.WriteString(string(ev.Phase))
+	unit := "files"
+	if ev.Operation == ark.OperationCheck || ev.Operation == ark.OperationForget {
+		unit = "snapshots"
+	}
 	switch {
 	case ev.FilesTotal > 0:
-		fmt.Fprintf(&b, " %d/%d files", ev.FilesDone, ev.FilesTotal)
+		fmt.Fprintf(&b, " %d/%d %s", ev.FilesDone, ev.FilesTotal, unit)
 	case ev.FilesDone > 0:
-		fmt.Fprintf(&b, " %d files", ev.FilesDone)
+		fmt.Fprintf(&b, " %d %s", ev.FilesDone, unit)
 	}
 	switch {
 	case ev.BytesTotal > 0:

@@ -153,7 +153,7 @@ func dockerBackupCommand() *cli.Command {
 			defer e.Close()
 
 			p := printer(cmd)
-			pr := p.Progress("backup volume " + volume)
+			pr := startProgress(p, "backup volume "+volume)
 			start := time.Now()
 			snap, err := e.BackupVolume(ctx, volume,
 				ark.WithTags(cmd.StringSlice("tag")...),
@@ -252,7 +252,7 @@ func dockerRestoreCommand() *cli.Command {
 			if err := p.Confirm(describeRestore(snap.ID, volume, plan)); err != nil {
 				return err
 			}
-			pr := p.Progress("restore " + snap.ID + " into volume " + volume)
+			pr := startProgress(p, "restore "+snap.ID+" into volume "+volume)
 			start := time.Now()
 			res, err := e.RestoreVolume(ctx, snap.ID, volume,
 				ark.WithRestorePaths(paths...),

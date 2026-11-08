@@ -52,7 +52,7 @@ func backupCommand() *cli.Command {
 			defer repo.Close()
 
 			p := printer(cmd)
-			pr := p.Progress("backup " + src.Meta().Name)
+			pr := startProgress(p, "backup "+src.Meta().Name)
 			start := time.Now()
 			snap, err := repo.Backup(ctx, src,
 				ark.WithTags(cmd.StringSlice("tag")...),

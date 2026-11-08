@@ -144,6 +144,64 @@ func TestProgressSpinnerOnTerminal(t *testing.T) {
 	}
 }
 
+func TestProgressSweepAndCheckCounters(t *testing.T) {
+	p, _, se := newTest(Mode{}, "")
+	pr := p.Progress("prune")
+	f := pr.Func()
+	f(ark.ProgressEvent{Operation: ark.OperationPrune, Phase: ark.PhaseSweep, ChunksTotal: 9})
+	f(ark.ProgressEvent{Operation: ark.OperationPrune, Phase: ark.PhaseSweep, ChunksDone: 9, ChunksTotal: 9})
+	f(ark.ProgressEvent{Operation: ark.OperationPrune, Phase: ark.PhaseFinalize})
+	pr.Fail()
+	pr = p.Progress("check")
+	f = pr.Func()
+	f(
+		ark.ProgressEvent{
+			Operation:   ark.OperationCheck,
+			Phase:       ark.PhaseFetch,
+			CurrentPath: "01A",
+			ChunksDone:  3,
+			ChunksTotal: 3,
+		},
+	)
+	f(
+		ark.ProgressEvent{
+			Operation:   ark.OperationCheck,
+			Phase:       ark.PhaseFetch,
+			CurrentPath: "01A",
+			FilesDone:   1,
+			FilesTotal:  2,
+		},
+	)
+	f(ark.ProgressEvent{Operation: ark.OperationCheck, Phase: ark.PhaseFinalize, FilesDone: 2, FilesTotal: 2})
+	pr.Fail()
+	want := "sweep 9/9 chunks\nfetch 1/2 snapshots\n"
+	if se.String() != want {
+		t.Fatalf("stderr %q, want %q", se.String(), want)
+	}
+}
+
+func TestProgressWait(t *testing.T) {
+	p, _, se := newTest(Mode{JSON: true}, "")
+	p.Progress("prune").Wait("waiting for lock held by h:1 (exclusive)")
+	if se.String() != "waiting for lock held by h:1 (exclusive)\n" {
+		t.Fatalf("stderr %q", se.String())
+	}
+
+	p, _, se = newTest(Mode{}, "")
+	p.SetTTY(true)
+	pr := p.Progress("prune")
+	pr.Wait("waiting for lock held by h:1 (exclusive)")
+	time.Sleep(250 * time.Millisecond)
+	pr.Resume()
+	time.Sleep(250 * time.Millisecond)
+	pr.Fail()
+	s := se.String()
+	i := strings.Index(s, "waiting for lock held by h:1 (exclusive)")
+	if i < 0 || !strings.Contains(s[i:], "prune") || strings.Contains(s[:i], "waiting") {
+		t.Fatalf("label not replaced then restored: %q", s)
+	}
+}
+
 func TestConfirm(t *testing.T) {
 	p, _, _ := newTest(Mode{Yes: true}, "")
 	if err := p.Confirm("delete"); err != nil {

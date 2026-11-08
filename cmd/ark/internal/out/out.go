@@ -78,6 +78,15 @@ func (p *Printer) Infof(format string, args ...any) {
 	fmt.Fprintf(p.stderr, format+"\n", args...)
 }
 
+// Notef writes a line to stderr unless --quiet is set. Unlike Infof it
+// also shows with --json: stdout stays untouched.
+func (p *Printer) Notef(format string, args ...any) {
+	if p.mode.Quiet {
+		return
+	}
+	fmt.Fprintf(p.stderr, format+"\n", args...)
+}
+
 // Warnf writes a line to stderr unless --quiet is set. Warnings are for
 // humans and do not corrupt --json output on stdout.
 func (p *Printer) Warnf(format string, args ...any) {

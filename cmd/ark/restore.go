@@ -73,7 +73,7 @@ func restoreCommand() *cli.Command {
 			if err != nil {
 				return fmt.Errorf("restore %s: %w", snap.ID, err)
 			}
-			pr := p.Progress("restore " + snap.ID)
+			pr := startProgress(p, "restore "+snap.ID)
 			start := time.Now()
 			res, err := repo.Restore(ctx, snap.ID, sink,
 				ark.WithRestorePaths(paths...),

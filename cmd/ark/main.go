@@ -231,7 +231,7 @@ func jsonRequested(args []string) bool {
 //
 //nolint:unparam // callers may pass options
 func openRepo(ctx context.Context, cmd *cli.Command, repoOpts ...ark.Option) (*ark.Repository, error) {
-	return openRepoAt(ctx, cmd, cmd.Root().String("repo"), repoOpts...)
+	return openRepoAt(ctx, cmd, cmd.Root().String("repo"), append(hookOptions(cmd), repoOpts...)...)
 }
 
 // openRepoAt opens the repository at uri with the global password, lock and
