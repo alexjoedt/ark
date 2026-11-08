@@ -142,7 +142,7 @@ func TestReplayedKeyFileOpensUnderTheOldPassword(t *testing.T) {
 		t.Fatalf("Open with the old password before the replay = %v, want ErrWrongPassword", err)
 	}
 
-	putKeyFile(t, b, oldName, oldKey)
+	putObject(t, b, ark.KeyFile, oldName, oldKey)
 	for _, pw := range []ark.Passphrase{oldPW, newPW} {
 		got, err := ark.Open(ctx, b, pw)
 		if err != nil {
@@ -189,6 +189,14 @@ func (b *markerBackend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, e
 	return b.Backend.Get(ctx, h)
 }
 
+func (b *markerBackend) takeMarkers() map[string][]byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	m := b.markers
+	b.markers = map[string][]byte{}
+	return m
+}
+
 func (b *markerBackend) takeChunkGets() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -208,11 +216,10 @@ func TestReplayedMarkerForcesRepairMode(t *testing.T) {
 	if _, err := repo.Backup(ctx, src); err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
-	replayed := b.markers
+	replayed := b.takeMarkers()
 	if len(replayed) != 1 || countMarkers(t, b) != 0 {
 		t.Fatalf("backup wrote %d markers and left %d, want 1 and 0", len(replayed), countMarkers(t, b))
 	}
-	b.markers = map[string][]byte{}
 	if _, err := repo.Backup(ctx, src); err != nil {
 		t.Fatalf("Backup: %v", err)
 	}

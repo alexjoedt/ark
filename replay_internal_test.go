@@ -9,8 +9,9 @@ import (
 
 // TestReplayedLockIsHonouredUntilItIsStale replays a released exclusive lock.
 // It blocks every other lock like the original until lockStaleAge, then is
-// ignored. The lock names this live test process; a replayed lock of a
-// process that has exited on this host is stale at once.
+// ignored. The lock names this live test process, so only the stale age
+// applies; a lock of an exited process on this host is covered by
+// TestLockOfThisHostIsStaleOnceItsProcessIsGone.
 func TestReplayedLockIsHonouredUntilItIsStale(t *testing.T) {
 	ctx := context.Background()
 	repo, b, clock := lockRepo(t)
@@ -62,13 +63,7 @@ func TestReplayedConfigFailsOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseRepositoryConfig: %v", err)
 	}
-	var oldKey Handle
-	if err := b.List(ctx, KeyFile, func(info BlobInfo) error {
-		oldKey = Handle{Type: KeyFile, Name: info.Name}
-		return nil
-	}); err != nil {
-		t.Fatalf("List keys: %v", err)
-	}
+	oldKey := onlyKeyHandle(t, b)
 	oldKeyData := readObject(t, b, oldKey)
 
 	rebindConfig(t, b, func(cfg *repositoryConfig) { cfg.Chunker.Min++ })
@@ -96,4 +91,19 @@ func TestReplayedConfigFailsOpen(t *testing.T) {
 	if repo.chunker.MinSize != old.Chunker.Min {
 		t.Errorf("chunker min = %d, want the rolled back %d", repo.chunker.MinSize, old.Chunker.Min)
 	}
+}
+
+func onlyKeyHandle(t *testing.T, b Backend) Handle {
+	t.Helper()
+	var names []string
+	if err := b.List(context.Background(), KeyFile, func(info BlobInfo) error {
+		names = append(names, info.Name)
+		return nil
+	}); err != nil {
+		t.Fatalf("List keys: %v", err)
+	}
+	if len(names) != 1 {
+		t.Fatalf("repository has %d key files, want 1", len(names))
+	}
+	return Handle{Type: KeyFile, Name: names[0]}
 }

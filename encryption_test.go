@@ -202,7 +202,7 @@ func TestEveryFlippedKeyFileByteFailsOpen(t *testing.T) {
 		for i := range body {
 			tampered := bytes.Clone(body)
 			tampered[i] ^= 0x01
-			putKeyFile(t, b, name, tampered)
+			putObject(t, b, ark.KeyFile, name, tampered)
 
 			repo, err := ark.Open(ctx, b, pw)
 			if err == nil {

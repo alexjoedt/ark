@@ -1,7 +1,6 @@
 package ark_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -61,17 +60,6 @@ func onlyKeyFile(t *testing.T, b ark.Backend) (string, []byte) {
 		return name, body
 	}
 	panic("unreachable")
-}
-
-func putKeyFile(t *testing.T, b ark.Backend, name string, body []byte) {
-	t.Helper()
-	if err := b.Put(
-		context.Background(),
-		ark.Handle{Type: ark.KeyFile, Name: name},
-		bytes.NewReader(body),
-	); err != nil {
-		t.Fatalf("put key file: %v", err)
-	}
 }
 
 func deleteKeyFiles(t *testing.T, b ark.Backend) {
@@ -226,7 +214,7 @@ func TestKeyFileDoesNotOpenElsewhere(t *testing.T) {
 		name, body := onlyKeyFile(t, donor)
 		b := initRepo(t, pw)
 		deleteKeyFiles(t, b)
-		putKeyFile(t, b, name, body)
+		putObject(t, b, ark.KeyFile, name, body)
 		// Same password, so the key opens; its master key is bound to the
 		// donor's config, which is what Open reports.
 		if _, err := ark.Open(ctx, b, pw); !errors.Is(err, ark.ErrCorruptConfig) {
@@ -238,7 +226,7 @@ func TestKeyFileDoesNotOpenElsewhere(t *testing.T) {
 		donor := initRepo(t, other)
 		name, body := onlyKeyFile(t, donor)
 		b := initRepo(t, pw)
-		putKeyFile(t, b, name, body)
+		putObject(t, b, ark.KeyFile, name, body)
 		// The foreign key opens under the other password, but the own key file
 		// failed it: the password is wrong for this repository.
 		if _, err := ark.Open(ctx, b, other); !errors.Is(err, ark.ErrWrongPassword) {
@@ -249,7 +237,7 @@ func TestKeyFileDoesNotOpenElsewhere(t *testing.T) {
 		b := initRepo(t, pw)
 		_, body := onlyKeyFile(t, b)
 		deleteKeyFiles(t, b)
-		putKeyFile(t, b, strings.Repeat("ab", 16), body)
+		putObject(t, b, ark.KeyFile, strings.Repeat("ab", 16), body)
 		if _, err := ark.Open(ctx, b, pw); !errors.Is(err, ark.ErrWrongPassword) {
 			t.Errorf("Open with a renamed key file = %v, want ark.ErrWrongPassword", err)
 		}
@@ -269,7 +257,7 @@ func TestKeyFileDoesNotOpenElsewhere(t *testing.T) {
 			key[len(key)-1] ^= 0x01
 			kf["key"] = hex.EncodeToString(key)
 			body, _ = json.Marshal(kf)
-			putKeyFile(t, b, name, body)
+			putObject(t, b, ark.KeyFile, name, body)
 			if _, err := ark.Open(ctx, b, pw); !errors.Is(err, ark.ErrWrongPassword) {
 				t.Errorf("%v: Open with a tampered key = %v, want ark.ErrWrongPassword", pw, err)
 			}
@@ -291,7 +279,7 @@ func TestOpenRejectsUnknownKeyFiles(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			b := initRepo(t, ark.WithoutPassword())
 			deleteKeyFiles(t, b)
-			putKeyFile(t, b, "k", []byte(body))
+			putObject(t, b, ark.KeyFile, "k", []byte(body))
 			if _, err := ark.Open(
 				context.Background(),
 				b,
@@ -327,7 +315,7 @@ func TestOpenTriesAtMostTwentyKeyFiles(t *testing.T) {
 	mem := initRepo(t, pw)
 	deleteKeyFiles(t, mem)
 	for i := range 30 {
-		putKeyFile(t, mem, fmt.Sprintf("k%02d", i), foreign)
+		putObject(t, mem, ark.KeyFile, fmt.Sprintf("k%02d", i), foreign)
 	}
 
 	b := &readBackend{Backend: mem}

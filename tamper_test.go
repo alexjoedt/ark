@@ -297,7 +297,7 @@ var tamperNamespaces = []tamperNamespace{
 				t.Fatalf("ChangePassword: %v", err)
 			}
 			other, _ := onlyKeyFile(t, f.b)
-			putKeyFile(t, f.b, victim, body)
+			putObject(t, f.b, ark.KeyFile, victim, body)
 			return victim, other
 		},
 		accepted: func(t *testing.T, f *tamperFixture, _ string) {
