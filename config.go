@@ -143,6 +143,9 @@ func Init(ctx context.Context, b Backend, pw Passphrase, opts ...InitOption) err
 		_ = b.Delete(context.WithoutCancel(ctx), Handle{Type: KeyFile, Name: keyName})
 		return fmt.Errorf("ark: failed to write the repository config: %w", putErr)
 	}
+	if err := b.Sync(ctx); err != nil {
+		return fmt.Errorf("ark: failed to sync the new repository: %w", err)
+	}
 	return nil
 }
 

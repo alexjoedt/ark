@@ -66,16 +66,26 @@ type FileInfo struct {
 	Type     FileType          `json:"type"`
 	LinkDest string            `json:"link_dest,omitempty"`
 	Xattrs   map[string][]byte `json:"xattrs,omitempty"`
+
+	// ChangeTime and Inode let a backup trust that a regular file is
+	// unchanged since its parent snapshot: ctime cannot be set from user
+	// space, so it catches a rewrite that kept the mtime. A source that
+	// cannot tell (a tar stream) leaves both zero, and only Size and ModTime
+	// are compared.
+	ChangeTime time.Time `json:"ctime,omitzero"`
+	Inode      uint64    `json:"inode,omitempty"`
 }
 
 // WalkFunc is called for each entry produced by a Source.
 //
-// r is nil for every entry except regular files; the caller must check
-// entry.Type before reading. For regular files, r is an [io.LimitReader] for
-// entry.Size bytes. The caller must fully consume r before returning — the
-// next call to fn advances the underlying stream (e.g. the tar reader inside
-// a Docker volume source).
-type WalkFunc func(entry FileInfo, r io.Reader) error
+// open is nil for every entry except regular files; the caller must check
+// entry.Type. For a regular file, open returns a reader for entry.Size bytes.
+// The caller calls open at most once and closes the reader before
+// returning, or never calls it when the parent snapshot already holds the
+// file unchanged. A [ConcurrentSource] lets the caller open and read the
+// file after returning instead. The next call to fn advances the source past the entry,
+// read or not ([archive/tar.Reader.Next] skips unread bytes).
+type WalkFunc func(entry FileInfo, open func() (io.ReadCloser, error)) error
 
 // Source drives the backup pipeline entry by entry.
 //
@@ -84,12 +94,24 @@ type WalkFunc func(entry FileInfo, r io.Reader) error
 //
 // Implementations must:
 //   - yield a hardlink target before the FileTypeHardlink entries naming it
-//   - pass r = nil for everything but regular files
-//   - pass r = [io.LimitReader](..., entry.Size) for regular files
+//   - pass open = nil for everything but regular files
+//   - for regular files, pass an open that yields at most entry.Size bytes
+//     and does no work until it is called; a walk that never calls open
+//     must succeed
 //   - be safe for a single concurrent Walk call
 type Source interface {
 	Meta() SourceMeta
 	Walk(ctx context.Context, fn WalkFunc) error
+}
+
+// ConcurrentSource is a Source whose open functions outlive the WalkFunc call
+// that passed them: open may run after fn returned, on any goroutine and
+// concurrently with the walk and with other opens. A backup reads the files
+// of such a source in parallel; it reads any other source inside fn, one file
+// at a time. ConcurrentOpen returning false opts a wrapper out.
+type ConcurrentSource interface {
+	Source
+	ConcurrentOpen() bool
 }
 
 // Sink receives file entries during a restore.

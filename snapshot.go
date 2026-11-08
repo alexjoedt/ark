@@ -18,11 +18,13 @@ type Snapshot struct {
 
 // SnapshotStats holds deduplication and compression statistics for a snapshot.
 // Skipped counts entries the source yielded that the v1 format does not model:
-// device nodes, fifos and sockets.
+// device nodes, fifos and sockets. FilesUnchanged counts the regular files a
+// backup took from the parent snapshot without reading them.
 type SnapshotStats struct {
 	FileCount          int           `json:"total_files"`
 	DirCount           int           `json:"total_dirs"`
 	Skipped            int           `json:"skipped"`
+	FilesUnchanged     int           `json:"files_unchanged,omitempty"`
 	TotalSize          int64         `json:"total_size"`
 	StoredSize         int64         `json:"stored_size"`
 	NewChunksRawSize   int64         `json:"new_chunks_raw_size"`
@@ -32,21 +34,6 @@ type SnapshotStats struct {
 	DeduplicationRatio float64       `json:"deduplication_ratio"`
 	CompressionRatio   float64       `json:"compression_ratio"`
 	Duration           time.Duration `json:"-"`
-}
-
-// countChunks folds one file's chunk references into the statistics. A
-// reference with a zero stored size is a chunk the CAS already held.
-func (s *SnapshotStats) countChunks(chunks []chunkRef) {
-	for _, c := range chunks {
-		s.ChunksTotal++
-		if c.Size > 0 {
-			s.ChunksNew++
-			s.StoredSize += int64(c.Size)
-			s.NewChunksRawSize += c.Length
-		} else {
-			s.ChunksReused++
-		}
-	}
 }
 
 // computeRatios derives the two ratios from the counters, once they are final.
@@ -114,7 +101,8 @@ func WithHost(h string) BackupOption {
 }
 
 // WithParent names the parent snapshot explicitly, as a full id or a unique
-// prefix. Without it the parent is the newest snapshot of the same source.
+// prefix. Without it the parent is the newest snapshot of the same source. A
+// parent of another source is recorded but no file is taken from it unread.
 func WithParent(id string) BackupOption {
 	return func(o *backupOptions) { o.parent = id }
 }
@@ -192,4 +180,7 @@ type VerifyResult struct {
 type CheckResult struct {
 	SnapshotsChecked int
 	Errors           []string
+	// Warnings are findings that leave every snapshot intact, such as a
+	// backup that did not finish; Prune clears them.
+	Warnings []string
 }

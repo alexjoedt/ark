@@ -37,6 +37,7 @@ var conformanceTypes = []ark.HandleType{
 	ark.SnapshotFile,
 	ark.LockFile,
 	ark.KeyFile,
+	ark.MarkerFile,
 }
 
 // chunkNameLen is the length of a chunk name the suite generates: a content
@@ -83,6 +84,7 @@ func RunBackendTests(t *testing.T, factory func(t *testing.T) ark.Backend) {
 	t.Run("ListStopsOnError", func(t *testing.T) { testListStopsOnError(t, newBackend) })
 	t.Run("ConcurrentPuts", func(t *testing.T) { testConcurrentPuts(t, newBackend) })
 	t.Run("ConcurrentMixed", func(t *testing.T) { testConcurrentMixed(t, newBackend) })
+	t.Run("Sync", func(t *testing.T) { testSync(t, newBackend) })
 	t.Run("Close", func(t *testing.T) { testClose(t, factory) })
 }
 
@@ -493,6 +495,30 @@ func testConcurrentMixed(t *testing.T, newBackend func(*testing.T) ark.Backend) 
 
 // testClose checks that Close reports no error on a backend that was used.
 // It owns its backend, so the shared cleanup does not close it twice.
+// testSync writes, deletes and then asks for the durability barrier, which
+// every backend has to answer with nil, also when nothing is pending.
+func testSync(t *testing.T, newBackend func(*testing.T) ark.Backend) {
+	ctx := context.Background()
+	b := newBackend(t)
+	h := ark.Handle{Type: ark.BlobFile, Name: objectName(ark.BlobFile, "sync")}
+	put(t, b, h, []byte("durable"))
+	if err := b.Sync(ctx); err != nil {
+		t.Fatalf("Sync after Put = %v, want nil", err)
+	}
+	if got := get(t, b, h); string(got) != "durable" {
+		t.Errorf("Get after Sync = %q, want %q", got, "durable")
+	}
+	if err := b.Delete(ctx, h); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := b.Sync(ctx); err != nil {
+		t.Fatalf("Sync after Delete = %v, want nil", err)
+	}
+	if err := b.Sync(ctx); err != nil {
+		t.Fatalf("Sync with nothing pending = %v, want nil", err)
+	}
+}
+
 func testClose(t *testing.T, factory func(t *testing.T) ark.Backend) {
 	b := factory(t)
 	put(t, b, ark.Handle{Type: ark.ConfigFile, Name: objectName(ark.ConfigFile, "closing")}, []byte("x"))

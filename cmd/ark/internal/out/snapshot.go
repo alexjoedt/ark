@@ -2,6 +2,7 @@ package out
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/alexjoedt/ark"
@@ -54,8 +55,15 @@ func Snapshots(list []*ark.Snapshot) []Snapshot {
 // after deduplication, what it took on the backend compressed, and the time.
 func BackupSummary(label string, st ark.SnapshotStats, d time.Duration) string {
 	files := Count(st.FileCount) + " files"
+	var notes []string
+	if st.FilesUnchanged > 0 {
+		notes = append(notes, Count(st.FilesUnchanged)+" unchanged")
+	}
 	if st.Skipped > 0 {
-		files += fmt.Sprintf(" (%s skipped)", Count(st.Skipped))
+		notes = append(notes, Count(st.Skipped)+" skipped")
+	}
+	if len(notes) > 0 {
+		files += " (" + strings.Join(notes, ", ") + ")"
 	}
 	return fmt.Sprintf("%s: %s, %s, %s new, %s stored, %s",
 		label, files, Bytes(st.TotalSize), Bytes(st.NewChunksRawSize),

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/pprof"
 	"slices"
 	"syscall"
 
@@ -35,7 +36,13 @@ func run(args []string) int {
 	// Load --env-file before app.Run so the flag env sources see the values.
 	err := config.PreloadEnvFile(args)
 	if err == nil {
-		err = newApp().Run(ctx, args)
+		var stop func() error
+		if stop, err = startCPUProfile(os.Getenv("ARK_CPUPROFILE")); err == nil {
+			err = newApp().Run(ctx, args)
+			if stopErr := stop(); err == nil {
+				err = stopErr
+			}
+		}
 	}
 	if err == nil {
 		return exitcode.OK
@@ -52,6 +59,30 @@ func run(args []string) int {
 		fmt.Fprintf(os.Stderr, "ark: %v\n", err)
 	}
 	return code
+}
+
+// startCPUProfile writes a CPU profile of the whole run to path, for
+// finding bottlenecks with go tool pprof. An empty path profiles nothing.
+// The returned func ends the profile and reports a failed write.
+func startCPUProfile(path string) (func() error, error) {
+	if path == "" {
+		return func() error { return nil }, nil
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, fmt.Errorf("create cpu profile: %w", err)
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("start cpu profile %s: %w", path, err)
+	}
+	return func() error {
+		pprof.StopCPUProfile()
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("write cpu profile %s: %w", path, err)
+		}
+		return nil
+	}, nil
 }
 
 func newApp() *cli.Command {

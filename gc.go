@@ -42,6 +42,18 @@ func (r *Repository) runGC(ctx context.Context, dryRun bool) (*PruneResult, erro
 		}
 		scanned += n
 	}
+	if !dryRun {
+		if err := r.backend.Sync(ctx); err != nil {
+			return nil, fmt.Errorf("gc: failed to sync deletions: %w", err)
+		}
+		n, err := r.removeStaleMarkers(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("gc: %w", err)
+		}
+		if n > 0 {
+			logger.InfoContext(ctx, "gc removed the markers of unfinished backups", "markers", n)
+		}
+	}
 
 	logger.InfoContext(ctx, "gc complete",
 		"scanned", scanned,

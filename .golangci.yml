@@ -430,6 +430,9 @@ linters:
         linters: [ errname ]
       - text: 'G301|G122|G115'
         linters: [ gosec ]
+      - path: 'scripts/bench/'
+        text: 'G404|G304|G302|G306|G703|G204|G702'
+        linters: [ gosec ]
       - text: 'unused-parameter'
         linters: [ revive ]
       - text: 'ifElseChain'

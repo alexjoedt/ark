@@ -14,6 +14,7 @@ import (
 
 	ark "github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkdocker"
+	"github.com/alexjoedt/ark/arkfs"
 	"github.com/alexjoedt/ark/arklocal"
 	dockerclient "github.com/moby/moby/client"
 )
@@ -23,6 +24,7 @@ import (
 // not a terminal, so no test ever prompts.
 func TestMain(m *testing.M) {
 	os.Setenv("ARK_INSECURE_NO_PASSWORD", "1")
+	os.Unsetenv("ARK_CPUPROFILE")
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
 		panic(err)
@@ -697,7 +699,7 @@ func (volumeSource) Meta() ark.SourceMeta {
 func (volumeSource) Walk(_ context.Context, fn ark.WalkFunc) error {
 	body := "x"
 	return fn(ark.FileInfo{Path: "pg.conf", Size: 1, Mode: 0o644, Type: ark.FileTypeRegular},
-		strings.NewReader(body))
+		func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(body)), nil })
 }
 
 func TestRestoreRefusesVolumeSnapshot(t *testing.T) {
@@ -986,5 +988,32 @@ func TestKeyPasswd(t *testing.T) {
 	t.Setenv("ARK_PASSWORD", "")
 	if code, _ := runCapture(t, "--insecure-no-password", "snapshots"); code != 0 {
 		t.Fatalf("open without password after removal: exit %d", code)
+	}
+}
+
+func TestCPUProfileEnv(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cpu.prof")
+	t.Setenv("ARK_CPUPROFILE", path)
+	if code, _ := runCapture(t, "--version"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Size() == 0 {
+		t.Fatalf("profile not written: %v", err)
+	}
+
+	t.Setenv("ARK_CPUPROFILE", filepath.Join(t.TempDir(), "missing", "cpu.prof"))
+	if code, _ := runCapture(t, "--version"); code == 0 {
+		t.Fatal("unwritable profile path exited 0")
+	}
+}
+
+func TestNamedSourceKeepsConcurrentOpen(t *testing.T) {
+	src, err := arkfs.NewSource(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs, ok := ark.Source(namedSource{Source: src, name: "x"}).(ark.ConcurrentSource)
+	if !ok || !cs.ConcurrentOpen() {
+		t.Error("namedSource over an arkfs source does not report ConcurrentOpen")
 	}
 }

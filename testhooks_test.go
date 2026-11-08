@@ -41,3 +41,16 @@ const (
 	LockReleased = lockReleased
 	LockLeftOver = lockLeftOver
 )
+
+// RootTree returns the root tree hash of snapshot id.
+func RootTree(ctx context.Context, r *Repository, id string) (string, error) {
+	m, err := r.loadManifest(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	return m.RootTree, nil
+}
+
+// SetPrefetchBytes lowers the floor of the restore prefetch budget of r for
+// a test.
+func SetPrefetchBytes(r *Repository, n int64) { r.prefetchBytes = n }

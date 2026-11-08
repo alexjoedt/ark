@@ -5,6 +5,7 @@ package arkfs
 import (
 	"os"
 	"syscall"
+	"time"
 )
 
 func fileOwner(fi os.FileInfo) (uid, gid int) {
@@ -36,4 +37,14 @@ func fileID(fi os.FileInfo) (inodeKey, uint64, bool) {
 	//nolint:unconvert // field widths differ per platform
 	dev, ino, nlink := uint64(stat.Dev), uint64(stat.Ino), uint64(stat.Nlink)
 	return inodeKey{dev: dev, ino: ino}, nlink, true
+}
+
+// changeID returns the ctime and inode number of fi, which a backup compares
+// with the parent snapshot to trust that the file is unchanged.
+func changeID(fi os.FileInfo) (time.Time, uint64) {
+	stat, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return time.Time{}, 0
+	}
+	return changeTime(stat), uint64(stat.Ino) //nolint:unconvert // field widths differ per platform
 }

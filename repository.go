@@ -67,6 +67,10 @@ type Repository struct {
 	keyName string         // name of that key file
 	chunker chunker.Config // chunker parameters of the config, keyed from key
 
+	// prefetchBytes is the floor of the restore prefetch budget, zero for the
+	// default; tests lower it to see the budget at work on small fixtures.
+	prefetchBytes int64
+
 	// clock is time.Now except in tests, which drive the lock staleness
 	// rules through it.
 	clock func() time.Time
@@ -156,6 +160,11 @@ func (r *Repository) ChangePassword(ctx context.Context, pw Passphrase) error {
 	if err != nil {
 		return err
 	}
+	// The old key goes only once the new one is durable: a power loss in
+	// between must leave at least one key file that opens the repository.
+	if err := r.backend.Sync(ctx); err != nil {
+		return fmt.Errorf("ark: failed to sync the new key file %s: %w", name, err)
+	}
 	if err := r.backend.Delete(ctx, Handle{Type: KeyFile, Name: r.keyName}); err != nil {
 		return fmt.Errorf(
 			"ark: new key file %s written, failed to delete the old key file %s: %w",
@@ -199,7 +208,15 @@ func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOptio
 		}
 		o.parent = parent
 	}
-	m, err := r.runBackup(ctx, src, *o)
+	chunks, trees, err := r.writeStores(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("backup: %w", err)
+	}
+	if err := r.putMarker(ctx, lock); err != nil {
+		return nil, err
+	}
+	m, err := r.runBackup(ctx, src, *o, chunks, trees)
+	r.clearMarker(ctx, lock, err == nil)
 	if err != nil {
 		return nil, err
 	}
@@ -376,6 +393,11 @@ func (r *Repository) Forget(
 			r.logger.WarnContext(ctx, "forget: failed to delete snapshot", "id", s.ID, "error", err)
 		}
 	}
+	// A removed snapshot has to stay removed before a prune sweeps its
+	// objects, so the removals are durable before Forget returns.
+	if err := r.backend.Sync(ctx); err != nil {
+		return nil, fmt.Errorf("forget: failed to sync snapshot removals: %w", err)
+	}
 	return result, nil
 }
 
@@ -462,7 +484,15 @@ func (r *Repository) Import(ctx context.Context, reader io.Reader) (*Snapshot, e
 	}
 	defer lock.release(ctx)
 
-	m, err := r.runImport(ctx, reader)
+	chunks, trees, err := r.writeStores(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("import: %w", err)
+	}
+	if err := r.putMarker(ctx, lock); err != nil {
+		return nil, err
+	}
+	m, err := r.runImport(ctx, reader, chunks, trees)
+	r.clearMarker(ctx, lock, err == nil)
 	if err != nil {
 		return nil, err
 	}
@@ -505,7 +535,11 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(ids)))
 
-	result := &CheckResult{SnapshotsChecked: len(ids)}
+	unclean, err := r.uncleanFindings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := &CheckResult{SnapshotsChecked: len(ids), Warnings: unclean}
 	for _, id := range ids {
 		vr, err := r.runVerify(ctx, id)
 		if err != nil {

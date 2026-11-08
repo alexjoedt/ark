@@ -87,3 +87,10 @@ func (s namedSource) Meta() ark.SourceMeta {
 	m.Name = s.name
 	return m
 }
+
+// ConcurrentOpen forwards the wrapped source's opt-in: Walk passes its opens
+// through unchanged, so they stay as concurrent as the source made them.
+func (s namedSource) ConcurrentOpen() bool {
+	cs, ok := s.Source.(ark.ConcurrentSource)
+	return ok && cs.ConcurrentOpen()
+}

@@ -70,11 +70,8 @@ func TestSourceYieldsSpecialFilesAsUnsupported(t *testing.T) {
 	}
 
 	got := map[string]ark.FileType{}
-	err := NewVolumeSource(c, v).Walk(ctx, func(info ark.FileInfo, r io.Reader) error {
+	err := NewVolumeSource(c, v).Walk(ctx, func(info ark.FileInfo, _ func() (io.ReadCloser, error)) error {
 		got[info.Path] = info.Type
-		if r != nil {
-			io.Copy(io.Discard, r)
-		}
 		return nil
 	})
 	if err != nil {

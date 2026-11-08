@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkmem"
@@ -43,7 +45,7 @@ func (s multiSource) Walk(_ context.Context, fn ark.WalkFunc) error {
 			Mode: 0o644,
 			Type: ark.FileTypeRegular,
 		}
-		if err := fn(info, strings.NewReader(content)); err != nil {
+		if err := fn(info, openReader(strings.NewReader(content))); err != nil {
 			return err
 		}
 	}
@@ -187,7 +189,19 @@ func bigFiles(t *testing.T) multiSource {
 func TestRestoreDoesNotFetchThatWholeSnapshotUpFront(t *testing.T) {
 	ctx := context.Background()
 	b := newCountingBackend()
-	repo := chunkyRepo(t, b)
+
+	// Four workers and a 64 KiB budget over 16 KiB chunks: the restore may
+	// hold a handful of chunks ahead of the sink, never the snapshot.
+	cfg := chunker.Config{MinSize: 4 << 10, AvgSize: 8 << 10, MaxSize: 16 << 10}
+	if err := ark.Init(ctx, b, testPassword, ark.WithChunkerConfig(cfg)); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	repo, err := ark.Open(ctx, b, testPassword, ark.WithConcurrency(4))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer repo.Close()
+	ark.SetPrefetchBytes(repo, 64<<10)
 
 	snap, err := repo.Backup(ctx, bigFiles(t))
 	if err != nil {
@@ -207,10 +221,60 @@ func TestRestoreDoesNotFetchThatWholeSnapshotUpFront(t *testing.T) {
 	}
 
 	// A prefetching restore would have read every unique chunk before the
-	// sink ever saw the first file. A streaming one reads a worker's worth.
+	// sink ever saw the first file. A bounded one reads a budget's worth.
 	if fetched := b.totalGets(); fetched > unique/2 {
 		t.Errorf("the restore read %d chunks before failing on the first file, snapshot holds %d unique",
 			fetched, unique)
+	}
+}
+
+// cancellingSink cancels the restore from inside Receive of one path.
+type cancellingSink struct {
+	recordingSink
+	cancelOn string
+	cancel   context.CancelFunc
+}
+
+func (s *cancellingSink) Receive(ctx context.Context, info ark.FileInfo, r io.Reader) error {
+	if info.Path == s.cancelOn {
+		s.cancel()
+	}
+	return s.recordingSink.Receive(ctx, info, r)
+}
+
+func TestRestoreStopsItsPrefetchWithoutLeakingGoroutines(t *testing.T) {
+	b := newCountingBackend()
+	repo := chunkyRepo(t, b)
+	snap, err := repo.Backup(context.Background(), bigFiles(t))
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+
+	cases := map[string]func(ctx context.Context) (ark.Sink, context.Context){
+		"sink failure": func(ctx context.Context) (ark.Sink, context.Context) {
+			return &recordingSink{failOn: "a/two.bin"}, ctx
+		},
+		"context cancelled": func(ctx context.Context) (ark.Sink, context.Context) {
+			ctx, cancel := context.WithCancel(ctx)
+			t.Cleanup(cancel)
+			return &cancellingSink{cancelOn: "a/two.bin", cancel: cancel}, ctx
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			before := runtime.NumGoroutine()
+			sink, ctx := setup(context.Background())
+			if _, err := repo.Restore(ctx, snap.ID, sink, ark.WithRestoreCache(0)); err == nil {
+				t.Fatal("Restore succeeded although it was stopped")
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if after := runtime.NumGoroutine(); after > before {
+				t.Errorf("%d goroutines before the restore, %d after it was stopped", before, after)
+			}
+		})
 	}
 }
 
@@ -269,6 +333,11 @@ func TestRestoreCacheServesRepeatedContent(t *testing.T) {
 
 	if cached >= uncached {
 		t.Errorf("the cache saved nothing: %d reads with it, %d without", cached, uncached)
+	}
+	// The two files are fetched at the same time, so a miss of one must wait
+	// for the other's GET instead of repeating it.
+	if unique := snap.Stats.ChunksNew; cached != unique {
+		t.Errorf("the cached restore read %d chunks, the snapshot holds %d unique", cached, unique)
 	}
 }
 

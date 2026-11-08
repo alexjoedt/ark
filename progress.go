@@ -21,8 +21,9 @@ const (
 type ProgressEvent struct {
 	Phase Phase
 
-	// CurrentPath is the entry being processed, empty when the phase works on
-	// no single entry.
+	// CurrentPath is the entry the event reports, empty when the phase works
+	// on no single entry. A backup reports a file once it is stored; files
+	// read in parallel finish, and are reported, out of walk order.
 	CurrentPath string
 
 	FilesTotal  int
@@ -35,7 +36,9 @@ type ProgressEvent struct {
 
 // ProgressFunc receives progress events from one backup or restore operation.
 // It must not block; implementations should drop events when the consumer is
-// slow.
+// slow. Calls never overlap, so a handler may update its state without a
+// lock. The phases of a restore interleave: chunks of upcoming files are
+// fetched while the current file is written.
 //
 // Example with a channel:
 //

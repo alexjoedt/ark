@@ -89,6 +89,8 @@ func (b *stubBackend) Stat(_ context.Context, h Handle) (BlobInfo, error) {
 	return BlobInfo{Name: h.Name, Size: int64(len(data))}, nil
 }
 
+func (b *stubBackend) Sync(context.Context) error { return nil }
+
 func (b *stubBackend) Close() error { return nil }
 
 // TestOpenTakesChunkerParametersFromTheConfig is the check that a repository

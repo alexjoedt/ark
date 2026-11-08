@@ -139,6 +139,11 @@ type objectStore struct {
 	idKey   []byte
 	// verify makes Get recompute the name of every object it reads.
 	verify bool
+	// repair makes putNamed read an object that exists and store it again
+	// when it does not open to its name, so an object a crash left torn is
+	// replaced and an intact one, which a snapshot may reference, is never
+	// written over.
+	repair bool
 }
 
 func newObjectStore(b Backend, t HandleType, c *objectCodec, key *masterKey) *objectStore {
@@ -156,6 +161,14 @@ func newObjectStore(b Backend, t HandleType, c *objectCodec, key *masterKey) *ob
 func (s *objectStore) verifying() *objectStore {
 	v := *s
 	v.verify = true
+	return &v
+}
+
+// repairing returns a copy of s whose putNamed stores again every object that
+// is missing or does not open to its name.
+func (s *objectStore) repairing() *objectStore {
+	v := *s
+	v.repair = true
 	return &v
 }
 
@@ -180,12 +193,9 @@ func (s *objectStore) Put(ctx context.Context, data []byte) (string, int, error)
 // putNamed is Put for a caller that already holds the name of data.
 func (s *objectStore) putNamed(ctx context.Context, name string, data []byte) (int, error) {
 	h := s.handle(name)
-	exists, err := s.backend.Exists(ctx, h)
-	if err != nil {
-		return 0, fmt.Errorf("ark: failed to check %s object %s: %w", s.typ, name, err)
-	}
-	if exists {
-		return 0, nil
+	present, err := s.present(ctx, name)
+	if err != nil || present {
+		return 0, err
 	}
 
 	obj := s.codec.seal(s.dataKey, objectAAD(h), data)
@@ -193,6 +203,26 @@ func (s *objectStore) putNamed(ctx context.Context, name string, data []byte) (i
 		return 0, fmt.Errorf("ark: failed to store %s object %s: %w", s.typ, name, err)
 	}
 	return len(obj), nil
+}
+
+// present reports whether the object named name is stored and needs no Put.
+// A repairing store counts only an object that opens and hashes to its name.
+func (s *objectStore) present(ctx context.Context, name string) (bool, error) {
+	if !s.repair {
+		exists, err := s.backend.Exists(ctx, s.handle(name))
+		if err != nil {
+			return false, fmt.Errorf("ark: failed to check %s object %s: %w", s.typ, name, err)
+		}
+		return exists, nil
+	}
+	_, err := s.verifying().Get(ctx, name)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, ErrNotFound), errors.Is(err, errSealBroken), errors.Is(err, errNameMismatch):
+		return false, nil
+	}
+	return false, err
 }
 
 // Get returns the raw content of the object stored under name. An object that

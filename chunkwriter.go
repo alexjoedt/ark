@@ -11,31 +11,62 @@ import (
 // backend operations in flight, so compression and the backend round trips
 // overlap with reading and chunking the source.
 //
-// Each distinct chunk is stored once per run. The stored size lands in a map
-// and fill copies it onto the first reference in walk order, which keeps the
-// snapshot identical to a sequential run.
+// Each distinct chunk is stored once per run and remembered with its sizes,
+// which is what stats counts: the chunk references in the snapshot carry no
+// stored size, so a node of unchanged files hashes to the node already stored.
 type chunkWriter struct {
-	store  *objectStore
-	ctx    context.Context
-	cancel context.CancelFunc
-	sem    chan struct{}
-	wg     sync.WaitGroup
+	firstError
+	store *objectStore
+	ctx   context.Context
+	sem   chan struct{}
+	wg    sync.WaitGroup
 
 	mu     sync.Mutex
-	err    error
 	seen   map[string]struct{}
-	stored map[string]int
+	stored map[string]storedChunk
+}
+
+// firstError keeps the first error of a group of goroutines and cancels their
+// context when it arrives.
+type firstError struct {
+	mu     sync.Mutex
+	err    error
+	cancel context.CancelFunc
+}
+
+// fail records err unless an earlier error is recorded, cancels on the first
+// one and returns the recorded error.
+func (f *firstError) fail(err error) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err == nil {
+		f.err = err
+		f.cancel()
+	}
+	return f.err
+}
+
+// failure returns the recorded error, nil while there is none.
+func (f *firstError) failure() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.err
+}
+
+// storedChunk is what a chunk this run wrote adds to the statistics.
+type storedChunk struct {
+	raw, stored int64
 }
 
 func newChunkWriter(ctx context.Context, store *objectStore, workers int) *chunkWriter {
 	ctx, cancel := context.WithCancel(ctx)
 	return &chunkWriter{
-		store:  store,
-		ctx:    ctx,
-		cancel: cancel,
-		sem:    make(chan struct{}, max(workers, 1)),
-		seen:   make(map[string]struct{}),
-		stored: make(map[string]int),
+		firstError: firstError{cancel: cancel},
+		store:      store,
+		ctx:        ctx,
+		sem:        make(chan struct{}, max(workers, 1)),
+		seen:       make(map[string]struct{}),
+		stored:     make(map[string]storedChunk),
 	}
 }
 
@@ -43,11 +74,10 @@ func newChunkWriter(ctx context.Context, store *objectStore, workers int) *chunk
 // bounds the chunk data held in memory, and returns the first error any
 // earlier write hit.
 func (w *chunkWriter) put(c chunker.Chunk) error {
-	w.mu.Lock()
-	if w.err != nil {
-		w.mu.Unlock()
-		return w.err
+	if err := w.failure(); err != nil {
+		return err
 	}
+	w.mu.Lock()
 	if _, ok := w.seen[c.Hash]; ok {
 		w.mu.Unlock()
 		return nil
@@ -69,22 +99,11 @@ func (w *chunkWriter) put(c chunker.Chunk) error {
 		}
 		if size > 0 {
 			w.mu.Lock()
-			w.stored[c.Hash] = size
+			w.stored[c.Hash] = storedChunk{raw: int64(c.Length), stored: int64(size)}
 			w.mu.Unlock()
 		}
 	})
 	return nil
-}
-
-// fail records the first error and stops the writes still running.
-func (w *chunkWriter) fail(err error) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.err == nil {
-		w.err = err
-		w.cancel()
-	}
-	return w.err
 }
 
 // wait blocks until every scheduled write finished and returns the first
@@ -92,19 +111,28 @@ func (w *chunkWriter) fail(err error) error {
 func (w *chunkWriter) wait() error {
 	w.wg.Wait()
 	w.cancel()
-	return w.err
+	return w.failure()
 }
 
-// fill sets the stored size on the first reference to every chunk this run
-// wrote, in entry order. Every other reference keeps size 0, reused.
-func (w *chunkWriter) fill(entries []fileEntry) {
-	for i := range entries {
-		for j := range entries[i].Chunks {
-			ref := &entries[i].Chunks[j]
-			if size, ok := w.stored[ref.ID]; ok {
-				ref.Size = size
-				delete(w.stored, ref.ID)
+// stats folds the run into s once wait returned: every reference in entries
+// counts, the distinct chunks this run stored and the entries use are new, the
+// rest the CAS held.
+func (w *chunkWriter) stats(s *SnapshotStats, entries []fileEntry) {
+	var added int
+	counted := make(map[string]struct{})
+	for _, e := range entries {
+		added += len(e.Chunks)
+		for _, c := range e.Chunks {
+			sc, ok := w.stored[c.ID]
+			if _, dup := counted[c.ID]; !ok || dup {
+				continue
 			}
+			counted[c.ID] = struct{}{}
+			s.ChunksNew++
+			s.StoredSize += sc.stored
+			s.NewChunksRawSize += sc.raw
 		}
 	}
+	s.ChunksTotal += added
+	s.ChunksReused = s.ChunksTotal - s.ChunksNew
 }

@@ -14,8 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"syscall"
 
 	"github.com/alexjoedt/ark"
 )
@@ -26,15 +24,10 @@ const tmpPrefix = ".ark-tmp-"
 // Compile-time check that *Backend satisfies ark.Backend.
 var _ ark.Backend = (*Backend)(nil)
 
-// syncFile flushes f to stable storage. Tests swap it to observe the calls.
-var syncFile = (*os.File).Sync
-
 // Backend implements ark.Backend backed by a directory tree.
 type Backend struct {
 	basePath string
-	// durable holds directories whose entries up to the root this process
-	// has fsynced, so Put pays the parent syncs once per directory.
-	durable sync.Map
+	root     *os.File // the root directory, open for Sync
 }
 
 // New creates or opens a local backend rooted at dir.
@@ -43,7 +36,11 @@ func New(dir string) (*Backend, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("arklocal: create backend directory %s: %w", dir, err)
 	}
-	return &Backend{basePath: dir}, nil
+	root, err := os.Open(dir)
+	if err != nil {
+		return nil, fmt.Errorf("arklocal: open backend directory %s: %w", dir, err)
+	}
+	return &Backend{basePath: dir, root: root}, nil
 }
 
 // BasePath returns the root directory of the local backend.
@@ -76,7 +73,8 @@ func (b *Backend) path(h ark.Handle) (string, error) {
 }
 
 // Put writes r to a temporary file in the target directory and renames it into
-// place, so a reader never sees a partial object.
+// place, so a reader never sees a partial object. Nothing is flushed to disk:
+// the object becomes durable with the next Sync.
 func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -86,8 +84,8 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 		return err
 	}
 	dir := filepath.Dir(p)
-	if err := b.mkdirDurable(dir); err != nil {
-		return err
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("arklocal: mkdir %s: %w", dir, err)
 	}
 
 	f, err := os.CreateTemp(dir, tmpPrefix+"*")
@@ -103,9 +101,6 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 	if _, err := io.Copy(f, r); err != nil {
 		return fmt.Errorf("arklocal: write %s: %w", h.Name, err)
 	}
-	if err := syncFile(f); err != nil {
-		return fmt.Errorf("arklocal: sync %s: %w", h.Name, err)
-	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("arklocal: close %s: %w", h.Name, err)
 	}
@@ -114,58 +109,19 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 	if err := os.Rename(tmp, p); err != nil {
 		return fmt.Errorf("arklocal: rename %s: %w", h.Name, err)
 	}
-	return syncDir(dir)
-}
-
-// mkdirDurable creates dir and fsyncs the parent of every directory from dir
-// up to the filesystem root, so a power loss cannot drop a directory that a
-// renamed object lives in, the backend root included. A directory that already
-// existed may have been created by a process that died before its sync, so it
-// gets the same treatment. The walk runs once per directory and process.
-func (b *Backend) mkdirDurable(dir string) error {
-	if _, ok := b.durable.Load(dir); ok {
-		if _, err := os.Stat(dir); err == nil {
-			return nil
-		}
-		b.durable.Clear() // removed behind our back; its parents may be gone too
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("arklocal: mkdir %s: %w", dir, err)
-	}
-	var synced []string
-	for d := dir; d != filepath.Dir(d); d = filepath.Dir(d) {
-		if _, ok := b.durable.Load(d); ok {
-			break
-		}
-		if err := syncDir(filepath.Dir(d)); err != nil {
-			return err
-		}
-		synced = append(synced, d)
-	}
-	for _, d := range synced {
-		b.durable.Store(d, struct{}{})
-	}
 	return nil
 }
 
-// syncDir fsyncs dir so a rename, create or remove inside it is durable.
-// Filesystems that cannot sync a directory (vfat, cifs) answer EINVAL or
-// ENOTSUP, and an ancestor of the backend root may not be readable; both are
-// treated as unsupported, not as a failure.
-func syncDir(dir string) error {
-	d, err := os.Open(dir)
-	if errors.Is(err, fs.ErrPermission) {
-		return nil
+// Sync flushes the filesystem holding the backend root, which makes every
+// Put and Delete that returned before the call durable. On Linux that is
+// syncfs on the root directory; when it fails for any reason, the global
+// sync takes over, so Sync never skips the flush silently. On macOS it is the
+// global sync from the start.
+func (b *Backend) Sync(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	if err != nil {
-		return fmt.Errorf("arklocal: open dir %s: %w", dir, err)
-	}
-	err = syncFile(d)
-	_ = d.Close()
-	if err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOTSUP) {
-		return fmt.Errorf("arklocal: sync dir %s: %w", dir, err)
-	}
-	return nil
+	return syncFS(b.root)
 }
 
 // Get opens the object stored under h.
@@ -206,6 +162,7 @@ func (b *Backend) Exists(ctx context.Context, h ark.Handle) (bool, error) {
 }
 
 // Delete removes the object identified by h. A missing object is not an error.
+// The removal becomes durable with the next Sync.
 func (b *Backend) Delete(ctx context.Context, h ark.Handle) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -216,12 +173,6 @@ func (b *Backend) Delete(ctx context.Context, h ark.Handle) error {
 	}
 	if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("arklocal: remove %s: %w", h.Name, err)
-	}
-	// Sync even when the object was already gone: an earlier Delete may have
-	// died between its remove and its sync. Forget relies on a removed
-	// snapshot staying removed before prune deletes its chunks.
-	if err := syncDir(filepath.Dir(p)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
 	}
 	return nil
 }
@@ -280,5 +231,5 @@ func (b *Backend) Stat(ctx context.Context, h ark.Handle) (ark.BlobInfo, error) 
 	return ark.BlobInfo{Name: h.Name, Size: fi.Size()}, nil
 }
 
-// Close is a no-op for the local backend.
-func (b *Backend) Close() error { return nil }
+// Close releases the root directory. The backend cannot Sync afterwards.
+func (b *Backend) Close() error { return b.root.Close() }

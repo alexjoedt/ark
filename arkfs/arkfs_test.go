@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkfs"
@@ -70,5 +71,59 @@ func TestBackupRejectsAMissingPath(t *testing.T) {
 
 	if _, err := arkfs.Backup(ctx, repo, filepath.Join(t.TempDir(), "nope")); err == nil {
 		t.Error("Backup of a missing path succeeded")
+	}
+}
+
+// A rewrite that restores the old mtime still changes the ctime, so the
+// second backup reads it again and takes only the untouched file as is.
+func TestIncrementalBackupCatchesMtimePreservingRewrite(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t)
+
+	src := t.TempDir()
+	same, edited := filepath.Join(src, "same.txt"), filepath.Join(src, "edited.txt")
+	// An hour old, so neither file is racy against the first backup's start.
+	old := time.Now().Add(-time.Hour)
+	for _, p := range []string{same, edited} {
+		if err := os.WriteFile(p, []byte("before"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatalf("chtimes: %v", err)
+		}
+	}
+	if _, err := arkfs.Backup(ctx, repo, src); err != nil {
+		t.Fatalf("first Backup: %v", err)
+	}
+
+	fi, err := os.Stat(edited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond) // ctime granularity
+	if err := os.WriteFile(edited, []byte("AFTER!"), 0o644); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if err := os.Chtimes(edited, fi.ModTime(), fi.ModTime()); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	snap, err := arkfs.Backup(ctx, repo, src)
+	if err != nil {
+		t.Fatalf("second Backup: %v", err)
+	}
+	if snap.Stats.FilesUnchanged != 1 {
+		t.Errorf("FilesUnchanged = %d, want 1", snap.Stats.FilesUnchanged)
+	}
+
+	dst := t.TempDir()
+	if _, err := arkfs.Restore(ctx, repo, snap.ID, dst); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	for name, want := range map[string]string{"same.txt": "before", "edited.txt": "AFTER!"} {
+		got, err := os.ReadFile(filepath.Join(dst, name))
+		if err != nil || string(got) != want {
+			t.Errorf("%s restored %q (%v), want %q", name, got, err, want)
+		}
 	}
 }

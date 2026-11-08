@@ -617,7 +617,7 @@ func (s cancellingSource) Meta() ark.SourceMeta {
 
 func (s cancellingSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 	info := ark.FileInfo{Path: "data.txt", Size: 5, Mode: 0o644, Type: ark.FileTypeRegular}
-	if err := fn(info, strings.NewReader("first")); err != nil {
+	if err := fn(info, openReader(strings.NewReader("first"))); err != nil {
 		return err
 	}
 	s.cancel()

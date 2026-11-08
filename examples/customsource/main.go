@@ -45,8 +45,8 @@ func (s memSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 			ModTime: now,
 			Type:    ark.FileTypeRegular,
 		}
-		r := io.LimitReader(strings.NewReader(content), info.Size)
-		if err := fn(info, r); err != nil {
+		open := func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(content)), nil }
+		if err := fn(info, open); err != nil {
 			return err
 		}
 	}

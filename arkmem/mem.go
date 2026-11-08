@@ -172,6 +172,9 @@ func (b *Backend) Stat(ctx context.Context, h ark.Handle) (ark.BlobInfo, error) 
 	return ark.BlobInfo{Name: h.Name, Size: int64(len(data))}, nil
 }
 
+// Sync is a no-op: memory has no stable storage to reach.
+func (b *Backend) Sync(ctx context.Context) error { return ctx.Err() }
+
 // Close drops every stored object. The backend stays usable and is empty
 // afterwards.
 func (b *Backend) Close() error {

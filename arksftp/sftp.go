@@ -349,6 +349,11 @@ func (b *Backend) Exists(ctx context.Context, h ark.Handle) (bool, error) {
 	return true, nil
 }
 
+// Sync is a no-op: Put and Delete already fsync every object and directory
+// they touch on the server (with fsync@openssh.com). A deferred flush would
+// cost an open, fsync and close round trip per object, more than it saves.
+func (b *Backend) Sync(ctx context.Context) error { return ctx.Err() }
+
 // Delete removes the object identified by h. Removing a non-existent object
 // is not an error.
 func (b *Backend) Delete(ctx context.Context, h ark.Handle) error {
