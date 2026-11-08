@@ -115,7 +115,7 @@ func Open(ctx context.Context, b Backend, pw Passphrase, opts ...Option) (*Repos
 	}
 
 	codec := newObjectCodec()
-	key, keyName, err := loadMasterKey(ctx, b, codec, configHash(data), pw)
+	key, keyName, err := loadMasterKey(ctx, b, codec, data, pw)
 	if err != nil {
 		codec.Close()
 		return nil, err

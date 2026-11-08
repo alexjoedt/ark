@@ -233,6 +233,18 @@ func TestKeyFileDoesNotOpenElsewhere(t *testing.T) {
 			t.Errorf("Open with a transplanted key file = %v, want ark.ErrCorruptConfig", err)
 		}
 	})
+	t.Run("other repository next to the own key", func(t *testing.T) {
+		other := ark.WithPassword("other secret")
+		donor := initRepo(t, other)
+		name, body := onlyKeyFile(t, donor)
+		b := initRepo(t, pw)
+		putKeyFile(t, b, name, body)
+		// The foreign key opens under the other password, but the own key file
+		// failed it: the password is wrong for this repository.
+		if _, err := ark.Open(ctx, b, other); !errors.Is(err, ark.ErrWrongPassword) {
+			t.Errorf("Open with the foreign key's password = %v, want ark.ErrWrongPassword", err)
+		}
+	})
 	t.Run("renamed", func(t *testing.T) {
 		b := initRepo(t, pw)
 		_, body := onlyKeyFile(t, b)

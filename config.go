@@ -17,7 +17,8 @@ import (
 
 // repoFormatVersion is the on-disk format version this build writes and is the
 // only one it reads. Open rejects anything else with ErrUnsupportedFormat.
-const repoFormatVersion = 1
+// Version 2 requires masterKey.ConfigHash.
+const repoFormatVersion = 2
 
 // configName is the name of the single object in the config namespace.
 const configName = "config"
@@ -25,7 +26,7 @@ const configName = "config"
 // repoIDBytes is the length of the random repository id before hex encoding.
 const repoIDBytes = 32
 
-// compressionZstd is the only compression codec format v1 defines.
+// compressionZstd is the only compression codec the format defines.
 const compressionZstd = "zstd"
 
 // repositoryConfig is the JSON object Init writes into the config namespace.
@@ -164,10 +165,7 @@ func configHash(data []byte) string {
 }
 
 // readRepositoryConfig returns the stored config bytes of b, unauthenticated.
-//
-// It returns ErrNotInitialized when b holds no config. A config that parses
-// and names another format version is ErrUnsupportedFormat here already, so
-// a repository of another build reports that before any key file is tried.
+// It returns ErrNotInitialized when b holds no config.
 func readRepositoryConfig(ctx context.Context, b Backend) ([]byte, error) {
 	rc, err := b.Get(ctx, Handle{Type: ConfigFile, Name: configName})
 	if err != nil {
@@ -182,14 +180,13 @@ func readRepositoryConfig(ctx context.Context, b Backend) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ark: failed to read the repository config: %w", err)
 	}
-	var v struct {
-		Version int `json:"version"`
-	}
-	if json.Unmarshal(data, &v) == nil && v.Version != repoFormatVersion {
-		return nil, fmt.Errorf("%w: repository format version %d, this build reads version %d",
-			ErrUnsupportedFormat, v.Version, repoFormatVersion)
-	}
 	return data, nil
+}
+
+// errFormatVersion reports a repository of format version v.
+func errFormatVersion(v int) error {
+	return fmt.Errorf("%w: repository format version %d, this build reads version %d",
+		ErrUnsupportedFormat, v, repoFormatVersion)
 }
 
 // parseRepositoryConfig decodes and validates config bytes. A config this
@@ -200,8 +197,7 @@ func parseRepositoryConfig(data []byte) (repositoryConfig, error) {
 		return repositoryConfig{}, fmt.Errorf("%w: config is not valid JSON: %w", ErrUnsupportedFormat, jsonErr)
 	}
 	if cfg.Version != repoFormatVersion {
-		return repositoryConfig{}, fmt.Errorf("%w: repository format version %d, this build reads version %d",
-			ErrUnsupportedFormat, cfg.Version, repoFormatVersion)
+		return repositoryConfig{}, errFormatVersion(cfg.Version)
 	}
 	if invalid := cfg.Chunker.validate(); invalid != nil {
 		return repositoryConfig{}, fmt.Errorf("%w: %w", ErrUnsupportedFormat, invalid)

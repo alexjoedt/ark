@@ -187,7 +187,8 @@ func rebindConfig(t *testing.T, b Backend, change func(*repositoryConfig)) {
 }
 
 // TestOpenRejectsAMasterKeyWithoutConfigHash pins that there is no legacy
-// path: a master key that carries no config_hash does not open the repository.
+// path: a master key that carries no config_hash, as format version 1 wrote
+// it, does not open the repository and reports the older format.
 func TestOpenRejectsAMasterKeyWithoutConfigHash(t *testing.T) {
 	ctx := context.Background()
 	b := newStubBackend()
@@ -229,7 +230,7 @@ func TestOpenRejectsAMasterKeyWithoutConfigHash(t *testing.T) {
 		t.Fatalf("put key file: %v", err)
 	}
 
-	if _, err := Open(ctx, b, WithoutPassword()); !errors.Is(err, ErrCorruptConfig) {
-		t.Errorf("Open = %v, want ErrCorruptConfig", err)
+	if _, err := Open(ctx, b, WithoutPassword()); !errors.Is(err, ErrUnsupportedFormat) {
+		t.Errorf("Open = %v, want ErrUnsupportedFormat", err)
 	}
 }

@@ -60,7 +60,7 @@ func TestTamperedObjectsAreRejected(t *testing.T) {
 // The master key carries the SHA-256 of the config bytes Init stored, so
 // every change to them fails Open with ErrCorruptConfig. The password is
 // changed first: the binding survives ChangePassword. A changed version is
-// read before any key and stays ErrUnsupportedFormat.
+// a tamper too: the version is only trusted once the hash matches.
 func TestTamperedConfigIsRejected(t *testing.T) {
 	ctx := context.Background()
 	pw := ark.WithPassword("changed password")
@@ -87,7 +87,7 @@ func TestTamperedConfigIsRejected(t *testing.T) {
 		{"flipped version byte", func(_ *testing.T, cfg []byte) []byte {
 			cfg[bytes.Index(cfg, []byte(`"version":`))+len(`"version":`)] ^= 0x01
 			return cfg
-		}, ark.ErrUnsupportedFormat},
+		}, ark.ErrCorruptConfig},
 	}
 	for _, c := range cells {
 		t.Run(c.name, func(t *testing.T) {

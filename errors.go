@@ -28,7 +28,7 @@ var (
 	// ErrCorruptConfig is returned by Open when a key file opens but the
 	// repository config is not the one its master key was created with: the
 	// config was changed or replaced, or the key file belongs to another
-	// repository.
+	// repository. The message says which of the two the config's id points to.
 	ErrCorruptConfig = errors.New("ark: repository config does not match its master key")
 
 	// ErrCorruptTree is returned by Restore, Export and Verify when a tree
