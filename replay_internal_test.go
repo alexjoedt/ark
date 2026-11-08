@@ -47,11 +47,11 @@ func TestReplayedLockIsHonouredUntilItIsStale(t *testing.T) {
 	lock.release(ctx)
 }
 
-// TestReplayedConfigFailsOpen replays the config of before a config change.
+// TestReplayedConfigOpensOnlyWithItsKeyFile replays the config of before a config change.
 // The key file is bound to the new bytes, so Open fails with
 // ErrCorruptConfig. Replaying the old key file with it is a rollback of the
 // whole repository state and opens: there is no freshness anchor.
-func TestReplayedConfigFailsOpen(t *testing.T) {
+func TestReplayedConfigOpensOnlyWithItsKeyFile(t *testing.T) {
 	ctx := context.Background()
 	b := newStubBackend()
 	if err := Init(ctx, b, WithoutPassword()); err != nil {

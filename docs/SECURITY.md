@@ -22,7 +22,9 @@ In scope are three attackers, alone or together:
 - A network attacker between the client and an sftp server, or between a browser and `ark serve`.
 
 The guarantees hold for a repository created with a passphrase. Data sent over sftp is already
-sealed, so a network attacker on that path sees no more than a passive reader of the backend.
+sealed, so a network attacker on that path gains no more than an attacker on the backend: with the
+host key verified, a passive reader of the traffic; with `insecure=1`, or as the server, an active
+writer, every accepted risk included.
 
 ## Format
 
@@ -72,7 +74,7 @@ sealed, so a network attacker on that path sees no more than a passive reader of
 - A replayed snapshot manifest restores exactly the bytes its snapshot held, never newer ones;
   after a prune it fails with `ErrNotFound` on its root tree: `TestReplayedManifestRestoresOnlyItsOwnBytes`.
 - An old config put back beside the current key files fails Open with `ErrCorruptConfig`:
-  `TestReplayedConfigFailsOpen`.
+  `TestReplayedConfigOpensOnlyWithItsKeyFile`.
 
 ## Guarantees in transit
 
@@ -100,7 +102,7 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
   data: `TestReplayedManifestRestoresOnlyItsOwnBytes`.
 - ChangePassword does not revoke the old passphrase: the old key file, put back, opens the
   repository under it again: `TestReplayedKeyFileOpensUnderTheOldPassword`.
-- An old config put back together with its old key file opens: `TestReplayedConfigFailsOpen`.
+- An old config put back together with its old key file opens: `TestReplayedConfigOpensOnlyWithItsKeyFile`.
 - A replayed lock blocks writers until it is stale: `TestReplayedLockIsHonouredUntilItIsStale`.
 - A replayed marker puts the next backup into repair mode, which re-reads the chunks it reuses,
   until a prune clears it: `TestReplayedMarkerForcesRepairMode`.
