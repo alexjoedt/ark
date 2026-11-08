@@ -15,8 +15,9 @@ const SourceTypeStream SourceType = "stream"
 // StreamSource is a Source over one [io.Reader], such as the stdout of a
 // database dump. See [NewStreamSource].
 type StreamSource struct {
-	name string
-	r    io.Reader
+	name     string
+	r        io.Reader
+	consumed bool
 }
 
 // NewStreamSource returns a Source that yields exactly one regular file named
@@ -27,7 +28,8 @@ type StreamSource struct {
 //
 // name is also the snapshot's source name and must be a clean base name: not
 // empty, no slash, not "." or "..". Walk rejects any other name. r is read
-// once, by the first Walk, and never closed; the caller owns it.
+// once, by the first Walk; a later Walk fails instead of yielding an empty
+// file. r is never closed; the caller owns it.
 func NewStreamSource(name string, r io.Reader) *StreamSource {
 	return &StreamSource{name: name, r: r}
 }
@@ -45,6 +47,10 @@ func (s *StreamSource) Walk(ctx context.Context, fn WalkFunc) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if s.consumed {
+		return fmt.Errorf("ark: stream %q was already read by an earlier Walk", s.name)
+	}
+	s.consumed = true
 	info := FileInfo{
 		Path: s.name,
 		Mode: 0o600,
@@ -70,11 +76,12 @@ func NewStreamSink(w io.Writer) *StreamSink {
 	return &StreamSink{w: w}
 }
 
-// Open accepts stream snapshots only.
+// Open accepts stream snapshots only; each Open starts a new restore.
 func (s *StreamSink) Open(_ context.Context, meta SourceMeta) error {
 	if meta.Type != SourceTypeStream {
 		return fmt.Errorf("%w: expected %q, got %q", ErrIncompatibleSourceType, SourceTypeStream, meta.Type)
 	}
+	s.file = ""
 	return nil
 }
 

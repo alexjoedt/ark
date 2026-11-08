@@ -3,6 +3,7 @@ package ark_test
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"io"
 	"strings"
@@ -133,5 +134,71 @@ func TestStreamSinkTakesOneRegularFile(t *testing.T) {
 	err = ark.NewStreamSink(io.Discard).Open(ctx, ark.SourceMeta{Type: ark.SourceTypeFile})
 	if !errors.Is(err, ark.ErrIncompatibleSourceType) {
 		t.Errorf("Open of a file snapshot = %v, want ErrIncompatibleSourceType", err)
+	}
+}
+
+func TestChangedStreamReusesChunks(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+	restore := func(id string) []byte {
+		t.Helper()
+		var buf bytes.Buffer
+		if _, err := repo.Restore(ctx, id, ark.NewStreamSink(&buf)); err != nil {
+			t.Fatalf("Restore: %v", err)
+		}
+		return buf.Bytes()
+	}
+
+	data := make([]byte, 50<<20)
+	_, _ = rand.Read(data)
+	snap, err := repo.Backup(ctx, ark.NewStreamSource("dump", bytes.NewReader(data)))
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	if !bytes.Equal(restore(snap.ID), data) {
+		t.Fatal("restored stream differs from the one backed up")
+	}
+
+	_, _ = rand.Read(data[20<<20 : 21<<20])
+	snap, err = repo.Backup(ctx, ark.NewStreamSource("dump", bytes.NewReader(data)))
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	if snap.Stats.ChunksReused == 0 {
+		t.Errorf("ChunksReused = 0 after changing 1 MiB of 50 MiB (ChunksNew %d)", snap.Stats.ChunksNew)
+	}
+	if !bytes.Equal(restore(snap.ID), data) {
+		t.Error("restored changed stream differs from the one backed up")
+	}
+}
+
+func TestStreamSourceFailsOnASecondWalk(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+	src := ark.NewStreamSource("dump", strings.NewReader("once"))
+	if _, err := repo.Backup(ctx, src); err != nil {
+		t.Fatalf("first Backup: %v", err)
+	}
+	if _, err := repo.Backup(ctx, src); err == nil {
+		t.Error("second Backup of a read stream = nil, want an error")
+	}
+}
+
+func TestStreamSinkRestoresTwiceAfterReopen(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+	var buf bytes.Buffer
+	sink := ark.NewStreamSink(&buf)
+	for _, content := range []string{"first", "second"} {
+		snap, err := repo.Backup(ctx, ark.NewStreamSource("dump", strings.NewReader(content)))
+		if err != nil {
+			t.Fatalf("Backup: %v", err)
+		}
+		if _, err := repo.Restore(ctx, snap.ID, sink); err != nil {
+			t.Fatalf("Restore %s into a reused sink: %v", content, err)
+		}
+	}
+	if buf.String() != "firstsecond" {
+		t.Errorf("reused sink wrote %q, want %q", buf.String(), "firstsecond")
 	}
 }

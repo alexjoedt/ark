@@ -47,25 +47,6 @@ func RunStreamTests(
 		}
 	})
 
-	t.Run("ChangedStreamReusesChunks", func(t *testing.T) {
-		repo := streamRepo(t)
-		data := randomBytes(50 << 20)
-		snap := backupStream(t, repo, newSource("dump", bytes.NewReader(data)))
-		if !bytes.Equal(restoreStream(t, repo, snap.ID, newSink), data) {
-			t.Fatal("restored stream differs from the one backed up")
-		}
-
-		changed := bytes.Clone(data)
-		copy(changed[20<<20:], randomBytes(1<<20))
-		snap = backupStream(t, repo, newSource("dump", bytes.NewReader(changed)))
-		if snap.Stats.ChunksReused == 0 {
-			t.Errorf("ChunksReused = 0 after changing 1 MiB of 50 MiB (ChunksNew %d)", snap.Stats.ChunksNew)
-		}
-		if !bytes.Equal(restoreStream(t, repo, snap.ID, newSink), changed) {
-			t.Error("restored changed stream differs from the one backed up")
-		}
-	})
-
 	t.Run("ReaderError", func(t *testing.T) {
 		repo := streamRepo(t)
 		boom := errors.New("arktest: reader failed")

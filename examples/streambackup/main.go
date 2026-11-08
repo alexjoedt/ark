@@ -46,7 +46,11 @@ func main() {
 		log.Fatal(err)
 	}
 	snap, err := repo.Backup(ctx, ark.NewStreamSource("dump", stdout))
-	// Wait closes the pipe, so it runs after the backup read it to EOF.
+	if err != nil {
+		// A failed backup stops reading; closing the pipe lets a command
+		// blocked on a full pipe exit, so Wait returns.
+		_ = stdout.Close()
+	}
 	if werr := cmd.Wait(); err == nil && werr != nil {
 		err = fmt.Errorf("command %q: %w", command, werr)
 	}
