@@ -6,9 +6,18 @@ import (
 	"time"
 )
 
-// generateID creates a sortable, unique snapshot ID.
+// newSnapshotID returns 128 random bits as 26 Crockford base32 characters.
+// A snapshot name carries no time: the backend listing must not date them.
+func newSnapshotID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return encodeBase32(b)
+}
+
+// generateID creates a sortable, unique lock and marker name.
 // Format: 10-char timestamp prefix (Crockford base32, ms precision) +
 // 16-char random suffix (80 bits of entropy). Total length: 26 characters.
+// The timestamp lets a zero-byte lock age out, see loadLocks.
 func generateID(timestamp time.Time) string {
 	tsMs := uint64(timestamp.UnixNano() / int64(time.Millisecond))
 	tsPart := encodeTimestampBase32(tsMs, 10)

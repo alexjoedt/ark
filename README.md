@@ -243,7 +243,7 @@ file.
 ├── keys/       the master key, sealed under the password
 ├── chunks/     compressed, encrypted content, named by an HMAC, sharded by prefix
 ├── trees/      one encrypted object per directory, named the same way
-├── snapshots/  one encrypted manifest per snapshot, named by its sortable id
+├── snapshots/  one encrypted manifest per snapshot, named by a random id
 └── locks/      encrypted shared and exclusive locks, stale after 30 minutes without a refresh
 ```
 

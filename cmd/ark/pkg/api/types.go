@@ -9,7 +9,7 @@ type BackupRequest struct {
 
 // BackupResponse is the response for POST /v1/backup
 type BackupResponse struct {
-	ID                string  `json:"id"` // Unique snapshot ID (26 chars, ULID-style)
+	ID                string  `json:"id"` // Unique snapshot ID (26 chars, random)
 	SizeBytes         int64   `json:"size_bytes"`
 	DurationSeconds   float64 `json:"duration_seconds"`
 	ContainersStopped int     `json:"containers_stopped"`
@@ -55,7 +55,7 @@ type DryRunResponse struct {
 // ArchiveInfo represents snapshot information in API responses.
 // The name "ArchiveInfo" is kept for backwards compatibility.
 type ArchiveInfo struct {
-	ID          string `json:"id"` // Unique snapshot ID (26 chars, ULID-style)
+	ID          string `json:"id"` // Unique snapshot ID (26 chars, random)
 	Volume      string `json:"volume"`
 	SizeBytes   int64  `json:"size_bytes"`
 	StoredBytes int64  `json:"stored_bytes,omitempty"`

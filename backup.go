@@ -38,7 +38,7 @@ func (r *Repository) runBackup(
 	now := time.Now().UTC()
 	m := &manifest{
 		Version:    manifestVersion3,
-		ID:         generateID(now),
+		ID:         newSnapshotID(),
 		ParentID:   parentID,
 		CreatedAt:  now,
 		SourceName: meta.Name,

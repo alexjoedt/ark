@@ -175,8 +175,13 @@ func (r *Repository) readManifests(ctx context.Context) ([]*manifest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("manifest: failed to list snapshots: %w", err)
 	}
-	// Sort newest first (ULID IDs are lexicographically sortable).
-	sort.Slice(manifests, func(i, j int) bool { return manifests[i].ID > manifests[j].ID })
+	// Snapshot IDs are random, so only CreatedAt orders them.
+	sort.Slice(manifests, func(i, j int) bool {
+		if !manifests[i].CreatedAt.Equal(manifests[j].CreatedAt) {
+			return manifests[i].CreatedAt.After(manifests[j].CreatedAt)
+		}
+		return manifests[i].ID > manifests[j].ID
+	})
 	return manifests, nil
 }
 
