@@ -5,6 +5,7 @@ package ark_test
 //
 //	no plaintext in any object name or body   TestBackendHoldsNoPlaintext
 //	wrong password fails before data reads    TestWrongPasswordReadsOnlyConfigAndKeys (keys_test.go)
+//	every sealed namespace x every mutation   TestTamperedObjectsAreRejected (tamper_test.go)
 //	tampered chunk, tree, manifest            TestScenarioVerifyFindsACorruptChunk, TestScenarioVerifyFindsACorruptTree,
 //	                                          TestScenarioTamperedManifestIsRefused (scenario_test.go)
 //	tampered key file                         TestEveryFlippedKeyFileByteFailsOpen

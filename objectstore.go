@@ -226,16 +226,29 @@ func (s *objectStore) present(ctx context.Context, name string) (bool, error) {
 }
 
 // Get returns the raw content of the object stored under name. An object that
-// was changed or moved from another name fails to open.
+// was changed or moved from another name fails to open, with ErrCorruptChunk
+// or ErrCorruptTree by namespace.
 func (s *objectStore) Get(ctx context.Context, name string) ([]byte, error) {
 	data, err := readSealed(ctx, s.backend, s.codec, s.dataKey, s.handle(name))
+	if errors.Is(err, errSealBroken) {
+		return nil, s.corrupt(err)
+	}
 	if err != nil {
 		return nil, err
 	}
 	if s.verify && s.name(data) != name {
-		return nil, fmt.Errorf("ark: %s object %s: %w", s.typ, name, errNameMismatch)
+		return nil, s.corrupt(fmt.Errorf("ark: %s object %s: %w", s.typ, name, errNameMismatch))
 	}
 	return data, nil
+}
+
+// corrupt wraps err in the sentinel of the namespace: ErrCorruptTree for
+// trees, ErrCorruptChunk for chunks.
+func (s *objectStore) corrupt(err error) error {
+	if s.typ == TreeFile {
+		return fmt.Errorf("%w: %w", ErrCorruptTree, err)
+	}
+	return fmt.Errorf("%w: %w", ErrCorruptChunk, err)
 }
 
 // Exists reports whether the object named name is present.

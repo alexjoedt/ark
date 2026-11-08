@@ -2,7 +2,6 @@ package ark
 
 import (
 	"context"
-	"errors"
 	"fmt"
 )
 
@@ -42,11 +41,11 @@ func (r *Repository) runVerify(ctx context.Context, snapshotID string) (*VerifyR
 		}
 		return nil
 	})
-	// verifyChunk records chunk failures, so a broken object here is a tree.
-	if errors.Is(err, errSealBroken) || errors.Is(err, errNameMismatch) {
-		return result, fmt.Errorf("%w: %w", ErrCorruptTree, err)
-	}
+	// verifyChunk records chunk failures, so an error here wrapping
+	// ErrCorruptTree is a tree that does not open or match its name. A walk
+	// that did not finish verified nothing past where it stopped.
 	if err != nil {
+		result.OK = false
 		return result, err
 	}
 

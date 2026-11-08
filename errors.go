@@ -25,11 +25,12 @@ var (
 	// by naming its id to Forget without a policy, then Prune.
 	ErrCorruptManifest = errors.New("ark: corrupt snapshot manifest")
 
-	// ErrCorruptTree is returned by Verify when a tree object of the snapshot
-	// does not authenticate or does not match its name.
+	// ErrCorruptTree is returned by Restore, Export and Verify when a tree
+	// object of the snapshot does not authenticate or does not match its name.
 	ErrCorruptTree = errors.New("ark: corrupt snapshot tree")
 
-	// ErrCorruptChunk is returned when a stored chunk fails its integrity check.
+	// ErrCorruptChunk is returned by Restore and Export when a stored chunk
+	// fails its integrity check. Verify lists such a chunk in CorruptChunks.
 	ErrCorruptChunk = errors.New("ark: corrupt chunk")
 
 	// ErrMissingChunk is returned when a required chunk is absent from the CAS.

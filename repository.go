@@ -539,6 +539,14 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	_, unreadable, err := r.loadLocks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range unreadable {
+		unclean = append(unclean,
+			fmt.Sprintf("lock %s does not open and is ignored, Unlock with WithForce removes it", name))
+	}
 	result := &CheckResult{SnapshotsChecked: len(ids), Warnings: unclean}
 	for _, id := range ids {
 		vr, err := r.runVerify(ctx, id)

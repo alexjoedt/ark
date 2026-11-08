@@ -180,7 +180,8 @@ type VerifyResult struct {
 type CheckResult struct {
 	SnapshotsChecked int
 	Errors           []string
-	// Warnings are findings that leave every snapshot intact, such as a
-	// backup that did not finish; Prune clears them.
+	// Warnings are findings that leave every snapshot intact: a backup that
+	// did not finish, which Prune clears, or a lock that does not open, which
+	// Unlock WithForce removes.
 	Warnings []string
 }
