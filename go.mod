@@ -6,7 +6,7 @@ require (
 	github.com/kevinburke/ssh_config v1.6.0
 	github.com/klauspost/compress v1.20.2
 	github.com/pkg/sftp v1.13.12
-	golang.org/x/crypto v0.54.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/sys v0.47.0
 )
 

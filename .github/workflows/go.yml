@@ -112,3 +112,15 @@ jobs:
 
       - name: Verify modules
         run: go mod verify
+
+      # Fails on a known vulnerability in code the binary can reach, an
+      # unreachable one only prints. -C per module: ./... stops at the root
+      # module. The version is pinned; the standard library is checked against
+      # the toolchain setup-go resolved for 1.26.
+      - name: Vulnerability check
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -eu
+          for dir in . arkdocker cmd/ark; do
+            go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -C "$dir" ./...
+          done
