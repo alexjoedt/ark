@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -75,6 +76,7 @@ func RunSourceSinkTests(
 	t.Run("Symlink", func(t *testing.T) { testSymlink(t, newSource, write) })
 	t.Run("Xattrs", func(t *testing.T) { testXattrs(t, newSource, write) })
 	t.Run("WalkWithoutOpen", func(t *testing.T) { testWalkWithoutOpen(t, newSource, write) })
+	t.Run("ConcurrentOpen", func(t *testing.T) { testConcurrentOpen(t, newSource, write) })
 	t.Run("IncompatibleSourceType", func(t *testing.T) { testIncompatibleSourceType(t, newSink) })
 }
 
@@ -390,6 +392,49 @@ func testWalkWithoutOpen(
 	if err != nil {
 		t.Fatalf("Source.Walk opening some files: %v", err)
 	}
+}
+
+// testConcurrentOpen checks an ark.ConcurrentSource: every open stays valid
+// after the walk returned and the files read correctly in parallel.
+func testConcurrentOpen(
+	t *testing.T,
+	newSource func(t *testing.T, location string) ark.Source,
+	write writeFunc,
+) {
+	entries := []Entry{
+		{Path: "a.txt", Type: ark.FileTypeRegular, Mode: modeFile, Content: strings.Repeat("a", 3000)},
+		{Path: "b.txt", Type: ark.FileTypeRegular, Mode: modeFile, Content: "bravo"},
+		{Path: "c.txt", Type: ark.FileTypeRegular, Mode: modeFile, Content: strings.Repeat("c", 700)},
+	}
+	src := newSource(t, write(t, entries))
+	if cs, ok := src.(ark.ConcurrentSource); !ok || !cs.ConcurrentOpen() {
+		t.Skip("source does not open concurrently")
+	}
+
+	opens := make(map[string]func() (io.ReadCloser, error))
+	infos := make(map[string]ark.FileInfo)
+	err := src.Walk(context.Background(), func(info ark.FileInfo, open func() (io.ReadCloser, error)) error {
+		if info.Type == ark.FileTypeRegular {
+			opens[info.Path], infos[info.Path] = open, info
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Source.Walk: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for _, e := range entries {
+		wg.Go(func() {
+			got, err := readEntry(t, infos[e.Path], opens[e.Path])
+			if err != nil {
+				t.Errorf("reading %s after the walk: %v", e.Path, err)
+			} else if got != e.Content {
+				t.Errorf("%s read %q after the walk, want %q", e.Path, got, e.Content)
+			}
+		})
+	}
+	wg.Wait()
 }
 
 func testIncompatibleSourceType(t *testing.T, newSink func(t *testing.T) (ark.Sink, string)) {

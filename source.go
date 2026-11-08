@@ -82,7 +82,8 @@ type FileInfo struct {
 // entry.Type. For a regular file, open returns a reader for entry.Size bytes.
 // The caller calls open at most once and closes the reader before
 // returning, or never calls it when the parent snapshot already holds the
-// file unchanged. The next call to fn advances the source past the entry,
+// file unchanged. A [ConcurrentSource] lets the caller open and read the
+// file after returning instead. The next call to fn advances the source past the entry,
 // read or not ([archive/tar.Reader.Next] skips unread bytes).
 type WalkFunc func(entry FileInfo, open func() (io.ReadCloser, error)) error
 
@@ -101,6 +102,16 @@ type WalkFunc func(entry FileInfo, open func() (io.ReadCloser, error)) error
 type Source interface {
 	Meta() SourceMeta
 	Walk(ctx context.Context, fn WalkFunc) error
+}
+
+// ConcurrentSource is a Source whose open functions outlive the WalkFunc call
+// that passed them: open may run after fn returned, on any goroutine and
+// concurrently with the walk and with other opens. A backup reads the files
+// of such a source in parallel; it reads any other source inside fn, one file
+// at a time. ConcurrentOpen returning false opts a wrapper out.
+type ConcurrentSource interface {
+	Source
+	ConcurrentOpen() bool
 }
 
 // Sink receives file entries during a restore.

@@ -56,6 +56,12 @@ func NewSource(root string) (ark.Source, error) {
 
 func (s *fileSource) Meta() ark.SourceMeta { return s.meta }
 
+// ConcurrentOpen reports that the open functions Walk passes stay valid after
+// fn returns: each opens its file by path, so a backup reads files in parallel.
+func (s *fileSource) ConcurrentOpen() bool { return true }
+
+var _ ark.ConcurrentSource = (*fileSource)(nil)
+
 // Walk visits every entry under the source root. Regular files, directories,
 // symlinks and hardlinks are yielded; device nodes, fifos and sockets are
 // yielded as ark.FileTypeUnsupported so the core can count them.
@@ -171,17 +177,11 @@ func (s *fileSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 		}
 
 		// The file is opened only when the core reads it, which it skips
-		// for a file the parent snapshot holds unchanged. The close here
-		// guards against a caller that does not close.
-		var f *os.File
-		defer func() {
-			if f != nil {
-				_ = f.Close()
-			}
-		}()
+		// for a file the parent snapshot holds unchanged, and possibly after
+		// fn returned (ConcurrentOpen), so the caller owns the close.
 		return fn(entry, func() (io.ReadCloser, error) {
-			var err error
-			if f, err = os.Open(path); err != nil {
+			f, err := os.Open(path)
+			if err != nil {
 				return nil, fmt.Errorf("arkfs: open %s: %w", path, err)
 			}
 			return struct {

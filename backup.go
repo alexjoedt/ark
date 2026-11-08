@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/alexjoedt/ark/chunker"
@@ -48,10 +49,35 @@ func (r *Repository) runBackup(
 		Comment:    opts.comment,
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	cr := chunker.New(nil, r.chunker)
 	w := newChunkWriter(ctx, chunks, r.concurrency)
 	var scannedEntries []fileEntry
 	var stats SnapshotStats
+
+	// Progress calls never overlap, but the readers finish files concurrently.
+	// An empty path counts a hardlink, which reads nothing and reports nothing.
+	var progressMu sync.Mutex
+	var filesDone int
+	var bytesDone int64
+	fileDone := func(path string, refs []chunkRef) {
+		progressMu.Lock()
+		defer progressMu.Unlock()
+		filesDone++
+		if path == "" {
+			return
+		}
+		bytesDone += refsSize(refs)
+		opts.progress(ProgressEvent{Phase: PhaseStore, CurrentPath: path, FilesDone: filesDone, BytesDone: bytesDone})
+	}
+
+	var readers *fileReaders
+	var pending []pendingFile
+	if cs, ok := src.(ConcurrentSource); ok && cs.ConcurrentOpen() {
+		readers = newFileReaders(ctx, cancel, w, r.chunker, r.concurrency, fileDone)
+	}
 
 	opts.progress(ProgressEvent{Phase: PhaseScan})
 
@@ -69,36 +95,32 @@ func (r *Repository) runBackup(
 			// A second name for content already stored under fe.LinkDest.
 			// It restores as a file, so it counts, but it reads no bytes.
 			stats.FileCount++
+			fileDone("", nil)
 
 		case FileTypeRegular:
-			if prev, ok := parent[normEntryPath(entry.Path)]; ok && unchanged(entry, prev.FileInfo) {
+			switch prev, ok := parent[normEntryPath(entry.Path)]; {
+			case ok && unchanged(entry, prev.FileInfo):
 				// The chunks are in the repository already, so they are
 				// reused, exactly as a re-read would have found them.
 				fe.Chunks = prev.Chunks
 				stats.FilesUnchanged++
-			} else {
+				fileDone(entry.Path, fe.Chunks)
+			case readers != nil:
+				// The entry keeps its place in the walk order; its chunks
+				// are filled in once the readers are done.
+				p := pendingFile{index: len(scannedEntries), refs: new([]chunkRef)}
+				if err := readers.submit(fileJob{path: entry.Path, open: open, refs: p.refs}); err != nil {
+					return err
+				}
+				pending = append(pending, p)
+			default:
 				chunks, err := chunkFile(w, cr, open)
 				if err != nil {
-					return fmt.Errorf("backup: failed to chunk file %s: %w", entry.Path, err)
+					return fmt.Errorf("failed to chunk file %s: %w", entry.Path, err)
 				}
 				fe.Chunks = chunks
+				fileDone(entry.Path, fe.Chunks)
 			}
-
-			// A file that shrank while it was read yields fewer bytes than
-			// its stat size; the snapshot records the bytes it stored.
-			fe.Size = 0
-			for _, c := range fe.Chunks {
-				fe.Size += c.Length
-			}
-			stats.FileCount++
-			stats.TotalSize += fe.Size
-
-			opts.progress(ProgressEvent{
-				Phase:       PhaseStore,
-				CurrentPath: entry.Path,
-				FilesDone:   stats.FileCount,
-				BytesDone:   stats.TotalSize,
-			})
 
 		case FileTypeUnsupported:
 			// Devices, fifos, sockets: the v1 format does not model them.
@@ -114,12 +136,39 @@ func (r *Repository) runBackup(
 		scannedEntries = append(scannedEntries, fe)
 		return nil
 	})
-	werr := w.wait()
+	// A reader that failed first cancelled the walk and is the cause; a walk
+	// that failed on its own stops the readers.
+	readersFailed := readers != nil && readers.failure() != nil
 	if err != nil {
+		cancel()
+	}
+	var rerr error
+	if readers != nil {
+		rerr = readers.wait()
+	}
+	werr := w.wait()
+	if err != nil && !readersFailed {
 		return nil, fmt.Errorf("backup: walk failed: %w", err)
+	}
+	if rerr != nil {
+		return nil, fmt.Errorf("backup: %w", rerr)
 	}
 	if werr != nil {
 		return nil, fmt.Errorf("backup: failed to store chunks: %w", werr)
+	}
+	for _, p := range pending {
+		scannedEntries[p.index].Chunks = *p.refs
+	}
+	for i := range scannedEntries {
+		fe := &scannedEntries[i]
+		if fe.Type != FileTypeRegular {
+			continue
+		}
+		// A file that shrank while it was read yields fewer bytes than its
+		// stat size; the snapshot records the bytes it stored.
+		fe.Size = refsSize(fe.Chunks)
+		stats.FileCount++
+		stats.TotalSize += fe.Size
 	}
 	w.stats(&stats, scannedEntries)
 
@@ -245,4 +294,103 @@ func chunkFileData(w *chunkWriter, cr *chunker.Chunker, r io.Reader) ([]chunkRef
 		})
 	}
 	return refs, nil
+}
+
+// refsSize is the number of bytes the chunk references cover.
+func refsSize(refs []chunkRef) int64 {
+	var n int64
+	for _, c := range refs {
+		n += c.Length
+	}
+	return n
+}
+
+// pendingFile is a scanned entry whose chunks a reader fills into refs.
+type pendingFile struct {
+	index int
+	refs  *[]chunkRef
+}
+
+// fileJob is one file a reader opens, chunks and stores, its refs written to
+// refs.
+type fileJob struct {
+	path string
+	open func() (io.ReadCloser, error)
+	refs *[]chunkRef
+}
+
+// fileReaders reads, chunks and hashes the files of a ConcurrentSource on a
+// bounded set of goroutines with one chunker each, so memory stays at workers
+// times the chunker buffer. The first error cancels the backup's context.
+type fileReaders struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	jobs   chan fileJob
+	wg     sync.WaitGroup
+
+	mu  sync.Mutex
+	err error
+}
+
+func newFileReaders(
+	ctx context.Context, cancel context.CancelFunc, w *chunkWriter, cfg chunker.Config, workers int,
+	done func(path string, refs []chunkRef),
+) *fileReaders {
+	fr := &fileReaders{ctx: ctx, cancel: cancel, jobs: make(chan fileJob)}
+	for range max(workers, 1) {
+		fr.wg.Go(func() {
+			cr := chunker.New(nil, cfg)
+			for job := range fr.jobs {
+				if fr.ctx.Err() != nil {
+					fr.fail(fr.ctx.Err())
+					continue
+				}
+				refs, err := chunkFile(w, cr, job.open)
+				if err != nil {
+					fr.fail(fmt.Errorf("failed to chunk file %s: %w", job.path, err))
+					continue
+				}
+				*job.refs = refs
+				done(job.path, refs)
+			}
+		})
+	}
+	return fr
+}
+
+// submit hands job to the next idle reader, blocking while all are busy. It
+// returns the error that stopped the readers.
+func (fr *fileReaders) submit(job fileJob) error {
+	select {
+	case fr.jobs <- job:
+		return nil
+	case <-fr.ctx.Done():
+		fr.fail(fr.ctx.Err())
+		return fr.failure()
+	}
+}
+
+// failure returns the first error a reader hit, nil while none did.
+func (fr *fileReaders) failure() error {
+	fr.mu.Lock()
+	defer fr.mu.Unlock()
+	return fr.err
+}
+
+// fail records the first error and cancels the backup.
+func (fr *fileReaders) fail(err error) {
+	fr.mu.Lock()
+	defer fr.mu.Unlock()
+	if fr.err == nil {
+		fr.err = err
+		fr.cancel()
+	}
+}
+
+// wait lets the readers finish the submitted files, stops them and returns the
+// first error. It must be called once, after the last submit.
+func (fr *fileReaders) wait() error {
+	close(fr.jobs)
+	fr.wg.Wait()
+	return fr.err
 }
