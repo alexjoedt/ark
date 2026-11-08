@@ -4,8 +4,8 @@ go 1.26
 
 require (
 	github.com/alexedwards/scs/v2 v2.9.0
-	github.com/alexjoedt/ark v1.0.0
-	github.com/alexjoedt/ark/arkdocker v1.0.0
+	github.com/alexjoedt/ark v0.2.0
+	github.com/alexjoedt/ark/arkdocker v0.2.0
 	github.com/alexjoedt/log v1.1.0
 	github.com/go-chi/chi/v5 v5.4.0
 	github.com/golang-migrate/migrate/v4 v4.20.1
@@ -14,8 +14,8 @@ require (
 	github.com/moby/moby/client v0.6.2
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/urfave/cli/v3 v3.6.1
-	golang.org/x/crypto v0.53.0
-	golang.org/x/term v0.44.0
+	golang.org/x/crypto v0.54.0
+	golang.org/x/term v0.45.0
 	golang.org/x/time v0.15.0
 	modernc.org/sqlite v1.58.0
 )
@@ -42,7 +42,7 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
-	github.com/pkg/sftp v1.13.7 // indirect
+	github.com/pkg/sftp v1.13.12 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
