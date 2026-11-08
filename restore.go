@@ -83,6 +83,7 @@ func (r *Repository) runRestore(
 
 	stats.ChunksFetched = fetcher.read
 	stats.Duration = time.Since(start)
+	opts.progress(ProgressEvent{Phase: PhaseFinalize, FilesDone: stats.FilesRestored, BytesDone: stats.BytesRestored})
 	logger.InfoContext(ctx, "restore completed",
 		"files", stats.FilesRestored,
 		"bytes", stats.BytesRestored,

@@ -121,7 +121,7 @@ entries. A matching `ark.Sink` (`Open`, `Receive`, `Close`) brings it back, and
 byte stream, such as a database dump, needs no own pair: `ark.NewStreamSource(name, r)` backs up one
 reader as one file and `ark.NewStreamSink(w)` restores it to a writer (`arktest.RunStreamTests`).
 
-`examples/` has four runnable programs:
+`examples/` has five runnable programs:
 
 | Example | Shows |
 |---|---|
@@ -129,6 +129,7 @@ reader as one file and `ark.NewStreamSink(w)` restores it to a writer (`arktest.
 | [`examples/dockervolume`](examples/dockervolume) | a Docker volume into a snapshot and into a second volume |
 | [`examples/customsource`](examples/customsource) | an `ark.Source` over in-memory files |
 | [`examples/streambackup`](examples/streambackup) | a command's stdout through `ark.NewStreamSource` into a snapshot and back to stdout via `ark.NewStreamSink` |
+| [`examples/observe`](examples/observe) | every operation against a local repository with `ark.WithProgress`, `ark.WithLockEvent` and `ark.Instrument` logged through slog |
 
 ### Encryption
 

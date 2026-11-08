@@ -5,11 +5,12 @@ package ark
 // is the caller's job.
 //
 // The phases per operation, in order. Forget, prune, verify and check emit
-// their first event before any I/O. Every operation but restore emits exactly
-// one PhaseFinalize event, last and only on success; restore sends none.
+// their first event before any I/O. Every operation emits exactly one
+// PhaseFinalize event, last and only on success.
 //
 //   - backup: PhaseScan, PhaseStore, PhaseFinalize
-//   - restore: PhaseLoad, PhaseFetch and PhaseWrite interleaved
+//   - restore: PhaseLoad, PhaseFetch and PhaseWrite interleaved, PhaseFinalize
+//     with FilesDone and BytesDone restored
 //   - forget: PhaseLoad, PhaseFinalize with FilesDone = manifests removed
 //   - prune: PhaseLoad, PhaseSweep with ChunksDone/ChunksTotal over the
 //     chunks and trees listed, PhaseFinalize
