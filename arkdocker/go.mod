@@ -1,9 +1,9 @@
 module github.com/alexjoedt/ark/arkdocker
 
-go 1.26
+go 1.26.0
 
 require (
-	github.com/alexjoedt/ark v1.0.0
+	github.com/alexjoedt/ark v0.3.0
 	github.com/containerd/errdefs v1.0.0
 	github.com/distribution/reference v0.6.0
 	github.com/moby/moby/api v1.56.1
