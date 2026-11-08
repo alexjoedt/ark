@@ -114,15 +114,18 @@ _, err = eng.RestoreVolume(ctx, snap.ID, "postgres_copy") // created if missing
 
 Your own data goes in through `ark.Source`, two methods: `Meta` names the snapshot, `Walk` yields
 entries. A matching `ark.Sink` (`Open`, `Receive`, `Close`) brings it back, and
-`arktest.RunSourceSinkTests` checks that what the sink receives, the source yields again.
+`arktest.RunSourceSinkTests` checks that what the sink receives, the source yields again. A single
+byte stream, such as a database dump, needs no own pair: `ark.NewStreamSource(name, r)` backs up one
+reader as one file and `ark.NewStreamSink(w)` restores it to a writer (`arktest.RunStreamTests`).
 
-`examples/` has three runnable programs:
+`examples/` has four runnable programs:
 
 | Example | Shows |
 |---|---|
 | [`examples/filebackup`](examples/filebackup) | a directory into a local repository and back |
 | [`examples/dockervolume`](examples/dockervolume) | a Docker volume into a snapshot and into a second volume |
 | [`examples/customsource`](examples/customsource) | an `ark.Source` over in-memory files |
+| [`examples/streambackup`](examples/streambackup) | a command's stdout through `ark.NewStreamSource` into a snapshot and back to stdout via `ark.NewStreamSink` |
 
 ### Encryption
 
