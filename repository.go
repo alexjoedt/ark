@@ -312,7 +312,6 @@ func (r *Repository) Snapshots(ctx context.Context, filter SnapshotFilter) ([]*S
 		}
 		out = append(out, s)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, nil
 }
 
