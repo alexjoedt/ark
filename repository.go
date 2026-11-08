@@ -376,6 +376,8 @@ func (r *Repository) Forget(
 	for _, o := range opts {
 		o(cfg)
 	}
+	progress := r.observer(OperationForget, nil)
+	progress(ProgressEvent{Phase: PhaseLoad})
 
 	ctx, lock, err := r.acquire(ctx, false)
 	if err != nil {
@@ -397,20 +399,26 @@ func (r *Repository) Forget(
 		return nil, err
 	}
 	result.DryRun = cfg.dryRun
+	done := ProgressEvent{Phase: PhaseFinalize, FilesTotal: len(result.Remove)}
 	if cfg.dryRun {
+		done.FilesDone = done.FilesTotal
+		progress(done)
 		return result, nil
 	}
 
 	for _, s := range result.Remove {
 		if err := r.deleteSnapshot(ctx, s.ID); err != nil {
 			r.logger.WarnContext(ctx, "forget: failed to delete snapshot", "id", s.ID, "error", err)
+			continue
 		}
+		done.FilesDone++
 	}
 	// A removed snapshot has to stay removed before a prune sweeps its
 	// objects, so the removals are durable before Forget returns.
 	if err := r.backend.Sync(ctx); err != nil {
 		return nil, fmt.Errorf("forget: failed to sync snapshot removals: %w", err)
 	}
+	progress(done)
 	return result, nil
 }
 
@@ -463,6 +471,8 @@ func (r *Repository) Prune(ctx context.Context, opts ...PruneOption) (*PruneResu
 	for _, o := range opts {
 		o(cfg)
 	}
+	progress := r.observer(OperationPrune, nil)
+	progress(ProgressEvent{Phase: PhaseLoad})
 
 	ctx, lock, err := r.acquire(ctx, true)
 	if err != nil {
@@ -470,7 +480,7 @@ func (r *Repository) Prune(ctx context.Context, opts ...PruneOption) (*PruneResu
 	}
 	defer lock.release(ctx)
 
-	return r.runGC(ctx, cfg.dryRun)
+	return r.runGC(ctx, cfg.dryRun, progress)
 }
 
 // Export writes a portable tar.gz archive of one snapshot to w. id is a full
@@ -515,6 +525,9 @@ func (r *Repository) Import(ctx context.Context, reader io.Reader) (*Snapshot, e
 // Verify checks one snapshot: manifest, tree and every chunk.
 // id is a full snapshot id or a unique prefix.
 func (r *Repository) Verify(ctx context.Context, id string) (*VerifyResult, error) {
+	progress := r.observer(OperationVerify, nil)
+	progress(ProgressEvent{Phase: PhaseLoad, CurrentPath: id})
+
 	ctx, lock, err := r.acquire(ctx, false)
 	if err != nil {
 		return nil, err
@@ -525,11 +538,19 @@ func (r *Repository) Verify(ctx context.Context, id string) (*VerifyResult, erro
 	if err != nil {
 		return nil, err
 	}
-	return r.runVerify(ctx, id)
+	result, err := r.runVerify(ctx, id, progress)
+	if err != nil {
+		return result, err
+	}
+	progress(ProgressEvent{Phase: PhaseFinalize, CurrentPath: id})
+	return result, nil
 }
 
 // Check verifies every snapshot in the repository.
 func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
+	progress := r.observer(OperationCheck, nil)
+	progress(ProgressEvent{Phase: PhaseLoad})
+
 	ctx, lock, err := r.acquire(ctx, false)
 	if err != nil {
 		return nil, err
@@ -553,11 +574,16 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 		return nil, err
 	}
 	result := &CheckResult{SnapshotsChecked: len(ids), Warnings: unclean}
-	for _, id := range ids {
-		vr, err := r.runVerify(ctx, id)
+	for i, id := range ids {
+		// The inner verify reports as check, counters restart per snapshot.
+		vr, err := r.runVerify(ctx, id, func(e ProgressEvent) {
+			e.FilesDone, e.FilesTotal = i, len(ids)
+			progress(e)
+		})
 		if ctx.Err() != nil {
 			return nil, ctx.Err() //nolint:wrapcheck // the caller's own cancellation
 		}
+		progress(ProgressEvent{Phase: PhaseFetch, CurrentPath: id, FilesDone: i + 1, FilesTotal: len(ids)})
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("snapshot %s: %v", id, err))
 			continue
@@ -569,6 +595,7 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 			result.Errors = append(result.Errors, fmt.Sprintf("snapshot %s: corrupt chunk %s", id, c))
 		}
 	}
+	progress(ProgressEvent{Phase: PhaseFinalize, FilesDone: len(ids), FilesTotal: len(ids)})
 	return result, nil
 }
 

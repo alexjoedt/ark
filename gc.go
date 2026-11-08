@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-func (r *Repository) runGC(ctx context.Context, dryRun bool) (*PruneResult, error) {
+func (r *Repository) runGC(ctx context.Context, dryRun bool, progress ProgressFunc) (*PruneResult, error) {
 	logger := r.logger.With("component", "gc")
 
 	manifests, err := r.readManifests(ctx)
@@ -27,20 +27,34 @@ func (r *Repository) runGC(ctx context.Context, dryRun bool) (*PruneResult, erro
 		}
 	}
 
-	result := &PruneResult{DryRun: dryRun}
-	scanned := 0
-	for _, ns := range []struct {
+	// Both namespaces are listed before the sweep starts, so the sweep
+	// reports one total.
+	type namespace struct {
 		store *objectStore
 		live  map[string]struct{}
-	}{
-		{r.chunks, liveChunks},
-		{r.trees, liveTrees},
-	} {
-		n, err := r.sweep(ctx, ns.store, ns.live, dryRun, result)
+		names []string
+	}
+	spaces := []namespace{{store: r.chunks, live: liveChunks}, {store: r.trees, live: liveTrees}}
+	scanned := 0
+	for i := range spaces {
+		names, err := spaces[i].store.Names(ctx)
 		if err != nil {
+			return nil, fmt.Errorf("gc: failed to enumerate objects: %w", err)
+		}
+		spaces[i].names = names
+		scanned += len(names)
+	}
+
+	result := &PruneResult{DryRun: dryRun}
+	ev := ProgressEvent{Phase: PhaseSweep, ChunksTotal: scanned}
+	progress(ev)
+	for _, ns := range spaces {
+		if err := r.sweep(ctx, ns.store, ns.names, ns.live, dryRun, result, func() {
+			ev.ChunksDone++
+			progress(ev)
+		}); err != nil {
 			return nil, err
 		}
-		scanned += n
 	}
 	if !dryRun {
 		if err := r.backend.Sync(ctx); err != nil {
@@ -62,40 +76,45 @@ func (r *Repository) runGC(ctx context.Context, dryRun bool) (*PruneResult, erro
 		"freed_bytes", result.BytesFreed,
 		"dry_run", dryRun,
 	)
+	ev.Phase = PhaseFinalize
+	progress(ev)
 	return result, nil
 }
 
-// sweep deletes every object of store that is absent from live and adds what
-// it removed to result. It returns the number of objects it scanned.
+// sweep deletes every object of names that is absent from live and adds what
+// it removed to result. It calls scanned once per name.
 func (r *Repository) sweep(
 	ctx context.Context,
 	store *objectStore,
+	names []string,
 	live map[string]struct{},
 	dryRun bool,
 	result *PruneResult,
-) (int, error) {
-	names, err := store.Names(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("gc: failed to enumerate objects: %w", err)
-	}
-
+	scanned func(),
+) error {
 	for _, name := range names {
-		if _, ok := live[name]; ok {
-			continue
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // the caller's own cancellation
 		}
-
-		size, err := store.StoredSize(ctx, name)
-		if err == nil {
-			result.BytesFreed += size
+		if _, ok := live[name]; !ok {
+			r.sweepOne(ctx, store, name, dryRun, result)
 		}
-
-		if !dryRun {
-			if err := store.Delete(ctx, name); err != nil {
-				r.logger.WarnContext(ctx, "gc: failed to delete orphaned object", "name", name, "error", err)
-				continue
-			}
-		}
-		result.BlobsRemoved++
+		scanned()
 	}
-	return len(names), nil
+	return nil
+}
+
+func (r *Repository) sweepOne(ctx context.Context, store *objectStore, name string, dryRun bool, result *PruneResult) {
+	size, err := store.StoredSize(ctx, name)
+	if err == nil {
+		result.BytesFreed += size
+	}
+
+	if !dryRun {
+		if err := store.Delete(ctx, name); err != nil {
+			r.logger.WarnContext(ctx, "gc: failed to delete orphaned object", "name", name, "error", err)
+			return
+		}
+	}
+	result.BlobsRemoved++
 }

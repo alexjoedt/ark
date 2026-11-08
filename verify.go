@@ -6,7 +6,14 @@ import (
 	"fmt"
 )
 
-func (r *Repository) runVerify(ctx context.Context, snapshotID string) (*VerifyResult, error) {
+// runVerify checks one snapshot and reports a PhaseFetch event per chunk
+// reference to progress, CurrentPath set to the snapshot ID. Callers emit the
+// events that open and close their operation.
+func (r *Repository) runVerify(
+	ctx context.Context,
+	snapshotID string,
+	progress ProgressFunc,
+) (*VerifyResult, error) {
 	logger := r.logger.With("component", "verify", "snapshot", snapshotID)
 
 	m, err := r.loadManifest(ctx, snapshotID)
@@ -25,6 +32,7 @@ func (r *Repository) runVerify(ctx context.Context, snapshotID string) (*VerifyR
 	// its name fails the walk.
 	seen := make(map[string]struct{})
 	chunks := r.chunks.verifying()
+	done := 0
 	err = walkSnapshot(ctx, r.trees.verifying(), m, pathFilter{}, func(fe fileEntry) error {
 		for _, ref := range fe.Chunks {
 			select {
@@ -32,13 +40,19 @@ func (r *Repository) runVerify(ctx context.Context, snapshotID string) (*VerifyR
 				return ctx.Err()
 			default:
 			}
-			if _, done := seen[ref.ID]; done {
-				continue
+			if _, dup := seen[ref.ID]; !dup {
+				seen[ref.ID] = struct{}{}
+				if err := verifyChunk(ctx, chunks, ref.ID, result); err != nil {
+					return err
+				}
 			}
-			seen[ref.ID] = struct{}{}
-			if err := verifyChunk(ctx, chunks, ref.ID, result); err != nil {
-				return err
-			}
+			done++
+			progress(ProgressEvent{
+				Phase:       PhaseFetch,
+				CurrentPath: snapshotID,
+				ChunksDone:  done,
+				ChunksTotal: m.Stats.ChunksTotal,
+			})
 		}
 		return nil
 	})
