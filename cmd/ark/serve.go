@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"syscall"
@@ -82,6 +84,10 @@ func serveCommand() *cli.Command {
 			}
 			// CLI flags are the final override layer.
 			applyServeFlags(serveCfg, cmd)
+
+			for _, w := range serveWarnings(serveCfg) {
+				logger.Warn(w)
+			}
 
 			// Open repository and create Docker engine.
 			repo, err := openRepoAt(ctx, cmd, serveCfg.RepoPath)
@@ -210,6 +216,36 @@ func serveCommand() *cli.Command {
 			return runErr
 		},
 	}
+}
+
+// serveWarnings lists what is unsafe about cfg. The server speaks plain HTTP
+// and has no TLS flags: a non-loopback address belongs behind a reverse proxy
+// that terminates TLS.
+func serveWarnings(cfg *config.ServeConfig) []string {
+	var warnings []string
+	if !isLoopbackAddr(cfg.HTTPAddr) {
+		warnings = append(warnings, fmt.Sprintf(
+			"listening on %s, not a loopback address: the server speaks plain HTTP, "+
+				"expose it only behind a TLS reverse proxy", cfg.HTTPAddr))
+	}
+	if !cfg.CSRFEnabled {
+		warnings = append(warnings, "CSRF protection is disabled (--no-csrf)")
+	}
+	return warnings
+}
+
+// isLoopbackAddr reports whether a listen address binds to loopback only. An
+// empty host (":8080") binds every interface.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.IsLoopback()
 }
 
 // applyServeFlags overlays explicitly provided CLI flags onto cfg.

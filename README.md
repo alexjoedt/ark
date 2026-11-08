@@ -212,8 +212,12 @@ number.
 
 ## Web UI
 
-`ark serve` starts a web UI on `:8080` with scheduled backups and live logs. It is not covered by the
-compatibility promise.
+`ark serve` starts a web UI on `127.0.0.1:8080` with scheduled backups and live logs. It is not
+covered by the compatibility promise.
+
+The server speaks plain HTTP and has no TLS flags. It listens on loopback by default and warns at
+start when `--addr`, `ARK_HTTP_ADDR` or `httpAddr` binds anything else, and when `--no-csrf` is set.
+Use any other address only behind a TLS reverse proxy.
 
 ```bash
 ARK_ADMIN_PASSWORD=... ARK_PASSWORD_FILE=/etc/ark/password ark serve --repo /srv/ark
@@ -226,7 +230,8 @@ environment, `ARK_PASSWORD` or `ARK_PASSWORD_FILE`, and the repository is create
 The SQLite database next to it is a cache for the UI. The repository stays the source of truth.
 
 `scripts/install.sh` installs `ark serve` as a systemd service with its settings in
-`/etc/ark/daemon.json`. The admin password only ever comes from `ARK_ADMIN_PASSWORD`, never from a
+`/etc/ark/daemon.json`; the unit sets `ARK_HTTP_ADDR=127.0.0.1:8080`, which overrides `httpAddr` there.
+The admin password only ever comes from `ARK_ADMIN_PASSWORD`, never from a
 file.
 
 ## Repository layout

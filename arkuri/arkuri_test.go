@@ -138,3 +138,23 @@ func TestOpenHonoursACancelledContext(t *testing.T) {
 		t.Fatal("Open ignored a cancelled context")
 	}
 }
+
+// TestOpenNeverEchoesAPassword: a password in the URI is rejected with the
+// variable to use instead, and no error quotes the URI back, well-formed or
+// not.
+func TestOpenNeverEchoesAPassword(t *testing.T) {
+	for _, uri := range []string{
+		"sftp://ark:hunter2@host/srv/ark",
+		"sftp://ark:hunter2@host:notaport/srv/ark",
+		"local://ark:hunter2@host/srv/ark",
+	} {
+		b, err := Open(t.Context(), uri)
+		if err == nil {
+			_ = b.Close()
+			t.Fatalf("Open(%q) succeeded", uri)
+		}
+		if strings.Contains(err.Error(), "hunter2") {
+			t.Errorf("Open(%q) error quotes the password:\n%v", uri, err)
+		}
+	}
+}

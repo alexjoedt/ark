@@ -108,7 +108,7 @@ if [[ ! -f "${DAEMON_CONFIG}" ]]; then
     cat > "${DAEMON_CONFIG}" << EODAEMON
 {
   "repoPath": "${REPO_DIR}",
-  "httpAddr": ":8080",
+  "httpAddr": "127.0.0.1:8080",
   "adminUsername": "admin",
   "csrfEnabled": true,
   "devMode": false
@@ -157,7 +157,10 @@ ProtectSystem=strict
 ReadWritePaths=${DATA_DIR}
 
 # Environment
+# Loopback: the server speaks plain HTTP. Any other address only behind a TLS
+# reverse proxy. This variable overrides httpAddr in daemon.json.
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+Environment="ARK_HTTP_ADDR=127.0.0.1:8080"
 ${ENV_BLOCK}
 
 [Install]

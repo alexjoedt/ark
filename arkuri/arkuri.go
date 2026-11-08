@@ -17,6 +17,7 @@ package arkuri
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -76,7 +77,11 @@ func parse(s string) (string, *url.URL, error) {
 
 	u, err := url.Parse(s)
 	if err != nil {
-		return "", nil, fmt.Errorf("arkuri: parse %q: %w", s, err)
+		// url.Error quotes the whole input, which may carry a password.
+		if urlErr, ok := errors.AsType[*url.Error](err); ok {
+			err = urlErr.Err
+		}
+		return "", nil, fmt.Errorf("arkuri: parse repository location: %w", err)
 	}
 	if u.User != nil {
 		if _, ok := u.User.Password(); ok {
