@@ -146,3 +146,49 @@ func TestMarkerWithLiveLockIsNotStale(t *testing.T) {
 		t.Fatalf("Check without the lock = %+v, %v; want one warning", res, err)
 	}
 }
+
+// A marker makes a backup verify the objects it would reuse even while its
+// lock is live, since a crashed backup of another host keeps a fresh lock. A
+// torn chunk is stored again; an intact one is reused, never written over.
+func TestBackupBesideMarkerVerifiesReusedChunks(t *testing.T) {
+	ctx := context.Background()
+	b := &putCountingBackend{Backend: arkmem.New(), puts: map[ark.HandleType]int{}}
+	repo := openRepo(t, b)
+	content := "content an earlier snapshot holds"
+	if _, err := repo.Backup(ctx, stubSource{name: "first", content: content}); err != nil {
+		t.Fatalf("first backup: %v", err)
+	}
+	var chunks []string
+	_ = b.List(ctx, ark.BlobFile, func(info ark.BlobInfo) error {
+		chunks = append(chunks, info.Name)
+		return nil
+	})
+	for _, c := range chunks {
+		if err := b.Put(ctx, ark.Handle{Type: ark.BlobFile, Name: c}, bytes.NewReader(nil)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	putMarker(t, repo, ark.MarkerFile, "01RUNNING", os.Getpid())
+	putMarker(t, repo, ark.LockFile, "01RUNNING", os.Getpid())
+	b.take()
+
+	repaired, err := repo.Backup(ctx, stubSource{name: "second", content: content})
+	if err != nil {
+		t.Fatalf("second backup: %v", err)
+	}
+	if puts := b.take()[ark.BlobFile]; puts != len(chunks) {
+		t.Fatalf("second backup put %d chunks, want the %d torn ones", puts, len(chunks))
+	}
+	sink := &recordingSink{}
+	if _, err := repo.Restore(ctx, repaired.ID, sink); err != nil || sink.written["data.txt"] != content {
+		t.Fatalf("Restore = %q, %v; want the source content", sink.written["data.txt"], err)
+	}
+
+	reused, err := repo.Backup(ctx, stubSource{name: "third", content: content})
+	if err != nil {
+		t.Fatalf("third backup: %v", err)
+	}
+	if puts := b.take()[ark.BlobFile]; puts != 0 || reused.Stats.ChunksNew != 0 || reused.Stats.StoredSize != 0 {
+		t.Fatalf("third backup put %d chunks, stats %+v; want every chunk reused", puts, reused.Stats)
+	}
+}

@@ -149,12 +149,8 @@ func (r *Repository) runExport(ctx context.Context, snapshotID string, w io.Writ
 	return nil
 }
 
-func (r *Repository) runImport(ctx context.Context, reader io.Reader) (*manifest, error) {
+func (r *Repository) runImport(ctx context.Context, reader io.Reader, chunks, trees *objectStore) (*manifest, error) {
 	logger := r.logger.With("component", "import")
-	chunks, trees, err := r.writeStores(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("import: %w", err)
-	}
 
 	rd, closeGzip, err := maybeGunzip(reader)
 	if err != nil {

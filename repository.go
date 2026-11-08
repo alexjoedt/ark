@@ -208,10 +208,14 @@ func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOptio
 		}
 		o.parent = parent
 	}
+	chunks, trees, err := r.writeStores(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("backup: %w", err)
+	}
 	if err := r.putMarker(ctx, lock); err != nil {
 		return nil, err
 	}
-	m, err := r.runBackup(ctx, src, *o)
+	m, err := r.runBackup(ctx, src, *o, chunks, trees)
 	r.clearMarker(ctx, lock, err == nil)
 	if err != nil {
 		return nil, err
@@ -480,10 +484,14 @@ func (r *Repository) Import(ctx context.Context, reader io.Reader) (*Snapshot, e
 	}
 	defer lock.release(ctx)
 
+	chunks, trees, err := r.writeStores(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("import: %w", err)
+	}
 	if err := r.putMarker(ctx, lock); err != nil {
 		return nil, err
 	}
-	m, err := r.runImport(ctx, reader)
+	m, err := r.runImport(ctx, reader, chunks, trees)
 	r.clearMarker(ctx, lock, err == nil)
 	if err != nil {
 		return nil, err
