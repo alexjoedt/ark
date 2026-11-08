@@ -97,3 +97,71 @@ func TestProgressIsScopedToOneCall(t *testing.T) {
 		t.Errorf("observer saw %d events from another call", len(observed)-before)
 	}
 }
+
+func operations(events []ark.ProgressEvent) map[ark.Operation]bool {
+	seen := make(map[ark.Operation]bool, len(events))
+	for _, e := range events {
+		seen[e.Operation] = true
+	}
+	return seen
+}
+
+func TestRepositoryProgressStampsTheOperation(t *testing.T) {
+	ctx := context.Background()
+	b := arkmem.New()
+	if err := ark.Init(ctx, b, testPassword); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	var events []ark.ProgressEvent
+	repo, err := ark.Open(ctx, b, testPassword, ark.WithProgress(collect(&events)))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	snap, err := repo.Backup(ctx, stubSource{name: "app", content: "one"})
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	backupEvents := len(events)
+	if got := operations(events); len(got) != 1 || !got[ark.OperationBackup] {
+		t.Errorf("backup events carry operations %v, want only backup", got)
+	}
+
+	if _, err := repo.Restore(ctx, snap.ID, discardSink{}); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if got := operations(events[backupEvents:]); len(got) != 1 || !got[ark.OperationRestore] {
+		t.Errorf("restore events carry operations %v, want only restore", got)
+	}
+
+	var own []ark.ProgressEvent
+	before := len(events)
+	if _, err := repo.Backup(ctx, stubSource{name: "app", content: "two"},
+		ark.WithBackupProgress(collect(&own))); err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	if len(events) != before || len(own) == 0 || !operations(own)[ark.OperationBackup] {
+		t.Errorf("per-call observer: default saw %d events, call saw %v", len(events)-before, own)
+	}
+
+	if _, err := repo.Backup(ctx, stubSource{name: "app", content: "three"},
+		ark.WithBackupProgress(nil)); err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	if len(events) == before {
+		t.Error("a nil per-call observer did not fall back to the repository default")
+	}
+}
+
+func TestNoObserverBacksUpAndRestores(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+	snap, err := repo.Backup(ctx, stubSource{name: "app", content: "one"})
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	if _, err := repo.Restore(ctx, snap.ID, discardSink{}); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+}

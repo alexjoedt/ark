@@ -107,9 +107,9 @@ func WithParent(id string) BackupOption {
 	return func(o *backupOptions) { o.parent = id }
 }
 
-// WithBackupProgress sets the observer for this backup. One observer per
-// call, so two operations on the same Repository never interleave their
-// events. fn must not block.
+// WithBackupProgress sets the observer for this backup, overriding the
+// repository default of WithProgress; nil keeps the default. Events of one
+// call never interleave with another operation's. fn must not block.
 func WithBackupProgress(fn ProgressFunc) BackupOption {
 	return func(o *backupOptions) { o.progress = fn }
 }
@@ -125,9 +125,9 @@ type restoreOptions struct {
 // RestoreOption is a functional option for Restore.
 type RestoreOption func(*restoreOptions)
 
-// WithRestoreProgress sets the observer for this restore. One observer per
-// call, so two operations on the same Repository never interleave their
-// events. fn must not block.
+// WithRestoreProgress sets the observer for this restore, overriding the
+// repository default of WithProgress; nil keeps the default. Events of one
+// call never interleave with another operation's. fn must not block.
 func WithRestoreProgress(fn ProgressFunc) RestoreOption {
 	return func(o *restoreOptions) { o.progress = fn }
 }

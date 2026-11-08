@@ -22,6 +22,7 @@ type openConfig struct {
 	logger      *slog.Logger
 	concurrency int
 	lockWait    time.Duration
+	progress    ProgressFunc
 }
 
 // Option configures a Repository at Open time.
@@ -40,6 +41,15 @@ func WithLockWait(d time.Duration) Option {
 			c.lockWait = d
 		}
 	}
+}
+
+// WithProgress sets the default progress observer of the repository. Every
+// operation reports to it unless the call passes its own observer, see
+// WithBackupProgress and WithRestoreProgress; a nil per-call observer falls
+// back to this one. Operations running concurrently call fn concurrently, see
+// ProgressFunc.
+func WithProgress(fn ProgressFunc) Option {
+	return func(c *openConfig) { c.progress = fn }
 }
 
 // WithConcurrency caps how many backend operations run at once. Values below
@@ -61,6 +71,7 @@ type Repository struct {
 	logger      *slog.Logger
 	concurrency int
 	lockWait    time.Duration
+	progress    ProgressFunc // repository default observer, may be nil
 
 	id      string         // repository id from the config object
 	key     *masterKey     // unsealed from the key file Open matched
@@ -136,6 +147,7 @@ func Open(ctx context.Context, b Backend, pw Passphrase, opts ...Option) (*Repos
 		logger:      cfg.logger,
 		concurrency: cfg.concurrency,
 		lockWait:    cfg.lockWait,
+		progress:    cfg.progress,
 		id:          rc.ID,
 		key:         key,
 		keyName:     keyName,
@@ -193,13 +205,11 @@ func (r *Repository) ID() string { return r.id }
 // visible. The orphans stay until Prune sweeps them, and a later backup of
 // the same data reuses them.
 func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOption) (*Snapshot, error) {
-	o := &backupOptions{progress: nopProgress}
+	o := &backupOptions{}
 	for _, opt := range opts {
 		opt(o)
 	}
-	if o.progress == nil {
-		o.progress = nopProgress
-	}
+	o.progress = r.observer(OperationBackup, o.progress)
 
 	ctx, lock, err := r.acquire(ctx, false)
 	if err != nil {
@@ -242,13 +252,11 @@ func (r *Repository) Restore(ctx context.Context, id string, sink Sink, opts ...
 	if err != nil {
 		return nil, err
 	}
-	o := &restoreOptions{progress: nopProgress}
+	o := &restoreOptions{}
 	for _, opt := range opts {
 		opt(o)
 	}
-	if o.progress == nil {
-		o.progress = nopProgress
-	}
+	o.progress = r.observer(OperationRestore, o.progress)
 	stats, err := r.runRestore(ctx, id, sink, *o)
 	if err != nil {
 		return nil, err
