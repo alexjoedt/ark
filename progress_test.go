@@ -2,6 +2,7 @@ package ark_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/alexjoedt/ark"
@@ -141,7 +142,7 @@ func TestRepositoryProgressStampsTheOperation(t *testing.T) {
 		ark.WithBackupProgress(collect(&own))); err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
-	if len(events) != before || len(own) == 0 || !operations(own)[ark.OperationBackup] {
+	if len(events) != before || len(operations(own)) != 1 || !operations(own)[ark.OperationBackup] {
 		t.Errorf("per-call observer: default saw %d events, call saw %v", len(events)-before, own)
 	}
 
@@ -154,14 +155,61 @@ func TestRepositoryProgressStampsTheOperation(t *testing.T) {
 	}
 }
 
-func TestNoObserverBacksUpAndRestores(t *testing.T) {
+// A handler set with WithProgress is shared by concurrent operations, so it
+// is called concurrently; this runs under -race.
+func TestRepositoryProgressIsCalledConcurrently(t *testing.T) {
 	ctx := context.Background()
-	repo := openRepo(t, arkmem.New())
+	b := arkmem.New()
+	if err := ark.Init(ctx, b, testPassword); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	var (
+		mu     sync.Mutex
+		events []ark.ProgressEvent
+	)
+	repo, err := ark.Open(ctx, b, testPassword, ark.WithProgress(func(e ark.ProgressEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, e)
+	}))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
 	snap, err := repo.Backup(ctx, stubSource{name: "app", content: "one"})
 	if err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
-	if _, err := repo.Restore(ctx, snap.ID, discardSink{}); err != nil {
-		t.Fatalf("Restore: %v", err)
+	mu.Lock()
+	events = nil
+	mu.Unlock()
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, err := repo.Backup(ctx, stubSource{name: "app", content: "two"})
+		errs <- err
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := repo.Restore(ctx, snap.ID, discardSink{})
+		errs <- err
+	}()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent operation: %v", err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	got := operations(events)
+	if !got[ark.OperationBackup] || !got[ark.OperationRestore] || len(got) != 2 {
+		t.Errorf("concurrent operations reported %v, want backup and restore", got)
 	}
 }
