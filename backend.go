@@ -77,7 +77,7 @@ type Backend interface {
 	// Put stores r under h atomically: a reader never observes a partial
 	// object. Implementations write to a temporary name in the same
 	// namespace and rename it into place. Put is idempotent, an existing
-	// object is replaced.
+	// object is replaced. Put need not make the object durable; Sync does.
 	Put(ctx context.Context, h Handle, r io.Reader) error
 
 	// Get retrieves a reader for the object stored under h.
@@ -90,6 +90,12 @@ type Backend interface {
 	// Delete removes the object identified by h.
 	// Removing a non-existent object is not an error.
 	Delete(ctx context.Context, h Handle) error
+
+	// Sync is the durability barrier: every Put and Delete that returned
+	// before the call has reached stable storage when Sync returns, so a
+	// power loss cannot undo it. A backend that already makes each Put and
+	// Delete durable returns nil without doing anything.
+	Sync(ctx context.Context) error
 
 	// List calls fn once for each object of the given type with its name and
 	// stored size. If fn returns an error, List stops and returns it.

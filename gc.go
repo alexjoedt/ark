@@ -42,6 +42,11 @@ func (r *Repository) runGC(ctx context.Context, dryRun bool) (*PruneResult, erro
 		}
 		scanned += n
 	}
+	if !dryRun {
+		if err := r.backend.Sync(ctx); err != nil {
+			return nil, fmt.Errorf("gc: failed to sync deletions: %w", err)
+		}
+	}
 
 	logger.InfoContext(ctx, "gc complete",
 		"scanned", scanned,

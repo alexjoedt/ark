@@ -118,13 +118,25 @@ type chunkRef struct {
 	Offset int64  `json:"offset"`
 }
 
-// saveManifest seals m and writes it under SnapshotFile.
+// saveManifest seals m and writes it under SnapshotFile between two
+// durability barriers: the first makes every chunk and tree the manifest
+// references durable before anything can point at them, the second makes the
+// manifest itself durable before the caller reports the snapshot.
 func (r *Repository) saveManifest(ctx context.Context, m *manifest) error {
 	data, err := json.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("manifest: failed to marshal: %w", err)
 	}
-	return r.putSealed(ctx, Handle{Type: SnapshotFile, Name: m.ID}, data)
+	if err := r.backend.Sync(ctx); err != nil {
+		return fmt.Errorf("manifest: failed to sync objects: %w", err)
+	}
+	if err := r.putSealed(ctx, Handle{Type: SnapshotFile, Name: m.ID}, data); err != nil {
+		return err
+	}
+	if err := r.backend.Sync(ctx); err != nil {
+		return fmt.Errorf("manifest: failed to sync %s: %w", m.ID, err)
+	}
+	return nil
 }
 
 // loadManifest reads and opens a manifest. One that was changed or moved

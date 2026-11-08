@@ -160,6 +160,11 @@ func (r *Repository) ChangePassword(ctx context.Context, pw Passphrase) error {
 	if err != nil {
 		return err
 	}
+	// The old key goes only once the new one is durable: a power loss in
+	// between must leave at least one key file that opens the repository.
+	if err := r.backend.Sync(ctx); err != nil {
+		return fmt.Errorf("ark: failed to sync the new key file %s: %w", name, err)
+	}
 	if err := r.backend.Delete(ctx, Handle{Type: KeyFile, Name: r.keyName}); err != nil {
 		return fmt.Errorf(
 			"ark: new key file %s written, failed to delete the old key file %s: %w",
@@ -379,6 +384,11 @@ func (r *Repository) Forget(
 		if err := r.deleteSnapshot(ctx, s.ID); err != nil {
 			r.logger.WarnContext(ctx, "forget: failed to delete snapshot", "id", s.ID, "error", err)
 		}
+	}
+	// A removed snapshot has to stay removed before a prune sweeps its
+	// objects, so the removals are durable before Forget returns.
+	if err := r.backend.Sync(ctx); err != nil {
+		return nil, fmt.Errorf("forget: failed to sync snapshot removals: %w", err)
 	}
 	return result, nil
 }
