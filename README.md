@@ -270,7 +270,7 @@ task tidy    # tidies every module and syncs the workspace
 
 `go build ./...` stops at the root module. Use `go build github.com/alexjoedt/ark/...`.
 
-Releases: [docs/RELEASING.md](docs/RELEASING.md).
+Releases: [docs/RELEASING.md](docs/RELEASING.md). Architecture decisions: [docs/adr/README.md](docs/adr/README.md).
 
 ## License
 
