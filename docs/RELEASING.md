@@ -6,14 +6,15 @@ ark ships three modules under one version number: `github.com/alexjoedt/ark` (th
 
 ## Versioning: v0.x
 
-ark is on the v0 line. Until `v1.0.0` is cut again:
+ark is on the v0 line. Until `v1.1.0` is cut
+(`v1.0.0` can never be tagged again, the proxy keeps the old content):
 
 - The exported API of every module may change between minors without a deprecation cycle.
 - The on-disk format may change. `repoFormatVersion` (config.go) is bumped only when an older build
   would misread a repository or a newer build needs a field unconditionally; additive, optional
   fields keep the number. There are no migrations: a repository an older format wrote is re-created.
 - CLI flags and `--json` output may change.
-- Each finished roadmap epic gets a minor tag.
+- Each finished body of work that ships code (a feature, a hardening pass) gets a minor tag; docs-only work gets none.
 
 `v1.0.0` and `v1.0.1` are retracted in all three `go.mod` files: they were published before the API
 and the format had settled. The first stable release will be `v1.1.0`, and from then on the API

@@ -22,25 +22,10 @@ var (
 // extra tags, every guarantee and accepted risk cites one, and the CI step and
 // the module list of Dependency scanning match go.yml, Taskfile.yml and go.work.
 func TestSecurityDocCitesDefinedTests(t *testing.T) {
-	work, err := os.ReadFile("go.work")
-	if os.IsNotExist(err) {
-		t.Skip("needs the go.work checkout, not a module copy of the root")
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
+	modules := workModules(t)
 	doc, err := os.ReadFile("docs/SECURITY.md")
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	use := workUse.FindSubmatch(work)
-	if use == nil {
-		t.Fatal("go.work has no use block")
-	}
-	var modules []string
-	for f := range strings.FieldsSeq(string(use[1])) {
-		modules = append(modules, filepath.Clean(f))
 	}
 
 	defined := definedTests(t, modules)
@@ -96,6 +81,28 @@ func TestSecurityDocCitesDefinedTests(t *testing.T) {
 	if !strings.Contains(string(doc), "("+names+")") {
 		t.Errorf("docs/SECURITY.md: Dependency scanning must list the go.work modules as (%s)", names)
 	}
+}
+
+// workModules returns the module directories of go.work and skips the test
+// when the checkout has none.
+func workModules(t *testing.T) []string {
+	t.Helper()
+	work, err := os.ReadFile("go.work")
+	if os.IsNotExist(err) {
+		t.Skip("needs the go.work checkout, not a module copy of the root")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	use := workUse.FindSubmatch(work)
+	if use == nil {
+		t.Fatal("go.work has no use block")
+	}
+	var modules []string
+	for f := range strings.FieldsSeq(string(use[1])) {
+		modules = append(modules, filepath.Clean(f))
+	}
+	return modules
 }
 
 // definedTests returns the Test functions of the go.work modules that go test
