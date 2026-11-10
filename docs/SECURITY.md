@@ -3,6 +3,7 @@
 The threat model of an ark repository at rest and in transit. Every guarantee and every accepted
 risk ends with the test that pins it; the tests carry the detail. `TestSecurityDocCitesDefinedTests`
 fails when a cited test does not exist or a guarantee or risk cites none.
+The reasoning behind the boundaries is in `docs/adr/0006-threat-model-boundaries.md`.
 
 ## Assets
 

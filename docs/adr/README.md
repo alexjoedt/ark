@@ -19,3 +19,5 @@ is replaced keeps its file; the new ADR is added and the old status becomes `sup
 | 0003 | [Unchanged-file detection](0003-unchanged-file-detection.md) | accepted | 2026-11-07 |
 | 0004 | [v0 line and release tagging](0004-v0-line-and-release-tagging.md) | accepted | 2026-11-07 |
 | 0005 | [Sync barrier instead of per-object fsync](0005-sync-barrier-instead-of-per-object-fsync.md) | accepted | 2026-11-08 |
+| 0006 | [Threat model boundaries](0006-threat-model-boundaries.md) | accepted | 2026-11-08 |
+| 0007 | [Embedding hooks on Open](0007-embedding-hooks-on-open.md) | accepted | 2026-11-08 |
