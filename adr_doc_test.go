@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -26,6 +27,9 @@ var (
 // "superseded by" status at an existing ADR.
 func TestADRIndexMatchesFiles(t *testing.T) {
 	modules := workModules(t)
+	if !slices.Contains(modules, "examples") {
+		t.Error("go.work does not list examples, so the CI build pattern no longer compiles the embedding examples")
+	}
 	readme, err := os.ReadFile("docs/adr/README.md")
 	if err != nil {
 		t.Fatal(err)

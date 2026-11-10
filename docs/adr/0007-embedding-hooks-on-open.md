@@ -58,5 +58,6 @@ puts the burden of locking on consumers that run operations concurrently. Pinned
 `TestEmbeddingObservesEveryOperation` in `embedding_test.go`, which runs all six operations with an
 observer, a lock hook and an instrumented backend, `TestInstrumentedBackendCountsWhatTheBackendSaw`
 in `instrument_test.go` against a backend that counts independently, and `TestStreamConformance` in
-`stream_test.go`. `examples/observe` and `examples/streambackup` are compiling consumers built by
-CI.
+`stream_test.go`. `examples/observe` and `examples/streambackup` are compiling consumers: the CI step
+`go build github.com/alexjoedt/ark/...` reaches the `examples` module through `go.work`, and
+`adr_doc_test.go` fails when `go.work` stops listing it.
