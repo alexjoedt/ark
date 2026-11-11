@@ -22,7 +22,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.27.4'
 
       # The pattern spans all three workspace modules, ./... stops at the root module.
       # CGO off proves the binary needs no C toolchain, the sqlite driver is pure Go.
@@ -116,7 +116,7 @@ jobs:
       # Fails on a known vulnerability in code the binary can reach, an
       # unreachable one only prints. -C per module: ./... stops at the root
       # module. The version is pinned; the standard library is checked against
-      # the toolchain setup-go resolved for 1.26.
+      # the toolchain setup-go resolved for 1.27.4.
       - name: Vulnerability check
         if: matrix.os == 'ubuntu-latest'
         run: |

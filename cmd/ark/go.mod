@@ -1,6 +1,6 @@
 module github.com/alexjoedt/ark/cmd/ark
 
-go 1.26
+go 1.27.4
 
 require (
 	github.com/alexedwards/scs/v2 v2.9.0
