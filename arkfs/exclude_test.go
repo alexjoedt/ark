@@ -136,7 +136,7 @@ func TestWithExcludeFile(t *testing.T) {
 	writeTree(t, root, "a", "b", "keep.txt", "x.log", "$HOME", "cache/c", "#x")
 
 	excludes := filepath.Join(t.TempDir(), "excludes")
-	content := "  # a comment\n*.log  \n\n\t/cache\n$HOME\n\\#x"
+	content := "\ufeff*.log  \n  # a comment\n\n\t/cache\n$HOME\n\\#x"
 	if err := os.WriteFile(excludes, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -149,6 +149,10 @@ func TestWithExcludeFile(t *testing.T) {
 	want := []string{"a", "*.log", "/cache", "$HOME", `\#x`, "b", "a"}
 	if got := src.Meta().Excludes; !slices.Equal(got, want) {
 		t.Errorf("Meta().Excludes = %q, want %q", got, want)
+	}
+	src.Meta().Excludes[0] = "changed"
+	if got := src.Meta().Excludes; !slices.Equal(got, want) {
+		t.Errorf("Meta().Excludes after caller write = %q, want %q", got, want)
 	}
 	got, err := walkPaths(t, src)
 	if err != nil {

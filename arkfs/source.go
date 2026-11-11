@@ -27,6 +27,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/alexjoedt/ark"
@@ -53,15 +54,16 @@ func WithExclude(patterns ...string) SourceOption {
 }
 
 // WithExcludeFile reads exclude patterns from the file at path, one per line.
-// Surrounding whitespace is trimmed, blank lines and lines starting with "#"
-// are skipped, and "$" stays literal.
+// A leading UTF-8 byte order mark is dropped, surrounding whitespace is
+// trimmed, blank lines and lines starting with "#" are skipped, and "$" stays
+// literal.
 func WithExcludeFile(path string) SourceOption {
 	return func(s *fileSource) error {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("arkfs: exclude file: %w", err)
 		}
-		for line := range strings.Lines(string(data)) {
+		for line := range strings.Lines(strings.TrimPrefix(string(data), "\ufeff")) {
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
@@ -107,7 +109,11 @@ func NewSource(root string, opts ...SourceOption) (ark.Source, error) {
 	return s, nil
 }
 
-func (s *fileSource) Meta() ark.SourceMeta { return s.meta }
+func (s *fileSource) Meta() ark.SourceMeta {
+	m := s.meta
+	m.Excludes = slices.Clone(m.Excludes)
+	return m
+}
 
 // ConcurrentOpen reports that the open functions Walk passes stay valid after
 // fn returns: each opens its file by path, so a backup reads files in parallel.
