@@ -60,7 +60,8 @@ func WithExclude(patterns ...string) SourceOption {
 // WithExcludeFile reads exclude patterns from the file at path, one per line.
 // A leading UTF-8 byte order mark is dropped, surrounding whitespace is
 // trimmed, blank lines and lines starting with "#" are skipped, and "$" stays
-// literal. A bad pattern fails with an error that names the file and line.
+// literal. A bad pattern fails with an error that names the file and line,
+// and so does a file that is not UTF-8 text, such as a UTF-16 one.
 func WithExcludeFile(path string) SourceOption {
 	return func(s *fileSource) error {
 		data, err := os.ReadFile(path)

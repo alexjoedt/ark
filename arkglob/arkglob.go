@@ -42,8 +42,9 @@ type Matcher struct {
 
 // New compiles patterns into a Matcher. A Matcher built from no patterns
 // matches nothing. An empty pattern, a pattern starting with "!", a pattern
-// with a "." or ".." component and a pattern with bad syntax return an error that wraps [path.ErrBadPattern] and names
-// the pattern.
+// with a "." or ".." component, a pattern with a NUL byte and a pattern with
+// bad syntax return an error that wraps [path.ErrBadPattern] and names the
+// pattern.
 func New(patterns ...string) (*Matcher, error) {
 	m := &Matcher{}
 	for _, p := range patterns {
@@ -59,6 +60,11 @@ func New(patterns ...string) (*Matcher, error) {
 func compile(p string) ([]string, error) {
 	if strings.HasPrefix(p, "!") {
 		return nil, fmt.Errorf("negation is not supported: %w", path.ErrBadPattern)
+	}
+	// No path holds a NUL byte, so such a pattern can only be a mistake, most
+	// often a UTF-16 exclude file.
+	if strings.ContainsRune(p, 0) {
+		return nil, fmt.Errorf("NUL byte, patterns are UTF-8 text: %w", path.ErrBadPattern)
 	}
 	var parts []string
 	for part := range strings.SplitSeq(p, "/") {

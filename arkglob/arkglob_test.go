@@ -3,6 +3,7 @@ package arkglob_test
 import (
 	"errors"
 	"path"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -87,13 +88,13 @@ func TestNoPatternsMatchNothing(t *testing.T) {
 }
 
 func TestNewRejectsBadPatterns(t *testing.T) {
-	for _, p := range []string{"", "/", "//", "[", "a/[/b", "!x", "!", "./foo", "a/../b", "../secret", "a/.", ".."} {
+	for _, p := range []string{"", "/", "//", "[", "a/[/b", "!x", "!", "./foo", "a/../b", "../secret", "a/.", "..", "a\x00b"} {
 		_, err := arkglob.New("ok", p)
 		if !errors.Is(err, path.ErrBadPattern) {
 			t.Errorf("New(%q): err = %v, want path.ErrBadPattern", p, err)
 			continue
 		}
-		if !strings.Contains(err.Error(), `"`+p+`"`) {
+		if !strings.Contains(err.Error(), strconv.Quote(p)) {
 			t.Errorf("New(%q): error %q does not name the pattern", p, err)
 		}
 	}

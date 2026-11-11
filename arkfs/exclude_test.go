@@ -183,6 +183,10 @@ func TestNewSourceRejectsBadExcludes(t *testing.T) {
 	if err := os.WriteFile(bad, []byte("ok\n[\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	utf16 := filepath.Join(dir, "utf16")
+	if err := os.WriteFile(utf16, []byte("\xff\xfe*\x00.\x00l\x00o\x00g\x00\n\x00"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := arkfs.NewSource(root, arkfs.WithExcludeFile(missing)); err == nil ||
 		!strings.Contains(err.Error(), missing) {
@@ -199,6 +203,10 @@ func TestNewSourceRejectsBadExcludes(t *testing.T) {
 	if _, err := arkfs.NewSource(root, arkfs.WithExcludeFile(bad)); err == nil ||
 		!strings.Contains(err.Error(), bad+" line 2") {
 		t.Errorf("bad exclude file: err = %v, want one naming %s line 2", err, bad)
+	}
+	if _, err := arkfs.NewSource(root, arkfs.WithExcludeFile(utf16)); !errors.Is(err, path.ErrBadPattern) ||
+		!strings.Contains(err.Error(), utf16+" line 1") {
+		t.Errorf("UTF-16 exclude file: err = %v, want path.ErrBadPattern naming %s line 1", err, utf16)
 	}
 }
 
