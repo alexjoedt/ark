@@ -40,9 +40,6 @@ var _ ark.Backend = (*Backend)(nil)
 // syncFile flushes f on the server. Tests swap it to observe the calls.
 var syncFile = (*sftp.File).Sync
 
-// removeFile deletes name on the server. Tests swap it to observe the calls.
-var removeFile = (*sftp.Client).Remove
-
 // Config describes how to reach an SFTP server. Zero values fall back to the
 // documented defaults. It holds no secrets.
 type Config struct {
@@ -176,7 +173,7 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 	defer func() {
 		_ = f.Close()
 		if !renamed {
-			_ = removeFile(b.client, tmp)
+			_ = b.client.Remove(tmp)
 		}
 	}()
 

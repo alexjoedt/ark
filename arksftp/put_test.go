@@ -3,10 +3,12 @@ package arksftp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"path"
 	"strings"
+	"sync"
 	"testing"
 	"testing/iotest"
 
@@ -102,55 +104,107 @@ func TestPutAndDeleteSyncOnlyWhenAnnounced(t *testing.T) {
 	}
 }
 
+// cmdRecorder wraps the in-memory command handler: it records the remove
+// requests the server receives and can fail renames with a status that rename
+// does not retry.
+type cmdRecorder struct {
+	sftp.FileCmder
+	mu         sync.Mutex
+	removed    []string
+	failRename bool
+}
+
+func (c *cmdRecorder) Filecmd(r *sftp.Request) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch r.Method {
+	case "Remove":
+		c.removed = append(c.removed, r.Filepath)
+	case "Rename", "PosixRename":
+		if c.failRename {
+			return sftp.ErrSSHFxPermissionDenied
+		}
+	}
+	return c.FileCmder.Filecmd(r)
+}
+
+func (c *cmdRecorder) takeRemoved() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r := c.removed
+	c.removed = nil
+	return r
+}
+
 func TestPutRemovesTheTempFileOnlyOnFailure(t *testing.T) {
 	ctx := context.Background()
-	b := pipeBackend(t)
-	var removed []string
-	orig := removeFile
-	t.Cleanup(func() { removeFile = orig })
-	removeFile = func(c *sftp.Client, name string) error {
-		removed = append(removed, name)
-		return orig(c, name)
-	}
 	h := ark.Handle{Type: ark.BlobFile, Name: "abcdef0123456789"}
 
-	if err := b.Put(ctx, h, strings.NewReader("x")); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-	if len(removed) != 0 {
-		t.Errorf("successful Put removed %v, want no remove request", removed)
+	newBackend := func(t *testing.T, fsync, posixRename bool) (*Backend, *cmdRecorder) {
+		t.Helper()
+		srvConn, cliConn := net.Pipe()
+		hs := sftp.InMemHandler()
+		rec := &cmdRecorder{FileCmder: hs.FileCmd}
+		hs.FileCmd = rec
+		srv := sftp.NewRequestServer(srvConn, hs)
+		go func() { _ = srv.Serve() }()
+		client, err := sftp.NewClientPipe(cliConn, cliConn)
+		if err != nil {
+			t.Fatalf("NewClientPipe: %v", err)
+		}
+		t.Cleanup(func() { _ = client.Close(); _ = srv.Close() })
+		return &Backend{client: client, basePath: "/repo", fsync: fsync, posixRename: posixRename}, rec
 	}
 
-	for _, step := range []string{"write", "sync", "rename"} {
-		removed = removed[:0]
-		b.fsync = step == "sync"
-		var r io.Reader = strings.NewReader("y")
-		switch step {
-		case "write":
-			r = iotest.ErrReader(errors.New("read failed"))
-		case "sync":
-			syncFile = func(f *sftp.File) error {
-				if strings.HasPrefix(path.Base(f.Name()), tmpPrefix) {
-					return errors.New("sync failed")
+	for _, fsync := range []bool{false, true} {
+		for _, posix := range []bool{false, true} {
+			t.Run(fmt.Sprintf("success fsync=%v posix=%v", fsync, posix), func(t *testing.T) {
+				orig := syncFile
+				t.Cleanup(func() { syncFile = orig })
+				syncFile = func(*sftp.File) error { return nil }
+				b, rec := newBackend(t, fsync, posix)
+				if err := b.Put(ctx, h, strings.NewReader("x")); err != nil {
+					t.Fatalf("Put: %v", err)
 				}
-				return nil
-			}
-			t.Cleanup(func() { syncFile = (*sftp.File).Sync })
-		case "rename":
-			// the target is a non-empty directory, so the rename cannot succeed
-			p, _ := b.remotePath(h)
-			if err := b.client.Remove(p); err != nil {
-				t.Fatal(err)
-			}
-			if err := b.client.MkdirAll(path.Join(p, "d")); err != nil {
-				t.Fatal(err)
-			}
+				if got := rec.takeRemoved(); len(got) != 0 {
+					t.Errorf("successful Put sent remove requests for %v, want none", got)
+				}
+			})
 		}
-		if err := b.Put(ctx, h, r); err == nil {
-			t.Fatalf("%s: Put succeeded, want an error", step)
-		}
-		if len(removed) != 1 || !strings.HasPrefix(path.Base(removed[0]), tmpPrefix) {
-			t.Errorf("%s: removed %v, want exactly the temp file", step, removed)
-		}
+	}
+
+	failures := []struct {
+		name, errPrefix string
+		fsync, posix    bool
+	}{
+		{"write", "arksftp: write ", false, false},
+		{"sync", "arksftp: sync ", true, false},
+		{"rename", "arksftp: rename ", false, false},
+		{"posix rename", "arksftp: rename ", false, true},
+	}
+	for _, f := range failures {
+		t.Run(f.name, func(t *testing.T) {
+			orig := syncFile
+			t.Cleanup(func() { syncFile = orig })
+			syncFile = func(*sftp.File) error { return nil }
+			b, rec := newBackend(t, f.fsync, f.posix)
+			var r io.Reader = strings.NewReader("y")
+			switch f.name {
+			case "write":
+				r = iotest.ErrReader(errors.New("read failed"))
+			case "sync":
+				syncFile = func(*sftp.File) error { return errors.New("sync failed") }
+			default:
+				rec.failRename = true
+			}
+			err := b.Put(ctx, h, r)
+			if err == nil || !strings.HasPrefix(err.Error(), f.errPrefix) {
+				t.Fatalf("Put error %v, want prefix %q", err, f.errPrefix)
+			}
+			got := rec.takeRemoved()
+			if len(got) != 1 || !strings.HasPrefix(path.Base(got[0]), tmpPrefix) {
+				t.Errorf("removed %v, want exactly the temp file", got)
+			}
+		})
 	}
 }
