@@ -21,3 +21,4 @@ is replaced keeps its file; the new ADR is added and the old status becomes `sup
 | 0005 | [Sync barrier instead of per-object fsync](0005-sync-barrier-instead-of-per-object-fsync.md) | accepted | 2026-11-08 |
 | 0006 | [Threat model boundaries](0006-threat-model-boundaries.md) | accepted | 2026-11-08 |
 | 0007 | [Embedding hooks on Open](0007-embedding-hooks-on-open.md) | accepted | 2026-11-08 |
+| 0008 | [Path matcher package](0008-path-matcher-package.md) | accepted | 2026-11-11 |

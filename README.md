@@ -68,6 +68,8 @@ starting a second one. Restore, export and verify stream the snapshot: memory st
 | **Sources and sinks**, what gets backed up and restored | |
 | [`arkfs`](https://pkg.go.dev/github.com/alexjoedt/ark/arkfs) | A local directory, with hardlinks and xattrs |
 | [`arkdocker`](https://pkg.go.dev/github.com/alexjoedt/ark/arkdocker) | A Docker volume, and an `Engine` that stops and restarts the containers using it |
+| **Paths** | |
+| [`arkglob`](https://pkg.go.dev/github.com/alexjoedt/ark/arkglob) | Matches snapshot paths against exclude patterns with restic's rules |
 | **Testing** | |
 | [`arktest`](https://pkg.go.dev/github.com/alexjoedt/ark/arktest) | Conformance suites for your own backends, sources and sinks |
 
@@ -212,8 +214,8 @@ set. `--json` prints results on stdout and logs on stderr. `ark <command> --help
 From 1.0.0 on, ark follows semantic versioning. All three modules release together under one version
 number.
 
-- The exported API of `ark`, `arkfs`, `arklocal`, `arksftp`, `arkuri`, `arkmem`, `arktest`, `chunker`
-  and `arkdocker` follows the Go compatibility rules: minors add, only a major removes.
+- The exported API of `ark`, `arkfs`, `arkglob`, `arklocal`, `arksftp`, `arkuri`, `arkmem`, `arktest`,
+  `chunker` and `arkdocker` follows the Go compatibility rules: minors add, only a major removes.
 - Every 1.x release reads the v1 on-disk format. Minors may add optional fields.
 - CLI flags keep their meaning. `--json` output only gains fields.
 - `ark export` writes plain tar, and `ark import` reads it.
