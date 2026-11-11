@@ -68,6 +68,8 @@ starting a second one. Restore, export and verify stream the snapshot: memory st
 | **Sources and sinks**, what gets backed up and restored | |
 | [`arkfs`](https://pkg.go.dev/github.com/alexjoedt/ark/arkfs) | A local directory, with hardlinks and xattrs |
 | [`arkdocker`](https://pkg.go.dev/github.com/alexjoedt/ark/arkdocker) | A Docker volume, and an `Engine` that stops and restarts the containers using it |
+| **Paths** | |
+| [`arkglob`](https://pkg.go.dev/github.com/alexjoedt/ark/arkglob) | Matches snapshot paths against exclude patterns with restic's rules |
 | **Testing** | |
 | [`arktest`](https://pkg.go.dev/github.com/alexjoedt/ark/arktest) | Conformance suites for your own backends, sources and sinks |
 
@@ -181,6 +183,28 @@ ark forget --keep-daily 7 --keep-weekly 4 --prune
 ark check
 ```
 
+`ark backup` leaves paths out with `--exclude/-e PATTERN` and `--exclude-file FILE`, both
+repeatable, and `--exclude-cloud-files` skips files that exist only in the cloud (iCloud `.name.icloud`
+placeholders, and on macOS every dataless File Provider entry), so a backup does not download a whole
+cloud share. The patterns are stored with the snapshot; `ark inspect` shows them.
+
+```bash
+ark backup ~ -e node_modules -e '*.tmp' -e /Library --exclude-file ~/.config/ark/excludes --exclude-cloud-files
+```
+
+- Patterns use `path.Match` syntax per path component (`*`, `?`, `[...]`) plus `**` for any number of
+  components, with `/` as the separator on every OS.
+- A pattern without a leading `/` matches at any depth: `node_modules` leaves out every directory of that
+  name. A leading `/` anchors it at the backed-up directory, not at the file system root: `/Library`
+  matches only `~/Library` in the example.
+- A matched directory is left out with everything below it.
+- A comma stays part of the pattern: `-e 'a,b'` is one pattern.
+- An exclude file holds one pattern per line; surrounding whitespace is trimmed, blank lines and lines
+  starting with `#` are skipped.
+- Differences from restic: no `!` negation, no `$VAR` expansion in exclude files (`$` stays literal),
+  and `/` anchors at the backed-up directory instead of the file system root. A bad pattern exits with
+  the usage code 2 before the repository is opened.
+
 Docker volumes live under `ark docker`. The daemon comes from `--docker-host` or `DOCKER_HOST`.
 
 ```bash
@@ -212,8 +236,8 @@ set. `--json` prints results on stdout and logs on stderr. `ark <command> --help
 From 1.0.0 on, ark follows semantic versioning. All three modules release together under one version
 number.
 
-- The exported API of `ark`, `arkfs`, `arklocal`, `arksftp`, `arkuri`, `arkmem`, `arktest`, `chunker`
-  and `arkdocker` follows the Go compatibility rules: minors add, only a major removes.
+- The exported API of `ark`, `arkfs`, `arkglob`, `arklocal`, `arksftp`, `arkuri`, `arkmem`, `arktest`,
+  `chunker` and `arkdocker` follows the Go compatibility rules: minors add, only a major removes.
 - Every 1.x release reads the v1 on-disk format. Minors may add optional fields.
 - CLI flags keep their meaning. `--json` output only gains fields.
 - `ark export` writes plain tar, and `ark import` reads it.

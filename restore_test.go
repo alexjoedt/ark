@@ -111,12 +111,16 @@ func (b *countingBackend) peakConcurrent() int {
 
 // recordingSink notes the paths it received and can fail on one of them.
 type recordingSink struct {
+	meta    ark.SourceMeta
 	got     []string
 	failOn  string
 	written map[string]string
 }
 
-func (s *recordingSink) Open(context.Context, ark.SourceMeta) error { return nil }
+func (s *recordingSink) Open(_ context.Context, meta ark.SourceMeta) error {
+	s.meta = meta
+	return nil
+}
 
 func (s *recordingSink) Receive(_ context.Context, info ark.FileInfo, r io.Reader) error {
 	s.got = append(s.got, info.Path)

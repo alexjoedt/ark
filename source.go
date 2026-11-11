@@ -26,6 +26,10 @@ type SourceMeta struct {
 
 	// Labels holds arbitrary key-value metadata (e.g. docker_host, docker_version).
 	Labels map[string]string
+
+	// Excludes lists the patterns the source left paths out by. The snapshot
+	// records them so a reader can see what the backup does not hold.
+	Excludes []string
 }
 
 // FileType represents the type of a filesystem entry.

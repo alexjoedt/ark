@@ -25,7 +25,7 @@ func TestCommandSurface(t *testing.T) {
 			"insecure-no-password",
 		},
 		"init":      {"chunk-min", "chunk-avg", "chunk-max"},
-		"backup":    {"tag", "comment", "host", "parent", "name"},
+		"backup":    {"tag", "comment", "host", "parent", "name", "exclude", "exclude-file", "exclude-cloud-files"},
 		"restore":   {"path", "dry-run", "cache"},
 		"snapshots": {"name", "type", "tag", "host", "last"},
 		"ls":        {"long"},

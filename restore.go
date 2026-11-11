@@ -45,9 +45,10 @@ func (r *Repository) runRestore(
 	opts.progress(ProgressEvent{Phase: PhaseLoad})
 
 	meta := SourceMeta{
-		Name:   m.SourceName,
-		Type:   m.SourceType,
-		Labels: m.SourceMeta,
+		Name:     m.SourceName,
+		Type:     m.SourceType,
+		Labels:   m.SourceMeta,
+		Excludes: m.Excludes,
 	}
 	if err := sink.Open(ctx, meta); err != nil {
 		return nil, fmt.Errorf("restore: sink rejected snapshot: %w", err)

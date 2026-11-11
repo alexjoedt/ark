@@ -25,6 +25,7 @@ type manifest struct {
 	SourceName string            `json:"source_name"`
 	SourceType SourceType        `json:"source_type"`
 	SourceMeta map[string]string `json:"source_meta,omitempty"`
+	Excludes   []string          `json:"excludes,omitempty"`
 	Tags       []string          `json:"tags,omitempty"`
 	Host       string            `json:"host"`
 	Comment    string            `json:"comment,omitempty"`
@@ -191,8 +192,9 @@ func manifestToSnapshot(m *manifest) *Snapshot {
 		SourceName: m.SourceName,
 		SourceType: m.SourceType,
 		SourceMeta: maps.Clone(m.SourceMeta),
+		Excludes:   append([]string(nil), m.Excludes...),
 		Host:       m.Host,
-		Tags:       m.Tags,
+		Tags:       append([]string(nil), m.Tags...),
 		Comment:    m.Comment,
 		CreatedAt:  m.CreatedAt,
 		ParentID:   m.ParentID,
