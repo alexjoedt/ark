@@ -79,6 +79,7 @@ func RunBackendTests(t *testing.T, factory func(t *testing.T) ark.Backend) {
 	t.Run("PutIsAtomic", func(t *testing.T) { testPutIsAtomic(t, newBackend) })
 	t.Run("PutEmptyObject", func(t *testing.T) { testPutEmptyObject(t, newBackend) })
 	t.Run("MissingObject", func(t *testing.T) { testMissingObject(t, newBackend) })
+	t.Run("GetRange", func(t *testing.T) { testGetRange(t, newBackend) })
 	t.Run("Delete", func(t *testing.T) { testDelete(t, newBackend) })
 	t.Run("ListSizes", func(t *testing.T) { testListSizes(t, newBackend) })
 	t.Run("ListStopsOnError", func(t *testing.T) { testListStopsOnError(t, newBackend) })
@@ -320,6 +321,73 @@ func testMissingObject(t *testing.T, newBackend func(*testing.T) ark.Backend) {
 	for _, typ := range conformanceTypes {
 		if got := list(t, b, typ); len(got) != 0 {
 			t.Errorf("List %v on an empty backend = %v, want nothing", typ, got)
+		}
+	}
+}
+
+// testGetRange checks that a range read returns exactly the bytes asked for and
+// never a short result.
+func testGetRange(t *testing.T, newBackend func(*testing.T) ark.Backend) {
+	ctx := context.Background()
+	b := newBackend(t)
+	payload := make([]byte, 100_000)
+	for i := range payload {
+		payload[i] = byte(i*7 + i/251)
+	}
+	size := int64(len(payload))
+	for _, typ := range []ark.HandleType{ark.BlobFile, ark.TreeFile} {
+		h := ark.Handle{Type: typ, Name: objectName(typ, "range")}
+		put(t, b, h, payload)
+
+		for _, r := range []struct {
+			name           string
+			offset, length int64
+		}{
+			{"start", 0, 1000},
+			{"middle", 40_000, 12_345},
+			{"end", size - 777, 777},
+			{"whole", 0, size},
+			{"zero length", 500, 0},
+			{"zero length at the end", size, 0},
+		} {
+			got, err := b.GetRange(ctx, h, r.offset, r.length)
+			if err != nil {
+				t.Errorf("%v %s: GetRange(%d, %d): %v", typ, r.name, r.offset, r.length, err)
+				continue
+			}
+			if want := payload[r.offset : r.offset+r.length]; !bytes.Equal(got, want) {
+				t.Errorf("%v %s: GetRange(%d, %d) = %d bytes %q, want %d bytes %q",
+					typ, r.name, r.offset, r.length, len(got), truncate(got), len(want), truncate(want))
+			}
+		}
+
+		for _, r := range []struct {
+			name           string
+			offset, length int64
+		}{
+			{"past the end", size - 10, 11},
+			{"starting past the end", size + 1, 5},
+			{"zero length past the end", size + 1, 0},
+		} {
+			got, err := b.GetRange(ctx, h, r.offset, r.length)
+			if !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Errorf("%v %s: GetRange(%d, %d) = %d bytes, %v; want io.ErrUnexpectedEOF",
+					typ, r.name, r.offset, r.length, len(got), err)
+			}
+		}
+
+		for _, r := range [][2]int64{{-1, 5}, {0, -1}} {
+			if _, err := b.GetRange(ctx, h, r[0], r[1]); err == nil || errors.Is(err, ark.ErrNotFound) {
+				t.Errorf("%v: GetRange(%d, %d) = %v, want an invalid range error", typ, r[0], r[1], err)
+			}
+		}
+
+		missing := ark.Handle{Type: typ, Name: objectName(typ, "range-absent")}
+		for _, length := range []int64{0, 10} {
+			if _, err := b.GetRange(ctx, missing, 0, length); !errors.Is(err, ark.ErrNotFound) {
+				t.Errorf("%v: GetRange of an absent object, length %d = %v, want ark.ErrNotFound",
+					typ, length, err)
+			}
 		}
 	}
 }

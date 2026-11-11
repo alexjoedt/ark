@@ -97,8 +97,8 @@ b := arkmem.New() // its objects are gone on Close
 key file is unlocked with `ARK_SFTP_KEY_PASSPHRASE`. Secrets never go into `Config` or a URI.
 `arkuri` takes the non-secret options as query parameters: `known_hosts`, `identity` and `insecure`.
 
-Anything else, such as S3 or a NAS API, is an `ark.Backend`: seven methods (`Put`, `Get`, `Exists`,
-`Delete`, `List`, `Stat`, `Close`). The suite in `arktest` checks the same contract the built-in
+Anything else, such as S3 or a NAS API, is an `ark.Backend`: nine methods (`Put`, `Get`, `GetRange`,
+`Exists`, `Delete`, `Sync`, `List`, `Stat`, `Close`). The suite in `arktest` checks the same contract the built-in
 backends pass:
 
 ```go

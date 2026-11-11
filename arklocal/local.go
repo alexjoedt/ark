@@ -129,6 +129,49 @@ func (b *Backend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	f, err := b.open(h)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// GetRange reads length bytes of the object stored under h at offset.
+func (b *Backend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if offset < 0 || length < 0 {
+		return nil, fmt.Errorf("arklocal: invalid range %d+%d of %s", offset, length, h.Name)
+	}
+	if length == 0 {
+		info, err := b.Stat(ctx, h)
+		if err != nil {
+			return nil, err
+		}
+		if offset > info.Size {
+			return nil, fmt.Errorf("arklocal: range %d+0 of %s (%d bytes): %w",
+				offset, h.Name, info.Size, io.ErrUnexpectedEOF)
+		}
+		return []byte{}, nil
+	}
+	f, err := b.open(h)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	buf := make([]byte, length)
+	if n, err := f.ReadAt(buf, offset); n < len(buf) {
+		if err == nil || errors.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
+		}
+		return nil, fmt.Errorf("arklocal: range %d+%d of %s: %w", offset, length, h.Name, err)
+	}
+	return buf, nil
+}
+
+// open opens the object stored under h for reading.
+func (b *Backend) open(h ark.Handle) (*os.File, error) {
 	p, err := b.path(h)
 	if err != nil {
 		return nil, err

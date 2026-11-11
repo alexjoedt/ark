@@ -91,6 +91,14 @@ type Backend interface {
 	// Callers must close the returned ReadCloser.
 	Get(ctx context.Context, h Handle) (io.ReadCloser, error)
 
+	// GetRange returns exactly length bytes of the object stored under h,
+	// starting at offset, without reading the bytes before offset. A zero
+	// length returns no bytes once the object exists. A range that ends past
+	// the object returns an error wrapping [io.ErrUnexpectedEOF], never a
+	// short result; a missing object returns [ErrNotFound]; a negative offset
+	// or length is an error.
+	GetRange(ctx context.Context, h Handle, offset, length int64) ([]byte, error)
+
 	// Exists returns true if the object identified by h is present.
 	Exists(ctx context.Context, h Handle) (bool, error)
 

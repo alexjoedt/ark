@@ -49,6 +49,19 @@ func (b *stubBackend) Get(_ context.Context, h Handle) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
+func (b *stubBackend) GetRange(_ context.Context, h Handle, offset, length int64) ([]byte, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	data, ok := b.objects[stubKey(h)]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, h.Name)
+	}
+	if offset < 0 || length < 0 || offset > int64(len(data)) || length > int64(len(data))-offset {
+		return nil, io.ErrUnexpectedEOF
+	}
+	return bytes.Clone(data[offset : offset+length]), nil
+}
+
 func (b *stubBackend) Exists(_ context.Context, h Handle) (bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

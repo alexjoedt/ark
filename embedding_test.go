@@ -19,8 +19,8 @@ import (
 // the reference its Stats are held against.
 type callCounter struct {
 	ark.Backend
-	put, get, exists, del, list, stat, sync atomic.Int64
-	putBytes, getBytes                      atomic.Int64
+	put, get, getRange, exists, del, list, stat, sync atomic.Int64
+	putBytes, getBytes, getRangeBytes                 atomic.Int64
 }
 
 type countedReader struct {
@@ -46,6 +46,13 @@ func (c *callCounter) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, err
 		return nil, err
 	}
 	return countedReader{rc, &c.getBytes}, nil
+}
+
+func (c *callCounter) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
+	c.getRange.Add(1)
+	data, err := c.Backend.GetRange(ctx, h, offset, length)
+	c.getRangeBytes.Add(int64(len(data)))
+	return data, err
 }
 
 func (c *callCounter) Exists(ctx context.Context, h ark.Handle) (bool, error) {
@@ -75,25 +82,27 @@ func (c *callCounter) Stat(ctx context.Context, h ark.Handle) (ark.BlobInfo, err
 
 func (c *callCounter) callsAndBytes() map[string][2]int64 {
 	return map[string][2]int64{
-		"Put":    {c.put.Load(), c.putBytes.Load()},
-		"Get":    {c.get.Load(), c.getBytes.Load()},
-		"Exists": {c.exists.Load(), 0},
-		"Delete": {c.del.Load(), 0},
-		"Sync":   {c.sync.Load(), 0},
-		"List":   {c.list.Load(), 0},
-		"Stat":   {c.stat.Load(), 0},
+		"Put":      {c.put.Load(), c.putBytes.Load()},
+		"Get":      {c.get.Load(), c.getBytes.Load()},
+		"GetRange": {c.getRange.Load(), c.getRangeBytes.Load()},
+		"Exists":   {c.exists.Load(), 0},
+		"Delete":   {c.del.Load(), 0},
+		"Sync":     {c.sync.Load(), 0},
+		"List":     {c.list.Load(), 0},
+		"Stat":     {c.stat.Load(), 0},
 	}
 }
 
 func statsCallsAndBytes(s ark.BackendStats) map[string][2]int64 {
 	return map[string][2]int64{
-		"Put":    {s.Put.Calls, s.Put.Bytes},
-		"Get":    {s.Get.Calls, s.Get.Bytes},
-		"Exists": {s.Exists.Calls, s.Exists.Bytes},
-		"Delete": {s.Delete.Calls, s.Delete.Bytes},
-		"Sync":   {s.Sync.Calls, s.Sync.Bytes},
-		"List":   {s.List.Calls, s.List.Bytes},
-		"Stat":   {s.Stat.Calls, s.Stat.Bytes},
+		"Put":      {s.Put.Calls, s.Put.Bytes},
+		"Get":      {s.Get.Calls, s.Get.Bytes},
+		"GetRange": {s.GetRange.Calls, s.GetRange.Bytes},
+		"Exists":   {s.Exists.Calls, s.Exists.Bytes},
+		"Delete":   {s.Delete.Calls, s.Delete.Bytes},
+		"Sync":     {s.Sync.Calls, s.Sync.Bytes},
+		"List":     {s.List.Calls, s.List.Bytes},
+		"Stat":     {s.Stat.Calls, s.Stat.Bytes},
 	}
 }
 

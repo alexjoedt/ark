@@ -267,8 +267,31 @@ func TestInstrumentedBackendCountsWhatTheBackendSaw(t *testing.T) {
 
 func methodStats(s ark.BackendStats) map[string]ark.MethodStats {
 	return map[string]ark.MethodStats{
-		"Put": s.Put, "Get": s.Get, "Exists": s.Exists, "Delete": s.Delete,
+		"Put": s.Put, "Get": s.Get, "GetRange": s.GetRange, "Exists": s.Exists, "Delete": s.Delete,
 		"List": s.List, "Stat": s.Stat, "Sync": s.Sync,
+	}
+}
+
+func TestInstrumentedBackendCountsRangeReadsApartFromGets(t *testing.T) {
+	ctx := context.Background()
+	ib := ark.Instrument(arkmem.New())
+	h := ark.Handle{Type: ark.TreeFile, Name: "pack"}
+	if err := ib.Put(ctx, h, strings.NewReader("0123456789")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if _, err := ib.GetRange(ctx, h, 2, 5); err != nil {
+		t.Fatalf("GetRange: %v", err)
+	}
+	if _, err := ib.GetRange(ctx, h, 8, 5); err == nil {
+		t.Fatal("GetRange past the end succeeded")
+	}
+
+	s := ib.Stats()
+	if got := (tally{calls: s.GetRange.Calls, errors: s.GetRange.Errors, bytes: s.GetRange.Bytes}); got != (tally{2, 1, 5}) {
+		t.Errorf("GetRange stats %+v, want 2 calls, 1 error, 5 bytes", got)
+	}
+	if s.Get != (ark.MethodStats{}) {
+		t.Errorf("Get stats %+v, want none after range reads only", s.Get)
 	}
 }
 
