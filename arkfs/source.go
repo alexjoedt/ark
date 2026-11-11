@@ -39,6 +39,9 @@ type fileSource struct {
 	root    string
 	meta    ark.SourceMeta
 	exclude *arkglob.Matcher
+
+	// dataless is set by WithExcludeCloudFiles; a test swaps it.
+	dataless func(os.FileInfo) bool
 }
 
 // SourceOption configures NewSource.
@@ -72,6 +75,35 @@ func WithExcludeFile(path string) SourceOption {
 		}
 		return nil
 	}
+}
+
+// WithExcludeCloudFiles leaves out files that exist only in the cloud, because
+// reading one makes the system download it and a backup would pull a whole
+// cloud share onto the disk. It skips regular files named like ".name.icloud"
+// (the iCloud Drive placeholders) on Linux and macOS and, on macOS, every
+// entry whose st_flags carry SF_DATALESS (File Provider shares). A dataless
+// directory is skipped with its subtree and never listed. Skipped entries
+// appear in no stats counter and the snapshot does not record the option.
+func WithExcludeCloudFiles() SourceOption {
+	return func(s *fileSource) error {
+		s.dataless = dataless
+		return nil
+	}
+}
+
+// skipCloud reports whether the entry is a cloud-only placeholder.
+func (s *fileSource) skipCloud(d os.DirEntry) (bool, error) {
+	if s.dataless == nil {
+		return false, nil
+	}
+	if name := d.Name(); d.Type().IsRegular() && strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".icloud") {
+		return true, nil
+	}
+	fi, err := d.Info()
+	if err != nil {
+		return false, err
+	}
+	return s.dataless(fi), nil
 }
 
 // NewSource creates an ark.Source that walks the directory tree rooted at root.
@@ -155,6 +187,15 @@ func (s *fileSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 		// Before any stat or xattr read, and before the hardlink map learns
 		// the entry, so a later name of an excluded file is stored as content.
 		if s.exclude != nil && s.exclude.Match(rel) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if skip, err := s.skipCloud(d); err != nil {
+			return fmt.Errorf("arkfs: info %s: %w", path, err)
+		} else if skip {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
