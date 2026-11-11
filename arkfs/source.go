@@ -40,7 +40,8 @@ type fileSource struct {
 	meta    ark.SourceMeta
 	exclude *arkglob.Matcher
 
-	// dataless is set by WithExcludeCloudFiles; a test swaps it.
+	skipCloud bool
+	// dataless is the per-OS check, nil where none exists; a test swaps it.
 	dataless func(os.FileInfo) bool
 }
 
@@ -86,24 +87,32 @@ func WithExcludeFile(path string) SourceOption {
 // appear in no stats counter and the snapshot does not record the option.
 func WithExcludeCloudFiles() SourceOption {
 	return func(s *fileSource) error {
-		s.dataless = dataless
+		s.skipCloud = true
 		return nil
 	}
 }
 
-// skipCloud reports whether the entry is a cloud-only placeholder.
-func (s *fileSource) skipCloud(d os.DirEntry) (bool, error) {
-	if s.dataless == nil {
-		return false, nil
+// cloudOnly reports whether the entry is a cloud-only placeholder. It returns
+// the entry's info when it had to read it, so the caller reads it only once.
+func (s *fileSource) cloudOnly(d os.DirEntry) (os.FileInfo, bool, error) {
+	if !s.skipCloud {
+		return nil, false, nil
 	}
-	if name := d.Name(); d.Type().IsRegular() && strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".icloud") {
-		return true, nil
+	name := d.Name()
+	// ".<stem>.icloud" with a non-empty stem, so a real ".icloud" is kept.
+	placeholder := len(name) > len("..icloud") &&
+		strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".icloud")
+	if placeholder && d.Type().IsRegular() {
+		return nil, true, nil
+	}
+	if s.dataless == nil {
+		return nil, false, nil
 	}
 	fi, err := d.Info()
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
-	return s.dataless(fi), nil
+	return fi, s.dataless(fi), nil
 }
 
 // NewSource creates an ark.Source that walks the directory tree rooted at root.
@@ -127,6 +136,7 @@ func NewSource(root string, opts ...SourceOption) (ark.Source, error) {
 			Name: abs,
 			Type: ark.SourceTypeFile,
 		},
+		dataless: dataless,
 	}
 	for _, opt := range opts {
 		if err := opt(s); err != nil {
@@ -193,31 +203,34 @@ func (s *fileSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 			return nil
 		}
 
-		if skip, err := s.skipCloud(d); err != nil {
+		fi, skip, err := s.cloudOnly(d)
+		if err != nil {
 			return fmt.Errorf("arkfs: info %s: %w", path, err)
-		} else if skip {
+		}
+		if skip {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-
-		// Symlinks: filepath.WalkDir uses Lstat, so d.Type() has ModeSymlink.
-		if d.Type()&os.ModeSymlink != 0 {
-			linfo, err := os.Lstat(path)
-			if err != nil {
-				return fmt.Errorf("arkfs: lstat %s: %w", path, err)
+		if fi == nil {
+			// An lstat: WalkDir does not follow symlinks.
+			if fi, err = d.Info(); err != nil {
+				return fmt.Errorf("arkfs: info %s: %w", path, err)
 			}
+		}
+
+		if d.Type()&os.ModeSymlink != 0 {
 			target, err := os.Readlink(path)
 			if err != nil {
 				return fmt.Errorf("arkfs: readlink %s: %w", path, err)
 			}
-			uid, gid := fileOwner(linfo)
+			uid, gid := fileOwner(fi)
 			return fn(ark.FileInfo{
 				Path:     rel,
 				Type:     ark.FileTypeSymlink,
-				Mode:     linfo.Mode().Perm(),
-				ModTime:  linfo.ModTime(),
+				Mode:     fi.Mode().Perm(),
+				ModTime:  fi.ModTime(),
 				UID:      uid,
 				GID:      gid,
 				LinkDest: target,
@@ -226,10 +239,6 @@ func (s *fileSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 
 		// Directories.
 		if d.IsDir() {
-			fi, err := d.Info()
-			if err != nil {
-				return fmt.Errorf("arkfs: info %s: %w", path, err)
-			}
 			xattrs, err := readXattrs(path)
 			if err != nil {
 				return err
@@ -244,11 +253,6 @@ func (s *fileSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 				GID:     gid,
 				Xattrs:  xattrs,
 			}, nil)
-		}
-
-		fi, err := d.Info()
-		if err != nil {
-			return fmt.Errorf("arkfs: info %s: %w", path, err)
 		}
 
 		uid, gid := fileOwner(fi)

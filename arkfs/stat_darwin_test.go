@@ -4,7 +4,6 @@ import (
 	"os"
 	"syscall"
 	"testing"
-	"time"
 )
 
 type fakeInfo struct {
@@ -12,12 +11,7 @@ type fakeInfo struct {
 	sys any
 }
 
-func (f fakeInfo) Sys() any         { return f.sys }
-func (fakeInfo) Name() string       { return "f" }
-func (fakeInfo) Size() int64        { return 0 }
-func (fakeInfo) Mode() os.FileMode  { return 0o644 }
-func (fakeInfo) ModTime() time.Time { return time.Time{} }
-func (fakeInfo) IsDir() bool        { return false }
+func (f fakeInfo) Sys() any { return f.sys }
 
 func TestDatalessReadsStFlags(t *testing.T) {
 	for _, tt := range []struct {

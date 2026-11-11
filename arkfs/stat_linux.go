@@ -8,4 +8,6 @@ import (
 
 func changeTime(stat *syscall.Stat_t) time.Time { return time.Unix(stat.Ctim.Unix()) }
 
-func dataless(os.FileInfo) bool { return false }
+// dataless is nil: Linux has no dataless files, so the walk reads no info for
+// the cloud check.
+var dataless func(os.FileInfo) bool
