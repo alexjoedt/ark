@@ -429,7 +429,7 @@ func TestSnapshotCarriesTheSourceExcludes(t *testing.T) {
 		excludes:   []string{"*.tmp", "/cache"},
 	}
 	repo := openRepo(t, arkmem.New())
-	snap, err := repo.Backup(ctx, src)
+	snap, err := repo.Backup(ctx, src, ark.WithTags("t"))
 	if err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
@@ -438,15 +438,30 @@ func TestSnapshotCarriesTheSourceExcludes(t *testing.T) {
 		t.Fatalf("Backup returned excludes %q, want %q", snap.Excludes, want)
 	}
 	snap.Excludes[0] = "changed"
+	snap.Tags[0] = "changed"
 
 	got, err := repo.Snapshot(ctx, snap.ID)
-	if err != nil || !slices.Equal(got.Excludes, want) {
-		t.Fatalf("Snapshot excludes %q, want %q: %v", got.Excludes, want, err)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if !slices.Equal(got.Excludes, want) || !slices.Equal(got.Tags, []string{"t"}) {
+		t.Fatalf("Snapshot excludes %q tags %q, want %q and [t]", got.Excludes, got.Tags, want)
 	}
 	got.Excludes[0] = "changed"
 	all, err := repo.Snapshots(ctx, ark.SnapshotFilter{})
-	if err != nil || len(all) != 1 || !slices.Equal(all[0].Excludes, want) {
-		t.Fatalf("Snapshots excludes %v, want %q: %v", all, want, err)
+	if err != nil {
+		t.Fatalf("Snapshots: %v", err)
+	}
+	if len(all) != 1 || !slices.Equal(all[0].Excludes, want) {
+		t.Fatalf("Snapshots %v, want one with excludes %q", all, want)
+	}
+
+	sink := &recordingSink{}
+	if _, err := repo.Restore(ctx, snap.ID, sink); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if !slices.Equal(sink.meta.Excludes, want) {
+		t.Fatalf("sink opened with excludes %q, want %q", sink.meta.Excludes, want)
 	}
 
 	var archive bytes.Buffer
@@ -454,15 +469,37 @@ func TestSnapshotCarriesTheSourceExcludes(t *testing.T) {
 		t.Fatalf("Export: %v", err)
 	}
 	imported, err := openRepo(t, arkmem.New()).Import(ctx, &archive)
-	if err != nil || !slices.Equal(imported.Excludes, want) {
-		t.Fatalf("imported excludes %q, want %q: %v", imported.Excludes, want, err)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if !slices.Equal(imported.Excludes, want) {
+		t.Fatalf("imported excludes %q, want %q", imported.Excludes, want)
 	}
 }
 
 func TestSnapshotWithoutExcludesHasNone(t *testing.T) {
-	repo := openRepo(t, arkmem.New())
-	snap, err := repo.Backup(context.Background(), newStatSource("app", map[string]statFile{"a": {content: "a"}}))
-	if err != nil || snap.Excludes != nil {
-		t.Fatalf("excludes %q, want nil: %v", snap.Excludes, err)
+	ctx := context.Background()
+	for name, excludes := range map[string][]string{"nil": nil, "empty": {}} {
+		t.Run(name, func(t *testing.T) {
+			repo := openRepo(t, arkmem.New())
+			src := excludingSource{
+				statSource: newStatSource("app", map[string]statFile{"a": {content: "a"}}),
+				excludes:   excludes,
+			}
+			snap, err := repo.Backup(ctx, src)
+			if err != nil {
+				t.Fatalf("Backup: %v", err)
+			}
+			if snap.Excludes != nil {
+				t.Fatalf("Backup excludes %q, want nil", snap.Excludes)
+			}
+			got, err := repo.Snapshot(ctx, snap.ID)
+			if err != nil {
+				t.Fatalf("Snapshot: %v", err)
+			}
+			if got.Excludes != nil {
+				t.Fatalf("Snapshot excludes %q, want nil", got.Excludes)
+			}
+		})
 	}
 }

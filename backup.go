@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -44,7 +45,7 @@ func (r *Repository) runBackup(
 		CreatedAt:  now,
 		SourceName: meta.Name,
 		SourceType: meta.Type,
-		SourceMeta: meta.Labels,
+		SourceMeta: maps.Clone(meta.Labels),
 		Excludes:   slices.Clone(meta.Excludes),
 		Tags:       opts.tags,
 		Host:       opts.host,
