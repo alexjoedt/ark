@@ -112,6 +112,12 @@ func (b *tallyBackend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, er
 	return &tallyReader{r: r, b: b}, nil
 }
 
+func (b *tallyBackend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
+	data, err := b.Backend.GetRange(ctx, h, offset, length)
+	b.note("GetRange", int64(len(data)), err, true)
+	return data, err
+}
+
 func (b *tallyBackend) Exists(ctx context.Context, h ark.Handle) (bool, error) {
 	ok, err := b.Backend.Exists(ctx, h)
 	b.note("Exists", 0, err, true)

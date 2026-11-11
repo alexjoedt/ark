@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/internal/rangeread"
 )
 
 // tmpPrefix marks in-flight objects written by Put. List skips them.
@@ -141,30 +142,19 @@ func (b *Backend) GetRange(ctx context.Context, h ark.Handle, offset, length int
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if _, err := b.path(h); err != nil {
+		return nil, err
+	}
 	if offset < 0 || length < 0 {
 		return nil, fmt.Errorf("arklocal: invalid range %d+%d of %s", offset, length, h.Name)
-	}
-	if length == 0 {
-		info, err := b.Stat(ctx, h)
-		if err != nil {
-			return nil, err
-		}
-		if offset > info.Size {
-			return nil, fmt.Errorf("arklocal: range %d+0 of %s (%d bytes): %w",
-				offset, h.Name, info.Size, io.ErrUnexpectedEOF)
-		}
-		return []byte{}, nil
 	}
 	f, err := b.open(h)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	buf := make([]byte, length)
-	if n, err := f.ReadAt(buf, offset); n < len(buf) {
-		if err == nil || errors.Is(err, io.EOF) {
-			err = io.ErrUnexpectedEOF
-		}
+	buf, err := rangeread.Read(f, offset, length)
+	if err != nil {
 		return nil, fmt.Errorf("arklocal: range %d+%d of %s: %w", offset, length, h.Name, err)
 	}
 	return buf, nil

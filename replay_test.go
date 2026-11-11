@@ -156,7 +156,7 @@ func TestReplayedKeyFileOpensUnderTheOldPassword(t *testing.T) {
 	}
 }
 
-// markerBackend keeps a copy of every marker written and counts chunk Gets:
+// markerBackend keeps a copy of every marker written and counts chunk reads:
 // a backup reads chunks it reuses only in repair mode.
 type markerBackend struct {
 	ark.Backend
@@ -187,6 +187,15 @@ func (b *markerBackend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, e
 		b.mu.Unlock()
 	}
 	return b.Backend.Get(ctx, h)
+}
+
+func (b *markerBackend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
+	if h.Type == ark.BlobFile {
+		b.mu.Lock()
+		b.chunkGets++
+		b.mu.Unlock()
+	}
+	return b.Backend.GetRange(ctx, h, offset, length)
 }
 
 func (b *markerBackend) takeMarkers() map[string][]byte {

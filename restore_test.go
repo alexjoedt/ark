@@ -67,23 +67,33 @@ func newCountingBackend() *countingBackend {
 }
 
 func (b *countingBackend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error) {
-	if h.Type != ark.BlobFile {
-		return b.Backend.Get(ctx, h)
+	if h.Type == ark.BlobFile {
+		defer b.enter(h.Name)()
 	}
+	return b.Backend.Get(ctx, h)
+}
+
+func (b *countingBackend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
+	if h.Type == ark.BlobFile {
+		defer b.enter(h.Name)()
+	}
+	return b.Backend.GetRange(ctx, h, offset, length)
+}
+
+// enter counts one chunk read as running until the returned func is called.
+func (b *countingBackend) enter(name string) (leave func()) {
 	b.mu.Lock()
-	b.gets[h.Name]++
+	b.gets[name]++
 	b.inABlob++
 	if b.inABlob > b.peak {
 		b.peak = b.inABlob
 	}
 	b.mu.Unlock()
-
-	defer func() {
+	return func() {
 		b.mu.Lock()
 		b.inABlob--
 		b.mu.Unlock()
-	}()
-	return b.Backend.Get(ctx, h)
+	}
 }
 
 func (b *countingBackend) reset() {

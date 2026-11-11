@@ -15,13 +15,22 @@ func (b *Backend) DisablePosixRename() { b.posixRename = false }
 // RemoveRoot deletes b's repository directory and everything in it.
 func (b *Backend) RemoveRoot() error { return b.client.RemoveAll(b.basePath) }
 
+// AwaitRead is the wait of GetRange on its read.
+var AwaitRead = awaitRead
+
 // CountReceived swaps b's sftp client for one on a new session of the same
 // SSH connection and returns the count of sftp bytes the server sends on it.
-func (b *Backend) CountReceived() (*atomic.Int64, error) {
+// Call it before anything else uses b: the swap is not synchronized.
+func (b *Backend) CountReceived() (_ *atomic.Int64, err error) {
 	s, err := b.conn.NewSession()
 	if err != nil {
 		return nil, fmt.Errorf("new session: %w", err)
 	}
+	defer func() {
+		if err != nil {
+			_ = s.Close()
+		}
+	}()
 	if err := s.RequestSubsystem("sftp"); err != nil {
 		return nil, fmt.Errorf("request sftp: %w", err)
 	}

@@ -530,6 +530,15 @@ func (b *blobGetBackend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, 
 	return b.Backend.Get(ctx, h)
 }
 
+func (b *blobGetBackend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
+	if h.Type == ark.BlobFile {
+		if err := b.onGet(); err != nil {
+			return nil, err
+		}
+	}
+	return b.Backend.GetRange(ctx, h, offset, length)
+}
+
 func TestVerifyReturnsAChunkReadFailure(t *testing.T) {
 	ctx := context.Background()
 	flaky := errors.New("flaky backend")

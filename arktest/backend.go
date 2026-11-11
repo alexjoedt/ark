@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -368,6 +369,9 @@ func testGetRange(t *testing.T, newBackend func(*testing.T) ark.Backend) {
 			{"past the end", size - 10, 11},
 			{"starting past the end", size + 1, 5},
 			{"zero length past the end", size + 1, 0},
+			{"huge length", 10, 1 << 62},
+			{"huge offset", 1 << 62, 5},
+			{"overflowing sum", math.MaxInt64 - 5, 10},
 		} {
 			got, err := b.GetRange(ctx, h, r.offset, r.length)
 			if !errors.Is(err, io.ErrUnexpectedEOF) {

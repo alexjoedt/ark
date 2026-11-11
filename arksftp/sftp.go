@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/internal/rangeread"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
@@ -323,38 +324,51 @@ func (b *Backend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error) 
 }
 
 // GetRange reads length bytes of the object stored under h at offset with
-// ReadAt on one handle, so the bytes before offset never cross the wire.
+// ReadAt on one handle, so the bytes before offset never cross the wire. It
+// returns as soon as ctx ends, see [awaitRead].
 func (b *Backend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := b.remotePath(h); err != nil {
 		return nil, err
 	}
 	if offset < 0 || length < 0 {
 		return nil, fmt.Errorf("arksftp: invalid range %d+%d of %s", offset, length, h.Name)
 	}
-	if length == 0 {
-		info, err := b.Stat(ctx, h)
+	return awaitRead(ctx, func() ([]byte, error) {
+		f, err := b.open(h)
 		if err != nil {
 			return nil, err
 		}
-		if offset > info.Size {
-			return nil, fmt.Errorf("arksftp: range %d+0 of %s (%d bytes): %w",
-				offset, h.Name, info.Size, io.ErrUnexpectedEOF)
+		defer f.Close()
+		buf, err := rangeread.Read(f, offset, length)
+		if err != nil {
+			return nil, fmt.Errorf("arksftp: range %d+%d of %s: %w", offset, length, h.Name, err)
 		}
-		return []byte{}, nil
+		return buf, nil
+	})
+}
+
+// awaitRead runs read and returns its result, or ctx's error as soon as ctx
+// ends. The sftp client cannot abort a request in flight, so a read left
+// behind that way ends on its own or with the connection.
+func awaitRead(ctx context.Context, read func() ([]byte, error)) ([]byte, error) {
+	type result struct {
+		buf []byte
+		err error
 	}
-	f, err := b.open(h)
-	if err != nil {
-		return nil, err
+	done := make(chan result, 1)
+	go func() {
+		buf, err := read()
+		done <- result{buf, err}
+	}()
+	select {
+	case r := <-done:
+		return r.buf, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-	defer f.Close()
-	buf := make([]byte, length)
-	if n, err := f.ReadAt(buf, offset); n < len(buf) {
-		if err == nil || errors.Is(err, io.EOF) {
-			err = io.ErrUnexpectedEOF
-		}
-		return nil, fmt.Errorf("arksftp: range %d+%d of %s: %w", offset, length, h.Name, err)
-	}
-	return buf, nil
 }
 
 // open opens the object stored under h for reading.

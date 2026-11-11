@@ -112,8 +112,8 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		name string
 		ark.MethodStats
 	}{
-		{"put", s.Put}, {"get", s.Get}, {"exists", s.Exists}, {"delete", s.Delete},
-		{"list", s.List}, {"stat", s.Stat}, {"sync", s.Sync},
+		{"put", s.Put}, {"get", s.Get}, {"getrange", s.GetRange}, {"exists", s.Exists},
+		{"delete", s.Delete}, {"list", s.List}, {"stat", s.Stat}, {"sync", s.Sync},
 	} {
 		logger.InfoContext(ctx, "backend", "method", m.name, "calls", m.Calls, "errors", m.Errors,
 			"duration", m.Duration, "bytes", m.Bytes)

@@ -27,6 +27,11 @@ func (b *ioBackend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error
 	return b.Backend.Get(ctx, h)
 }
 
+func (b *ioBackend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
+	b.calls.Add(1)
+	return b.Backend.GetRange(ctx, h, offset, length)
+}
+
 func (b *ioBackend) Exists(ctx context.Context, h ark.Handle) (bool, error) {
 	b.calls.Add(1)
 	return b.Backend.Exists(ctx, h)
