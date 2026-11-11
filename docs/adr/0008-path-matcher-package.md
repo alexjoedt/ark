@@ -24,7 +24,9 @@ file inside an excluded directory needs no second check. Two rules differ from r
 relative to it. A pattern starting with `!` is rejected: restic re-includes with it, and read
 literally an exclude file written for restic would silently exclude more than intended. An empty
 pattern and bad syntax are rejected too, every rejection wraps `path.ErrBadPattern` and names the
-pattern, so `Match` never returns an error.
+pattern, so `Match` never returns an error. A `.` or `..` component is rejected instead of cleaned,
+so `./foo` is an error rather than an unanchored `foo`. The root of the tree never matches, so `**`
+excludes everything below the source directory but not the directory itself.
 
 - Not in `arkfs`, because a search over Docker volume snapshots needs the matcher without the
   directory source.
@@ -40,5 +42,5 @@ pattern, so `Match` never returns an error.
 
 Every filter and search in ark answers with the same rules, and restic exclude files port as long
 as they use relative patterns and no `!`. The package is part of the compatibility promise, so its
-rules cannot change in a minor release. Matching backtracks on `**`, which is fine for hand-written
-patterns. Pinned by `TestMatch` and `TestNewRejectsBadPatterns` in `arkglob_test.go`.
+rules cannot change in a minor release. Matching tracks reachable positions instead of backtracking on `**`,
+so its cost is linear in pattern length times path depth. Pinned by `TestMatch` and `TestNewRejectsBadPatterns` in `arkglob_test.go`.

@@ -5,6 +5,7 @@ import (
 	"path"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alexjoedt/ark/arkglob"
 )
@@ -43,6 +44,12 @@ func TestMatch(t *testing.T) {
 		{`[!]x`, "yx", false},
 		{`\*`, "a", false},
 		{`\*`, "*", true},
+		{"**", "", false},
+		{"/**", ".", false},
+		{"**/", "/", false},
+		{"**/x", "", false},
+		{"a/**/**/b", "a/b", true},
+		{"**/**/x", "a/b/x/c", true},
 	}
 	for _, tt := range tests {
 		m, err := arkglob.New(tt.pattern)
@@ -80,7 +87,7 @@ func TestNoPatternsMatchNothing(t *testing.T) {
 }
 
 func TestNewRejectsBadPatterns(t *testing.T) {
-	for _, p := range []string{"", "/", "[", "a/[/b", "!x", "!"} {
+	for _, p := range []string{"", "/", "//", "[", "a/[/b", "!x", "!", "./foo", "a/../b", "../secret", "a/.", ".."} {
 		_, err := arkglob.New("ok", p)
 		if !errors.Is(err, path.ErrBadPattern) {
 			t.Errorf("New(%q): err = %v, want path.ErrBadPattern", p, err)
@@ -89,5 +96,20 @@ func TestNewRejectsBadPatterns(t *testing.T) {
 		if !strings.Contains(err.Error(), `"`+p+`"`) {
 			t.Errorf("New(%q): error %q does not name the pattern", p, err)
 		}
+	}
+}
+
+func TestMatchManyDoubleStarsIsFast(t *testing.T) {
+	m, err := arkglob.New("**/a/**/a/**/a/**/a/**/a/**/a/**/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deep := strings.Repeat("a/", 200) + "y"
+	start := time.Now()
+	if m.Match(deep) {
+		t.Fatal("Match = true, want false")
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("Match took %v on a 201-component path", d)
 	}
 }

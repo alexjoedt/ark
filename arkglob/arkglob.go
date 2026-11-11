@@ -18,11 +18,14 @@
 //     "a/foo/bar/x.txt", so one call answers for a file inside an excluded
 //     directory.
 //
-// Two differences from restic: a pattern starting with "!" is rejected
-// instead of re-including what an earlier pattern excluded (write "\!" or
-// "[!]" for a name that starts with "!"), and a leading "/" anchors at the
-// root of the matched tree, such as the source directory of a backup, not at
-// the root of the filesystem.
+// Differences from restic: a pattern starting with "!" is rejected instead of
+// re-including what an earlier pattern excluded (write "\!" or "[!]" for a
+// name that starts with "!"); a pattern with a "." or ".." component is
+// rejected instead of cleaned, so "./foo" is an error, not an unanchored
+// "foo"; a leading "/" anchors at the root of the matched tree, such as the
+// source directory of a backup, not at the root of the filesystem; and the
+// root itself never matches, so "**" excludes everything below the root but
+// not the root.
 package arkglob
 
 import (
@@ -38,8 +41,8 @@ type Matcher struct {
 }
 
 // New compiles patterns into a Matcher. A Matcher built from no patterns
-// matches nothing. An empty pattern, a pattern starting with "!" and a pattern
-// with bad syntax return an error that wraps [path.ErrBadPattern] and names
+// matches nothing. An empty pattern, a pattern starting with "!", a pattern
+// with a "." or ".." component and a pattern with bad syntax return an error that wraps [path.ErrBadPattern] and names
 // the pattern.
 func New(patterns ...string) (*Matcher, error) {
 	m := &Matcher{}
@@ -57,30 +60,39 @@ func compile(p string) ([]string, error) {
 	if strings.HasPrefix(p, "!") {
 		return nil, fmt.Errorf("negation is not supported: %w", path.ErrBadPattern)
 	}
-	anchored := strings.HasPrefix(p, "/")
-	clean := strings.TrimPrefix(path.Clean("/"+p), "/")
-	if clean == "" {
-		return nil, fmt.Errorf("no path component: %w", path.ErrBadPattern)
-	}
-	parts := strings.Split(clean, "/")
-	for _, part := range parts {
+	var parts []string
+	for part := range strings.SplitSeq(p, "/") {
+		switch {
+		case part == "":
+			continue
+		case part == "." || part == "..":
+			return nil, fmt.Errorf("%q component: %w", part, path.ErrBadPattern)
+		case part == "**" && len(parts) > 0 && parts[len(parts)-1] == "**":
+			continue
+		}
 		if _, err := path.Match(part, ""); err != nil {
 			return nil, err
 		}
+		parts = append(parts, part)
 	}
-	if !anchored {
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("no path component: %w", path.ErrBadPattern)
+	}
+	if !strings.HasPrefix(p, "/") && parts[0] != "**" {
 		parts = append([]string{"**"}, parts...)
 	}
 	return parts, nil
 }
 
 // Match reports whether p, a slash-separated path relative to the root of the
-// matched tree, or a path below it matches any pattern.
+// matched tree, or a path below it matches any pattern. The root itself ("",
+// ".", "/") never matches.
 func (m *Matcher) Match(p string) bool {
-	var comps []string
-	if clean := strings.TrimPrefix(path.Clean("/"+p), "/"); clean != "" {
-		comps = strings.Split(clean, "/")
+	clean := strings.TrimPrefix(path.Clean("/"+p), "/")
+	if clean == "" {
+		return false
 	}
+	comps := strings.Split(clean, "/")
 	for _, pat := range m.patterns {
 		if matchPrefix(pat, comps) {
 			return true
@@ -89,24 +101,38 @@ func (m *Matcher) Match(p string) bool {
 	return false
 }
 
-// matchPrefix reports whether pat matches a leading run of comps.
-// ponytail: backtracks on "**", exponential in the number of "**" per pattern;
-// fine for hand-written excludes, add memoisation if patterns get generated.
+// matchPrefix reports whether pat matches a leading run of comps. It tracks
+// the set of component positions reachable after each pattern part, so it
+// runs in O(len(pat) * len(comps)) without backtracking.
 func matchPrefix(pat, comps []string) bool {
-	if len(pat) == 0 {
-		return true
-	}
-	if pat[0] == "**" {
-		for i := range len(comps) + 1 {
-			if matchPrefix(pat[1:], comps[i:]) {
-				return true
+	at := make([]bool, len(comps)+1)
+	at[0] = true
+	for _, part := range pat {
+		next := make([]bool, len(comps)+1)
+		reached := false
+		for i, ok := range at {
+			if !ok {
+				continue
+			}
+			if part == "**" {
+				for j := i; j <= len(comps); j++ {
+					next[j] = true
+				}
+				reached = true
+				break
+			}
+			// compile validated part, so path.Match cannot return an error here.
+			if i < len(comps) {
+				if hit, _ := path.Match(part, comps[i]); hit {
+					next[i+1] = true
+					reached = true
+				}
 			}
 		}
-		return false
+		if !reached {
+			return false
+		}
+		at = next
 	}
-	if len(comps) == 0 {
-		return false
-	}
-	ok, _ := path.Match(pat[0], comps[0])
-	return ok && matchPrefix(pat[1:], comps[1:])
+	return true
 }
