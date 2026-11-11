@@ -196,6 +196,10 @@ func TestNewSourceRejectsBadExcludes(t *testing.T) {
 			t.Errorf("%s: err = %v, want path.ErrBadPattern", name, err)
 		}
 	}
+	if _, err := arkfs.NewSource(root, arkfs.WithExcludeFile(bad)); err == nil ||
+		!strings.Contains(err.Error(), bad+" line 2") {
+		t.Errorf("bad exclude file: err = %v, want one naming %s line 2", err, bad)
+	}
 }
 
 // The parent snapshot holds only what the patterns left in, so a second

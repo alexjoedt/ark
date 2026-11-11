@@ -137,12 +137,7 @@ func (v *stringList) Set(s string) error {
 	return nil
 }
 
-func (v *stringList) String() string {
-	if v.p == nil {
-		return ""
-	}
-	return strings.Join(*v.p, ", ")
-}
+func (v *stringList) String() string { return listCreator{}.ToString(*v.p) }
 
 func (v *stringList) Get() any { return *v.p }
 

@@ -60,17 +60,22 @@ func WithExclude(patterns ...string) SourceOption {
 // WithExcludeFile reads exclude patterns from the file at path, one per line.
 // A leading UTF-8 byte order mark is dropped, surrounding whitespace is
 // trimmed, blank lines and lines starting with "#" are skipped, and "$" stays
-// literal.
+// literal. A bad pattern fails with an error that names the file and line.
 func WithExcludeFile(path string) SourceOption {
 	return func(s *fileSource) error {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("arkfs: exclude file: %w", err)
 		}
+		n := 0
 		for line := range strings.Lines(strings.TrimPrefix(string(data), "\ufeff")) {
+			n++
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
+			}
+			if _, err := arkglob.New(line); err != nil {
+				return fmt.Errorf("arkfs: exclude file %s line %d: %w", path, n, err)
 			}
 			s.meta.Excludes = append(s.meta.Excludes, line)
 		}
