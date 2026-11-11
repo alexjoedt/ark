@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -118,13 +119,13 @@ func (s namedSource) ConcurrentOpen() bool {
 }
 
 // listFlag is a repeatable string flag whose values are never split on
-// commas, so a pattern like "{a,b}" stays one value.
+// commas, so a pattern like "a,b" stays one value.
 type listFlag = cli.FlagBase[[]string, cli.NoConfig, listCreator]
 
 type listCreator struct{}
 
 func (listCreator) Create(val []string, p *[]string, _ cli.NoConfig) cli.Value {
-	*p = append([]string(nil), val...)
+	*p = slices.Clone(val)
 	return &stringList{p: p}
 }
 
