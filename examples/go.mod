@@ -1,6 +1,6 @@
 module github.com/alexjoedt/ark/examples
 
-go 1.26
+go 1.27.4
 
 require (
 	github.com/alexjoedt/ark v1.0.0
