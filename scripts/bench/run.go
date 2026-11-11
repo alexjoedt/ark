@@ -28,6 +28,8 @@ const (
 	benchPass    = "bench"
 	minFree      = 45 << 30
 	minFreeSmall = 1 << 30
+	minFreeFiles = 4 << 30
+	sftpRounds   = 3
 )
 
 var callerRepoEnv = []string{
@@ -41,14 +43,23 @@ var phases = [...]string{"initial", "incremental", "restore"}
 type times [len(phases)]time.Duration
 
 // tool is one CLI against one kind of repository. repo returns a fresh
-// repository location per call; local ones are removed after the run.
+// repository location per call; local ones are removed after the run, and so
+// are remote ones when mirror names the local directory they land in.
 type tool struct {
-	name  string
-	bin   string
-	opts  []string
-	ark   bool
-	local bool
-	repo  func() string
+	name   string
+	bin    string
+	opts   []string
+	ark    bool
+	local  bool
+	mirror string
+	repo   func() string
+}
+
+// result is one run of a tool: its phase times and the repository's bytes on
+// disk over its stored bytes after the incremental backup, 0 when unknown.
+type result struct {
+	t    times
+	disk float64
 }
 
 type arkSnap struct {
@@ -73,9 +84,9 @@ func runBench(
 	w io.Writer,
 	dir string,
 	sp spec,
-	small bool,
+	need uint64,
 	seed int64,
-	arkBin, resticBin string,
+	arkBin, resticBin, sftpDir string,
 ) error {
 	arkPath, err := exec.LookPath(arkBin)
 	if err != nil {
@@ -96,10 +107,6 @@ func runBench(
 	dir, err = filepath.Abs(dir)
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
-	}
-	need := uint64(minFree)
-	if small {
-		need = minFreeSmall
 	}
 	free, err := freeBytes(dir)
 	if err != nil {
@@ -150,38 +157,15 @@ func runBench(
 	resticLocal := tool{name: "restic", bin: resticPath, local: true}
 	resticLocal.repo = localRepo("restic")
 
-	var arkRuns, resticRuns []times
-	for round := 1; ; round++ {
-		// Alternating the order keeps drift and the previous run's cleanup
-		// from always landing on the same tool.
-		order := []tool{arkLocal, resticLocal}
-		if round%2 == 0 {
-			slices.Reverse(order)
-		}
-		for _, t := range order {
-			r, err := b.once(ctx, w, t, round)
-			if err != nil {
-				return err
-			}
-			if t.ark {
-				arkRuns = append(arkRuns, r)
-			} else {
-				resticRuns = append(resticRuns, r)
-			}
-		}
-		if round >= 3 && stable(arkRuns, resticRuns) || round == 5 {
-			break
-		}
+	tools := []tool{arkLocal, resticLocal}
+	runs, err := b.rounds(ctx, w, tools, 5)
+	if err != nil {
+		return err
 	}
-	_, _ = fmt.Fprintf(w, "\nlocal, median of %d runs\n", len(arkRuns))
-	if !stable(arkRuns, resticRuns) {
-		_, _ = fmt.Fprintf(w, "warning: spread ark %.0f%%, restic %.0f%% is above %.0f%%, the verdict is not stable\n",
-			spread(arkRuns)*100, spread(resticRuns)*100, maxSpread*100)
-	}
-	table(w, median(arkRuns), median(resticRuns), true)
+	summary(w, "local", tools, runs, true)
 
 	if uri := os.Getenv("ARK_SFTP_TEST_URI"); uri != "" {
-		if err := b.sftpRow(ctx, w, uri, arkPath, resticPath); err != nil {
+		if err := b.sftpRow(ctx, w, uri, arkPath, resticPath, sftpDir); err != nil {
 			return err
 		}
 	}
@@ -189,36 +173,144 @@ func runBench(
 	return nil
 }
 
-// sftpRow times one ark and, when the URI names an identity, one restic run
-// against the sftp server and prints them without a verdict.
-func (b *bench) sftpRow(ctx context.Context, w io.Writer, uri, arkPath, resticPath string) error {
+// rounds runs every tool once per round until the spread is stable from round
+// 3 on, or round last is done, and returns the results per tool. Alternating
+// the order keeps drift and the previous run's cleanup from always landing on
+// the same tool.
+func (b *bench) rounds(ctx context.Context, w io.Writer, tools []tool, last int) ([][]result, error) {
+	runs := make([][]result, len(tools))
+	for round := 1; ; round++ {
+		for k := range tools {
+			i := k
+			if round%2 == 0 {
+				i = len(tools) - 1 - k
+			}
+			r, err := b.once(ctx, w, tools[i], round)
+			if err != nil {
+				return nil, err
+			}
+			runs[i] = append(runs[i], r)
+		}
+		if round >= 3 && stable(phaseTimes(runs)...) || round >= last {
+			return runs, nil
+		}
+	}
+}
+
+// sftpRow times ark and, when the URI names an identity, restic against the
+// sftp server for sftpRounds rounds and prints the medians without a verdict.
+func (b *bench) sftpRow(ctx context.Context, w io.Writer, uri, arkPath, resticPath, sftpDir string) error {
 	arkSFTP, resticSFTP, err := sftpTools(uri, arkPath, resticPath)
 	if err != nil {
 		return err
 	}
-	at, err := b.once(ctx, w, arkSFTP, 1)
+	tools := []tool{arkSFTP}
+	if resticSFTP != nil {
+		tools = append(tools, *resticSFTP)
+	}
+	for i := range tools {
+		tools[i].mirror = sftpDir
+	}
+	runs, err := b.rounds(ctx, w, tools, sftpRounds)
 	if err != nil {
 		return err
 	}
-	var rt times
-	if resticSFTP != nil {
-		if rt, err = b.once(ctx, w, *resticSFTP, 1); err != nil {
-			return err
-		}
+	title := "sftp, informational"
+	if sftpDir == "" {
+		title += ", remote repositories are left on the server"
 	}
-	_, _ = fmt.Fprintln(w, "\nsftp, informational, one run, remote repositories are left on the server")
+	summary(w, title, tools, runs, false)
 	if resticSFTP == nil {
 		_, _ = fmt.Fprintln(w, "restic skipped: ARK_SFTP_TEST_URI has no identity")
 	}
-	table(w, at, rt, false)
 	return nil
+}
+
+// summary prints the medians of ark (runs[0]) against restic (runs[1], when
+// present) with a warning when the spread is above maxSpread.
+func summary(w io.Writer, title string, tools []tool, runs [][]result, judged bool) {
+	ts := phaseTimes(runs)
+	_, _ = fmt.Fprintf(w, "\n%s, median of %d runs\n", title, len(ts[0]))
+	if !stable(ts...) {
+		parts := make([]string, len(ts))
+		for i := range ts {
+			parts[i] = fmt.Sprintf("%s %.0f%%", tools[i].name, spread(ts[i])*100)
+		}
+		_, _ = fmt.Fprintf(w, "warning: spread %s is above %.0f%%, the verdict is not stable\n",
+			strings.Join(parts, ", "), maxSpread*100)
+	}
+	var restic times
+	var resticDisk float64
+	if len(runs) > 1 {
+		restic, resticDisk = median(ts[1]), medianDisk(runs[1])
+	}
+	table(w, median(ts[0]), restic, medianDisk(runs[0]), resticDisk, judged)
+}
+
+func phaseTimes(runs [][]result) [][]times {
+	ts := make([][]times, len(runs))
+	for i, rs := range runs {
+		for _, r := range rs {
+			ts[i] = append(ts[i], r.t)
+		}
+	}
+	return ts
+}
+
+func medianDisk(rs []result) float64 {
+	d := make([]float64, len(rs))
+	for i, r := range rs {
+		d[i] = r.disk
+	}
+	slices.Sort(d)
+	return d[len(d)/2]
+}
+
+// diskRatio is the space dir takes on disk, directories included, over the
+// bytes its regular files hold.
+func diskRatio(dir string) (float64, error) {
+	var alloc, stored int64
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		fi, err := d.Info()
+		if err != nil {
+			return err
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			return fmt.Errorf("%s: no block count", p)
+		}
+		alloc += st.Blocks * 512
+		if fi.Mode().IsRegular() {
+			stored += fi.Size()
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("disk usage of %s: %w", dir, err)
+	}
+	if stored == 0 {
+		return 0, fmt.Errorf("disk usage of %s: no stored bytes", dir)
+	}
+	return float64(alloc) / float64(stored), nil
+}
+
+// mirrorPath is where the repository at the sftp URI repo lands below mirror.
+func mirrorPath(mirror, repo string) (string, error) {
+	u, err := url.Parse(repo)
+	if err != nil {
+		return "", fmt.Errorf("run: %w", err)
+	}
+	return filepath.Join(mirror, path.Base(u.Path)), nil
 }
 
 // once regenerates the dataset, then times initial backup, incremental backup
 // after mutate, and restore of the latest snapshot, and checks the restore
 // against the source tree.
-func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (times, error) {
-	var res times
+func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (result, error) {
+	var res result
 	if err := os.RemoveAll(b.data); err != nil {
 		return res, fmt.Errorf("run: %w", err)
 	}
@@ -227,8 +319,19 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (times
 	}
 	syscall.Sync()
 	repo := t.repo()
-	if t.local {
-		defer os.RemoveAll(repo)
+	disk := ""
+	switch {
+	case t.local:
+		disk = repo
+	case t.mirror != "":
+		p, err := mirrorPath(t.mirror, repo)
+		if err != nil {
+			return res, err
+		}
+		disk = p
+	}
+	if disk != "" {
+		defer os.RemoveAll(disk)
 	}
 	defer os.RemoveAll(b.cache)
 	tag := fmt.Sprintf("%s-%d", t.name, round)
@@ -258,12 +361,19 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (times
 		if err != nil {
 			return res, err
 		}
-		res[i] = d
+		res.t[i] = d
 		if t.ark {
 			if err := json.Unmarshal(out, &snaps[i]); err != nil {
 				return res, fmt.Errorf("run: parsing ark backup output: %w", err)
 			}
 		}
+	}
+	if disk != "" {
+		r, err := diskRatio(disk)
+		if err != nil {
+			return res, fmt.Errorf("run: %w", err)
+		}
+		res.disk = r
 	}
 
 	if err := os.RemoveAll(b.restore); err != nil {
@@ -280,7 +390,7 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (times
 	if err != nil {
 		return res, err
 	}
-	res[2] = d
+	res.t[2] = d
 
 	want, _, _, err := hashTree(ctx, b.data)
 	if err != nil {
@@ -295,7 +405,10 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (times
 	}
 
 	_, _ = fmt.Fprintf(w, "%-12s run %d: initial %s, incremental %s, restore %s",
-		t.name, round, secs(res[0]), secs(res[1]), secs(res[2]))
+		t.name, round, secs(res.t[0]), secs(res.t[1]), secs(res.t[2]))
+	if res.disk > 0 {
+		_, _ = fmt.Fprintf(w, ", disk/stored %.2f", res.disk)
+	}
 	if t.ark {
 		_, _ = fmt.Fprintf(w, "; chunks new/reused %d/%d, %d/%d",
 			snaps[0].Stats.ChunksNew, snaps[0].Stats.ChunksReused,
@@ -417,8 +530,13 @@ func shellQuote(a string) string {
 	return `"` + a + `"`
 }
 
-func stable(arkRuns, resticRuns []times) bool {
-	return spread(arkRuns) <= maxSpread && spread(resticRuns) <= maxSpread
+func stable(runs ...[]times) bool {
+	for _, r := range runs {
+		if spread(r) > maxSpread {
+			return false
+		}
+	}
+	return true
 }
 
 func spread(runs []times) float64 {
@@ -464,7 +582,7 @@ func verdict(ark, restic time.Duration, judged bool) (string, string) {
 	return fmt.Sprintf("%.2f", r), "FAIL"
 }
 
-func table(w io.Writer, ark, restic times, judged bool) {
+func table(w io.Writer, ark, restic times, arkDisk, resticDisk float64, judged bool) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	head := "phase\tark\trestic\tratio"
 	if judged {
@@ -483,7 +601,15 @@ func table(w io.Writer, ark, restic times, judged bool) {
 		}
 		_, _ = fmt.Fprintln(tw, line)
 	}
+	_, _ = fmt.Fprintf(tw, "disk/stored\t%s\t%s\t-\n", ratio(arkDisk), ratio(resticDisk))
 	_ = tw.Flush()
+}
+
+func ratio(r float64) string {
+	if r == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%.2f", r)
 }
 
 func secs(d time.Duration) string { return fmt.Sprintf("%.1fs", d.Seconds()) }

@@ -155,3 +155,27 @@ func TestGenerateCancelCleansUp(t *testing.T) {
 		t.Fatalf("%d entries left behind", len(entries))
 	}
 }
+
+func TestFilesOnlyDataset(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	ctx := context.Background()
+	n, total, err := generate(ctx, dir, spec{smallN: 400, logSizes: true}, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Log-uniform over 1 to 64 KiB has a mean of 63/ln(64) KiB, about 15 KiB.
+	if mean := total / int64(n); n != 400 || mean < 10<<10 || mean > 21<<10 {
+		t.Fatalf("%d files, mean %d bytes", n, mean)
+	}
+	before := sum(t, dir)
+	if err := mutate(ctx, dir, 3); err != nil {
+		t.Fatal(err)
+	}
+	if sum(t, dir) == before {
+		t.Fatal("mutate changed nothing")
+	}
+	r, err := diskRatio(dir)
+	if err != nil || r < 1 {
+		t.Fatalf("diskRatio = %v, %v", r, err)
+	}
+}
