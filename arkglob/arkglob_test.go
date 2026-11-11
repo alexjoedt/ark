@@ -113,3 +113,18 @@ func TestMatchManyDoubleStarsIsFast(t *testing.T) {
 		t.Errorf("Match took %v on a 201-component path", d)
 	}
 }
+
+func TestMatchAllocationsDoNotGrowWithPatterns(t *testing.T) {
+	patterns := make([]string, 20)
+	for i := range patterns {
+		patterns[i] = "c/*/x" + strings.Repeat("y", i) + ".tmp"
+	}
+	m, err := arkglob.New(patterns...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocs := testing.AllocsPerRun(100, func() { m.Match("a/b/c/d/e/f.txt") })
+	if allocs > 3 {
+		t.Errorf("Match allocates %v times per call with 20 patterns, want at most 3", allocs)
+	}
+}

@@ -93,8 +93,10 @@ func (m *Matcher) Match(p string) bool {
 		return false
 	}
 	comps := strings.Split(clean, "/")
+	buf := make([]bool, 2*(len(comps)+1))
+	at, next := buf[:len(comps)+1], buf[len(comps)+1:]
 	for _, pat := range m.patterns {
-		if matchPrefix(pat, comps) {
+		if matchPrefix(pat, comps, at, next) {
 			return true
 		}
 	}
@@ -103,12 +105,13 @@ func (m *Matcher) Match(p string) bool {
 
 // matchPrefix reports whether pat matches a leading run of comps. It tracks
 // the set of component positions reachable after each pattern part, so it
-// runs in O(len(pat) * len(comps)) without backtracking.
-func matchPrefix(pat, comps []string) bool {
-	at := make([]bool, len(comps)+1)
+// runs in O(len(pat) * len(comps)) without backtracking. at and next are
+// scratch space of len(comps)+1 each.
+func matchPrefix(pat, comps []string, at, next []bool) bool {
+	clear(at)
 	at[0] = true
 	for _, part := range pat {
-		next := make([]bool, len(comps)+1)
+		clear(next)
 		reached := false
 		for i, ok := range at {
 			if !ok {
@@ -132,7 +135,7 @@ func matchPrefix(pat, comps []string) bool {
 		if !reached {
 			return false
 		}
-		at = next
+		at, next = next, at
 	}
 	return true
 }
