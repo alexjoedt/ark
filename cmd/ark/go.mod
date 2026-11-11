@@ -5,7 +5,7 @@ go 1.26
 require (
 	github.com/alexedwards/scs/v2 v2.9.0
 	github.com/alexjoedt/ark v1.0.0
-	github.com/alexjoedt/ark/arkdocker v1.0.0
+	github.com/alexjoedt/ark/arkdocker v1.0.1
 	github.com/alexjoedt/log v1.1.0
 	github.com/go-chi/chi/v5 v5.4.0
 	github.com/golang-migrate/migrate/v4 v4.20.1
