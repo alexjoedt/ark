@@ -6,6 +6,11 @@
 
 Deduplicated backups as a Go library, with a CLI on top.
 
+> [!WARNING]
+> ark is under active development. Breaking changes are expected: the Go API, the CLI and the
+> on-disk repository format can change between releases without a migration path. Don't rely on it
+> as your only backup yet.
+
 ark backs up anything you can walk as a tree of files: a directory, a Docker volume, a database dump,
 an API export. Content is split with FastCDC, stored once, compressed with zstd and encrypted.
 
@@ -299,3 +304,10 @@ Releases: [docs/RELEASING.md](docs/RELEASING.md). Architecture decisions: [docs/
 ## License
 
 Apache License 2.0, see [LICENSE](LICENSE).
+
+## Disclaimer
+
+Use ark at your own risk. You are responsible for your data, including verifying that backups are
+complete and restorable. The developer and contributors accept no liability for data loss,
+corruption or any other damage resulting from the use of this software. See the warranty and
+liability sections of the [LICENSE](LICENSE).
