@@ -8,6 +8,7 @@ type Snapshot struct {
 	SourceName string
 	SourceType SourceType
 	SourceMeta map[string]string // labels the source recorded, see SourceMeta.Labels
+	Excludes   []string          // patterns the source excluded, see SourceMeta.Excludes
 	Host       string
 	Tags       []string
 	Comment    string

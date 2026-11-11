@@ -52,7 +52,7 @@ writer, every accepted risk included.
 ## Guarantees at rest
 
 - Without the passphrase no object name, body, listing or stat reveals file contents, paths, names,
-  symlink targets, xattrs or snapshot metadata, markers included: `TestBackendHoldsNoPlaintext`.
+  symlink targets, xattrs, exclude patterns or snapshot metadata, markers included: `TestBackendHoldsNoPlaintext`.
 - Object names are keyed: the same files in two repositories share no name in any namespace, and no
   chunk is named by the SHA-256 of its content: `TestSameFilesInTwoRepositoriesShareNoNames`,
   `TestChunksAndTreesAreSealedUnderKeyedNames`.

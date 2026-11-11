@@ -87,6 +87,17 @@ func scanForMarker(t *testing.T, b ark.Backend) map[ark.HandleType]int {
 	return seen
 }
 
+type excludingMetaSource struct {
+	ark.Source
+	excludes []string
+}
+
+func (s excludingMetaSource) Meta() ark.SourceMeta {
+	m := s.Source.Meta()
+	m.Excludes = s.excludes
+	return m
+}
+
 func TestBackendHoldsNoPlaintext(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -138,6 +149,7 @@ func TestBackendHoldsNoPlaintext(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			src = excludingMetaSource{Source: src, excludes: []string{marker + "-skip/**"}}
 			// the first progress event arrives under the backup's lock
 			var during map[ark.HandleType]int
 			var once sync.Once
@@ -154,6 +166,9 @@ func TestBackendHoldsNoPlaintext(t *testing.T) {
 			}
 			if during[ark.LockFile] == 0 || during[ark.MarkerFile] == 0 {
 				t.Error("no lock or marker seen during the backup, the scan did not cover them")
+			}
+			if len(snap.Excludes) != 1 || !strings.Contains(snap.Excludes[0], marker) {
+				t.Fatalf("the exclude pattern did not reach the snapshot: %q", snap.Excludes)
 			}
 			if snap.Host != marker+"-host" || !strings.Contains(snap.SourceName, marker) {
 				t.Fatalf("the marker did not reach the snapshot: %+v", snap)

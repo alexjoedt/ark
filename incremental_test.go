@@ -1,6 +1,7 @@
 package ark_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -408,4 +409,60 @@ func TestBackupStoresOnlyChangedTreeNodes(t *testing.T) {
 			st.ChunksNew, st.ChunksReused, st.StoredSize, st.NewChunksRawSize, parent.Stats.ChunksTotal-1)
 	}
 	checkRestore(t, repo, child.ID, files)
+}
+
+type excludingSource struct {
+	*statSource
+	excludes []string
+}
+
+func (s excludingSource) Meta() ark.SourceMeta {
+	m := s.statSource.Meta()
+	m.Excludes = s.excludes
+	return m
+}
+
+func TestSnapshotCarriesTheSourceExcludes(t *testing.T) {
+	ctx := context.Background()
+	src := excludingSource{
+		statSource: newStatSource("app", map[string]statFile{"a.txt": {content: "a"}}),
+		excludes:   []string{"*.tmp", "/cache"},
+	}
+	repo := openRepo(t, arkmem.New())
+	snap, err := repo.Backup(ctx, src)
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	want := []string{"*.tmp", "/cache"}
+	if !slices.Equal(snap.Excludes, want) {
+		t.Fatalf("Backup returned excludes %q, want %q", snap.Excludes, want)
+	}
+	snap.Excludes[0] = "changed"
+
+	got, err := repo.Snapshot(ctx, snap.ID)
+	if err != nil || !slices.Equal(got.Excludes, want) {
+		t.Fatalf("Snapshot excludes %q, want %q: %v", got.Excludes, want, err)
+	}
+	got.Excludes[0] = "changed"
+	all, err := repo.Snapshots(ctx, ark.SnapshotFilter{})
+	if err != nil || len(all) != 1 || !slices.Equal(all[0].Excludes, want) {
+		t.Fatalf("Snapshots excludes %v, want %q: %v", all, want, err)
+	}
+
+	var archive bytes.Buffer
+	if err := repo.Export(ctx, snap.ID, &archive); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	imported, err := openRepo(t, arkmem.New()).Import(ctx, &archive)
+	if err != nil || !slices.Equal(imported.Excludes, want) {
+		t.Fatalf("imported excludes %q, want %q: %v", imported.Excludes, want, err)
+	}
+}
+
+func TestSnapshotWithoutExcludesHasNone(t *testing.T) {
+	repo := openRepo(t, arkmem.New())
+	snap, err := repo.Backup(context.Background(), newStatSource("app", map[string]statFile{"a": {content: "a"}}))
+	if err != nil || snap.Excludes != nil {
+		t.Fatalf("excludes %q, want nil: %v", snap.Excludes, err)
+	}
 }
