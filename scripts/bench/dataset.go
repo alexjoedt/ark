@@ -214,13 +214,7 @@ func generate(ctx context.Context, dir string, sp spec, seed int64) (int, int64,
 	err := parallel(ctx, len(jobs), func(k int) error {
 		j := jobs[k]
 		c := stream(seed, fmt.Sprintf("%s/%d/0", j.band, j.i))
-		size := int64(j.min)
-		switch {
-		case j.max > j.min && j.log:
-			size = int64(float64(j.min) * math.Pow(float64(j.max)/float64(j.min), rand.New(c).Float64()))
-		case j.max > j.min:
-			size += int64(rand.New(c).IntN(j.max - j.min + 1))
-		}
+		size := fileSize(rand.New(c), j.min, j.max, j.log)
 		text := j.i%2 == 0
 		ext := extRandom
 		if text {
@@ -244,12 +238,25 @@ func generate(ctx context.Context, dir string, sp spec, seed int64) (int, int64,
 	return len(jobs), total, nil
 }
 
+// fileSize draws a size in [lo, hi], log-uniform when log is set.
+func fileSize(r *rand.Rand, lo, hi int, log bool) int64 {
+	switch {
+	case hi <= lo:
+		return int64(lo)
+	case log:
+		return int64(float64(lo) * math.Pow(float64(hi)/float64(lo), r.Float64()))
+	}
+	return int64(lo + r.IntN(hi-lo+1))
+}
+
 // mutate applies the incremental change set in place, deterministic from
 // seed and the current tree: rewrite 5% of the non-large files, delete and add
 // len/200 small files, and append to 1% (at least one) of the large ones, if
 // any. dir must be the dataset root. Names and content depend on a digest of the file
 // list, so repeated rounds change different files instead of repeating.
-func mutate(ctx context.Context, dir string, seed int64) error {
+// Added files follow the dataset's small-file sizes, log-uniform when
+// logSizes is set.
+func mutate(ctx context.Context, dir string, seed int64, logSizes bool) error {
 	files, err := listFiles(dir)
 	if err != nil {
 		return fmt.Errorf("mutate: %w", err)
@@ -336,7 +343,7 @@ func mutate(ctx context.Context, dir string, seed int64) error {
 		c := stream(seed, fmt.Sprintf("add/%s/%d", tag, k))
 		rr := rand.New(c)
 		d := smallDirs[rr.IntN(len(smallDirs))]
-		size := int64(smallMin + rr.IntN(smallMax-smallMin+1))
+		size := fileSize(rr, smallMin, smallMax, logSizes)
 		text := k%2 == 0
 		ext := extRandom
 		if text {

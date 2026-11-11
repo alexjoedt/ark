@@ -43,16 +43,14 @@ var phases = [...]string{"initial", "incremental", "restore"}
 type times [len(phases)]time.Duration
 
 // tool is one CLI against one kind of repository. repo returns a fresh
-// repository location per call; local ones are removed after the run, and so
-// are remote ones when mirror names the local directory they land in.
+// repository location per call and the local directory it lands in, "" when
+// that is unknown; known directories are removed after each run.
 type tool struct {
-	name   string
-	bin    string
-	opts   []string
-	ark    bool
-	local  bool
-	mirror string
-	repo   func() string
+	name string
+	bin  string
+	opts []string
+	ark  bool
+	repo func() (string, string)
 }
 
 // result is one run of a tool: its phase times and the repository's bytes on
@@ -108,13 +106,24 @@ func runBench(
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
-	free, err := freeBytes(dir)
-	if err != nil {
-		return fmt.Errorf("run: %w", err)
+	if err := checkFree(dir, need); err != nil {
+		return err
 	}
-	if free < need {
-		return fmt.Errorf("run: %s has %.1f GiB free, the benchmark needs %.0f GiB",
-			dir, float64(free)/(1<<30), float64(need)/(1<<30))
+	var sftp []tool
+	if uri := os.Getenv("ARK_SFTP_TEST_URI"); uri != "" {
+		a, r, err := sftpTools(uri, arkPath, resticPath, sftpDir)
+		if err != nil {
+			return err
+		}
+		sftp = append(sftp, a)
+		if r != nil {
+			sftp = append(sftp, *r)
+		}
+	}
+	if sftpDir != "" {
+		if err := checkFree(sftpDir, need); err != nil {
+			return err
+		}
 	}
 
 	b := &bench{
@@ -147,15 +156,23 @@ func runBench(
 		}
 	}()
 
+	if len(sftp) > 0 && sftpDir != "" {
+		if err := b.probeMirror(ctx, sftp[0]); err != nil {
+			return err
+		}
+	}
+
 	header(ctx, w, arkPath, resticPath)
 	n := 0
-	localRepo := func(name string) func() string {
-		return func() string { n++; return filepath.Join(dir, fmt.Sprintf("repo-%s-%d", name, n)) }
+	localRepo := func(name string) func() (string, string) {
+		return func() (string, string) {
+			n++
+			p := filepath.Join(dir, fmt.Sprintf("repo-%s-%d", name, n))
+			return p, p
+		}
 	}
-	arkLocal := tool{name: "ark", bin: arkPath, ark: true, local: true}
-	arkLocal.repo = localRepo("ark")
-	resticLocal := tool{name: "restic", bin: resticPath, local: true}
-	resticLocal.repo = localRepo("restic")
+	arkLocal := tool{name: "ark", bin: arkPath, ark: true, repo: localRepo("ark")}
+	resticLocal := tool{name: "restic", bin: resticPath, repo: localRepo("restic")}
 
 	tools := []tool{arkLocal, resticLocal}
 	runs, err := b.rounds(ctx, w, tools, 5)
@@ -164,8 +181,8 @@ func runBench(
 	}
 	summary(w, "local", tools, runs, true)
 
-	if uri := os.Getenv("ARK_SFTP_TEST_URI"); uri != "" {
-		if err := b.sftpRow(ctx, w, uri, arkPath, resticPath, sftpDir); err != nil {
+	if len(sftp) > 0 {
+		if err := b.sftpRow(ctx, w, sftp, sftpDir != ""); err != nil {
 			return err
 		}
 	}
@@ -197,31 +214,39 @@ func (b *bench) rounds(ctx context.Context, w io.Writer, tools []tool, last int)
 	}
 }
 
-// sftpRow times ark and, when the URI names an identity, restic against the
-// sftp server for sftpRounds rounds and prints the medians without a verdict.
-func (b *bench) sftpRow(ctx context.Context, w io.Writer, uri, arkPath, resticPath, sftpDir string) error {
-	arkSFTP, resticSFTP, err := sftpTools(uri, arkPath, resticPath)
+// sftpRow times the sftp tools and prints the medians without a verdict:
+// sftpRounds rounds when mirrored, so each run's repository is removed again,
+// and a single round otherwise, so only one repository per tool is left on
+// the server.
+func (b *bench) sftpRow(ctx context.Context, w io.Writer, tools []tool, mirrored bool) error {
+	last, title := sftpRounds, "sftp, informational"
+	if !mirrored {
+		last, title = 1, title+", remote repositories are left on the server, pass -sftp-dir for 3 rounds"
+	}
+	runs, err := b.rounds(ctx, w, tools, last)
 	if err != nil {
 		return err
-	}
-	tools := []tool{arkSFTP}
-	if resticSFTP != nil {
-		tools = append(tools, *resticSFTP)
-	}
-	for i := range tools {
-		tools[i].mirror = sftpDir
-	}
-	runs, err := b.rounds(ctx, w, tools, sftpRounds)
-	if err != nil {
-		return err
-	}
-	title := "sftp, informational"
-	if sftpDir == "" {
-		title += ", remote repositories are left on the server"
 	}
 	summary(w, title, tools, runs, false)
-	if resticSFTP == nil {
+	if len(tools) == 1 {
 		_, _ = fmt.Fprintln(w, "restic skipped: ARK_SFTP_TEST_URI has no identity")
+	}
+	return nil
+}
+
+// probeMirror inits an ark repository over sftp and checks that it lands
+// below the -sftp-dir directory, readable and removable, before any round
+// runs.
+func (b *bench) probeMirror(ctx context.Context, t tool) error {
+	repo, disk := t.repo()
+	if _, _, err := b.exec(ctx, t, "sftp-dir-probe-init", false, "--repo", repo, "init"); err != nil {
+		return err
+	}
+	if _, err := diskRatio(disk); err != nil {
+		return fmt.Errorf("run: -sftp-dir does not mirror the sftp URI's path, %s is left on the server: %w", repo, err)
+	}
+	if err := os.RemoveAll(disk); err != nil {
+		return fmt.Errorf("run: -sftp-dir: %w", err)
 	}
 	return nil
 }
@@ -236,8 +261,12 @@ func summary(w io.Writer, title string, tools []tool, runs [][]result, judged bo
 		for i := range ts {
 			parts[i] = fmt.Sprintf("%s %.0f%%", tools[i].name, spread(ts[i])*100)
 		}
-		_, _ = fmt.Fprintf(w, "warning: spread %s is above %.0f%%, the verdict is not stable\n",
-			strings.Join(parts, ", "), maxSpread*100)
+		what := "the verdict is not stable"
+		if !judged {
+			what = "the medians are rough"
+		}
+		_, _ = fmt.Fprintf(w, "warning: spread %s is above %.0f%%, %s\n",
+			strings.Join(parts, ", "), maxSpread*100, what)
 	}
 	var restic times
 	var resticDisk float64
@@ -297,20 +326,10 @@ func diskRatio(dir string) (float64, error) {
 	return float64(alloc) / float64(stored), nil
 }
 
-// mirrorPath is where the repository at the sftp URI repo lands below mirror.
-func mirrorPath(mirror, repo string) (string, error) {
-	u, err := url.Parse(repo)
-	if err != nil {
-		return "", fmt.Errorf("run: %w", err)
-	}
-	return filepath.Join(mirror, path.Base(u.Path)), nil
-}
-
 // once regenerates the dataset, then times initial backup, incremental backup
 // after mutate, and restore of the latest snapshot, and checks the restore
 // against the source tree.
-func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (result, error) {
-	var res result
+func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (res result, err error) {
 	if err := os.RemoveAll(b.data); err != nil {
 		return res, fmt.Errorf("run: %w", err)
 	}
@@ -318,20 +337,13 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (resul
 		return res, fmt.Errorf("run: %w", err)
 	}
 	syscall.Sync()
-	repo := t.repo()
-	disk := ""
-	switch {
-	case t.local:
-		disk = repo
-	case t.mirror != "":
-		p, err := mirrorPath(t.mirror, repo)
-		if err != nil {
-			return res, err
-		}
-		disk = p
-	}
+	repo, disk := t.repo()
 	if disk != "" {
-		defer os.RemoveAll(disk)
+		defer func() {
+			if e := os.RemoveAll(disk); e != nil && err == nil {
+				err = fmt.Errorf("run: removing repository: %w", e)
+			}
+		}()
 	}
 	defer os.RemoveAll(b.cache)
 	tag := fmt.Sprintf("%s-%d", t.name, round)
@@ -348,7 +360,7 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (resul
 	var snaps [2]arkSnap
 	for i := range 2 {
 		if i == 1 {
-			if err := mutate(ctx, b.data, b.seed); err != nil {
+			if err := mutate(ctx, b.data, b.seed, b.sp.logSizes); err != nil {
 				return res, fmt.Errorf("run: %w", err)
 			}
 			syscall.Sync()
@@ -452,19 +464,26 @@ func (b *bench) exec(
 
 // sftpTools derives ark and restic tools from an sftp URI. restic reaches the
 // server through ssh built from the URI's port, identity and known_hosts; it
-// is nil when the URI has no identity.
-func sftpTools(uri, arkBin, resticBin string) (tool, *tool, error) {
+// is nil when the URI has no identity. mirror, when set, is the local
+// directory the URI's path is served from.
+func sftpTools(uri, arkBin, resticBin, mirror string) (tool, *tool, error) {
 	u, err := url.Parse(uri)
 	if err != nil || u.Scheme != "sftp" || u.Host == "" {
 		return tool{}, nil, fmt.Errorf("run: ARK_SFTP_TEST_URI %q is not an sftp:// URI", uri)
 	}
-	fresh := func(prefix string) string {
-		return path.Join("/", u.Path, fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()))
+	fresh := func(prefix string) (string, string) {
+		name := fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+		disk := ""
+		if mirror != "" {
+			disk = filepath.Join(mirror, name)
+		}
+		return path.Join("/", u.Path, name), disk
 	}
-	a := tool{name: "ark-sftp", bin: arkBin, ark: true, repo: func() string {
+	a := tool{name: "ark-sftp", bin: arkBin, ark: true, repo: func() (string, string) {
 		r := *u
-		r.Path = fresh("bench-ark")
-		return r.String()
+		p, disk := fresh("bench-ark")
+		r.Path = p
+		return r.String(), disk
 	}}
 	cmd := sftpCommand(u)
 	if cmd == "" {
@@ -476,12 +495,13 @@ func sftpTools(uri, arkBin, resticBin string) (tool, *tool, error) {
 		name: "restic-sftp",
 		bin:  resticBin,
 		opts: []string{"-o", "sftp.command=" + cmd},
-		repo: func() string {
-			ru := url.URL{Scheme: "sftp", Host: u.Host, Path: "/" + fresh("bench-restic")}
+		repo: func() (string, string) {
+			p, disk := fresh("bench-restic")
+			ru := url.URL{Scheme: "sftp", Host: u.Host, Path: "/" + p}
 			if user := u.User.Username(); user != "" {
 				ru.User = url.User(user)
 			}
-			return ru.String()
+			return ru.String(), disk
 		},
 	}
 	return a, r, nil
@@ -654,6 +674,18 @@ func memTotal() string {
 		}
 	}
 	return "unknown"
+}
+
+func checkFree(dir string, need uint64) error {
+	free, err := freeBytes(dir)
+	if err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+	if free < need {
+		return fmt.Errorf("run: %s has %.1f GiB free, the benchmark needs %.0f GiB",
+			dir, float64(free)/(1<<30), float64(need)/(1<<30))
+	}
+	return nil
 }
 
 func freeBytes(dir string) (uint64, error) {

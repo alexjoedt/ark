@@ -54,6 +54,9 @@ func run(ctx context.Context, args []string) error {
 	if *dir == "" {
 		return errors.New("-dir is required")
 	}
+	if *sftpDir != "" && (args[0] != "run" || os.Getenv("ARK_SFTP_TEST_URI") == "") {
+		return errors.New("-sftp-dir needs the run subcommand and ARK_SFTP_TEST_URI")
+	}
 	sp, need := fullSpec, uint64(minFree)
 	switch {
 	case *small && *files:
@@ -71,7 +74,7 @@ func run(ctx context.Context, args []string) error {
 		}
 		_, _ = fmt.Fprintf(os.Stdout, "%d files, %.2f GiB\n", files, float64(n)/(1<<30))
 	case "mutate":
-		return mutate(ctx, *dir, *seed)
+		return mutate(ctx, *dir, *seed, sp.logSizes)
 	case "hash":
 		sum, files, n, err := hashTree(ctx, *dir)
 		if err != nil {

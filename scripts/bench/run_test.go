@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"net/url"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -48,25 +50,36 @@ func TestSFTPCommand(t *testing.T) {
 			t.Errorf("sftpCommand(%s) = %q, want %q", uri, got, want)
 		}
 	}
-	a, r, err := sftpTools("sftp://ark@h:2222/repo?identity=/id", "ark", "restic")
+	a, r, err := sftpTools("sftp://ark@h:2222/repo?identity=/id", "ark", "restic", "/srv/m")
 	if err != nil || r == nil {
 		t.Fatalf("sftpTools: %v, restic %v", err, r)
 	}
-	if got := r.repo(); !strings.HasPrefix(got, "sftp://ark@h:2222//repo/bench-restic-") {
-		t.Errorf("restic repo = %s", got)
+	if got, disk := r.repo(); !strings.HasPrefix(got, "sftp://ark@h:2222//repo/bench-restic-") ||
+		disk != "/srv/m/"+path.Base(got) {
+		t.Errorf("restic repo = %s on %s", got, disk)
 	}
-	if got := a.repo(); !strings.HasPrefix(got, "sftp://ark@h:2222/repo/bench-ark-") ||
-		!strings.Contains(got, "identity=") {
-		t.Errorf("ark repo = %s", got)
+	if got, disk := a.repo(); !strings.HasPrefix(got, "sftp://ark@h:2222/repo/bench-ark-") ||
+		!strings.Contains(got, "identity=") || !strings.HasPrefix(disk, "/srv/m/bench-ark-") {
+		t.Errorf("ark repo = %s on %s", got, disk)
 	}
-	a, r, err = sftpTools("sftp://[::1]?identity=/id", "ark", "restic")
+	a, r, err = sftpTools("sftp://[::1]?identity=/id", "ark", "restic", "")
 	if err != nil || r == nil {
 		t.Fatalf("sftpTools: %v, restic %v", err, r)
 	}
-	if got := r.repo(); !strings.HasPrefix(got, "sftp://[::1]//bench-restic-") {
-		t.Errorf("restic repo without path = %s", got)
+	if got, disk := r.repo(); !strings.HasPrefix(got, "sftp://[::1]//bench-restic-") || disk != "" {
+		t.Errorf("restic repo without path = %s on %q", got, disk)
 	}
-	if got := a.repo(); !strings.HasPrefix(got, "sftp://[::1]/bench-ark-") {
+	if got, _ := a.repo(); !strings.HasPrefix(got, "sftp://[::1]/bench-ark-") {
 		t.Errorf("ark repo without path = %s", got)
+	}
+}
+
+func TestSFTPDirNeedsRunAndURI(t *testing.T) {
+	t.Setenv("ARK_SFTP_TEST_URI", "")
+	for _, sub := range []string{"hash", "run"} {
+		err := run(context.Background(), []string{sub, "-dir", t.TempDir(), "-sftp-dir", t.TempDir()})
+		if err == nil || !strings.Contains(err.Error(), "-sftp-dir needs") {
+			t.Errorf("%s: err = %v", sub, err)
+		}
 	}
 }
