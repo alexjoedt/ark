@@ -204,6 +204,9 @@ func inspectCommand() *cli.Command {
 			if s.Comment != "" {
 				rows = append(rows, []string{"Comment:", s.Comment})
 			}
+			for _, e := range s.Excludes {
+				rows = append(rows, []string{"Excludes:", e})
+			}
 			p.Table(nil, rows)
 			return nil
 		},

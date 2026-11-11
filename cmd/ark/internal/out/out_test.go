@@ -76,13 +76,15 @@ func TestJSONShapes(t *testing.T) {
 	if err := json.Unmarshal(so.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"id", "created_at", "source_name", "source_type", "host", "tags", "comment", "parent_id", "stats"} {
+	for _, k := range []string{"id", "created_at", "source_name", "source_type", "host", "tags", "comment", "excludes", "parent_id", "stats"} {
 		if _, ok := got[k]; !ok {
 			t.Errorf("key %q missing in %s", k, so.String())
 		}
 	}
-	if tags, ok := got["tags"].([]any); !ok || tags == nil {
-		t.Errorf("tags must be an empty array, got %v", got["tags"])
+	for _, k := range []string{"tags", "excludes"} {
+		if v, ok := got[k].([]any); !ok || v == nil {
+			t.Errorf("%s must be an empty array, got %v", k, got[k])
+		}
 	}
 	if len(Snapshots(nil)) != 0 || Snapshots(nil) == nil {
 		t.Error("Snapshots(nil) must be an empty slice")

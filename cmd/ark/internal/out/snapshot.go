@@ -19,27 +19,32 @@ type Snapshot struct {
 	Host       string            `json:"host"`
 	Tags       []string          `json:"tags"`
 	Comment    string            `json:"comment"`
+	Excludes   []string          `json:"excludes"`
 	ParentID   string            `json:"parent_id"`
 	Stats      ark.SnapshotStats `json:"stats"`
 }
 
-// NewSnapshot maps s. Tags is never null.
+// NewSnapshot maps s. Tags and Excludes are never null.
 func NewSnapshot(s *ark.Snapshot) Snapshot {
-	tags := s.Tags
-	if tags == nil {
-		tags = []string{}
-	}
 	return Snapshot{
 		ID:         s.ID,
 		CreatedAt:  s.CreatedAt,
 		SourceName: s.SourceName,
 		SourceType: string(s.SourceType),
 		Host:       s.Host,
-		Tags:       tags,
+		Tags:       orEmpty(s.Tags),
 		Comment:    s.Comment,
+		Excludes:   orEmpty(s.Excludes),
 		ParentID:   s.ParentID,
 		Stats:      s.Stats,
 	}
+}
+
+func orEmpty(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // Snapshots maps a list. The result is never null.

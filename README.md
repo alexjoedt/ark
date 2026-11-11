@@ -183,6 +183,28 @@ ark forget --keep-daily 7 --keep-weekly 4 --prune
 ark check
 ```
 
+`ark backup` leaves paths out with `--exclude/-e PATTERN` and `--exclude-file FILE`, both
+repeatable, and `--exclude-cloud-files` skips files that exist only in the cloud (iCloud `.name.icloud`
+placeholders, and on macOS every dataless File Provider entry), so a backup does not download a whole
+cloud share. The patterns are stored with the snapshot; `ark inspect` shows them.
+
+```bash
+ark backup ~ -e node_modules -e '*.tmp' -e /Library --exclude-file ~/.config/ark/excludes --exclude-cloud-files
+```
+
+- Patterns use `path.Match` syntax per path component (`*`, `?`, `[...]`) plus `**` for any number of
+  components, with `/` as the separator on every OS.
+- A pattern without a leading `/` matches at any depth: `node_modules` leaves out every directory of that
+  name. A leading `/` anchors it at the backed-up directory, not at the file system root: `/Library`
+  matches only `~/Library` in the example.
+- A matched directory is left out with everything below it.
+- A comma stays part of the pattern: `-e 'a,b'` is one pattern.
+- An exclude file holds one pattern per line; surrounding whitespace is trimmed, blank lines and lines
+  starting with `#` are skipped.
+- Differences from restic: no `!` negation, no `$VAR` expansion in exclude files (`$` stays literal),
+  and `/` anchors at the backed-up directory instead of the file system root. A bad pattern exits with
+  the usage code 2 before the repository is opened.
+
 Docker volumes live under `ark docker`. The daemon comes from `--docker-host` or `DOCKER_HOST`.
 
 ```bash
