@@ -3,10 +3,7 @@ package arkdocker
 import (
 	"context"
 	"errors"
-	"fmt"
-	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -17,7 +14,6 @@ import (
 	"github.com/alexjoedt/ark/arkfs"
 	"github.com/alexjoedt/ark/arklocal"
 	"github.com/alexjoedt/ark/arkmem"
-	"github.com/alexjoedt/ark/arkuri"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	dockerclient "github.com/moby/moby/client"
@@ -54,10 +50,10 @@ func testEngineOn(t *testing.T, b ark.Backend, opts ...Option) *Engine {
 	return e
 }
 
-// onEachBackend runs fn with an engine over arkmem, over arklocal and, when
-// ARK_SFTP_TEST_URI names a server, over arksftp: a volume is the one source
-// a backup reads as a stream, and the backends differ in how they store what
-// it writes.
+// onEachBackend runs fn with an engine over arkmem and over arklocal: a
+// volume is the one source a backup reads as a stream, and the backends differ
+// in how they store what it writes. The sftp runs are in cmd/ark, whose module
+// may depend on pkg/sftp.
 func onEachBackend(t *testing.T, fn func(t *testing.T, e *Engine)) {
 	t.Helper()
 	t.Run("arkmem", func(t *testing.T) { fn(t, testEngine(t)) })
@@ -68,48 +64,7 @@ func onEachBackend(t *testing.T, fn func(t *testing.T, e *Engine)) {
 		}
 		fn(t, testEngineOn(t, b))
 	})
-	t.Run("arksftp", func(t *testing.T) {
-		env := os.Getenv("ARK_SFTP_TEST_URI")
-		if env == "" {
-			t.Skip("ARK_SFTP_TEST_URI is not set, skipping the sftp run")
-		}
-		u, err := url.Parse(env)
-		if err != nil {
-			t.Fatalf("parse ARK_SFTP_TEST_URI: %v", err)
-		}
-		u.Path = path.Join(u.Path, fmt.Sprintf("volume-%d", time.Now().UnixNano()))
-		ctx := context.Background()
-		b, err := arkuri.Open(ctx, u.String())
-		if err != nil {
-			t.Fatalf("open %s: %v", u.Redacted(), err)
-		}
-		// Registered first, so it runs last and also after a failed Init or
-		// Open; the repository gets a backend it cannot close before that.
-		// Empty directories stay on the server.
-		t.Cleanup(func() {
-			defer func() { _ = b.Close() }()
-			for _, typ := range []ark.HandleType{
-				ark.ConfigFile, ark.KeyFile, ark.SnapshotFile, ark.LockFile,
-				ark.DataPackFile, ark.TreePackFile, ark.DataIndexFile, ark.TreeIndexFile,
-			} {
-				var names []string
-				_ = b.List(ctx, typ, func(info ark.BlobInfo) error {
-					names = append(names, info.Name)
-					return nil
-				})
-				for _, name := range names {
-					_ = b.Delete(ctx, ark.Handle{Type: typ, Name: name})
-				}
-			}
-		})
-		fn(t, testEngineOn(t, keepOpen{b}))
-	})
 }
-
-// keepOpen is a backend that outlives the repository opened on it.
-type keepOpen struct{ ark.Backend }
-
-func (keepOpen) Close() error { return nil }
 
 // fixture is what the round trip carries: files, a directory, a hardlink and
 // a symlink, with a private mode on one file.
