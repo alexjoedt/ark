@@ -27,3 +27,6 @@ is replaced keeps its file; the new ADR is added and the old status becomes `sup
 | 0011 | [Pack index format and loading](0011-pack-index-format-and-loading.md) | accepted | 2026-11-11 |
 | 0012 | [Crash and concurrent-writer model for packs](0012-crash-and-writer-model-for-packs.md) | accepted | 2026-11-11 |
 | 0013 | [Prune repacks by a repository-wide unused budget](0013-prune-repacks-by-an-unused-budget.md) | accepted | 2026-11-11 |
+
+0012 supersedes the part of 0005 about torn objects, markers and repair mode; the Sync barrier of
+0005 stays, so 0005 keeps the status accepted.

@@ -287,6 +287,10 @@ file.
 └── locks/      encrypted shared and exclusive locks, stale after 30 minutes without a refresh
 ```
 
+A pack is named by the SHA-256 of its bytes, so `sha256sum` on the storage host checks packs
+without ark and without the key. Repositories of format version 2 are not read and not migrated:
+re-initialise them. The byte layout is in [docs/FORMAT.md](docs/FORMAT.md).
+
 ## Development
 
 Four modules in one workspace: the root, `arkdocker/`, `cmd/ark/` and the untagged `examples/`.
