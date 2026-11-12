@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # Drives the built binary against a temp local repository and checks the
-# exit codes ark promises: 2 usage, 3 locked, 4 not found, 5 verify failed,
+# exit codes ark promises: 2 usage, 3 locked, 4 not found, 5 verify failed (also repair index with an unreadable pack),
 # 6 wrong password.
 # Each case runs twice, plain and with --json, where stdout must carry the
 # error shape with the matching code; verify and check report through their
@@ -79,10 +79,14 @@ expect 3 "$locked" -r "$repo" prune --yes
 exec 3>&-
 wait "$held" || true
 
+# a healthy repository repairs its index and exits 0
+expect 0 "j['packs_indexed'] == 2 and j['unreadable_packs'] == []" -r "$repo" repair index
+
 # a data pack cut short fails verification: its chunks end before they should
 for c in "$repo"/datapacks/*/*; do printf 'garbage' > "$c"; done
 expect 5 "j['ok'] is False and j['corrupt_chunks']" -r "$repo" verify "$id"
 expect 5 "j['errors'] and j['snapshots_checked'] == 1" -r "$repo" check
 expect 5 "j['error']['code'] == 'verify_failed'" -r "$repo" restore "$id" "$tmp/restored"
+expect 5 "j['packs_indexed'] == 2 and len(j['unreadable_packs']) == 1" -r "$repo" repair index
 
 exit $fail

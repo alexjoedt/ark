@@ -186,6 +186,7 @@ ark ls <id>
 ark restore <id> /tmp/etc-restore
 ark forget --keep-daily 7 --keep-weekly 4 --prune
 ark check
+ark repair index            # after check or prune report a lost or damaged index
 ```
 
 `ark backup` leaves paths out with `--exclude/-e PATTERN` and `--exclude-file FILE`, both
@@ -233,7 +234,7 @@ set. `--json` prints results on stdout and logs on stderr. `ark <command> --help
 | 2 | usage error |
 | 3 | repository locked |
 | 4 | snapshot not found, or an id prefix matches several |
-| 5 | verify or check found damage, or a read hit a corrupt object |
+| 5 | verify or check found damage, `repair index` found an unreadable pack, or a read hit a corrupt object |
 | 6 | wrong password |
 
 ## Compatibility

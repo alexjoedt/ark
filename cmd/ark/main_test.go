@@ -1032,3 +1032,60 @@ func TestNamedSourceKeepsConcurrentOpen(t *testing.T) {
 		t.Error("namedSource over an arkfs source does not report ConcurrentOpen")
 	}
 }
+
+func TestRepairIndex(t *testing.T) {
+	repo := initRepo(t)
+	t.Setenv("ARK_REPOSITORY", "")
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("contents"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := runCapture(t, "-q", "-r", repo, "backup", src); code != 0 {
+		t.Fatalf("backup exit %d: %s", code, out)
+	}
+	repair := func(wantCode int) (res struct {
+		PacksIndexed    int      `json:"packs_indexed"`
+		BlobsIndexed    int      `json:"blobs_indexed"`
+		UnreadablePacks []string `json:"unreadable_packs"`
+	}) {
+		t.Helper()
+		code, out := runCapture(t, "--json", "-r", repo, "repair", "index")
+		if err := json.Unmarshal([]byte(out), &res); err != nil || code != wantCode {
+			t.Fatalf("repair index: exit %d, want %d: %q", code, wantCode, out)
+		}
+		return res
+	}
+	if res := repair(0); res.PacksIndexed != 2 || res.BlobsIndexed != 2 || res.UnreadablePacks == nil {
+		t.Fatalf("healthy repository: %+v", res)
+	}
+
+	for _, dir := range []string{"dataindex", "treeindex"} {
+		files, _ := filepath.Glob(filepath.Join(repo, dir, "*"))
+		for _, f := range files {
+			if err := os.Remove(f); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, out := runCapture(t, "-r", repo, "prune", "--yes"); strings.Contains(out, "RebuildIndex") {
+		t.Fatalf("library name in stdout: %s", out)
+	}
+	code, out := runCapture(t, "--json", "-r", repo, "check")
+	if code != 5 || !strings.Contains(out, "ark repair index") || strings.Contains(out, "RebuildIndex") {
+		t.Fatalf("check over a lost index: exit %d, %s", code, out)
+	}
+	repair(0)
+	if code, out := runCapture(t, "-r", repo, "check"); code != 0 {
+		t.Fatalf("check after repair: exit %d, %s", code, out)
+	}
+
+	packs, _ := filepath.Glob(filepath.Join(repo, "datapacks", "*", "*"))
+	for _, p := range packs {
+		if err := os.WriteFile(p, []byte("garbage"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if res := repair(5); len(res.UnreadablePacks) != len(packs) {
+		t.Fatalf("damaged pack: %+v", res)
+	}
+}

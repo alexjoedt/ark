@@ -53,10 +53,10 @@ func run(args []string) int {
 	case exitcode.IsSilent(err):
 	case jsonRequested(args):
 		outputJSON(map[string]any{
-			"error": map[string]string{"code": kind, "message": err.Error()},
+			"error": map[string]string{"code": kind, "message": cliText(err.Error())},
 		})
 	default:
-		fmt.Fprintf(os.Stderr, "ark: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ark: %s\n", cliText(err.Error()))
 	}
 	return code
 }
@@ -155,6 +155,7 @@ func newApp() *cli.Command {
 			inspectCommand(),
 			forgetCommand(),
 			pruneCommand(),
+			repairCommand(),
 			verifyCommand(),
 			checkCommand(),
 			exportCommand(),

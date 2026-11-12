@@ -48,6 +48,8 @@ func TestCommandSurface(t *testing.T) {
 			"yes",
 		},
 		"prune":          {"dry-run", "yes"},
+		"repair":         {},
+		"repair index":   {},
 		"verify":         {},
 		"check":          {},
 		"export":         {},
