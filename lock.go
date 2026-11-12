@@ -18,15 +18,16 @@ import (
 // refreshing is reclaimed after five missed refreshes. An operation whose own
 // lock has not refreshed within lockRefreshTimeout gives up rather than keep
 // writing under a lock others may already treat as stale.
-const (
-	lockStaleAge       = 30 * time.Minute
-	lockRefreshTimeout = 22*time.Minute + 30*time.Second
-)
+const lockStaleAge = 30 * time.Minute
 
-// lockRefreshInterval is how often a held lock rewrites its object. Like
-// lockSettleDelay it is a variable so the test binary can shorten it; nothing
-// outside the package can.
-var lockRefreshInterval = 5 * time.Minute
+// lockRefreshInterval is how often a held lock rewrites its object and
+// lockRefreshTimeout how long it may go without. Like lockSettleDelay they
+// are variables so the test binary can shorten them; nothing outside the
+// package can.
+var (
+	lockRefreshInterval = 5 * time.Minute
+	lockRefreshTimeout  = 22*time.Minute + 30*time.Second
+)
 
 // lockSettleDelay is the pause between publishing our own lock and re-reading
 // the namespace, long enough for a concurrent writer's Put to become visible.
@@ -263,6 +264,10 @@ type repoLock struct {
 	exclusive bool
 	cancel    context.CancelFunc
 	done      chan struct{}
+	// expire aborts the operation lockRefreshTimeout after the last refresh
+	// that was stored. It does not wait for a refresh in flight: one that
+	// hangs returns late or never.
+	expire *time.Timer
 }
 
 // acquire takes a lock of the requested class and returns it together with a
@@ -334,6 +339,8 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 
 	name := generateID(now)
 	if err := r.putLock(ctx, name, newLockObject(now, exclusive)); err != nil {
+		// A put that failed may still have stored the object.
+		r.dropLock(ctx, name, exclusive)
 		return nil, nil, err
 	}
 	stored := now
@@ -361,6 +368,8 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 
 	lockCtx, cancel := context.WithCancel(ctx)
 	l := &repoLock{repo: r, name: name, exclusive: exclusive, cancel: cancel, done: make(chan struct{})}
+	timeout := lockRefreshTimeout
+	l.expire = time.AfterFunc(timeout-now.Sub(stored), func() { l.abort(lockCtx, timeout) })
 	go l.keepAlive(lockCtx, stored)
 	r.reportLock(LockEvent{Kind: LockAcquired, Exclusive: exclusive, LockID: name})
 	return lockCtx, l, nil
@@ -372,8 +381,14 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 // it. lastOK is the time the stored lock object carries: the others count
 // its age from there, and a clock reading of its own at the start would land
 // at any point of whatever the caller does next.
+//
+// The age is checked twice. After a failed refresh the repository's clock
+// says how old the stored object is, which also counts the time a suspended
+// host slept. The expire timer runs beside it and fires while a refresh is
+// still in flight, however long that one takes to fail.
 func (l *repoLock) keepAlive(ctx context.Context, lastOK time.Time) {
 	defer close(l.done)
+	defer l.expire.Stop()
 
 	t := time.NewTicker(lockRefreshInterval)
 	defer t.Stop()
@@ -385,19 +400,29 @@ func (l *repoLock) keepAlive(ctx context.Context, lastOK time.Time) {
 		case <-t.C:
 		}
 
-		now := l.repo.now()
+		start, now := time.Now(), l.repo.now()
 		if err := l.repo.putLock(ctx, l.name, newLockObject(now, l.exclusive)); err != nil {
 			l.repo.logger.WarnContext(ctx, "lock refresh failed", "lock", l.name, "error", err)
-			if now.Sub(lastOK) >= lockRefreshTimeout {
-				l.repo.logger.ErrorContext(ctx, "lock could not be refreshed, aborting operation",
-					"lock", l.name, "since", now.Sub(lastOK))
-				l.cancel()
+			if since := now.Sub(lastOK); since >= lockRefreshTimeout {
+				l.abort(ctx, since)
 				return
 			}
 			continue
 		}
 		lastOK = now
+		l.expire.Reset(lockRefreshTimeout - time.Since(start))
 	}
+}
+
+// abort cancels the operation whose lock went without a refresh for since,
+// unless it is cancelled already: by its caller, a release or the other check.
+func (l *repoLock) abort(ctx context.Context, since time.Duration) {
+	if ctx.Err() != nil {
+		return
+	}
+	l.repo.logger.ErrorContext(ctx, "lock could not be refreshed, aborting operation",
+		"lock", l.name, "since", since)
+	l.cancel()
 }
 
 // release stops the refresh goroutine and removes the lock object. It runs
