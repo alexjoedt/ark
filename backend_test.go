@@ -11,6 +11,8 @@ func TestHandleTypeString(t *testing.T) {
 		LockFile:        "locks",
 		KeyFile:         "keys",
 		MarkerFile:      "markers",
+		DataPackFile:    "datapacks",
+		TreePackFile:    "treepacks",
 		HandleType(0):   "unknown",
 		HandleType(200): "unknown",
 	}

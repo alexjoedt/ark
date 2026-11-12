@@ -436,6 +436,7 @@ func TestListingRevealsCountsAndSizes(t *testing.T) {
 	want := map[ark.HandleType]int{
 		ark.ConfigFile: 1, ark.KeyFile: 1, ark.SnapshotFile: 1, ark.TreeFile: 3,
 		ark.BlobFile: snap.Stats.ChunksNew, ark.LockFile: 0, ark.MarkerFile: 0,
+		ark.DataPackFile: 0, ark.TreePackFile: 0,
 	}
 	var plain int64
 	for _, typ := range allHandleTypes {

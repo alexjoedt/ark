@@ -29,6 +29,12 @@ const (
 	// behind by a backup that never finished makes later backups distrust
 	// Exists until Prune.
 	MarkerFile
+	// DataPackFile is a pack object holding sealed chunks, named by the
+	// SHA-256 of its bytes.
+	DataPackFile
+	// TreePackFile is a pack object holding sealed tree nodes, named by the
+	// SHA-256 of its bytes.
+	TreePackFile
 )
 
 // UnknownNamespace is the namespace name String returns for a handle type this
@@ -53,6 +59,10 @@ func (t HandleType) String() string {
 		return "keys"
 	case MarkerFile:
 		return "markers"
+	case DataPackFile:
+		return "datapacks"
+	case TreePackFile:
+		return "treepacks"
 	default:
 		return UnknownNamespace
 	}
