@@ -13,7 +13,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/moby/moby/client v0.6.2
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/urfave/cli/v3 v3.6.1
+	github.com/urfave/cli/v3 v3.14.0
 	golang.org/x/crypto v0.59.0
 	golang.org/x/term v0.48.0
 	golang.org/x/time v0.15.0
