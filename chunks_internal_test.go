@@ -30,15 +30,7 @@ func TestStreamClosedOutOfOrderKeepsTheTurnChain(t *testing.T) {
 		t.Fatalf("finish: %v", err)
 	}
 
-	f := &chunkFetcher{
-		store:   store,
-		workers: 2,
-		sem:     make(chan struct{}, 2),
-		budget:  newByteBudget(4), // one chunk at a time
-		turn:    make(chan struct{}),
-		flights: make(map[string]*flight),
-	}
-	close(f.turn)
+	f := newFetcher(store, nil, 2, 4) // one chunk at a time
 
 	a := f.reader(ctx, refs[:2])
 	b := f.reader(ctx, refs[2:3])

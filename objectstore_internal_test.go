@@ -170,6 +170,46 @@ func TestWholePackReadThatComesBackShortIsAskedAgain(t *testing.T) {
 	}
 }
 
+// TestTreePackPushedOutOfTheCacheIsReadByRange: a walk whose tree packs do
+// not fit the cache must not fetch a pack whole for every node it reads.
+func TestTreePackPushedOutOfTheCacheIsReadByRange(t *testing.T) {
+	ctx := context.Background()
+	codec := newObjectCodec()
+	defer codec.Close()
+	key := newMasterKey("repo")
+	b := newIndexBackend(newStubBackend())
+
+	session := testSession(b, codec, key)
+	nodes := map[string][]byte{}
+	for i := range 8 {
+		data := fmt.Appendf(nil, "tree node %d", i)
+		nodes[session.trees.name(data)] = data
+		if _, err := session.trees.putNamed(ctx, session.trees.name(data), data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := session.finish(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	_, trees := (&Repository{backend: b, codec: codec, key: key, logger: quietLogger}).stores()
+	trees.packs.chunkCache = newChunkCache(1) // holds no pack
+	if _, err := trees.index.load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b.reset()
+	for name, want := range nodes {
+		got, err := trees.Get(ctx, name)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("Get %s = %q, %v, want %q", name, got, err, want)
+		}
+	}
+	if _, gets, total := b.calls(TreePackFile); gets != 1 || total != len(nodes) {
+		t.Errorf("%d whole reads of the tree pack and %d requests for %d nodes, want 1 and %d",
+			gets, total, len(nodes), len(nodes))
+	}
+}
+
 // TestVerifyDoesNotBlameTheChunkForALostIndexObject: an index object
 // that was listed and is gone fails the load with ErrNotFound, which is no
 // verdict on any chunk.

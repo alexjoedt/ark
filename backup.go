@@ -245,7 +245,7 @@ func (r *Repository) parentFiles(
 	// Nothing reads a tree node after this walk: its whole packs go with it
 	// and do not stay in the store for the length of the run.
 	walk := *trees
-	walk.packs = newChunkCache(treePackCacheBytes)
+	walk.packs = newPackCache()
 	err = walkTree(ctx, &walk, m.RootTree, func(e fileEntry) error {
 		if e.Type == FileTypeRegular && e.ModTime.Before(racy) {
 			files[e.Path] = e

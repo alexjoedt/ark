@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"sync"
 
 	"github.com/klauspost/compress/zstd"
 	"golang.org/x/crypto/chacha20poly1305"
@@ -163,7 +164,7 @@ type objectStore struct {
 	// packs holds whole packs, by name. With it Get fetches the pack of an
 	// object whole and serves the objects beside it from memory; without it
 	// every Get is one range read.
-	packs *chunkCache
+	packs *packCache
 	// suspects, when set, collects the blobs Get could not open, by pack.
 	// Check sets it: nothing that reads concurrently does.
 	suspects map[string][]packEntry
@@ -181,8 +182,33 @@ func (r *Repository) stores() (chunks, trees *objectStore) {
 		return &objectStore{backend: r.backend, space: space, index: newPackIndex(r.backend, space, r.logger)}
 	}
 	chunks, trees = open(BlobFile), open(TreeFile)
-	trees.packs = newChunkCache(treePackCacheBytes)
+	trees.packs = newPackCache()
 	return chunks, trees
+}
+
+// packCache is the LRU of whole tree packs of one operation. It remembers the
+// packs it was given, so a pack pushed out is read by range from then on and
+// a walk larger than the cache downloads every pack whole at most once.
+type packCache struct {
+	*chunkCache
+	mu      sync.Mutex
+	fetched map[string]bool
+}
+
+func newPackCache() *packCache {
+	return &packCache{chunkCache: newChunkCache(treePackCacheBytes), fetched: make(map[string]bool)}
+}
+
+// first reports whether pack was never fetched whole before, and notes that
+// it is now.
+func (c *packCache) first(pack string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.fetched[pack] {
+		return false
+	}
+	c.fetched[pack] = true
+	return true
 }
 
 // verifying returns a copy of s whose Get fails with errNameMismatch when an
@@ -231,13 +257,9 @@ func (s *objectStore) putNamed(ctx context.Context, name string, data []byte) (i
 // or moved from another name fails to open, with ErrCorruptChunk or
 // ErrCorruptTree by namespace.
 func (s *objectStore) Get(ctx context.Context, name string) ([]byte, error) {
-	pack, e, ok, err := s.index.lookup(ctx, name)
+	pack, e, err := s.locate(ctx, name)
 	if err != nil {
 		return nil, err
-	}
-	if !ok {
-		return nil, fmt.Errorf("ark: failed to read %s object %s: %w: %w",
-			s.space.blobs, name, ErrNotFound, errNotIndexed)
 	}
 	var data []byte
 	if s.packs == nil {
@@ -246,6 +268,16 @@ func (s *objectStore) Get(ctx context.Context, name string) ([]byte, error) {
 		data, err = s.fromWholePack(ctx, pack, e)
 	}
 	return s.checked(pack, e, data, err)
+}
+
+// locate returns the pack and the place in it of the object stored under name.
+// An object no index lists wraps ErrNotFound.
+func (s *objectStore) locate(ctx context.Context, name string) (string, packEntry, error) {
+	pack, e, ok, err := s.index.lookup(ctx, name)
+	if err == nil && !ok {
+		err = fmt.Errorf("ark: failed to read %s object %s: %w: %w", s.space.blobs, name, ErrNotFound, errNotIndexed)
+	}
+	return pack, e, err
 }
 
 // checked is what every read does with data and err, the outcome of reading
@@ -333,6 +365,11 @@ func (s *objectStore) getMany(
 // fetching the pack whole unless s holds it.
 func (s *objectStore) fromWholePack(ctx context.Context, pack string, e packEntry) ([]byte, error) {
 	whole, ok := s.packs.get(pack)
+	if !ok && !s.packs.first(pack) {
+		// The walk outgrew the cache and pushed this pack out: fetching it
+		// whole again for every blob would cost a pack per blob.
+		return s.space.readBlob(ctx, s.backend, pack, e)
+	}
 	for retried := false; ; retried = true {
 		if !ok {
 			var err error
