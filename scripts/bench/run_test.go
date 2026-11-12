@@ -83,3 +83,30 @@ func TestSFTPDirNeedsRunAndURI(t *testing.T) {
 		}
 	}
 }
+
+func TestSummaryOneTool(t *testing.T) {
+	var b strings.Builder
+	s := time.Second
+	runs := [][]result{{{t: times{10 * s, 4 * s, 6 * s}}, {t: times{14 * s, 4 * s, 6 * s}}}}
+	summary(&b, "docker volume", []tool{{name: "ark"}}, runs, refBudget)
+	out := b.String()
+	for _, bad := range []string{"restic", "budget", "ratio", "verdict"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("one-tool summary has %q:\n%s", bad, out)
+		}
+	}
+	if !strings.Contains(out, "the medians are rough") || !strings.Contains(out, "initial      14.0s") {
+		t.Errorf("one-tool summary:\n%s", out)
+	}
+}
+
+func TestSFTPPlan(t *testing.T) {
+	if title, last, judge := sftpPlan("sftp", sftpBudget, true); title != "sftp" || last != sftpRounds ||
+		judge != sftpBudget {
+		t.Errorf("mirrored = %q %d %v", title, last, judge)
+	}
+	if title, last, judge := sftpPlan("sftp", sftpBudget, false); !strings.Contains(title, "left on the server") ||
+		last != 1 || judge != 0 {
+		t.Errorf("unmirrored = %q %d %v", title, last, judge)
+	}
+}
