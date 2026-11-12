@@ -194,6 +194,16 @@ func (s *packSpace) openBlob(pack string, e packEntry, obj []byte) ([]byte, erro
 	return data, nil
 }
 
+// checkSeal is openBlob without the content: it authenticates obj and does
+// not decompress it.
+func (s *packSpace) checkSeal(pack string, e packEntry, obj []byte) error {
+	name := hex.EncodeToString(e.name[:])
+	if _, err := unseal(s.dataKey, objectAAD(Handle{Type: s.blobs, Name: name}), obj); err != nil {
+		return fmt.Errorf("%w: failed to open %s in %s object %s: %w", s.corruptErr, name, s.packs, pack, err)
+	}
+	return nil
+}
+
 // packWriter collects sealed blobs of one type into pack objects. It is safe
 // for concurrent use. A pack that fails to upload fails the writer: the pack
 // held blobs whose add had returned, so every later add and flush returns

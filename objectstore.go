@@ -75,6 +75,16 @@ func (c *objectCodec) seal(key *[32]byte, aad string, data []byte) []byte {
 // open reverses seal. A changed byte, an unknown format byte, a different key
 // or a different aad all return errSealBroken.
 func (c *objectCodec) open(key *[32]byte, aad string, obj []byte) ([]byte, error) {
+	frame, err := unseal(key, aad, obj)
+	if err != nil {
+		return nil, err
+	}
+	return c.dec.DecodeAll(frame, nil)
+}
+
+// unseal authenticates obj and returns the zstd frame it seals: all of open
+// but the decompression.
+func unseal(key *[32]byte, aad string, obj []byte) ([]byte, error) {
 	if len(obj) == 0 {
 		return nil, fmt.Errorf("%w: object is empty", errSealBroken)
 	}
@@ -90,7 +100,7 @@ func (c *objectCodec) open(key *[32]byte, aad string, obj []byte) ([]byte, error
 	if err != nil {
 		return nil, errSealBroken
 	}
-	return c.dec.DecodeAll(frame, nil)
+	return frame, nil
 }
 
 // objectAAD is the associated data an object is sealed with, so an object
@@ -323,11 +333,23 @@ func (s *objectStore) checked(pack string, e packEntry, data []byte, err error) 
 func (s *objectStore) getMany(
 	ctx context.Context, pack string, entries []packEntry, fn func(e packEntry, data []byte, err error) error,
 ) error {
-	h := Handle{Type: s.space.packs, Name: pack}
-	yield := func(e packEntry, data []byte, err error) error {
+	return s.sealedMany(ctx, pack, entries, func(e packEntry, sealed []byte, err error) error {
+		var data []byte
+		if err == nil {
+			data, err = s.space.openBlob(pack, e, sealed)
+		}
 		data, err = s.checked(pack, e, data, err)
 		return fn(e, data, err)
-	}
+	})
+}
+
+// sealedMany is getMany before a blob is opened: yield gets the sealed bytes of
+// each blob as the pack holds them, which are only valid during the call, or
+// the error of the read that should have returned them.
+func (s *objectStore) sealedMany(
+	ctx context.Context, pack string, entries []packEntry, yield func(e packEntry, sealed []byte, err error) error,
+) error {
+	h := Handle{Type: s.space.packs, Name: pack}
 	// size is where the pack ends, once a read ran past it.
 	size, sized := uint64(0), false
 	for len(entries) > 0 {
@@ -360,12 +382,11 @@ func (s *objectStore) getMany(
 			n = len(entries)
 		}
 		for _, e := range entries[:n] {
-			var data []byte
-			blobErr := err
+			var sealed []byte
 			if err == nil {
-				data, blobErr = s.space.openBlob(pack, e, whole[uint64(e.offset)-start:][:e.length])
+				sealed = whole[uint64(e.offset)-start:][:e.length]
 			}
-			if err := yield(e, data, blobErr); err != nil {
+			if err := yield(e, sealed, err); err != nil {
 				return err
 			}
 		}

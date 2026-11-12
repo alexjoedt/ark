@@ -474,8 +474,11 @@ type PruneOption func(*pruneConfig)
 func WithPruneDryRun() PruneOption { return func(c *pruneConfig) { c.dryRun = true } }
 
 // Prune deletes the packs that hold no object a snapshot references, and the
-// packs no index lists. A pack that still holds one referenced object stays
-// whole.
+// packs no index lists. From a pack that holds both it copies the referenced
+// objects into a new pack and deletes the old one: every such tree pack, and
+// data packs, those with the largest unused share first, until at most 5% of
+// the object bytes in the repository are unused. An object that does not
+// open while it is copied fails the call with nothing deleted.
 //
 // It deletes nothing when a snapshot references an object no index lists:
 // the error names RebuildIndex, which restores the index from the packs.

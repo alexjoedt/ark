@@ -62,6 +62,9 @@ type packSession struct {
 	stored  [2][]indexedPack
 	pending int
 	last    time.Time
+	// indexed names the index objects the session stored, by side. Only
+	// flushIndex appends, under flushing.
+	indexed [2][]string
 }
 
 // writeSession returns the session of a run that is about to start.
@@ -126,7 +129,9 @@ func (p *packSession) flushIndex(ctx context.Context, force bool) error {
 		if len(packs[i]) == 0 {
 			continue
 		}
-		if _, err := s.index.write(ctx, packs[i]); err != nil {
+		names, err := s.index.write(ctx, packs[i])
+		p.indexed[i] = append(p.indexed[i], names...)
+		if err != nil {
 			return err
 		}
 	}

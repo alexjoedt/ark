@@ -1,6 +1,7 @@
 package ark
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,32 +10,60 @@ import (
 	"slices"
 )
 
+// pruneUnusedPercent is the share of the stored blob bytes a prune leaves
+// unused at most: blobs no snapshot references and second copies of blobs, in
+// the packs it keeps.
+const pruneUnusedPercent = 5
+
+// packUse is what a prune knows about one pack the index lists.
+type packUse struct {
+	// blobs and bytes are what the index lists in the pack, unreferenced the
+	// bytes of its blobs no snapshot references.
+	blobs               int
+	bytes, unreferenced int64
+	// liveBlobs and live are the referenced blobs that count as stored here:
+	// a blob in several packs is live in one of them.
+	liveBlobs int
+	live      int64
+	// stored says the pack exists. repack says its live blobs are copied into
+	// a new pack and it is deleted.
+	stored, repack bool
+}
+
+// unused returns the bytes a repack of the pack gives back.
+func (u *packUse) unused() int64 { return u.bytes - u.live }
+
+// share returns n as a share of the pack's bytes.
+func (u *packUse) share(n int64) float64 { return float64(n) / float64(u.bytes) }
+
 // prunePlan is what a prune does to the packs and the index of one blob
 // type.
 type prunePlan struct {
 	store *objectStore
+	// live names every referenced blob of the type.
+	live  map[string]struct{}
 	table *indexTable
-	// referenced marks the packs of table.packs that hold a referenced blob
-	// and stay. The index is written from them when rewrite is set.
-	referenced []bool
-	rewrite    bool
-	// stored is every pack in the namespace. remove names those of them that
-	// no index lists or that hold no referenced blob, with the number of
-	// blobs the index lists in each: none for a pack it does not list.
+	// use describes the packs of table.packs, by their number.
+	use []packUse
+	// stored is every pack in the namespace.
 	stored []BlobInfo
-	remove map[string]int
+	// repacked lists the packs a repack stored.
+	repacked []indexedPack
 }
 
-// runGC deletes the packs without a referenced blob and the packs no index
-// lists, and rewrites the index without them. Nothing is deleted before
+// runGC deletes the packs without a live blob and the packs no index lists,
+// copies the live blobs of partly dead packs into new packs until the unused
+// bytes fit the budget, and rewrites the index. Nothing is deleted before
 // every snapshot was walked and every blob it references was found in the
 // index: a prune that trusted an incomplete index would delete packs whose
 // index object was lost.
 //
-// The order is what a kill at any point leaves readable: the complete new
-// index, Sync, the old index objects, Sync, then the packs. Until the last
-// step every listed pack is stored; after a kill in it the index lists
-// nothing that is gone, and the next prune removes the packs left over.
+// The order is what a kill at any point leaves readable: the new packs, Sync,
+// the complete new index, Sync, the old index objects, Sync, then the old
+// packs. Until the last step every listed pack is stored; after a kill in it
+// the index lists nothing that is gone, and the next prune removes the packs
+// left over. A kill before it leaves blobs listed in an old pack and a new
+// one, of which the next prune keeps the new one (liveCopy).
 func (r *Repository) runGC(ctx context.Context, dryRun bool, progress ProgressFunc) (*PruneResult, error) {
 	logger := r.logger.With("component", "gc")
 
@@ -67,23 +96,28 @@ func (r *Repository) runGC(ctx context.Context, dryRun bool, progress ProgressFu
 		}
 	}
 
-	plans := []*prunePlan{{store: chunks}, {store: trees}}
+	plans := []*prunePlan{{store: chunks, live: liveChunks}, {store: trees, live: liveTrees}}
 	scanned := 0
-	for i, live := range []map[string]struct{}{liveChunks, liveTrees} {
-		if err := plans[i].plan(ctx, live); err != nil {
+	for _, p := range plans {
+		if err := p.plan(ctx); err != nil {
 			return nil, fmt.Errorf("gc: %w", err)
 		}
-		scanned += len(plans[i].stored)
+		scanned += len(p.stored)
 	}
-
 	result := &PruneResult{DryRun: dryRun}
+	result.BytesRepacked, result.BytesUnused = chooseRepacks(plans)
+
+	if !dryRun {
+		indexed, err := r.repack(ctx, plans, result.BytesRepacked, progress)
+		if err != nil {
+			return nil, fmt.Errorf("gc: %w", err)
+		}
+		if err := r.rewriteIndexes(ctx, plans, indexed); err != nil {
+			return nil, fmt.Errorf("gc: %w", err)
+		}
+	}
 	ev := ProgressEvent{Phase: PhaseSweep, ChunksTotal: scanned}
 	progress(ev)
-	if !dryRun {
-		if err := r.rewriteIndexes(ctx, plans); err != nil {
-			return nil, fmt.Errorf("gc: %w", err)
-		}
-	}
 	for _, p := range plans {
 		if err := p.sweep(ctx, r, dryRun, result, func() {
 			ev.ChunksDone++
@@ -102,7 +136,10 @@ func (r *Repository) runGC(ctx context.Context, dryRun bool, progress ProgressFu
 		"scanned", scanned,
 		"live", len(liveChunks)+len(liveTrees),
 		"deleted", result.BlobsRemoved,
+		"packs_deleted", result.PacksDeleted,
 		"freed_bytes", result.BytesFreed,
+		"repacked_bytes", result.BytesRepacked,
+		"unused_bytes", result.BytesUnused,
 		"dry_run", dryRun,
 	)
 	ev.Phase = PhaseFinalize
@@ -119,11 +156,9 @@ func notIndexedHint(err error) error {
 		"nothing was deleted, RebuildIndex restores the index from the packs", err)
 }
 
-// plan loads the index and lists the packs of p's namespace, and decides
-// what goes: live names every referenced blob of the type. A pack stays
-// while the index lists a referenced blob in it, also when that is a second
-// copy of the blob.
-func (p *prunePlan) plan(ctx context.Context, live map[string]struct{}) error {
+// plan loads the index, lists the packs of p's namespace and counts what
+// every listed pack holds.
+func (p *prunePlan) plan(ctx context.Context) error {
 	x := p.store.index
 	t, err := x.load(ctx)
 	if err != nil {
@@ -131,37 +166,30 @@ func (p *prunePlan) plan(ctx context.Context, live map[string]struct{}) error {
 	}
 	p.table = t
 
-	p.referenced = make([]bool, len(t.packs))
-	blobs := make([]int, len(t.packs))
-	var name [2 * sha256.Size]byte
-	for _, records := range &t.records {
-		for _, rec := range records {
-			blobs[rec.pack]++
-			hex.Encode(name[:], rec.name[:])
-			if _, ok := live[string(name[:])]; ok {
-				p.referenced[rec.pack] = true
+	p.use = make([]packUse, len(t.packs))
+	p.eachBlob(func(copies []indexRecord, referenced bool) {
+		for _, rec := range copies {
+			u := &p.use[rec.pack]
+			u.blobs++
+			u.bytes += int64(rec.length)
+			if !referenced {
+				u.unreferenced += int64(rec.length)
 			}
 		}
-	}
-	dead := make(map[string]int)
-	kept := 0
-	for i, pack := range t.packs {
-		if p.referenced[i] {
-			kept += blobs[i]
-			continue
+	})
+	// Only once every pack knows its unreferenced bytes: liveCopy compares them.
+	p.eachBlob(func(copies []indexRecord, referenced bool) {
+		if referenced {
+			rec := p.liveCopy(copies)
+			p.use[rec.pack].liveBlobs++
+			p.use[rec.pack].live += int64(rec.length)
 		}
-		dead[hex.EncodeToString(pack[:])] = blobs[i]
-	}
-	// One object per indexMaxRecords blobs is what a rewrite leaves at most.
-	p.rewrite = len(dead) > 0 || len(t.unreadable) > 0 ||
-		len(t.objects) > (kept+indexMaxRecords-1)/indexMaxRecords
+	})
 
-	p.remove = make(map[string]int)
 	err = p.store.backend.List(ctx, x.space.packs, func(info BlobInfo) error {
 		p.stored = append(p.stored, info)
-		lost, isDead := dead[info.Name]
-		if _, listed := t.pack(info.Name); isDead || !listed {
-			p.remove[info.Name] = lost
+		if i, listed := t.pack(info.Name); listed {
+			p.use[i].stored = true
 		}
 		return nil
 	})
@@ -169,6 +197,168 @@ func (p *prunePlan) plan(ctx context.Context, live map[string]struct{}) error {
 		return fmt.Errorf("ark: failed to list %s objects: %w", x.space.packs, err)
 	}
 	return nil
+}
+
+// eachBlob calls fn once per blob the index lists, with every record of it
+// and whether a snapshot references the blob.
+func (p *prunePlan) eachBlob(fn func(copies []indexRecord, referenced bool)) {
+	var name [2 * sha256.Size]byte
+	for _, records := range &p.table.records {
+		for len(records) > 0 {
+			n := 1
+			for n < len(records) && records[n].name == records[0].name {
+				n++
+			}
+			hex.Encode(name[:], records[0].name[:])
+			_, referenced := p.live[string(name[:])]
+			fn(records[:n], referenced)
+			records = records[n:]
+		}
+	}
+}
+
+// liveCopy returns the record a referenced blob counts as stored at: of its
+// copies the one in the pack with the smallest share of unreferenced bytes,
+// of several such the one in the pack with the smallest name. The output of
+// an interrupted repack holds no unreferenced blob, so it wins over the pack
+// it was copied from, which then goes without being read again.
+func (p *prunePlan) liveCopy(copies []indexRecord) indexRecord {
+	share := func(rec indexRecord) float64 {
+		u := &p.use[rec.pack]
+		return u.share(u.unreferenced)
+	}
+	// Records are in the order of their pack names.
+	return slices.MinFunc(copies, func(a, b indexRecord) int { return cmp.Compare(share(a), share(b)) })
+}
+
+// chooseRepacks marks the packs a prune rewrites and returns the bytes of
+// the blobs it copies for that and the unused bytes it leaves. A tree pack
+// with an unreferenced node is always rewritten: tree packs are read whole.
+// Data packs are rewritten in the order of their unused share until the unused
+// bytes of the repository fit pruneUnusedPercent. A pack whose only unused
+// bytes are second copies is never chosen, and neither is one that is lost:
+// its entries stay for Check to report.
+func chooseRepacks(plans []*prunePlan) (repacked, unused int64) {
+	var live int64
+	var data []*packUse
+	for _, p := range plans {
+		for i := range p.use {
+			u := &p.use[i]
+			if u.live == 0 {
+				continue
+			}
+			live += u.live
+			switch {
+			case u.unreferenced == 0 || !u.stored:
+				unused += u.unused()
+			case p.store.space.blobs == TreeFile:
+				u.repack = true
+				repacked += u.live
+			default:
+				unused += u.unused()
+				data = append(data, u)
+			}
+		}
+	}
+	slices.SortStableFunc(data, func(a, b *packUse) int {
+		return cmp.Compare(b.share(b.unused()), a.share(a.unused()))
+	})
+	for _, u := range data {
+		if unused*100 <= pruneUnusedPercent*(live+unused) {
+			break
+		}
+		u.repack = true
+		repacked += u.live
+		unused -= u.unused()
+	}
+	return repacked, unused
+}
+
+// repack copies the live blobs of the packs chosen for it into new packs,
+// which it makes durable and lists in the index, and returns the index
+// objects it stored for that, data then tree. The blobs are copied as they
+// are sealed, each one authenticated first: one that does not open ends the
+// prune, with nothing deleted yet.
+func (r *Repository) repack(
+	ctx context.Context, plans []*prunePlan, total int64, progress ProgressFunc,
+) ([2][]string, error) {
+	if total == 0 {
+		return [2][]string{}, nil
+	}
+	ev := ProgressEvent{Phase: PhaseStore, BytesTotal: total}
+	progress(ev)
+	// The session of a backup: packs, checkpoints, Sync before every index
+	// object. What it lists in the index is listed in the old packs too until
+	// the index is rewritten.
+	session := r.writeSession()
+	for i, p := range plans {
+		w := []*objectStore{session.chunks, session.trees}[i].writer
+		stored := w.stored
+		// One add at a time, so one call at a time.
+		w.stored = func(ctx context.Context, pack string, entries []packEntry) error {
+			p.repacked = append(p.repacked, indexedPack{name: pack, entries: entries})
+			return stored(ctx, pack, entries)
+		}
+		// ponytail: one pack after the other, each read before it is written.
+		// Read ahead with the repository's concurrency once a prune over a
+		// slow backend shows the wait.
+		moving := p.moving()
+		for n, pack := range p.table.packs {
+			entries := moving[uint32(n)]
+			if len(entries) == 0 {
+				continue
+			}
+			slices.SortFunc(entries, func(a, b packEntry) int { return cmp.Compare(a.offset, b.offset) })
+			name := hex.EncodeToString(pack[:])
+			err := p.store.sealedMany(ctx, name, entries, func(e packEntry, sealed []byte, err error) error {
+				if err == nil {
+					err = p.store.space.checkSeal(name, e, sealed)
+				}
+				if err != nil {
+					return err
+				}
+				return w.add(ctx, hex.EncodeToString(e.name[:]), sealed)
+			})
+			if err != nil {
+				return [2][]string{}, fmt.Errorf("repack: %w", err)
+			}
+			ev.BytesDone += p.use[n].live
+			progress(ev)
+		}
+	}
+	if err := session.finish(ctx); err != nil {
+		return [2][]string{}, fmt.Errorf("repack: %w", err)
+	}
+	return session.indexed, nil
+}
+
+// moving returns the live blobs of the packs chosen for a repack, by the
+// number of their pack.
+func (p *prunePlan) moving() map[uint32][]packEntry {
+	moving := make(map[uint32][]packEntry)
+	p.eachBlob(func(copies []indexRecord, referenced bool) {
+		if !referenced {
+			return
+		}
+		if rec := p.liveCopy(copies); p.use[rec.pack].repack {
+			moving[rec.pack] = append(moving[rec.pack], rec.packEntry)
+		}
+	})
+	return moving
+}
+
+// rewrite reports whether the index is written again: when a listed pack
+// goes, an index object does not open, or more objects exist than a rewrite
+// leaves, one per indexMaxRecords blobs.
+func (p *prunePlan) rewrite() bool {
+	kept := 0
+	for i := range p.use {
+		if p.use[i].live == 0 || p.use[i].repack {
+			return true
+		}
+		kept += p.use[i].blobs
+	}
+	return len(p.table.unreadable) > 0 || len(p.table.objects) > (kept+indexMaxRecords-1)/indexMaxRecords
 }
 
 // indexSet is the index of one blob type as a prune or a rebuild leaves it:
@@ -180,13 +370,14 @@ type indexSet struct {
 	old   []string
 }
 
-// rewriteIndexes stores the index of the packs that stay and deletes the
-// index objects it replaces. An object that does not open goes last, with
-// the packs.
-func (r *Repository) rewriteIndexes(ctx context.Context, plans []*prunePlan) error {
+// rewriteIndexes stores the index of the packs that stay and of those a
+// repack stored, and deletes the index objects it replaces: those the prune
+// loaded and indexed, those the repack stored, data then tree. An object that
+// does not open goes last, with the packs.
+func (r *Repository) rewriteIndexes(ctx context.Context, plans []*prunePlan, indexed [2][]string) error {
 	var sets []indexSet
-	for _, p := range plans {
-		if !p.rewrite {
+	for i, p := range plans {
+		if !p.rewrite() {
 			continue
 		}
 		old := slices.DeleteFunc(slices.Clone(p.table.objects), func(name string) bool {
@@ -194,8 +385,14 @@ func (r *Repository) rewriteIndexes(ctx context.Context, plans []*prunePlan) err
 		})
 		sets = append(sets, indexSet{
 			space: p.store.space,
-			packs: func() []indexedPack { return p.table.listed(p.referenced) },
-			old:   old,
+			packs: func() []indexedPack {
+				keep := make([]bool, len(p.use))
+				for n := range p.use {
+					keep[n] = p.use[n].live > 0 && !p.use[n].repack
+				}
+				return append(p.table.listed(keep), p.repacked...)
+			},
+			old: append(old, indexed[i]...),
 		})
 	}
 	return r.replaceIndexes(ctx, sets)
@@ -318,10 +515,11 @@ func withoutCopies(kept, readable []indexedPack) []indexedPack {
 	return slices.DeleteFunc(kept, func(p indexedPack) bool { return len(p.entries) == 0 })
 }
 
-// sweep deletes the packs of p.remove and the index objects that do not
-// open, and adds what it removed to result. It calls scanned once per stored
-// pack. A pack that fails to delete stays for the next prune, which finds it
-// listed nowhere.
+// sweep deletes the packs that hold no live blob, those a repack copied from
+// and those no index lists, then the index objects that do not open, and adds
+// what it removed to result. It calls scanned once per stored pack. A pack
+// that fails to delete stays for the next prune, which finds it listed
+// nowhere.
 func (p *prunePlan) sweep(
 	ctx context.Context, r *Repository, dryRun bool, result *PruneResult, scanned func(),
 ) error {
@@ -330,7 +528,19 @@ func (p *prunePlan) sweep(
 		if err := ctx.Err(); err != nil {
 			return err //nolint:wrapcheck // the caller's own cancellation
 		}
-		blobs, remove := p.remove[info.Name]
+		// A pack no index lists goes with its bytes only.
+		blobs, copied, remove := 0, int64(0), true
+		if i, listed := p.table.pack(info.Name); listed {
+			u := &p.use[i]
+			switch {
+			case u.live == 0:
+				blobs = u.blobs
+			case u.repack:
+				blobs, copied = u.blobs-u.liveBlobs, u.live
+			default:
+				remove = false
+			}
+		}
 		if remove && !dryRun {
 			if err := r.backend.Delete(ctx, Handle{Type: space.packs, Name: info.Name}); err != nil {
 				r.logger.WarnContext(ctx, "gc: failed to delete an unreferenced pack",
@@ -339,8 +549,9 @@ func (p *prunePlan) sweep(
 			}
 		}
 		if remove {
+			result.PacksDeleted++
 			result.BlobsRemoved += blobs
-			result.BytesFreed += info.Size
+			result.BytesFreed += info.Size - copied
 		}
 		scanned()
 	}

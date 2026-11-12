@@ -161,14 +161,26 @@ type RestoreResult struct {
 	BytesRestored int64
 }
 
-// PruneResult is returned by Prune.
+// PruneResult is returned by Prune. A dry run fills it with what the same
+// prune would do.
 type PruneResult struct {
 	// BlobsRemoved counts the chunks and tree nodes the index listed in the
-	// packs that were deleted. A pack no index listed adds its bytes only.
+	// packs that were deleted, less those copied into new packs. A pack no
+	// index listed adds its bytes only.
 	BlobsRemoved int
-	// BytesFreed is the stored size of the deleted packs.
+	// BytesFreed is the stored size of the deleted packs less BytesRepacked.
 	BytesFreed int64
-	DryRun     bool
+	// PacksDeleted counts the packs that were deleted: those without a
+	// referenced object, those no index listed, and those whose referenced
+	// objects were copied into new packs.
+	PacksDeleted int
+	// BytesRepacked is the sealed size of the objects copied into new packs.
+	BytesRepacked int64
+	// BytesUnused is the sealed size of what stays in the repository without
+	// use, objects no snapshot references and second copies of objects: at
+	// most 5% of the object bytes, unless second copies alone are more.
+	BytesUnused int64
+	DryRun      bool
 }
 
 // VerifyResult is returned by Verify.

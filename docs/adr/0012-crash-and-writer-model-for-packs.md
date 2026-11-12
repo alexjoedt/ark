@@ -80,7 +80,8 @@ triggers and the reuse after an interrupt.
 Prune depends on a complete index. `TestPruneAbortsWhenTheIndexHidesALiveBlob` cuts an index object
 short and expects no delete, `TestPruneDeletesDeadAndUnlistedPacks` covers what goes and that the
 index is rewritten without it. Until packs are repacked, a pack with one referenced blob stays
-whole, so forgetting a snapshot frees only packs that are entirely unreferenced.
+whole, so forgetting a snapshot frees only packs that are entirely unreferenced. 0013 adds the
+repacking.
 
 The index is trusted. Someone who can write to the backend can put back the index objects of a
 pruned backup; a later backup of the same data then stores nothing and its snapshot does not
