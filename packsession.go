@@ -15,6 +15,10 @@ const checkpointInterval = 10 * time.Minute
 
 // heldBlobs is the set of blobs a run put into packs. No index lists them
 // before the run's next checkpoint, so the run asks here first.
+//
+// ponytail: the set keeps every blob of the run, about 80 bytes each, also
+// those a checkpoint has listed since. Release them after the index write
+// once a run of many million chunks shows the memory.
 type heldBlobs struct {
 	mu    sync.Mutex
 	names map[[sha256.Size]byte]struct{}
