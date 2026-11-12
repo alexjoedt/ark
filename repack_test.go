@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math/rand/v2"
 	"slices"
 	"strings"
 	"sync"
@@ -86,6 +87,24 @@ func assertRestores(t *testing.T, repo *ark.Repository, snap *ark.Snapshot, src 
 	}
 	if !maps.Equal(sink.written, src.files) {
 		t.Errorf("the restore of %s differs from its source", src.name)
+	}
+}
+
+// withoutDataIndex runs fn while the data index objects are set aside: a
+// backup in fn stores every chunk it meets, also one an earlier backup stored,
+// and a lookup in fn finds only what fn stored.
+func withoutDataIndex(t *testing.T, b ark.Backend, fn func()) {
+	t.Helper()
+	saved := map[string][]byte{}
+	for _, name := range objectNames(t, b, ark.DataIndexFile) {
+		saved[name] = readObject(t, b, ark.DataIndexFile, name)
+		if err := b.Delete(context.Background(), ark.Handle{Type: ark.DataIndexFile, Name: name}); err != nil {
+			t.Fatalf("delete index object: %v", err)
+		}
+	}
+	fn()
+	for name, obj := range saved {
+		putObject(t, b, ark.DataIndexFile, name, obj)
 	}
 }
 
@@ -318,12 +337,8 @@ func TestPruneLeavesALostPackToCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
-	if got := b.take(); got["put datapacks"] != 0 || got["put treepacks"] != 1 || res.BytesUnused == 0 {
-		t.Errorf(
-			"Prune = %+v, %v; want the tree pack rewritten and the lost data pack counted as it is listed",
-			*res,
-			got,
-		)
+	if got := b.take(); got["put datapacks"] != 0 || got["put treepacks"] != 1 || res.BytesUnused != 0 {
+		t.Errorf("Prune = %+v, %v; want the tree pack rewritten and no byte of the lost data pack counted", *res, got)
 	}
 	if now, _, _ := place(t, repo, a[0]); now != lost {
 		t.Errorf("chunk of the lost pack resolves to %s, want its entry kept", now)
@@ -442,18 +457,8 @@ func TestPruneCountsABlobStoredTwiceOnce(t *testing.T) {
 				treeOf("second", dirOf{"y", slices.Concat(x[:2], contents("y", 2))}),
 			}
 			snaps := []*ark.Snapshot{mustBackup(t, repo, srcs[0])}
-			// Without the data index the second backup stores x[0] and x[1] again.
-			saved := map[string][]byte{}
-			for _, name := range objectNames(t, b, ark.DataIndexFile) {
-				saved[name] = readObject(t, b, ark.DataIndexFile, name)
-				if err := b.Delete(ctx, ark.Handle{Type: ark.DataIndexFile, Name: name}); err != nil {
-					t.Fatalf("delete index object: %v", err)
-				}
-			}
-			snaps = append(snaps, mustBackup(t, repo, srcs[1]))
-			for name, obj := range saved {
-				putObject(t, b, ark.DataIndexFile, name, obj)
-			}
+			// The second backup stores x[0] and x[1] again.
+			withoutDataIndex(t, b, func() { snaps = append(snaps, mustBackup(t, repo, srcs[1])) })
 			_, _, len0 := place(t, repo, x[0])
 			_, _, len1 := place(t, repo, x[1])
 			if n := len(objectNames(t, b, ark.DataPackFile)); n != 2 {
@@ -489,6 +494,167 @@ func TestPruneCountsABlobStoredTwiceOnce(t *testing.T) {
 			assertRestores(t, repo, snaps[kept], srcs[kept])
 			if check := mustCheck(t, repo); len(check.Errors) != 0 || len(check.Warnings) != 0 {
 				t.Errorf("Check = %+v, want no findings", check)
+			}
+		})
+	}
+}
+
+// TestPruneSecondCopiesDoNotSelectOtherPacks stores twenty chunks twice, in
+// packs without an unreferenced chunk, which no prune rewrites: far more than
+// the budget, for good. A pack with one dead chunk in forty is within the
+// budget on its own and is left alone, where counting what cannot be freed
+// would have every partly dead pack rewritten at every prune.
+func TestPruneSecondCopiesDoNotSelectOtherPacks(t *testing.T) {
+	ctx := context.Background()
+	b := newOpCountingBackend()
+	repo := openRepo(t, b)
+	x, c := contents("x", 20), contents("c", 40)
+	// Each pack holds a chunk the other lacks, so neither goes as a whole.
+	mustBackup(t, repo, treeOf("first", dirOf{"x", slices.Concat(x, contents("z", 1))}))
+	withoutDataIndex(t, b, func() {
+		mustBackup(t, repo, treeOf("second", dirOf{"y", slices.Concat(x, contents("y", 1))}))
+	})
+	gone := mustBackup(t, repo, treeOf("two", dirOf{"c", c}))
+	mustBackup(t, repo, treeOf("keep", dirOf{"e", c[:39]}))
+	mustForget(t, repo, gone)
+
+	var twice int64
+	for _, content := range x {
+		_, _, n := place(t, repo, content)
+		twice += n
+	}
+	_, _, dead := place(t, repo, c[39])
+
+	b.take()
+	res, err := repo.Prune(ctx)
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	got := b.take()
+	var stored int64
+	for _, typ := range []ark.HandleType{ark.BlobFile, ark.TreeFile} {
+		_, length := blobPlaces(t, repo, typ)
+		for _, n := range length {
+			stored += n
+		}
+	}
+	stored += twice
+	if twice*100 <= 5*stored || (twice+dead)*100 <= 5*stored || dead*100 > 5*stored {
+		t.Fatalf("fixture: %d bytes stored twice and %d dead of %d, want the second copies alone above 5%%",
+			twice, dead, stored)
+	}
+	if got["put datapacks"] != 0 || got["delete datapacks"] != 0 || res.BytesRepacked != 0 ||
+		res.BytesUnused != twice+dead {
+		t.Errorf("Prune = %+v, %v; want no data pack rewritten and %d bytes unused", *res, got, twice+dead)
+	}
+}
+
+// TestPruneCountsALostCopyOnlyWithoutAStoredOne lists two chunks in a pack
+// that is lost and in one that is stored and partly dead. Counted as stored
+// in the lost pack, which holds nothing unreferenced, they would leave the
+// other pack without a live chunk, and the prune would delete their last
+// copy.
+func TestPruneCountsALostCopyOnlyWithoutAStoredOne(t *testing.T) {
+	ctx := context.Background()
+	b := newOpCountingBackend()
+	repo := openRepo(t, b)
+	x := contents("x", 4)
+	mustBackup(t, repo, treeOf("first", dirOf{"x", x}))
+	lost, _, _ := place(t, repo, x[0])
+	var gone *ark.Snapshot
+	withoutDataIndex(t, b, func() {
+		gone = mustBackup(t, repo, treeOf("second", dirOf{"y", slices.Concat(x[:2], contents("y", 2))}))
+	})
+	mustForget(t, repo, gone)
+	if err := b.Delete(ctx, ark.Handle{Type: ark.DataPackFile, Name: lost}); err != nil {
+		t.Fatalf("delete pack: %v", err)
+	}
+
+	if _, err := repo.Prune(ctx); err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	// A lookup may still resolve to the lost pack, which has the smaller name
+	// or not. The rebuild lists what is stored.
+	if _, err := repo.RebuildIndex(ctx); err != nil {
+		t.Fatalf("RebuildIndex: %v", err)
+	}
+	for _, content := range x[:2] {
+		name := ark.ObjectName(repo, []byte(content))
+		if data, err := ark.OpenObject(ctx, repo, ark.BlobFile, name); err != nil || string(data) != content {
+			t.Errorf("chunk %q after the prune: %v, want it stored", content, err)
+		}
+	}
+}
+
+// TestPruneReadsTheCopyItKeepsBeforeItDeletesTheOther stores two chunks in
+// two packs and changes a byte of one in the pack a prune counts it in. The
+// pack with the other copy goes, as a whole or after a repack that copies
+// what else is live in it. Deleted unread, it would take the last copy that
+// opens with it: the prune stops instead, and after a rebuild of the index
+// the next one keeps the good copy.
+func TestPruneReadsTheCopyItKeepsBeforeItDeletesTheOther(t *testing.T) {
+	ctx := context.Background()
+	for _, repacked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("other pack repacked %v", repacked), func(t *testing.T) {
+			b := newOpCountingBackend()
+			repo := openRepo(t, b)
+			x := contents("x", 4)
+			second := treeOf("second", dirOf{"y", slices.Concat(x[:2], contents("y", 2))})
+			third := treeOf("third", dirOf{"z", x[3:]})
+			gone := mustBackup(t, repo, treeOf("first", dirOf{"x", x}))
+			good, _, _ := place(t, repo, x[0])
+			var kept, keptThird *ark.Snapshot
+			var counted string
+			var offset, length int64
+			withoutDataIndex(t, b, func() {
+				kept = mustBackup(t, repo, second)
+				counted, offset, length = place(t, repo, x[0])
+			})
+			if repacked {
+				// One chunk of the first pack stays live there and nowhere else.
+				keptThird = mustBackup(t, repo, third)
+			}
+			// The first pack holds dead chunks now, so the two count in the second.
+			mustForget(t, repo, gone)
+			if counted == good {
+				t.Fatalf("fixture: both copies of the chunk in pack %s", good)
+			}
+			h := ark.Handle{Type: ark.DataPackFile, Name: counted}
+			pack := readObject(t, b, h.Type, h.Name)
+			pack[offset+length-1] ^= 0x01
+			putObject(t, b, h.Type, h.Name, pack)
+			before := packObjects(t, b)
+			if dry, err := repo.Prune(ctx, ark.WithPruneDryRun()); err != nil || (dry.BytesRepacked != 0) != repacked {
+				t.Fatalf("fixture: dry run = %+v, %v; want a repack: %v", dry, err, repacked)
+			}
+
+			victim := ark.ObjectName(repo, []byte(x[0]))
+			b.take()
+			_, err := repo.Prune(ctx)
+			if !errors.Is(err, ark.ErrCorruptChunk) || !strings.Contains(fmt.Sprint(err), victim) {
+				t.Fatalf("Prune = %v, want ErrCorruptChunk naming %s", err, victim)
+			}
+			for op, n := range b.take() {
+				if strings.HasPrefix(op, "put ") || strings.HasPrefix(op, "delete ") {
+					t.Errorf("the aborted prune issued %d %q", n, op)
+				}
+			}
+			if !maps.Equal(packObjects(t, b), before) {
+				t.Fatal("the aborted prune changed the packs or the index")
+			}
+
+			if _, err := repo.RebuildIndex(ctx); err != nil {
+				t.Fatalf("RebuildIndex: %v", err)
+			}
+			if _, err := repo.Prune(ctx); err != nil {
+				t.Fatalf("Prune after the rebuild: %v", err)
+			}
+			assertRestores(t, repo, kept, second)
+			if repacked {
+				assertRestores(t, repo, keptThird, third)
+			}
+			if check := mustCheck(t, repo); len(check.Errors) != 0 {
+				t.Errorf("Check = %+v, want no errors", check)
 			}
 		})
 	}
@@ -534,6 +700,81 @@ func TestPruneAbortsOnABlobThatDoesNotOpen(t *testing.T) {
 	writeBlob(t, b, repo, ark.BlobFile, victim, intact)
 	if res, err := repo.Prune(ctx); err != nil || res.BytesRepacked == 0 {
 		t.Fatalf("Prune with the chunk restored = %+v, %v; want a repack", res, err)
+	}
+	assertRestores(t, repo, kept, keep)
+	if check := mustCheck(t, repo); len(check.Errors) != 0 || len(check.Warnings) != 0 {
+		t.Errorf("Check = %+v, want no findings", check)
+	}
+}
+
+// incompressible returns n file contents of 200 KiB that do not compress,
+// each its own chunk: they are shorter than the smallest chunk.
+func incompressible(seed byte, n int) []string {
+	rnd := rand.NewChaCha8([32]byte{seed})
+	out := make([]string, n)
+	buf := make([]byte, 200<<10)
+	for i := range out {
+		rnd.Read(buf)
+		out[i] = string(buf)
+	}
+	return out
+}
+
+// TestPruneAbortedRepackIsNotCopiedAgain damages a live chunk that a repack
+// reaches after it stored a new pack. The prune stops there, and so does the
+// next one: it finds the pack of the first listed and stores none again.
+// Unlisted, the pack would be copied anew by every prune that fails, and none
+// of them gets as far as deleting what the one before left.
+func TestPruneAbortedRepackIsNotCopiedAgain(t *testing.T) {
+	ctx := context.Background()
+	b := newOpCountingBackend()
+	openRepo(t, b)
+	// In walk order, so that each of the two packs gets a dead quarter.
+	repo, err := ark.Open(ctx, b, testPassword, ark.WithConcurrency(1))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer repo.Close()
+	live := [2][]string{incompressible(1, 60), incompressible(2, 60)}
+	keep := treeOf("keep", dirOf{"b", live[0]}, dirOf{"d", live[1]})
+	gone := mustBackup(t, repo, treeOf("one",
+		dirOf{"a", incompressible(3, 20)}, dirOf{"b", live[0]},
+		dirOf{"c", incompressible(4, 20)}, dirOf{"d", live[1]}))
+	kept := mustBackup(t, repo, keep)
+	mustForget(t, repo, gone)
+
+	// The last live chunk of the pack a repack reads second: by then it has
+	// copied more than a pack holds.
+	var victim string
+	var last string
+	var at int64
+	for _, content := range slices.Concat(live[0], live[1]) {
+		if pack, offset, _ := place(t, repo, content); pack > last || pack == last && offset > at {
+			victim, last, at = ark.ObjectName(repo, []byte(content)), pack, offset
+		}
+	}
+	intact := readBlob(t, b, repo, ark.BlobFile, victim)
+	broken := slices.Clone(intact)
+	broken[len(broken)-1] ^= 0x01
+	writeBlob(t, b, repo, ark.BlobFile, victim, broken)
+
+	b.take()
+	if _, err := repo.Prune(ctx); !errors.Is(err, ark.ErrCorruptChunk) {
+		t.Fatalf("Prune = %v, want ErrCorruptChunk", err)
+	}
+	if got := b.take(); got["put datapacks"] == 0 || got["delete datapacks"] != 0 {
+		t.Fatalf("fixture: the aborted prune issued %v, want a data pack stored before the damaged chunk", got)
+	}
+	if _, err := repo.Prune(ctx); !errors.Is(err, ark.ErrCorruptChunk) {
+		t.Fatalf("second Prune = %v, want ErrCorruptChunk", err)
+	}
+	if got := b.take(); got["put datapacks"] != 0 || got["delete datapacks"] != 0 {
+		t.Errorf("the second aborted prune issued %v, want no data pack stored again and none deleted", got)
+	}
+
+	writeBlob(t, b, repo, ark.BlobFile, victim, intact)
+	if _, err := repo.Prune(ctx); err != nil {
+		t.Fatalf("Prune with the chunk restored: %v", err)
 	}
 	assertRestores(t, repo, kept, keep)
 	if check := mustCheck(t, repo); len(check.Errors) != 0 || len(check.Warnings) != 0 {

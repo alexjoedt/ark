@@ -24,7 +24,8 @@ whole. The value is fixed and there is no cap on what one run rewrites (`gc.go`)
 A rewrite copies the sealed bytes of the live blobs through the pack writer of a backup. Before a
 blob is copied its seal is opened and the plaintext discarded: no decompression, no rehash. A blob
 that does not open ends the prune before anything is deleted, so damage is never copied into a
-pack the index vouches for.
+pack the index vouches for. The packs stored until then are listed in the index first, so the next
+prune counts their blobs as copied and does not store them again.
 
 The order is: new packs, Sync, the index, Sync, the old index objects deleted, Sync, the old packs
 deleted, Sync. The copying lists its packs like a backup does, at its checkpoints and when it
@@ -35,11 +36,20 @@ or more index objects exist than a rewrite would leave.
 A referenced blob listed in several packs counts as live in the pack with the smallest share of
 unreferenced bytes, in the one with the smallest name among equals. The output of an interrupted
 rewrite holds no unreferenced blob, so it wins over the pack it was copied from, and the next
-prune deletes that pack without reading it again. Second copies count toward the budget and never
-select a pack on their own.
+prune deletes that pack without reading it again. What it reads first is the copy that stays:
+before a pack with a second copy of a referenced blob is deleted, the seal of the copy the blob
+counts in is opened, as for a blob that is copied, and one that does not open ends the prune with
+nothing deleted. That copy is the last one afterwards, and nothing has read it since it was
+stored.
 
-A pack that is listed but no longer stored is not selected: prune cannot copy from it, its entries
-stay in the index, and check reports it.
+Second copies in a pack that also holds an unreferenced blob count toward the budget and go when
+the pack is rewritten. A pack whose only unused bytes are second copies is never selected, and
+those bytes do not count against the budget: no rewrite frees them, and counted they would have
+every partly dead pack rewritten at every prune. They are reported as unused.
+
+A pack that is listed but no longer stored is not selected and its bytes are not counted: prune
+cannot copy from it, its entries stay in the index, and check reports it. A blob it lists counts
+as live in it only when no stored pack holds the blob.
 
 `PruneResult` gains `PacksDeleted`, `BytesRepacked` and `BytesUnused`. `BytesFreed` is the size of
 the deleted packs less the bytes copied, `BlobsRemoved` the index entries that went less the blobs
@@ -75,9 +85,15 @@ second copies, `TestPruneWritesInAnOrderAKillCannotBreak` the order and its Sync
 `kill_test.go` kills prune at random points.
 
 A damaged live blob in a pack that prune wants to rewrite stops every prune until it is dealt
-with: `TestPruneAbortsOnABlobThatDoesNotOpen`. A lost pack does not:
-`TestPruneLeavesALostPackToCheck`.
+with: `TestPruneAbortsOnABlobThatDoesNotOpen`. Each of those prunes stores at most what the one
+before had not copied yet: `TestPruneAbortedRepackIsNotCopiedAgain`. A damaged copy that prune
+would keep while it deletes the other stops it the same way, and `RebuildIndex` then lists the
+blob in the pack that opens: `TestPruneReadsTheCopyItKeepsBeforeItDeletesTheOther`. The prune
+after an interrupted rewrite therefore reads the copied blobs once more, from the new packs. A
+lost pack stops nothing, and a blob it shares with a stored pack stays in that one:
+`TestPruneLeavesALostPackToCheck`, `TestPruneCountsALostCopyOnlyWithoutAStoredOne`.
 
-Second copies alone can keep a repository above the budget. They come from two writers storing
-the same new blob at the same time, which is rare, and they go when their pack is rewritten for
-another reason.
+Second copies alone can keep a repository above the budget, without making prune rewrite the
+packs that are within it: `TestPruneSecondCopiesDoNotSelectOtherPacks`. They come from two
+writers storing the same new blob at the same time, which is rare, and they go when their pack is
+rewritten for another reason.

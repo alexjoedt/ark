@@ -178,7 +178,8 @@ type PruneResult struct {
 	BytesRepacked int64
 	// BytesUnused is the sealed size of what stays in the repository without
 	// use, objects no snapshot references and second copies of objects: at
-	// most 5% of the object bytes, unless second copies alone are more.
+	// most 5% of the object bytes, not counting the second copies in packs
+	// without an unreferenced object, which no prune rewrites.
 	BytesUnused int64
 	DryRun      bool
 }
