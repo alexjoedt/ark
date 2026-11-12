@@ -26,7 +26,7 @@ func TestMedianSpreadVerdict(t *testing.T) {
 		{13 * s, 10 * s, "1.30", "FAIL"},
 		{5 * s, 0, "-", ""},
 	} {
-		if r, v := verdict(c.ark, c.restic, true); r != c.ratio || v != c.v {
+		if r, v := verdict(c.ark, c.restic, budget); r != c.ratio || v != c.v {
 			t.Errorf("verdict(%v, %v) = %s %s, want %s %s", c.ark, c.restic, r, v, c.ratio, c.v)
 		}
 	}

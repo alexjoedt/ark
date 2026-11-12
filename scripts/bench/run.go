@@ -24,6 +24,9 @@ import (
 
 const (
 	budget       = 1.2
+	sftpBudget   = 1.5
+	refBudget    = 1.1
+	helperImage  = "busybox:stable"
 	maxSpread    = 0.10
 	benchPass    = "bench"
 	minFree      = 45 << 30
@@ -44,13 +47,16 @@ type times [len(phases)]time.Duration
 
 // tool is one CLI against one kind of repository. repo returns a fresh
 // repository location per call and the local directory it lands in, "" when
-// that is unknown; known directories are removed after each run.
+// that is unknown; known directories are removed after each run. volume
+// backs up and restores a Docker volume filled with the dataset instead of
+// the dataset directory.
 type tool struct {
-	name string
-	bin  string
-	opts []string
-	ark  bool
-	repo func() (string, string)
+	name   string
+	bin    string
+	opts   []string
+	ark    bool
+	volume bool
+	repo   func() (string, string)
 }
 
 // result is one run of a tool: its phase times and the repository's bytes on
@@ -84,11 +90,17 @@ func runBench(
 	sp spec,
 	need uint64,
 	seed int64,
-	arkBin, resticBin, sftpDir string,
+	arkBin, refBin, resticBin, sftpDir string,
 ) error {
 	arkPath, err := exec.LookPath(arkBin)
 	if err != nil {
 		return fmt.Errorf("ark binary %s not found, build it with task build: %w", arkBin, err)
+	}
+	refPath := ""
+	if refBin != "" {
+		if refPath, err = exec.LookPath(refBin); err != nil {
+			return fmt.Errorf("reference ark binary %s not found: %w", refBin, err)
+		}
 	}
 	resticPath, err := exec.LookPath(resticBin)
 	if err != nil {
@@ -179,12 +191,15 @@ func runBench(
 	if err != nil {
 		return err
 	}
-	summary(w, "local", tools, runs, true)
+	summary(w, "local", tools, runs, budget)
 
 	if len(sftp) > 0 {
 		if err := b.sftpRow(ctx, w, sftp, sftpDir != ""); err != nil {
 			return err
 		}
+	}
+	if err := b.volumeRows(ctx, w, arkLocal, refPath, sftp, sftpDir != ""); err != nil {
+		return err
 	}
 	ok = true
 	return nil
@@ -214,24 +229,103 @@ func (b *bench) rounds(ctx context.Context, w io.Writer, tools []tool, last int)
 	}
 }
 
-// sftpRow times the sftp tools and prints the medians without a verdict:
-// sftpRounds rounds when mirrored, so each run's repository is removed again,
-// and a single round otherwise, so only one repository per tool is left on
+// sftpRow times the sftp tools against sftpBudget: sftpRounds rounds when
+// mirrored, so each run's repository is removed again, and a single round
+// without a verdict otherwise, so only one repository per tool is left on
 // the server.
 func (b *bench) sftpRow(ctx context.Context, w io.Writer, tools []tool, mirrored bool) error {
-	last, title := sftpRounds, "sftp, informational"
+	last, title, judge := sftpRounds, "sftp", sftpBudget
 	if !mirrored {
-		last, title = 1, title+", remote repositories are left on the server, pass -sftp-dir for 3 rounds"
+		last, title, judge = 1, title+", remote repositories are left on the server, pass -sftp-dir for 3 rounds", 0
 	}
 	runs, err := b.rounds(ctx, w, tools, last)
 	if err != nil {
 		return err
 	}
-	summary(w, title, tools, runs, false)
+	summary(w, title, tools, runs, judge)
 	if len(tools) == 1 {
 		_, _ = fmt.Fprintln(w, "restic skipped: ARK_SFTP_TEST_URI has no identity")
 	}
 	return nil
+}
+
+// volumeRows times ark docker backup and restore of a volume filled with the
+// dataset against the reference ark binary, when there is one, within
+// refBudget: on a local repository and, when sftp is set, over sftp with the
+// rounds of sftpRow. It runs on the small-files dataset only and is skipped
+// with a notice when no Docker daemon answers.
+func (b *bench) volumeRows(
+	ctx context.Context,
+	w io.Writer,
+	local tool,
+	refBin string,
+	sftp []tool,
+	mirrored bool,
+) error {
+	if b.sp != filesSpec {
+		_, _ = fmt.Fprintln(w, "\ndocker volume rows skipped: they run with -files")
+		return nil
+	}
+	if err := docker(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
+		_, _ = fmt.Fprintf(w, "\ndocker volume rows skipped: %v\n", err)
+		return nil
+	}
+	pair := func(t tool) []tool {
+		t.volume = true
+		ts := []tool{t}
+		if refBin != "" {
+			r := t
+			r.name, r.bin = t.name+"-ref", refBin
+			ts = append(ts, r)
+		}
+		return ts
+	}
+	type row struct {
+		title string
+		tools []tool
+		last  int
+		judge float64
+	}
+	rows := []row{{"docker volume, local", pair(local), 5, refBudget}}
+	if len(sftp) > 0 {
+		r := row{"docker volume, sftp", pair(sftp[0]), sftpRounds, refBudget}
+		if !mirrored {
+			r.title, r.last, r.judge = r.title+", remote repositories are left on the server", 1, 0
+		}
+		rows = append(rows, r)
+	}
+	for _, r := range rows {
+		runs, err := b.rounds(ctx, w, r.tools, r.last)
+		if err != nil {
+			return err
+		}
+		summary(w, r.title, r.tools, runs, r.judge)
+	}
+	if refBin == "" {
+		_, _ = fmt.Fprintln(w, "no reference column: pass -ark-ref with the ark binary to compare against")
+	}
+	return nil
+}
+
+// docker runs the docker CLI and returns its output in the error.
+func docker(ctx context.Context, args ...string) error {
+	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker %s: %w: %s", args[0], err, bytes.TrimSpace(out))
+	}
+	return nil
+}
+
+// fillVolume makes vol hold exactly the dataset, modes and times kept.
+func (b *bench) fillVolume(ctx context.Context, vol string) error {
+	return docker(ctx, "run", "--rm", "-v", vol+":/data", "-v", b.data+":/src:ro", helperImage,
+		"sh", "-c", "find /data -mindepth 1 -delete && cp -a /src/. /data")
+}
+
+// copyVolume copies vol into the empty directory dir, owned by the caller.
+func copyVolume(ctx context.Context, vol, dir string) error {
+	return docker(ctx, "run", "--rm", "-v", vol+":/data:ro", "-v", dir+":/out", helperImage,
+		"sh", "-c", fmt.Sprintf("cp -a /data/. /out && chown -R %d:%d /out", os.Getuid(), os.Getgid()))
 }
 
 // probeMirror inits an ark repository over sftp and checks that it lands
@@ -251,9 +345,10 @@ func (b *bench) probeMirror(ctx context.Context, t tool) error {
 	return nil
 }
 
-// summary prints the medians of ark (runs[0]) against restic (runs[1], when
-// present) with a warning when the spread is above maxSpread.
-func summary(w io.Writer, title string, tools []tool, runs [][]result, judged bool) {
+// summary prints the medians of tools[0] against tools[1], when present, with
+// a verdict against judge when it is set and a warning when the spread is
+// above maxSpread.
+func summary(w io.Writer, title string, tools []tool, runs [][]result, judge float64) {
 	ts := phaseTimes(runs)
 	_, _ = fmt.Fprintf(w, "\n%s, median of %d runs\n", title, len(ts[0]))
 	if !stable(ts...) {
@@ -262,7 +357,7 @@ func summary(w io.Writer, title string, tools []tool, runs [][]result, judged bo
 			parts[i] = fmt.Sprintf("%s %.0f%%", tools[i].name, spread(ts[i])*100)
 		}
 		what := "the verdict is not stable"
-		if !judged {
+		if judge == 0 {
 			what = "the medians are rough"
 		}
 		_, _ = fmt.Fprintf(w, "warning: spread %s is above %.0f%%, %s\n",
@@ -270,10 +365,11 @@ func summary(w io.Writer, title string, tools []tool, runs [][]result, judged bo
 	}
 	var restic times
 	var resticDisk float64
+	other := "restic"
 	if len(runs) > 1 {
-		restic, resticDisk = median(ts[1]), medianDisk(runs[1])
+		restic, resticDisk, other = median(ts[1]), medianDisk(runs[1]), tools[1].name
 	}
-	table(w, median(ts[0]), restic, medianDisk(runs[0]), resticDisk, judged)
+	table(w, [2]string{tools[0].name, other}, median(ts[0]), restic, medianDisk(runs[0]), resticDisk, judge)
 }
 
 func phaseTimes(runs [][]result) [][]times {
@@ -347,6 +443,12 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (res r
 	}
 	defer os.RemoveAll(b.cache)
 	tag := fmt.Sprintf("%s-%d", t.name, round)
+	vol := ""
+	if t.volume {
+		vol = fmt.Sprintf("ark-bench-%d", time.Now().UnixNano())
+		tag = "docker-" + tag
+		defer func() { _ = docker(context.WithoutCancel(ctx), "volume", "rm", "-f", vol) }()
+	}
 
 	global := func(a ...string) []string {
 		if t.ark {
@@ -366,7 +468,14 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (res r
 			syscall.Sync()
 		}
 		args := global("backup", b.data)
-		if t.ark {
+		switch {
+		case vol != "":
+			if err := b.fillVolume(ctx, vol); err != nil {
+				return res, fmt.Errorf("run: %w", err)
+			}
+			syscall.Sync()
+			args = global("--json", "docker", "backup", vol)
+		case t.ark:
 			args = global("--json", "backup", b.data)
 		}
 		d, out, err := b.exec(ctx, t, fmt.Sprintf("%s-%s", tag, phases[i]), t.ark, args...)
@@ -394,7 +503,14 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (res r
 	defer os.RemoveAll(b.restore)
 	args := global("restore", "latest", "--target", b.restore)
 	root := filepath.Join(b.restore, b.data)
-	if t.ark {
+	switch {
+	case vol != "":
+		if err := docker(ctx, "volume", "rm", vol); err != nil {
+			return res, fmt.Errorf("run: %w", err)
+		}
+		args = global("docker", "restore", "--yes", snaps[1].ID)
+		root = b.restore
+	case t.ark:
 		args = global("restore", snaps[1].ID, b.restore)
 		root = b.restore
 	}
@@ -403,6 +519,14 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (res r
 		return res, err
 	}
 	res.t[2] = d
+	if vol != "" {
+		if err := os.Mkdir(b.restore, 0o750); err != nil {
+			return res, fmt.Errorf("run: %w", err)
+		}
+		if err := copyVolume(ctx, vol, b.restore); err != nil {
+			return res, fmt.Errorf("run: %w", err)
+		}
+	}
 
 	want, _, _, err := hashTree(ctx, b.data)
 	if err != nil {
@@ -587,36 +711,36 @@ func median(runs []times) times {
 	return m
 }
 
-// verdict is the ratio column and, when judged, PASS or FAIL against budget.
-func verdict(ark, restic time.Duration, judged bool) (string, string) {
+// verdict is the ratio column and, when judge is set, PASS or FAIL against it.
+func verdict(ark, restic time.Duration, judge float64) (string, string) {
 	if restic == 0 {
 		return "-", ""
 	}
 	r := float64(ark) / float64(restic)
-	if !judged {
+	if judge == 0 {
 		return fmt.Sprintf("%.2f", r), ""
 	}
-	if r <= budget {
+	if r <= judge {
 		return fmt.Sprintf("%.2f", r), "PASS"
 	}
 	return fmt.Sprintf("%.2f", r), "FAIL"
 }
 
-func table(w io.Writer, ark, restic times, arkDisk, resticDisk float64, judged bool) {
+func table(w io.Writer, names [2]string, ark, restic times, arkDisk, resticDisk float64, judge float64) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	head := "phase\tark\trestic\tratio"
-	if judged {
-		head += fmt.Sprintf("\tbudget %.1fx", budget)
+	head := "phase\t" + names[0] + "\t" + names[1] + "\tratio"
+	if judge != 0 {
+		head += fmt.Sprintf("\tbudget %.1fx", judge)
 	}
 	_, _ = fmt.Fprintln(tw, head)
 	for p, name := range phases {
-		ratio, v := verdict(ark[p], restic[p], judged)
+		ratio, v := verdict(ark[p], restic[p], judge)
 		rs := "-"
 		if restic[p] > 0 {
 			rs = secs(restic[p])
 		}
 		line := fmt.Sprintf("%s\t%s\t%s\t%s", name, secs(ark[p]), rs, ratio)
-		if judged {
+		if judge != 0 {
 			line += "\t" + v
 		}
 		_, _ = fmt.Fprintln(tw, line)

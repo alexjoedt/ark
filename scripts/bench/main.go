@@ -27,7 +27,7 @@ func main() {
 	}
 }
 
-const usage = "usage: bench gen|mutate|hash|run -dir DIR [-seed N] [-small|-files] [-ark BIN] [-restic BIN] [-sftp-dir DIR]"
+const usage = "usage: bench gen|mutate|hash|run -dir DIR [-seed N] [-small|-files] [-ark BIN] [-ark-ref BIN] [-restic BIN] [-sftp-dir DIR]"
 
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
@@ -44,6 +44,8 @@ func run(ctx context.Context, args []string) error {
 	sftpDir := fs.String("sftp-dir", "", "run: local directory the sftp URI's path is served from, "+
 		"enables the disk ratio of sftp repositories and removes them after each run")
 	arkBin := fs.String("ark", "bin/ark", "run: ark binary")
+	refBin := fs.String("ark-ref", "", "run: reference ark binary the docker volume row is judged against, "+
+		"such as the build before a format change")
 	resticBin := fs.String("restic", "restic", "run: restic binary")
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -82,7 +84,7 @@ func run(ctx context.Context, args []string) error {
 		}
 		_, _ = fmt.Fprintf(os.Stdout, "%s  %d files, %d bytes\n", sum, files, n)
 	case "run":
-		return runBench(ctx, os.Stdout, *dir, sp, need, *seed, *arkBin, *resticBin, *sftpDir)
+		return runBench(ctx, os.Stdout, *dir, sp, need, *seed, *arkBin, *refBin, *resticBin, *sftpDir)
 	}
 	return nil
 }
