@@ -336,6 +336,7 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 	if err := r.putLock(ctx, name, newLockObject(now, exclusive)); err != nil {
 		return nil, nil, err
 	}
+	stored := now
 
 	if err := sleepCtx(ctx, lockSettleDelay); err != nil {
 		r.dropLock(ctx, name, exclusive)
@@ -360,7 +361,7 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 
 	lockCtx, cancel := context.WithCancel(ctx)
 	l := &repoLock{repo: r, name: name, exclusive: exclusive, cancel: cancel, done: make(chan struct{})}
-	go l.keepAlive(lockCtx)
+	go l.keepAlive(lockCtx, stored)
 	r.reportLock(LockEvent{Kind: LockAcquired, Exclusive: exclusive, LockID: name})
 	return lockCtx, l, nil
 }
@@ -368,14 +369,15 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 // keepAlive rewrites the lock object every lockRefreshInterval. When no
 // refresh has succeeded for lockRefreshTimeout it cancels the operation: past
 // that point another process may consider the lock stale and prune underneath
-// it.
-func (l *repoLock) keepAlive(ctx context.Context) {
+// it. lastOK is the time the stored lock object carries: the others count
+// its age from there, and a clock reading of its own at the start would land
+// at any point of whatever the caller does next.
+func (l *repoLock) keepAlive(ctx context.Context, lastOK time.Time) {
 	defer close(l.done)
 
 	t := time.NewTicker(lockRefreshInterval)
 	defer t.Stop()
 
-	lastOK := l.repo.now()
 	for {
 		select {
 		case <-ctx.Done():
