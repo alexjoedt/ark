@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 // TestMain shortens the lock settle delay. Every operation acquires a lock, so
@@ -579,29 +580,42 @@ func TestRefreshTimeoutRunsFromTheStoredLockObject(t *testing.T) {
 	}
 }
 
-// hangingLocks blocks every lock write once hang is closed until free is,
-// whatever happens to the context of the write.
+// hangingLocks blocks every lock write after the first, the acquire's, until
+// free is closed, whatever happens to the context of the write. hung is
+// closed once a write blocks.
 type hangingLocks struct {
 	*stubBackend
-	hang, free chan struct{}
+	free, hung chan struct{}
+
+	mu     sync.Mutex
+	writes int
 }
 
-func (b hangingLocks) Put(ctx context.Context, h Handle, r io.Reader) error {
+func (b *hangingLocks) Put(ctx context.Context, h Handle, r io.Reader) error {
 	if h.Type == LockFile {
-		select {
-		case <-b.hang:
+		b.mu.Lock()
+		b.writes++
+		first := b.writes == 1
+		if b.writes == 2 {
+			close(b.hung)
+		}
+		b.mu.Unlock()
+		if !first {
 			<-b.free
-		default:
 		}
 	}
 	return b.stubBackend.Put(ctx, h, r)
 }
 
-func TestOperationAbortsWhileALockRefreshHangs(t *testing.T) {
+// A refresh that never returns must neither keep the operation running nor
+// hold up its release, and the object it stores should it land late must go.
+func TestReleaseReturnsWhileALockRefreshHangs(t *testing.T) {
 	ctx := context.Background()
 	repo, b, _ := lockRepo(t)
-	hb := hangingLocks{b, make(chan struct{}), make(chan struct{})}
+	hb := &hangingLocks{stubBackend: b, free: make(chan struct{}), hung: make(chan struct{})}
 	repo.backend = hb
+	free := sync.OnceFunc(func() { close(hb.free) })
+	defer free()
 
 	interval, timeout := lockRefreshInterval, lockRefreshTimeout
 	lockRefreshInterval, lockRefreshTimeout = time.Millisecond, 100*time.Millisecond
@@ -611,16 +625,197 @@ func TestOperationAbortsWhileALockRefreshHangs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
-	defer lock.release(ctx)
-	defer close(hb.free) // before the release, which waits for the refresh
 
 	// The clock stands still, so only the time that really passes can end
 	// the operation.
-	close(hb.hang)
+	for name, ch := range map[string]<-chan struct{}{"a refresh hang": hb.hung, "the operation end": lockCtx.Done()} {
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("waited in vain for %s", name)
+		}
+	}
+
+	released := make(chan struct{})
+	go func() {
+		lock.release(ctx)
+		close(released)
+	}()
+	select {
+	case <-released:
+	case <-time.After(5 * time.Second):
+		t.Fatal("release waits for a lock refresh that does not return")
+	}
+	if names := lockNames(t, b); len(names) != 0 {
+		t.Fatalf("release left the lock objects %v", names)
+	}
+
+	free()
+	<-lock.done
+	if names := lockNames(t, b); len(names) != 0 {
+		t.Errorf("the refresh that landed after the release left the lock objects %v", names)
+	}
+}
+
+// A suspended or stopped process misses refreshes without any of them
+// failing. Once its wall clock says the stored object passed the refresh
+// timeout, a refresh that succeeds must not let the operation run on: others
+// may have broken the lock in between.
+func TestRefreshAfterALongStopAborts(t *testing.T) {
+	ctx := context.Background()
+	repo, _, clock := lockRepo(t)
+
+	restore := lockRefreshInterval
+	lockRefreshInterval = time.Millisecond
+	defer func() { lockRefreshInterval = restore }()
+
+	lockCtx, lock, err := repo.acquire(ctx, false)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer lock.release(ctx)
+
+	clock.advance(lockRefreshTimeout)
+
 	select {
 	case <-lockCtx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("the operation runs on after its lock went unrefreshed past the timeout")
+	}
+}
+
+// suspended returns t moved on by d on the wall clock only, as [time.Now] reads
+// after a host slept for d: the monotonic clock stops during a suspend.
+// [time.Time] is {wall uint64; ext int64; loc}, ext holds the monotonic reading.
+func suspended(t time.Time, d time.Duration) time.Time {
+	type rep struct {
+		wall uint64
+		ext  int64
+	}
+	s := t.Add(d)
+	(*rep)(unsafe.Pointer(&s)).ext = (*rep)(unsafe.Pointer(&t)).ext
+	return s
+}
+
+// signalLocks signals every lock write as it starts.
+type signalLocks struct {
+	*stubBackend
+	puts chan struct{}
+}
+
+func (b signalLocks) Put(ctx context.Context, h Handle, r io.Reader) error {
+	if h.Type == LockFile {
+		select {
+		case b.puts <- struct{}{}:
+		default:
+		}
+	}
+	return b.stubBackend.Put(ctx, h, r)
+}
+
+func TestRefreshCountsTheTimeAHostSlept(t *testing.T) {
+	ctx := context.Background()
+	repo, b, clock := lockRepo(t)
+	base := time.Now()
+	if s := suspended(base, time.Hour); s.Sub(base) != 0 || s.Round(0).Sub(base) != time.Hour {
+		t.Fatalf("suspended does not model a suspend: monotonic %s, wall %s", s.Sub(base), s.Round(0).Sub(base))
+	}
+	clock.mu.Lock()
+	clock.now = base
+	clock.mu.Unlock()
+
+	puts := make(chan struct{}, 1)
+	repo.backend = signalLocks{b, puts}
+
+	restore := lockRefreshInterval
+	lockRefreshInterval = time.Millisecond
+	defer func() { lockRefreshInterval = restore }()
+
+	lockCtx, lock, err := repo.acquire(ctx, false)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer lock.release(ctx)
+
+	// The second refresh starts once the first is stored, so the age runs
+	// from a reading of the clock with a monotonic part.
+	<-puts
+	for range 2 {
+		select {
+		case <-puts:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the lock is not refreshed")
+		}
+	}
+	clock.mu.Lock()
+	clock.now = suspended(base, lockStaleAge)
+	clock.mu.Unlock()
+
+	select {
+	case <-lockCtx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("the operation runs on after its host slept past the stale age")
+	}
+}
+
+// An acquire that takes the refresh timeout or longer holds a lock others
+// may already treat as stale: it fails instead of reporting the lock.
+func TestAcquireSlowerThanTheRefreshTimeoutFails(t *testing.T) {
+	ctx := context.Background()
+	events := &lockEvents{}
+	repo, b, clock := lockRepo(t, WithLockEvent(events.add))
+	repo.backend = slowAcquire{&failingLocks{stubBackend: b}, clock, lockRefreshTimeout}
+
+	lockCtx, lock, err := repo.acquire(ctx, false)
+	if err == nil {
+		lock.release(ctx)
+		t.Fatalf("acquire succeeded, its context ended with %v", lockCtx.Err())
+	}
+	wantKinds(t, events.take())
+	if names := lockNames(t, b); len(names) != 0 {
+		t.Errorf("the failed acquire left the lock objects %v", names)
+	}
+}
+
+// stalledLocks fails every lock write and blocks every lock delete until its
+// context ends, as a backend does whose server stopped answering.
+type stalledLocks struct{ *stubBackend }
+
+func (b stalledLocks) Put(ctx context.Context, h Handle, r io.Reader) error {
+	if h.Type == LockFile {
+		return errors.New("timeout")
+	}
+	return b.stubBackend.Put(ctx, h, r)
+}
+
+func (b stalledLocks) Delete(ctx context.Context, h Handle) error {
+	if h.Type == LockFile {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return b.stubBackend.Delete(ctx, h)
+}
+
+func TestFailedAcquireDoesNotWaitOnAStalledBackend(t *testing.T) {
+	repo, b, _ := lockRepo(t)
+	repo.backend = stalledLocks{b}
+
+	restore := lockDropTimeout
+	lockDropTimeout = 50 * time.Millisecond
+	defer func() { lockDropTimeout = restore }()
+
+	failed := make(chan error, 1)
+	go func() {
+		_, _, err := repo.acquire(context.Background(), true)
+		failed <- err
+	}()
+	select {
+	case err := <-failed:
+		if err == nil {
+			t.Fatal("acquire succeeded although its lock write failed")
+		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("the operation was not aborted while its lock refresh hung")
+		t.Fatal("acquire waits on the removal of its failed lock write")
 	}
 }
 
