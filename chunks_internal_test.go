@@ -14,16 +14,20 @@ func TestStreamClosedOutOfOrderKeepsTheTurnChain(t *testing.T) {
 	ctx := context.Background()
 	codec := newObjectCodec()
 	defer codec.Close()
-	store := newObjectStore(newStubBackend(), BlobFile, codec, newMasterKey("repo"))
+	session := testSession(newStubBackend(), codec, newMasterKey("repo"))
+	store := session.chunks
 
 	var refs []chunkRef
 	for i := range 4 {
 		data := []byte{byte(i), 1, 2, 3}
-		name, _, err := store.Put(ctx, data)
-		if err != nil {
-			t.Fatalf("Put: %v", err)
+		name := store.name(data)
+		if _, err := store.putNamed(ctx, name, data); err != nil {
+			t.Fatalf("putNamed: %v", err)
 		}
 		refs = append(refs, chunkRef{ID: name, Length: int64(len(data))})
+	}
+	if err := session.finish(ctx); err != nil {
+		t.Fatalf("finish: %v", err)
 	}
 
 	f := &chunkFetcher{

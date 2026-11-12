@@ -12,6 +12,7 @@ import (
 func (r *Repository) runVerify(
 	ctx context.Context,
 	snapshotID string,
+	chunks, trees *objectStore,
 	progress ProgressFunc,
 ) (*VerifyResult, error) {
 	logger := r.logger.With("component", "verify", "snapshot", snapshotID)
@@ -31,9 +32,9 @@ func (r *Repository) runVerify(
 	// name of every object they read, so a tree that opens but does not match
 	// its name fails the walk.
 	seen := make(map[string]struct{})
-	chunks := r.chunks.verifying()
+	chunks = chunks.verifying()
 	done := 0
-	err = walkSnapshot(ctx, r.trees.verifying(), m, pathFilter{}, func(fe fileEntry) error {
+	err = walkSnapshot(ctx, trees.verifying(), m, pathFilter{}, func(fe fileEntry) error {
 		for _, ref := range fe.Chunks {
 			select {
 			case <-ctx.Done():
@@ -79,25 +80,20 @@ func (r *Repository) runVerify(
 // verifyChunk records one chunk as checked, missing or corrupt. Only a backend
 // failure that says nothing about the chunk itself is returned as an error.
 func verifyChunk(ctx context.Context, chunks *objectStore, id string, result *VerifyResult) error {
-	exists, err := chunks.Exists(ctx, id)
-	if err != nil {
-		return fmt.Errorf("verify: failed to check chunk %s: %w", id, err)
-	}
-	if !exists {
+	// A chunk no index lists, or whose pack is gone, is missing. One that
+	// fails its tag or does not hash to its name is corrupt.
+	_, err := chunks.Get(ctx, id)
+	switch {
+	case err == nil:
+		result.ChunksChecked++
+		return nil
+	case errors.Is(err, ErrNotFound):
 		result.MissingChunks = append(result.MissingChunks, id)
-		result.OK = false
-		return nil
-	}
-
-	// A chunk that fails its tag or does not hash to its name is corrupt.
-	if _, err := chunks.Get(ctx, id); err != nil {
-		if !errors.Is(err, ErrCorruptChunk) {
-			return fmt.Errorf("verify: failed to read chunk %s: %w", id, err)
-		}
+	case errors.Is(err, ErrCorruptChunk):
 		result.CorruptChunks = append(result.CorruptChunks, id)
-		result.OK = false
-		return nil
+	default:
+		return fmt.Errorf("verify: failed to read chunk %s: %w", id, err)
 	}
-	result.ChunksChecked++
+	result.OK = false
 	return nil
 }

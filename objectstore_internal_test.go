@@ -5,8 +5,16 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"log/slog"
 	"testing"
 )
+
+// testSession returns the write session of a repository on b that holds
+// nothing but the key: enough for the stores, which tests of package ark
+// cannot get from arkmem.
+func testSession(b Backend, codec *objectCodec, key *masterKey) *packSession {
+	return (&Repository{backend: b, codec: codec, key: key, logger: slog.Default()}).writeSession()
+}
 
 // TestVerifyingStoreRecomputesTheName covers what the tag cannot: an object
 // sealed correctly under a name that is not the HMAC of its content, which
@@ -18,12 +26,25 @@ func TestVerifyingStoreRecomputesTheName(t *testing.T) {
 	defer codec.Close()
 	key := newMasterKey("repo")
 
-	for _, typ := range []HandleType{BlobFile, TreeFile} {
-		s := newObjectStore(newStubBackend(), typ, codec, key)
+	session := testSession(newStubBackend(), codec, key)
+	for _, s := range []*objectStore{session.chunks, session.trees} {
+		typ := s.space.blobs
 		data := []byte("content")
 		wrong := s.name([]byte("other content"))
-		if _, err := s.putNamed(ctx, wrong, data); err != nil {
-			t.Fatalf("putNamed: %v", err)
+		name := s.name(data)
+		for _, n := range []string{wrong, name} {
+			if size, err := s.putNamed(ctx, n, data); err != nil || size == 0 {
+				t.Fatalf("putNamed stored %d bytes: %v", size, err)
+			}
+			if size, err := s.putNamed(ctx, n, data); err != nil || size != 0 {
+				t.Errorf("%s: second putNamed stored %d bytes, want 0: %v", typ, size, err)
+			}
+		}
+		if _, err := s.Get(ctx, name); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s: Get before the index lists the object returned %v, want ErrNotFound", typ, err)
+		}
+		if err := session.finish(ctx); err != nil {
+			t.Fatalf("finish: %v", err)
 		}
 
 		if _, err := s.Get(ctx, wrong); err != nil {
@@ -33,10 +54,6 @@ func TestVerifyingStoreRecomputesTheName(t *testing.T) {
 			t.Errorf("%s: verifying Get returned %v, want errNameMismatch", typ, err)
 		}
 
-		name, _, err := s.Put(ctx, data)
-		if err != nil {
-			t.Fatalf("Put: %v", err)
-		}
 		if _, err := s.verifying().Get(ctx, name); err != nil {
 			t.Errorf("%s: verifying Get of a correct object: %v", typ, err)
 		}

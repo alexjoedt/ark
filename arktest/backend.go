@@ -38,7 +38,6 @@ var conformanceTypes = []ark.HandleType{
 	ark.SnapshotFile,
 	ark.LockFile,
 	ark.KeyFile,
-	ark.MarkerFile,
 	ark.DataPackFile,
 	ark.TreePackFile,
 	ark.DataIndexFile,

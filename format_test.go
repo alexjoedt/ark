@@ -94,6 +94,68 @@ func objectNames(t *testing.T, b ark.Backend, typ ark.HandleType) []string {
 	return names
 }
 
+// blobNames lists every chunk (BlobFile) or tree node (TreeFile) the index of
+// repo lists. They are stored inside packs, so no listing of the backend
+// names them.
+func blobNames(t *testing.T, repo *ark.Repository, typ ark.HandleType) []string {
+	t.Helper()
+	names, err := ark.BlobNames(context.Background(), repo, typ)
+	if err != nil {
+		t.Fatalf("blob names of %s: %v", typ, err)
+	}
+	return names
+}
+
+// readBlob returns the sealed bytes of a chunk or tree node as its pack
+// stores them.
+func readBlob(t *testing.T, b ark.Backend, repo *ark.Repository, typ ark.HandleType, name string) []byte {
+	t.Helper()
+	ctx := context.Background()
+	pack, offset, length, err := ark.BlobPlace(ctx, repo, typ, name)
+	if err != nil {
+		t.Fatalf("place of %s/%s: %v", typ, name, err)
+	}
+	obj, err := b.GetRange(ctx, pack, offset, length)
+	if err != nil {
+		t.Fatalf("read %s/%s from %s/%s: %v", typ, name, pack.Type, pack.Name, err)
+	}
+	return obj
+}
+
+// writeBlob replaces the sealed bytes of a chunk or tree node inside its
+// pack by obj, which has their length. The pack keeps its name, which no read
+// checks against its content.
+func writeBlob(t *testing.T, b ark.Backend, repo *ark.Repository, typ ark.HandleType, name string, obj []byte) {
+	t.Helper()
+	ctx := context.Background()
+	pack, offset, length, err := ark.BlobPlace(ctx, repo, typ, name)
+	if err != nil {
+		t.Fatalf("place of %s/%s: %v", typ, name, err)
+	}
+	if int64(len(obj)) != length {
+		t.Fatalf("replacement of %s/%s has %d bytes, the blob %d", typ, name, len(obj), length)
+	}
+	whole := readObject(t, b, pack.Type, pack.Name)
+	copy(whole[offset:], obj)
+	if err := b.Put(ctx, pack, bytes.NewReader(whole)); err != nil {
+		t.Fatalf("put %s/%s: %v", pack.Type, pack.Name, err)
+	}
+}
+
+// deletePackOf deletes the pack that holds a chunk or tree node, which is how
+// one goes missing.
+func deletePackOf(t *testing.T, b ark.Backend, repo *ark.Repository, typ ark.HandleType, name string) {
+	t.Helper()
+	ctx := context.Background()
+	pack, _, _, err := ark.BlobPlace(ctx, repo, typ, name)
+	if err != nil {
+		t.Fatalf("place of %s/%s: %v", typ, name, err)
+	}
+	if err := b.Delete(ctx, pack); err != nil {
+		t.Fatalf("delete %s/%s: %v", pack.Type, pack.Name, err)
+	}
+}
+
 // openObject returns the raw content of an object of repo.
 func openObject(t *testing.T, repo *ark.Repository, typ ark.HandleType, name string) []byte {
 	t.Helper()
@@ -109,12 +171,12 @@ func TestChunksAndTreesAreSealedUnderKeyedNames(t *testing.T) {
 	repo, _ := backupFixture(t, b)
 
 	for _, typ := range []ark.HandleType{ark.BlobFile, ark.TreeFile} {
-		names := objectNames(t, b, typ)
+		names := blobNames(t, repo, typ)
 		if len(names) == 0 {
 			t.Fatalf("namespace %s is empty", typ)
 		}
 		for _, name := range names {
-			obj := readObject(t, b, typ, name)
+			obj := readBlob(t, b, repo, typ, name)
 			if obj[0] != formatSealed {
 				t.Errorf("%s/%s starts with 0x%02x, want 0x%02x", typ, name, obj[0], formatSealed)
 			}
@@ -151,14 +213,11 @@ func TestSameFilesInTwoRepositoriesShareNoNames(t *testing.T) {
 			continue
 		}
 		names := objectNames(t, one, typ)
-		// A finished backup leaves no lock and no marker, and writes no pack
-		// and no index yet.
-		leftEmpty := []ark.HandleType{
-			ark.LockFile, ark.MarkerFile,
-			ark.DataPackFile, ark.TreePackFile, ark.DataIndexFile, ark.TreeIndexFile,
-		}
-		if len(names) == 0 && !slices.Contains(leftEmpty, typ) {
-			t.Errorf("namespace %s is empty", typ)
+		// A finished backup leaves no lock, and no chunk or tree node is an
+		// object of its own: they are inside the packs.
+		leftEmpty := []ark.HandleType{ark.LockFile, ark.BlobFile, ark.TreeFile}
+		if (len(names) == 0) != slices.Contains(leftEmpty, typ) {
+			t.Errorf("namespace %s holds %d objects", typ, len(names))
 		}
 		for _, name := range objectNames(t, two, typ) {
 			if slices.Contains(names, name) {
@@ -186,15 +245,15 @@ func TestTreeNodesLiveInTheTreesNamespace(t *testing.T) {
 		t.Fatal("manifest has no root_tree")
 	}
 
-	if !slices.Contains(objectNames(t, b, ark.TreeFile), m.RootTree) {
-		t.Errorf("root tree %s is not in the trees namespace", m.RootTree)
+	if !slices.Contains(blobNames(t, repo, ark.TreeFile), m.RootTree) {
+		t.Errorf("root tree %s is not in the tree index", m.RootTree)
 	}
-	if slices.Contains(objectNames(t, b, ark.BlobFile), m.RootTree) {
-		t.Errorf("root tree %s is still in the chunks namespace", m.RootTree)
+	if slices.Contains(blobNames(t, repo, ark.BlobFile), m.RootTree) {
+		t.Errorf("root tree %s is in the data index", m.RootTree)
 	}
 	// Two directories back up to two tree nodes, chunks stay out of them.
-	if got := len(objectNames(t, b, ark.TreeFile)); got != 2 {
-		t.Errorf("trees namespace holds %d objects, want 2", got)
+	if got := len(blobNames(t, repo, ark.TreeFile)); got != 2 {
+		t.Errorf("the tree index lists %d nodes, want 2", got)
 	}
 }
 
@@ -202,7 +261,7 @@ func TestTreeNodeJSONIsCanonical(t *testing.T) {
 	b := arkmem.New()
 	repo, _ := backupFixture(t, b)
 
-	for _, name := range objectNames(t, b, ark.TreeFile) {
+	for _, name := range blobNames(t, repo, ark.TreeFile) {
 		data := openObject(t, repo, ark.TreeFile, name)
 		if bytes.ContainsAny(data, "\n\t") {
 			t.Errorf("tree %s is indented, want canonical JSON: %s", name, data)
@@ -232,12 +291,10 @@ func TestUnknownFormatByteIsRejected(t *testing.T) {
 
 	// Rewrite one chunk with the plaintext format byte of the pre-encryption
 	// draft, which the encrypted format no longer reads.
-	chunk := objectNames(t, b, ark.BlobFile)[0]
-	obj := readObject(t, b, ark.BlobFile, chunk)
+	chunk := blobNames(t, repo, ark.BlobFile)[0]
+	obj := readBlob(t, b, repo, ark.BlobFile, chunk)
 	obj[0] = 0x01
-	if putErr := b.Put(ctx, ark.Handle{Type: ark.BlobFile, Name: chunk}, bytes.NewReader(obj)); putErr != nil {
-		t.Fatalf("rewrite chunk: %v", putErr)
-	}
+	writeBlob(t, b, repo, ark.BlobFile, chunk, obj)
 
 	_, err := repo.Restore(ctx, id, discardSink{})
 	if err == nil {

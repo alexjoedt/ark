@@ -2,12 +2,14 @@ package ark
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -73,7 +75,8 @@ func buildTreeSequential(ctx context.Context, trees *objectStore, entries []file
 		if err != nil {
 			return "", err
 		}
-		hash, _, err := trees.Put(ctx, data)
+		hash := trees.name(data)
+		_, err = trees.putNamed(ctx, hash, data)
 		return hash, err
 	}
 	return build("")
@@ -84,6 +87,30 @@ func buildTreeSequential(ctx context.Context, trees *objectStore, entries []file
 // stored.
 const treeFixtureNodes = 88
 
+// storedNodes finishes session and returns the name of every tree node in
+// the tree packs of b, one per copy.
+func storedNodes(t *testing.T, b *stubBackend, session *packSession) []string {
+	t.Helper()
+	if err := session.finish(context.Background()); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	var names []string
+	for key, pack := range b.objects {
+		if !strings.HasPrefix(key, TreePackFile.String()+"/") {
+			continue
+		}
+		entries, err := session.trees.space.parse(pack)
+		if err != nil {
+			t.Fatalf("parse %s: %v", key, err)
+		}
+		for _, e := range entries {
+			names = append(names, hex.EncodeToString(e.name[:]))
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
 func TestBuildTreeMatchesSequential(t *testing.T) {
 	ctx := context.Background()
 	codec := newObjectCodec()
@@ -91,32 +118,31 @@ func TestBuildTreeMatchesSequential(t *testing.T) {
 	key := newMasterKey("repo")
 
 	seqBackend := newStubBackend()
-	want, err := buildTreeSequential(ctx, newObjectStore(seqBackend, TreeFile, codec, key), treeFixture())
+	session := testSession(seqBackend, codec, key)
+	want, err := buildTreeSequential(ctx, session.trees, treeFixture())
 	if err != nil {
 		t.Fatalf("sequential build: %v", err)
 	}
-	seq := slices.Sorted(maps.Keys(seqBackend.objects))
+	seq := storedNodes(t, seqBackend, session)
 	if len(seq) != treeFixtureNodes {
 		t.Fatalf("sequential build stored %d tree nodes, want %d", len(seq), treeFixtureNodes)
 	}
 
 	for _, workers := range []int{1, 8} {
-		b := &gatedBackend{stubBackend: newStubBackend(), hook: func(context.Context, int32) error { return nil }}
-		got, err := buildTree(ctx, newObjectStore(b, TreeFile, codec, key), treeFixture(), workers)
+		b := newStubBackend()
+		session := testSession(b, codec, key)
+		got, err := buildTree(ctx, session.trees, treeFixture(), workers)
 		if err != nil {
 			t.Fatalf("workers %d: %v", workers, err)
 		}
 		if got != want {
 			t.Errorf("workers %d: root %s, sequential root %s", workers, got, want)
 		}
-		// Same objects, so a check of either repository reports the same.
-		if par := slices.Sorted(maps.Keys(b.objects)); !slices.Equal(seq, par) {
+		// Same nodes, so a check of either repository reports the same, and
+		// each once: identical nodes of one level or of two go into a pack
+		// one time.
+		if par := storedNodes(t, b, session); !slices.Equal(seq, par) {
 			t.Errorf("workers %d: stored %d tree nodes, sequential build stored %d", workers, len(par), len(seq))
-		}
-		// Identical nodes in one level are stored once, not Put at the same
-		// time to the same handle.
-		if calls := b.calls.Load(); calls != treeFixtureNodes {
-			t.Errorf("workers %d: %d Puts for %d distinct nodes", workers, calls, treeFixtureNodes)
 		}
 	}
 }
@@ -147,56 +173,41 @@ func (b *gatedBackend) Put(ctx context.Context, h Handle, r io.Reader) error {
 	return b.stubBackend.Put(ctx, h, r)
 }
 
+// failListBackend fails every List, which is the first request a tree build
+// issues: the lookup of its first node loads the index.
+type failListBackend struct {
+	Backend
+	err error
+}
+
+func (b failListBackend) List(context.Context, HandleType, func(BlobInfo) error) error { return b.err }
+
 func TestBuildTreeStopsOnFirstError(t *testing.T) {
 	codec := newObjectCodec()
 	defer codec.Close()
 	key := newMasterKey("repo")
-	errPut := errors.New("put failed")
+	errList := errors.New("list failed")
 
-	for _, tc := range []struct {
-		name string
-		fail func(cancel context.CancelFunc) error
-		want error
-	}{
-		{"put error", func(context.CancelFunc) error { return errPut }, errPut},
-		{"cancel", func(cancel context.CancelFunc) error { cancel(); return nil }, context.Canceled},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			b := &gatedBackend{stubBackend: newStubBackend()}
-			b.hook = func(ctx context.Context, call int32) error {
-				if call == 2 {
-					return tc.fail(cancel)
-				}
-				// Every other Put stays in flight until buildTree cancels
-				// it, so the count below does not depend on timing.
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(5 * time.Second):
-					return errors.New("Put was not cancelled")
-				}
-			}
-
-			_, err := buildTree(ctx, newObjectStore(b, TreeFile, codec, key), treeFixture(), 4)
-			if !errors.Is(err, tc.want) {
-				t.Fatalf("buildTree returned %v, want %v", err, tc.want)
-			}
-			if n := b.inFlight.Load(); n != 0 {
-				t.Errorf("%d Puts still running after return", n)
-			}
-			// The 4 workers, plus the one put that may already be waiting
-			// for a slot when the error lands; the deepest level alone has
-			// 64 nodes.
-			if calls := b.calls.Load(); calls > 5 {
-				t.Errorf("%d Puts ran, the error did not stop the rest", calls)
-			}
-			if p := b.peak; p > 4 {
-				t.Errorf("%d Puts ran at once, limit 4", p)
-			}
-		})
-	}
+	t.Run("backend error", func(t *testing.T) {
+		b := failListBackend{Backend: newStubBackend(), err: errList}
+		_, err := buildTree(context.Background(), testSession(b, codec, key).trees, treeFixture(), 4)
+		if !errors.Is(err, errList) {
+			t.Fatalf("buildTree returned %v, want %v", err, errList)
+		}
+	})
+	t.Run("cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		b := newIndexBackend(newStubBackend())
+		b.onList = cancel
+		_, err := buildTree(ctx, testSession(b, codec, key).trees, treeFixture(), 4)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("buildTree returned %v, want %v", err, context.Canceled)
+		}
+		if _, _, total := b.calls(TreePackFile); total != 1 {
+			t.Errorf("%d requests after the cancel, want the one List", total)
+		}
+	})
 }
 
 // TestTreeNodeChunkRefsCarryNoStoredSize pins the node format: a chunk

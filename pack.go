@@ -164,14 +164,19 @@ func (s *packSpace) parse(pack []byte) ([]packEntry, error) {
 // one range read. A blob that does not open, and a pack that ends before the
 // blob does, fail with the corrupt error of the namespace.
 func (s *packSpace) readBlob(ctx context.Context, b Backend, pack string, e packEntry) ([]byte, error) {
-	name := hex.EncodeToString(e.name[:])
 	obj, err := b.GetRange(ctx, Handle{Type: s.packs, Name: pack}, int64(e.offset), int64(e.length))
 	if errors.Is(err, io.ErrUnexpectedEOF) {
-		return nil, fmt.Errorf("%w: %s object %s ends before %s: %w", s.corruptErr, s.packs, pack, name, err)
+		return nil, fmt.Errorf("%w: %s object %s ends before %x: %w", s.corruptErr, s.packs, pack, e.name, err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("ark: failed to read %s object %s: %w", s.packs, pack, err)
 	}
+	return s.openBlob(pack, e, obj)
+}
+
+// openBlob opens obj, the sealed bytes at e of the pack named pack.
+func (s *packSpace) openBlob(pack string, e packEntry, obj []byte) ([]byte, error) {
+	name := hex.EncodeToString(e.name[:])
 	data, err := s.codec.open(s.dataKey, objectAAD(Handle{Type: s.blobs, Name: name}), obj)
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to open %s in %s object %s: %w", s.corruptErr, name, s.packs, pack, err)
@@ -191,8 +196,9 @@ type packWriter struct {
 	// uploads holds one token per pack upload in flight.
 	uploads chan struct{}
 	// stored is called once per pack after its Put returned, from the
-	// goroutine that uploaded it, so several calls may run at once.
-	stored func(pack string, entries []packEntry)
+	// goroutine that uploaded it, so several calls may run at once. Its
+	// error is the error of the add or flush that uploaded the pack.
+	stored func(ctx context.Context, pack string, entries []packEntry) error
 
 	// open holds a token while a caller works on the open pack, blobs and
 	// entries: a mutex whose wait ends with the caller's context. The open
@@ -213,7 +219,8 @@ func newPackUploads() chan struct{} { return make(chan struct{}, packUploads) }
 // name and blob table of every pack once it is stored; nothing else reports
 // where a blob went.
 func newPackWriter(
-	b Backend, s *packSpace, uploads chan struct{}, stored func(pack string, entries []packEntry),
+	b Backend, s *packSpace, uploads chan struct{},
+	stored func(ctx context.Context, pack string, entries []packEntry) error,
 ) *packWriter {
 	return &packWriter{
 		space: s, backend: b, target: packTargetSize, uploads: uploads, stored: stored,
@@ -340,6 +347,5 @@ func (w *packWriter) store(ctx context.Context, entries []packEntry, section ...
 		w.failed.CompareAndSwap(nil, &err)
 		return err
 	}
-	w.stored(name, entries)
-	return nil
+	return w.stored(ctx, name, entries)
 }

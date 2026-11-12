@@ -78,8 +78,8 @@ func loadTreeNode(ctx context.Context, trees *objectStore, hash string) (*treeNo
 }
 
 // buildTree organises the flat fileEntry list into a Merkle directory tree,
-// stores every treeNode blob in the CAS with at most workers Puts in flight,
-// and returns the root tree hash.
+// seals every treeNode into the tree packs with at most workers at work, and
+// returns the root tree hash.
 func buildTree(ctx context.Context, trees *objectStore, entries []fileEntry, workers int) (string, error) {
 	dirChildren := treeChildren(entries)
 
@@ -159,8 +159,8 @@ func treeChildren(entries []fileEntry) map[string][]fileEntry {
 }
 
 // storeTreeLevel stores the nodes of dirs through a chunkWriter, which bounds
-// the Puts in flight, stores identical nodes once and stops the rest on the
-// first error. The hashes of their child directories must be in hashes
+// the nodes being sealed, stores identical nodes once and stops the rest on
+// the first error. The hashes of their child directories must be in hashes
 // already; the level's own hashes land there once every node is stored.
 func storeTreeLevel(
 	ctx context.Context,

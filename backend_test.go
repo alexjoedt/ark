@@ -10,7 +10,6 @@ func TestHandleTypeString(t *testing.T) {
 		SnapshotFile:    "snapshots",
 		LockFile:        "locks",
 		KeyFile:         "keys",
-		MarkerFile:      "markers",
 		DataPackFile:    "datapacks",
 		TreePackFile:    "treepacks",
 		DataIndexFile:   "dataindex",

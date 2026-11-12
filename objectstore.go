@@ -30,6 +30,9 @@ var (
 	// errNameMismatch is returned by a verifying store when an object opens
 	// but its content does not hash to its name.
 	errNameMismatch = errors.New("ark: object content does not match its name")
+	// errNotIndexed says why an object is missing: no index object lists it.
+	// The pack that holds it may still be stored.
+	errNotIndexed = errors.New("no index object lists it")
 )
 
 // objectCodec seals and opens data objects and key files.
@@ -110,6 +113,19 @@ func (r *Repository) getSealed(ctx context.Context, h Handle) ([]byte, error) {
 // readSealed reads and opens the object under h. Errors wrap ErrNotFound from
 // the backend, and errSealBroken for an object that was changed or moved.
 func readSealed(ctx context.Context, b Backend, c *objectCodec, key *[32]byte, h Handle) ([]byte, error) {
+	obj, err := readWhole(ctx, b, h)
+	if err != nil {
+		return nil, err
+	}
+	data, err := c.open(key, objectAAD(h), obj)
+	if err != nil {
+		return nil, fmt.Errorf("ark: failed to open %s object %s: %w", h.Type, h.Name, err)
+	}
+	return data, nil
+}
+
+// readWhole returns the whole object stored under h, as stored.
+func readWhole(ctx context.Context, b Backend, h Handle) ([]byte, error) {
 	rc, err := b.Get(ctx, h)
 	if err != nil {
 		return nil, fmt.Errorf("ark: failed to read %s object %s: %w", h.Type, h.Name, err)
@@ -120,54 +136,49 @@ func readSealed(ctx context.Context, b Backend, c *objectCodec, key *[32]byte, h
 	if err != nil {
 		return nil, fmt.Errorf("ark: failed to read %s object %s: %w", h.Type, h.Name, err)
 	}
-	data, err := c.open(key, objectAAD(h), obj)
-	if err != nil {
-		return nil, fmt.Errorf("ark: failed to open %s object %s: %w", h.Type, h.Name, err)
-	}
-	return data, nil
+	return obj, nil
 }
 
-// objectStore is a content-addressable store over one backend namespace.
-// An object is named by the HMAC-SHA256 of its raw content under the ID key
-// and sealed with the data key, so its name reveals nothing without the keys
-// and does not depend on how it is encoded.
+// treePackCacheBytes bounds the whole tree packs an operation keeps in memory:
+// a walk reads the nodes of one pack close together, so a pack is fetched
+// once and its neighbours stay for the walks that follow.
+const treePackCacheBytes = 64 << 20
+
+// objectStore is a content-addressable store of the chunks or the tree nodes
+// of a repository. An object is named by the HMAC-SHA256 of its raw content
+// under the ID key and sealed with the data key, so its name reveals nothing
+// without the keys and does not depend on how it is encoded. The sealed
+// objects are stored in packs, and an object is present once an index object
+// lists it.
+//
+// A store serves one operation: its index is loaded at the first lookup and
+// never listed again, so it does not see what another writer stores later.
 type objectStore struct {
 	backend Backend
-	typ     HandleType
-	codec   *objectCodec
-	dataKey *[32]byte
-	idKey   []byte
-	// corruptErr is the sentinel Get wraps an object that does not open in.
-	corruptErr error
+	space   *packSpace
+	index   *packIndex
 	// verify makes Get recompute the name of every object it reads.
 	verify bool
-	// repair makes putNamed read an object that exists and store it again
-	// when it does not open to its name, so an object a crash left torn is
-	// replaced and an intact one, which a snapshot may reference, is never
-	// written over.
-	repair bool
+	// packs holds whole packs, by name. With it Get fetches the pack of an
+	// object whole and serves the objects beside it from memory; without it
+	// every Get is one range read.
+	packs *chunkCache
+	// held and writer take what putNamed stores. They are set on the stores
+	// of a packSession; any other store only reads.
+	held   *heldBlobs
+	writer *packWriter
 }
 
-// newObjectStore returns the store of the chunk (BlobFile) or tree (TreeFile)
-// namespace. Any other type panics: it has no corruption sentinel.
-func newObjectStore(b Backend, t HandleType, c *objectCodec, key *masterKey) *objectStore {
-	var corruptErr error
-	switch t { //nolint:exhaustive // only chunks and trees are object stores
-	case BlobFile:
-		corruptErr = ErrCorruptChunk
-	case TreeFile:
-		corruptErr = ErrCorruptTree
-	default:
-		panic(fmt.Sprintf("ark: no object store for %s", t))
+// stores returns the chunk and the tree store of one operation. They issue no
+// request before their first use.
+func (r *Repository) stores() (chunks, trees *objectStore) {
+	open := func(blobs HandleType) *objectStore {
+		space := newPackSpace(r.codec, r.key, blobs)
+		return &objectStore{backend: r.backend, space: space, index: newPackIndex(r.backend, space, r.logger)}
 	}
-	return &objectStore{
-		backend:    b,
-		typ:        t,
-		codec:      c,
-		dataKey:    (*[32]byte)(&key.DataKey),
-		idKey:      key.IDKey[:],
-		corruptErr: corruptErr,
-	}
+	chunks, trees = open(BlobFile), open(TreeFile)
+	trees.packs = newChunkCache(treePackCacheBytes)
+	return chunks, trees
 }
 
 // verifying returns a copy of s whose Get fails with errNameMismatch when an
@@ -178,18 +189,8 @@ func (s *objectStore) verifying() *objectStore {
 	return &v
 }
 
-// repairing returns a copy of s whose putNamed stores again every object that
-// is missing or does not open to its name.
-func (s *objectStore) repairing() *objectStore {
-	v := *s
-	v.repair = true
-	return &v
-}
-
-func (s *objectStore) handle(name string) Handle { return Handle{Type: s.typ, Name: name} }
-
 // name returns the object name of data: its HMAC-SHA256 under the ID key, hex.
-func (s *objectStore) name(data []byte) string { return keyedName(s.idKey, data) }
+func (s *objectStore) name(data []byte) string { return keyedName(s.space.idKey, data) }
 
 // keyedName returns the name of an object that is named by its content: the
 // HMAC-SHA256 of data under the ID key, hex.
@@ -199,95 +200,71 @@ func keyedName(idKey, data []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// Put stores data under its name and returns that name with the number of
-// bytes written. A stored size of 0 means the object was already present and
-// nothing was written.
-func (s *objectStore) Put(ctx context.Context, data []byte) (string, int, error) {
-	name := s.name(data)
-	size, err := s.putNamed(ctx, name, data)
-	return name, size, err
-}
-
-// putNamed is Put for a caller that already holds the name of data.
+// putNamed stores data, whose name the caller holds, and returns the number
+// of bytes it adds to a pack. A stored size of 0 means the object was already
+// present, in the index or in a pack this run wrote, and nothing was written.
+// The object is durable and present for others only once the session of s
+// has listed its pack in an index object.
 func (s *objectStore) putNamed(ctx context.Context, name string, data []byte) (int, error) {
-	h := s.handle(name)
-	present, err := s.present(ctx, name)
+	_, _, present, err := s.index.lookup(ctx, name)
 	if err != nil || present {
 		return 0, err
 	}
-
-	obj := s.codec.seal(s.dataKey, objectAAD(h), data)
-	if err := s.backend.Put(ctx, h, bytes.NewReader(obj)); err != nil {
-		return 0, fmt.Errorf("ark: failed to store %s object %s: %w", s.typ, name, err)
+	blob, _ := parseName(name) // lookup rejected a name that is none
+	if !s.held.claim(blob) {
+		return 0, nil
+	}
+	obj := s.space.codec.seal(s.space.dataKey, objectAAD(Handle{Type: s.space.blobs, Name: name}), data)
+	if err := s.writer.add(ctx, name, obj); err != nil {
+		s.held.release(blob)
+		return 0, err
 	}
 	return len(obj), nil
 }
 
-// present reports whether the object named name is stored and needs no Put.
-// A repairing store counts only an object that opens and hashes to its name.
-func (s *objectStore) present(ctx context.Context, name string) (bool, error) {
-	if !s.repair {
-		exists, err := s.backend.Exists(ctx, s.handle(name))
-		if err != nil {
-			return false, fmt.Errorf("ark: failed to check %s object %s: %w", s.typ, name, err)
-		}
-		return exists, nil
-	}
-	_, err := s.verifying().Get(ctx, name)
-	switch {
-	case err == nil:
-		return true, nil
-	case errors.Is(err, ErrNotFound), errors.Is(err, s.corruptErr):
-		return false, nil
-	}
-	return false, err
-}
-
-// Get returns the raw content of the object stored under name. An object that
-// was changed or moved from another name fails to open, with ErrCorruptChunk
-// or ErrCorruptTree by namespace.
+// Get returns the raw content of the object stored under name. An object no
+// index lists, or whose pack is gone, wraps ErrNotFound. One that was changed
+// or moved from another name fails to open, with ErrCorruptChunk or
+// ErrCorruptTree by namespace.
 func (s *objectStore) Get(ctx context.Context, name string) ([]byte, error) {
-	data, err := readSealed(ctx, s.backend, s.codec, s.dataKey, s.handle(name))
-	if errors.Is(err, errSealBroken) {
-		return nil, fmt.Errorf("%w: %w", s.corruptErr, err)
+	pack, e, ok, err := s.index.lookup(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("ark: failed to read %s object %s: %w: %w",
+			s.space.blobs, name, ErrNotFound, errNotIndexed)
+	}
+	var data []byte
+	if s.packs == nil {
+		data, err = s.space.readBlob(ctx, s.backend, pack, e)
+	} else {
+		data, err = s.fromWholePack(ctx, pack, e)
 	}
 	if err != nil {
 		return nil, err
 	}
 	if s.verify && s.name(data) != name {
-		return nil, fmt.Errorf("%w: %s object %s: %w", s.corruptErr, s.typ, name, errNameMismatch)
+		return nil, fmt.Errorf("%w: %s object %s: %w", s.space.corruptErr, s.space.blobs, name, errNameMismatch)
 	}
 	return data, nil
 }
 
-// Exists reports whether the object named name is present.
-func (s *objectStore) Exists(ctx context.Context, name string) (bool, error) {
-	return s.backend.Exists(ctx, s.handle(name))
-}
-
-// Delete removes the object named name.
-func (s *objectStore) Delete(ctx context.Context, name string) error {
-	return s.backend.Delete(ctx, s.handle(name))
-}
-
-// StoredSize returns the size of the object as stored, header byte included.
-func (s *objectStore) StoredSize(ctx context.Context, name string) (int64, error) {
-	info, err := s.backend.Stat(ctx, s.handle(name))
-	if err != nil {
-		return 0, fmt.Errorf("ark: failed to stat %s object %s: %w", s.typ, name, err)
+// fromWholePack returns the content of the blob at e in the pack named pack,
+// fetching the pack whole unless s holds it.
+func (s *objectStore) fromWholePack(ctx context.Context, pack string, e packEntry) ([]byte, error) {
+	whole, ok := s.packs.get(pack)
+	if !ok {
+		var err error
+		if whole, err = readWhole(ctx, s.backend, Handle{Type: s.space.packs, Name: pack}); err != nil {
+			return nil, err
+		}
+		s.packs.put(pack, whole)
 	}
-	return info.Size, nil
-}
-
-// Names returns the name of every object currently in the namespace.
-func (s *objectStore) Names(ctx context.Context) ([]string, error) {
-	var names []string
-	err := s.backend.List(ctx, s.typ, func(info BlobInfo) error {
-		names = append(names, info.Name)
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("ark: failed to list %s objects: %w", s.typ, err)
+	end := uint64(e.offset) + uint64(e.length)
+	if end > uint64(len(whole)) {
+		return nil, fmt.Errorf("%w: %s object %s ends before %x: %w",
+			s.space.corruptErr, s.space.packs, pack, e.name, io.ErrUnexpectedEOF)
 	}
-	return names, nil
+	return s.space.openBlob(pack, e, whole[e.offset:end])
 }

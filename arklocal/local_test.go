@@ -78,7 +78,9 @@ func TestRoundTripPerNamespace(t *testing.T) {
 	}
 
 	// Packs are sharded one level deep, nothing else is.
-	for _, p := range []string{"datapacks/ab/abcdef0123456789", "treepacks/00/0011223344556677", "dataindex/abcdef0123456789"} {
+	for _, p := range []string{
+		"datapacks/ab/abcdef0123456789", "treepacks/00/0011223344556677", "dataindex/abcdef0123456789",
+	} {
 		if _, err := os.Stat(filepath.Join(b.BasePath(), filepath.FromSlash(p))); err != nil {
 			t.Errorf("expected object at %s: %v", p, err)
 		}

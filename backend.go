@@ -27,10 +27,6 @@ const (
 	LockFile
 	// KeyFile holds the master key sealed under one password.
 	KeyFile
-	// MarkerFile marks a backup in progress, named like its lock. One left
-	// behind by a backup that never finished makes later backups distrust
-	// Exists until Prune.
-	MarkerFile
 	// DataPackFile is a pack object holding sealed chunks, named by the
 	// SHA-256 of its bytes. Directory backends shard these by name prefix.
 	DataPackFile
@@ -65,8 +61,6 @@ func (t HandleType) String() string {
 		return "locks"
 	case KeyFile:
 		return "keys"
-	case MarkerFile:
-		return "markers"
 	case DataPackFile:
 		return "datapacks"
 	case TreePackFile:

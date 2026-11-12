@@ -78,8 +78,6 @@ func WithConcurrency(n int) Option {
 type Repository struct {
 	backend     Backend
 	codec       *objectCodec
-	chunks      *objectStore
-	trees       *objectStore
 	logger      *slog.Logger
 	concurrency int
 	lockWait    time.Duration
@@ -155,8 +153,6 @@ func Open(ctx context.Context, b Backend, pw Passphrase, opts ...Option) (*Repos
 	return &Repository{
 		backend:     b,
 		codec:       codec,
-		chunks:      newObjectStore(b, BlobFile, codec, key),
-		trees:       newObjectStore(b, TreeFile, codec, key),
 		logger:      cfg.logger,
 		concurrency: cfg.concurrency,
 		lockWait:    cfg.lockWait,
@@ -214,10 +210,11 @@ func (r *Repository) ID() string { return r.id }
 
 // Backup walks src and stores its entries as a new snapshot.
 //
-// A cancelled backup leaves orphan chunks and tree objects behind, no
-// snapshot: the manifest is written last, so the snapshot never becomes
-// visible. The orphans stay until Prune sweeps them, and a later backup of
-// the same data reuses them.
+// A cancelled backup leaves packs behind, no snapshot: the manifest is
+// written last, so the snapshot never becomes visible. A later backup of the
+// same data reuses the packs an index object lists already, which is what the
+// backup stored up to its last checkpoint; the rest stays until Prune deletes
+// it.
 func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOption) (*Snapshot, error) {
 	o := &backupOptions{}
 	for _, opt := range opts {
@@ -238,15 +235,7 @@ func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOptio
 		}
 		o.parent = parent
 	}
-	chunks, trees, err := r.writeStores(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("backup: %w", err)
-	}
-	if err := r.putMarker(ctx, lock); err != nil {
-		return nil, err
-	}
-	m, err := r.runBackup(ctx, src, *o, chunks, trees)
-	r.clearMarker(ctx, lock, err == nil)
+	m, err := r.runBackup(ctx, src, *o, r.writeSession())
 	if err != nil {
 		return nil, err
 	}
@@ -483,7 +472,12 @@ type PruneOption func(*pruneConfig)
 // anything.
 func WithPruneDryRun() PruneOption { return func(c *pruneConfig) { c.dryRun = true } }
 
-// Prune removes CAS objects that no snapshot references.
+// Prune deletes the packs that hold no object a snapshot references, and the
+// packs no index lists. A pack that still holds one referenced object stays
+// whole.
+//
+// It deletes nothing when a snapshot references an object no index lists:
+// the error names RebuildIndex, which restores the index from the packs.
 // Pass WithPruneDryRun to report what would be removed without making changes.
 func (r *Repository) Prune(ctx context.Context, opts ...PruneOption) (*PruneResult, error) {
 	cfg := &pruneConfig{}
@@ -526,15 +520,7 @@ func (r *Repository) Import(ctx context.Context, reader io.Reader) (*Snapshot, e
 	}
 	defer lock.release(ctx)
 
-	chunks, trees, err := r.writeStores(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("import: %w", err)
-	}
-	if err := r.putMarker(ctx, lock); err != nil {
-		return nil, err
-	}
-	m, err := r.runImport(ctx, reader, chunks, trees)
-	r.clearMarker(ctx, lock, err == nil)
+	m, err := r.runImport(ctx, reader, r.writeSession())
 	if err != nil {
 		return nil, err
 	}
@@ -557,7 +543,8 @@ func (r *Repository) Verify(ctx context.Context, id string) (*VerifyResult, erro
 	if err != nil {
 		return nil, err
 	}
-	result, err := r.runVerify(ctx, id, progress)
+	chunks, trees := r.stores()
+	result, err := r.runVerify(ctx, id, chunks, trees, progress)
 	if err != nil {
 		return result, err
 	}
@@ -588,14 +575,21 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(ids)))
 
-	unclean, err := r.uncleanFindings(ctx)
+	_, unreadable, err := r.loadLocks(ctx)
 	if err != nil {
 		return nil, err
 	}
-	result := &CheckResult{SnapshotsChecked: len(ids), Warnings: unclean}
+	result := &CheckResult{SnapshotsChecked: len(ids)}
+	for _, name := range unreadable {
+		result.Warnings = append(result.Warnings,
+			fmt.Sprintf("lock %s does not open and is ignored, Unlock with WithForce removes it", name))
+	}
+	// One pair of stores for the check: the indexes load once and a tree pack
+	// several snapshots share is fetched once.
+	chunks, trees := r.stores()
 	for i, id := range ids {
 		// The inner verify reports as check, counters restart per snapshot.
-		vr, err := r.runVerify(ctx, id, func(e ProgressEvent) {
+		vr, err := r.runVerify(ctx, id, chunks, trees, func(e ProgressEvent) {
 			e.FilesDone, e.FilesTotal = i, len(ids)
 			progress(e)
 		})
@@ -636,7 +630,8 @@ func (r *Repository) Walk(ctx context.Context, id string, fn func(FileInfo) erro
 	if m.RootTree == "" {
 		return nil
 	}
-	return walkTree(ctx, r.trees, m.RootTree, func(e fileEntry) error { return fn(e.FileInfo) })
+	_, trees := r.stores()
+	return walkTree(ctx, trees, m.RootTree, func(e fileEntry) error { return fn(e.FileInfo) })
 }
 
 // Close releases any resources held by the repository (and the backend).

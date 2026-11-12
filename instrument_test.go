@@ -84,7 +84,7 @@ func (b *tallyBackend) get(method string) tally {
 func (b *tallyBackend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 	data, err := io.ReadAll(r)
 	if err == nil {
-		if h.Type == ark.BlobFile && b.failPut.CompareAndSwap(true, false) {
+		if h.Type == ark.DataPackFile && b.failPut.CompareAndSwap(true, false) {
 			err = errInjected
 		} else {
 			err = b.Backend.Put(ctx, h, bytes.NewReader(data))
@@ -106,7 +106,8 @@ func (b *tallyBackend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, er
 		return nil, err
 	}
 	var r io.Reader = bytes.NewReader(data)
-	if h.Type == ark.BlobFile && b.failRead.CompareAndSwap(true, false) {
+	// A restore reads its tree packs whole, through Get.
+	if h.Type == ark.TreePackFile && b.failRead.CompareAndSwap(true, false) {
 		r = io.MultiReader(bytes.NewReader(data[:len(data)/2]), errorReader{})
 	}
 	return &tallyReader{r: r, b: b}, nil
@@ -228,7 +229,7 @@ func TestInstrumentedBackendCountsWhatTheBackendSaw(t *testing.T) {
 
 	tb.failRead.Store(true)
 	if _, err := repo.Restore(ctx, snap.ID, &recordingSink{}); err == nil {
-		t.Fatal("Restore with a failing chunk read succeeded")
+		t.Fatal("Restore with a failing tree pack read succeeded")
 	}
 	sink := &recordingSink{}
 	if _, err := repo.Restore(ctx, snap.ID, sink); err != nil {
