@@ -12,10 +12,11 @@ import (
 func pruneCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "prune",
-		Usage: "delete chunks no snapshot references",
+		Usage: "delete packs no snapshot references",
 		UsageText: `ark prune [--dry-run] [--yes]
 
-   Deletes chunks and trees no snapshot references. Takes the exclusive lock.`,
+   Deletes the packs that hold no chunk or tree a snapshot references. A pack
+   with one referenced chunk or tree stays whole. Takes the exclusive lock.`,
 		Flags: []cli.Flag{
 			&cli.BoolFlag{Name: "dry-run", Aliases: []string{"n"}, Usage: "show what would be freed, delete nothing"},
 			&cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "skip the confirmation prompt"},
@@ -37,7 +38,7 @@ func runPrune(ctx context.Context, cmd *cli.Command, repo *ark.Repository, dryRu
 	var opts []ark.PruneOption
 	if dryRun {
 		opts = append(opts, ark.WithPruneDryRun())
-	} else if err := p.Confirm("delete unreferenced chunks"); err != nil {
+	} else if err := p.Confirm("delete unreferenced packs"); err != nil {
 		return err
 	}
 	pr := startProgress(p, "prune")

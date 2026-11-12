@@ -254,13 +254,27 @@ func (s *objectStore) Get(ctx context.Context, name string) ([]byte, error) {
 // fetching the pack whole unless s holds it.
 func (s *objectStore) fromWholePack(ctx context.Context, pack string, e packEntry) ([]byte, error) {
 	whole, ok := s.packs.get(pack)
-	if !ok {
-		var err error
-		if whole, err = readWhole(ctx, s.backend, Handle{Type: s.space.packs, Name: pack}); err != nil {
-			return nil, err
+	for retried := false; ; retried = true {
+		if !ok {
+			var err error
+			if whole, err = readWhole(ctx, s.backend, Handle{Type: s.space.packs, Name: pack}); err != nil {
+				return nil, err
+			}
+			s.packs.put(pack, whole)
 		}
-		s.packs.put(pack, whole)
+		data, err := s.blobIn(pack, e, whole)
+		if retried || !errors.Is(err, s.space.corruptErr) {
+			return data, err
+		}
+		// A read that came back short or garbled looks like a damaged pack,
+		// and what s holds is served to every later read: ask once more.
+		s.packs.drop(pack)
+		ok = false
 	}
+}
+
+// blobIn returns the content of the blob at e in whole, the pack named pack.
+func (s *objectStore) blobIn(pack string, e packEntry, whole []byte) ([]byte, error) {
 	end := uint64(e.offset) + uint64(e.length)
 	if end > uint64(len(whole)) {
 		return nil, fmt.Errorf("%w: %s object %s ends before %x: %w",

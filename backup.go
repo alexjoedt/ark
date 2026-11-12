@@ -242,7 +242,11 @@ func (r *Repository) parentFiles(
 	// ext3, NFS) and 2 s ticks (FAT).
 	racy := m.CreatedAt.Add(-2 * time.Second)
 	files := make(map[string]fileEntry)
-	err = walkTree(ctx, trees, m.RootTree, func(e fileEntry) error {
+	// Nothing reads a tree node after this walk: its whole packs go with it
+	// and do not stay in the store for the length of the run.
+	walk := *trees
+	walk.packs = newChunkCache(treePackCacheBytes)
+	err = walkTree(ctx, &walk, m.RootTree, func(e fileEntry) error {
 		if e.Type == FileTypeRegular && e.ModTime.Before(racy) {
 			files[e.Path] = e
 		}

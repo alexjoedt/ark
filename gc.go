@@ -14,10 +14,12 @@ import (
 type prunePlan struct {
 	store *objectStore
 	table *indexTable
-	// keep lists the packs that hold a referenced blob, with every blob the
-	// index lists in them; the index is written from it when rewrite is set.
-	keep    []indexedPack
-	rewrite bool
+	// referenced marks the packs of table.packs that hold a referenced blob
+	// and stay, blobs counts what the index lists in each. The index is
+	// written from the packs that stay when rewrite is set.
+	referenced []bool
+	blobs      []int
+	rewrite    bool
 	// stored is every pack in the namespace. remove names those of them that
 	// no index lists or that hold no referenced blob, with the number of
 	// blobs the index lists in each: none for a pack it does not list.
@@ -131,27 +133,26 @@ func (p *prunePlan) plan(ctx context.Context, live map[string]struct{}) error {
 	}
 	p.table = t
 
-	entries := make([][]packEntry, len(t.packs))
-	referenced := make([]bool, len(t.packs))
+	p.referenced = make([]bool, len(t.packs))
+	p.blobs = make([]int, len(t.packs))
 	var name [2 * sha256.Size]byte
 	for _, records := range &t.records {
 		for _, rec := range records {
-			entries[rec.pack] = append(entries[rec.pack], rec.packEntry)
+			p.blobs[rec.pack]++
 			hex.Encode(name[:], rec.name[:])
 			if _, ok := live[string(name[:])]; ok {
-				referenced[rec.pack] = true
+				p.referenced[rec.pack] = true
 			}
 		}
 	}
 	dead := make(map[string]int)
 	kept := 0
 	for i, pack := range t.packs {
-		if !referenced[i] {
-			dead[hex.EncodeToString(pack[:])] = len(entries[i])
+		if p.referenced[i] {
+			kept += p.blobs[i]
 			continue
 		}
-		p.keep = append(p.keep, indexedPack{name: hex.EncodeToString(pack[:]), entries: entries[i]})
-		kept += len(entries[i])
+		dead[hex.EncodeToString(pack[:])] = p.blobs[i]
 	}
 	// One object per indexMaxRecords blobs is what a rewrite leaves at most.
 	p.rewrite = len(dead) > 0 || len(t.unreadable) > 0 ||
@@ -174,6 +175,31 @@ func (p *prunePlan) plan(ctx context.Context, live map[string]struct{}) error {
 	return nil
 }
 
+// keep returns the packs that stay, each with every blob the index lists in
+// it. That is a second copy of their records, so only a rewrite asks for it.
+func (p *prunePlan) keep() []indexedPack {
+	entries := make([][]packEntry, len(p.table.packs))
+	for i, n := range p.blobs {
+		if p.referenced[i] {
+			entries[i] = make([]packEntry, 0, n)
+		}
+	}
+	for _, records := range &p.table.records {
+		for _, rec := range records {
+			if p.referenced[rec.pack] {
+				entries[rec.pack] = append(entries[rec.pack], rec.packEntry)
+			}
+		}
+	}
+	var keep []indexedPack
+	for i, pack := range p.table.packs {
+		if p.referenced[i] {
+			keep = append(keep, indexedPack{name: hex.EncodeToString(pack[:]), entries: entries[i]})
+		}
+	}
+	return keep
+}
+
 // rewriteIndexes stores the index of the packs that stay and then deletes
 // the index objects it replaces, each step made durable before the next.
 func (r *Repository) rewriteIndexes(ctx context.Context, plans []*prunePlan) error {
@@ -186,7 +212,7 @@ func (r *Repository) rewriteIndexes(ctx context.Context, plans []*prunePlan) err
 		rewrite = true
 		// A fresh index: one that is loaded would merge what it writes into
 		// its table, which nothing reads here.
-		names, err := newPackIndex(r.backend, p.store.space, r.logger).write(ctx, p.keep)
+		names, err := newPackIndex(r.backend, p.store.space, r.logger).write(ctx, p.keep())
 		if err != nil {
 			return err
 		}

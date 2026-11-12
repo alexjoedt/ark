@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"log/slog"
+	"slices"
 	"testing"
 )
 
@@ -91,5 +93,95 @@ func BenchmarkObjectCodec(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// TestWholePackReadThatComesBackShortIsAskedAgain: a pack Get that returns
+// half the pack without an error must not stay in the store, where every
+// later read of the pack would see a damaged object that is stored intact.
+func TestWholePackReadThatComesBackShortIsAskedAgain(t *testing.T) {
+	ctx := context.Background()
+	codec := newObjectCodec()
+	defer codec.Close()
+	key := newMasterKey("repo")
+	b := newIndexBackend(newStubBackend())
+
+	session := testSession(b, codec, key)
+	var names []string
+	for i := range 8 { // several of them lie past the cut
+		data := fmt.Appendf(nil, "tree node %d", i)
+		names = append(names, session.trees.name(data))
+		if _, err := session.trees.putNamed(ctx, names[i], data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := session.finish(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	_, trees := (&Repository{backend: b, codec: codec, key: key, logger: quietLogger}).stores()
+	if _, err := trees.index.load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b.reset()
+	b.cutGets = 1
+	for _, name := range slices.Backward(names) {
+		if _, err := trees.Get(ctx, name); err != nil {
+			t.Fatalf("Get after a short pack read: %v", err)
+		}
+	}
+	if _, gets, _ := b.calls(TreePackFile); gets != 2 {
+		t.Errorf("%d Gets of the tree pack, want 2: the short one and one more", gets)
+	}
+
+	// A pack that is damaged where it is stored is read twice and no more.
+	_, trees = (&Repository{backend: b, codec: codec, key: key, logger: quietLogger}).stores()
+	if _, err := trees.index.load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b.reset()
+	b.cutGets = 2
+	last := names[len(names)-1]
+	if _, err := trees.Get(ctx, last); !errors.Is(err, ErrCorruptTree) {
+		t.Errorf("Get of a pack that is short twice returned %v, want ErrCorruptTree", err)
+	}
+	if _, gets, _ := b.calls(TreePackFile); gets != 2 {
+		t.Errorf("%d Gets of the damaged tree pack, want 2", gets)
+	}
+}
+
+// TestVerifyChunkDoesNotBlameTheChunkForALostIndexObject: an index object
+// that was listed and is gone fails the load with ErrNotFound, which is no
+// verdict on any chunk.
+func TestVerifyChunkDoesNotBlameTheChunkForALostIndexObject(t *testing.T) {
+	ctx := context.Background()
+	codec := newObjectCodec()
+	defer codec.Close()
+	key := newMasterKey("repo")
+	b := newIndexBackend(newStubBackend())
+
+	session := testSession(b, codec, key)
+	data := []byte("content")
+	name := session.chunks.name(data)
+	if _, err := session.chunks.putNamed(ctx, name, data); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.finish(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	chunks, _ := (&Repository{backend: b, codec: codec, key: key, logger: quietLogger}).stores()
+	b.getErr = fmt.Errorf("%w: the index object", ErrNotFound)
+	result := &VerifyResult{OK: true}
+	if err := verifyChunk(ctx, chunks, name, result); !errors.Is(err, b.getErr) {
+		t.Errorf("verifyChunk returned %v, want the load error", err)
+	}
+	if !result.OK || len(result.MissingChunks) != 0 {
+		t.Errorf("a failed index load reported the chunk: %+v", result)
+	}
+
+	b.getErr = nil
+	if err := verifyChunk(ctx, chunks, name, result); err != nil || result.ChunksChecked != 1 {
+		t.Errorf("verifyChunk after the index is back: %v, %d checked", err, result.ChunksChecked)
 	}
 }

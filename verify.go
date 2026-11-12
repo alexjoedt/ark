@@ -80,6 +80,12 @@ func (r *Repository) runVerify(
 // verifyChunk records one chunk as checked, missing or corrupt. Only a backend
 // failure that says nothing about the chunk itself is returned as an error.
 func verifyChunk(ctx context.Context, chunks *objectStore, id string, result *VerifyResult) error {
+	// An index that does not load says nothing about the chunk, also when
+	// the failure wraps ErrNotFound: an index object that was listed and is
+	// gone.
+	if _, err := chunks.index.load(ctx); err != nil {
+		return fmt.Errorf("verify: %w", err)
+	}
 	// A chunk no index lists, or whose pack is gone, is missing. One that
 	// fails its tag or does not hash to its name is corrupt.
 	_, err := chunks.Get(ctx, id)
