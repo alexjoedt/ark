@@ -1,6 +1,7 @@
 package ark
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"fmt"
@@ -52,6 +53,8 @@ type packSession struct {
 	backend       Backend
 	now           func() time.Time
 	chunks, trees *objectStore
+	// checkpointBlobs is how many blobs wait for their index object at most.
+	checkpointBlobs int
 
 	// flushing holds a token while a caller syncs and writes index objects.
 	flushing chan struct{}
@@ -69,7 +72,10 @@ type packSession struct {
 
 // writeSession returns the session of a run that is about to start.
 func (r *Repository) writeSession() *packSession {
-	p := &packSession{backend: r.backend, now: r.now, flushing: make(chan struct{}, 1), last: r.now()}
+	p := &packSession{
+		backend: r.backend, now: r.now, flushing: make(chan struct{}, 1), last: r.now(),
+		checkpointBlobs: cmp.Or(r.checkpointBlobs, indexMaxRecords),
+	}
 	p.chunks, p.trees = r.stores()
 	uploads := newPackUploads()
 	for i, s := range []*objectStore{p.chunks, p.trees} {
@@ -78,6 +84,7 @@ func (r *Repository) writeSession() *packSession {
 			func(ctx context.Context, pack string, entries []packEntry) error {
 				return p.packStored(ctx, i, indexedPack{name: pack, entries: entries})
 			})
+		s.writer.target = cmp.Or(r.packTarget, packTargetSize)
 	}
 	return p
 }
@@ -99,7 +106,7 @@ func (p *packSession) packStored(ctx context.Context, side int, pack indexedPack
 // due reports whether the stored packs are to be listed now. The caller
 // holds p.mu.
 func (p *packSession) due() bool {
-	return p.pending >= indexMaxRecords || p.now().Sub(p.last) >= checkpointInterval
+	return p.pending >= p.checkpointBlobs || p.now().Sub(p.last) >= checkpointInterval
 }
 
 // flushIndex syncs and then stores index objects for the packs stored before

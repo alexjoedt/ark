@@ -138,3 +138,10 @@ func IndexedPacks(ctx context.Context, r *Repository, h Handle) ([]string, int, 
 	}
 	return names, t.count(), nil
 }
+
+// SetPackLimits lowers the size that closes a pack of r and the number of
+// blobs a run of r stores before it lists them in an index object, so a small
+// source fills several packs and several index objects.
+func SetPackLimits(r *Repository, packBytes, checkpointBlobs int) {
+	r.packTarget, r.checkpointBlobs = packBytes, checkpointBlobs
+}

@@ -94,6 +94,11 @@ type Repository struct {
 	// default; tests lower it to see the budget at work on small fixtures.
 	prefetchBytes int64
 
+	// packTarget and checkpointBlobs are packTargetSize and indexMaxRecords,
+	// zero for the default; tests lower them so that a small source fills
+	// several packs and lists them in several index objects.
+	packTarget, checkpointBlobs int
+
 	// clock is time.Now except in tests, which drive the lock staleness
 	// rules through it.
 	clock func() time.Time

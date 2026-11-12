@@ -38,6 +38,18 @@ import (
 // child and must leave Check clean. Restores run once per snapshot and again in a full pass before the
 // repository is replaced; Check covers the rest in between.
 //
+// The children close a pack at killPackTarget bytes and list their packs
+// every killCheckpointBlobs blobs, so a backup of the small tree stores
+// several packs and several index objects, and every backup is drawn from one
+// of two sources: arkfs, which a backup reads in parallel, or the same tree
+// without ConcurrentOpen, which it reads file by file inside the walk as it
+// does a tar stream. A child reports each write of a pack, an index object
+// and a manifest, so the harness logs where its kills landed (killWindow).
+// Half of the kill delays start at the first of those writes instead of at
+// the start of the op: an op spends most of its time before it writes, on its
+// lock and on reading the index and the snapshots, most of all over sftp, and
+// a kill there finds nothing half done.
+//
 //	ARK_KILL_RUNS  iterations, default 5
 //	ARK_KILL_SEED  seed of the ops, tree changes and kill delays, printed on every run
 //
@@ -51,6 +63,16 @@ const (
 	killEnvSrc  = "ARK_KILL_CHILD_SRC"
 	killEnvTag  = "ARK_KILL_CHILD_TAG"
 	killEnvIDs  = "ARK_KILL_CHILD_IDS"
+	killEnvSeq  = "ARK_KILL_CHILD_SEQ"
+)
+
+const (
+	// killPackTarget closes the packs of a child: a few chunks to a pack, so
+	// the chunks of files that change at different rates share packs.
+	killPackTarget = 32 << 10
+	// killCheckpointBlobs is how many blobs a child stores before it lists
+	// them in the index.
+	killCheckpointBlobs = 8
 )
 
 // killOps is drawn uniformly, so backup runs at least half of the iterations:
@@ -132,7 +154,7 @@ func runKillHarness(
 	ctx := context.Background()
 	src := t.TempDir()
 	for i := range killTreeFiles {
-		writeKillFile(t, bytesSrc, src, i, rng.IntN(256<<10))
+		writeKillFile(t, bytesSrc, src, i, rng.IntN(killFileSize(i)))
 	}
 	st := &killState{
 		want:     map[string]map[string]string{},
@@ -141,8 +163,10 @@ func runKillHarness(
 		gone:     map[string]bool{},
 		ids:      map[string]string{},
 	}
-	ceil := map[string]time.Duration{} // kill delay ceiling per op
+	ceil := map[string]time.Duration{} // kill delay ceiling per op and start of the delay
 	runsOf, kills := map[string]int{}, map[string]int{}
+	windows := map[string]int{} // kills by op and killWindow
+	repacks := 0                // prunes that stored a pack
 	// raw is the open backend of the current repository, b wraps it for
 	// ark.Open. A failed run keeps its repository.
 	var repoDir string
@@ -184,7 +208,8 @@ func runKillHarness(
 		// whatever earlier kills left behind.
 		mutateKillTree(t, rng, bytesSrc, src)
 		op := killOps[rng.IntN(len(killOps))]
-		frac, pick := rng.Float64(), rng.Uint64()
+		frac, pick, sequential := rng.Float64(), rng.Uint64(), rng.IntN(2) == 0
+		fromWrite := rng.IntN(2) == 0
 
 		var targets []string
 		if op == "forget" {
@@ -198,6 +223,9 @@ func runKillHarness(
 		case "backup":
 			st.want[tag] = readTree(t, src)
 			env = append(env, killEnvSrc+"="+src, killEnvTag+"="+tag)
+			if sequential {
+				env = append(env, killEnvSeq+"=1")
+			}
 		case "forget":
 			ids := make([]string, len(targets))
 			for j, tg := range targets {
@@ -210,21 +238,42 @@ func runKillHarness(
 		// finished run resets the ceiling to its duration, a killed one raises
 		// it by half, so the delays keep reaching the end of an op whose work
 		// grows, like a prune that has more to delete than the first one had.
-		delay := time.Duration(frac * float64(ceil[op]))
-		took, killed, out, err := runKillChild(env, delay)
+		// A delay that starts at the first write has a ceiling of its own, the
+		// time a finished run took from there; a run that wrote nothing was
+		// not killed and says nothing about it.
+		phase, from := op, "its start"
+		if fromWrite {
+			phase, from = op+" from its first write", "its first write"
+		}
+		delay := time.Duration(frac * float64(ceil[phase]))
+		run, err := runKillChild(env, delay, fromWrite)
+		killed, out, events := run.killed, run.out, run.events
 		runsOf[op]++
-		point := fmt.Sprintf("seed %d iteration %d, %s exited after %v", seed, i, op, took)
+		point := fmt.Sprintf("seed %d iteration %d, %s exited after %v", seed, i, op, run.took)
 		if killed {
 			kills[op]++
-			point = fmt.Sprintf("seed %d iteration %d, %s killed after %v", seed, i, op, delay)
+			window := killWindow(events)
+			point = fmt.Sprintf("seed %d iteration %d, %s killed %v after %s, %s", seed, i, op, delay, from, window)
+			switch {
+			case op == "backup" && sequential:
+				windows["backup, sequential source: "+window]++
+			case op == "backup":
+				windows["backup, arkfs: "+window]++
+			default:
+				windows[op+": "+window]++
+			}
 		}
 		if err != nil {
 			t.Fatalf("%s: child: %v\n%s", point, err, out)
 		}
-		if killed {
-			ceil[op] += ceil[op] / 2
-		} else {
-			ceil[op] = took
+		repacked := op == "prune" && bytes.IndexByte(events, 'P') >= 0
+		switch {
+		case killed:
+			ceil[phase] += ceil[phase] / 2
+		case !fromWrite:
+			ceil[phase] = run.took
+		case len(events) > 0:
+			ceil[phase] = run.sinceWrite
 		}
 
 		switch op {
@@ -252,15 +301,24 @@ func runKillHarness(
 				}
 			}
 		case op == "prune" && killed:
-			if _, _, out, err := runKillChild(env, 0); err != nil {
-				t.Fatalf("%s: prune rerun: %v\n%s", point, err, out)
+			rerun, err := runKillChild(env, 0, false)
+			if err != nil {
+				t.Fatalf("%s: prune rerun: %v\n%s", point, err, rerun.out)
 			}
+			repacked = repacked || bytes.IndexByte(rerun.events, 'P') >= 0
 			st.check(ctx, t, b, point+", after prune rerun")
+		}
+		if repacked {
+			repacks++
 		}
 	}
 
 	for _, op := range slices.Compact(slices.Sorted(slices.Values(killOps))) {
 		t.Logf("%s: %d runs, %d killed before finishing", op, runsOf[op], kills[op])
+	}
+	t.Logf("prune: %d of %d runs repacked, the rerun of a killed one included", repacks, runsOf["prune"])
+	for _, w := range slices.Sorted(maps.Keys(windows)) {
+		t.Logf("killed %s: %d", w, windows[w])
 	}
 	retire(fmt.Sprintf("seed %d final full pass", seed))
 }
@@ -363,19 +421,19 @@ func TestKillHarnessChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open %s: %v", repoDir, err)
 	}
-	repo, err := ark.Open(ctx, b, testPassword)
+	// fd 3 is the pipe runKillChild reads: the ready byte, then the writes.
+	ready := os.NewFile(3, "ready")
+	repo, err := ark.Open(ctx, killProbe{b, ready}, testPassword)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = repo.Close() }()
+	ark.SetPackLimits(repo, killPackTarget, killCheckpointBlobs)
 
 	var run func() error
 	switch op := os.Getenv(killEnvOp); op {
 	case "backup":
-		src, err := arkfs.NewSource(os.Getenv(killEnvSrc))
-		if err != nil {
-			t.Fatalf("NewSource: %v", err)
-		}
+		src := treeSource(t, os.Getenv(killEnvSrc), os.Getenv(killEnvSeq) != "")
 		run = func() error {
 			_, err := repo.Backup(ctx, src, ark.WithTags(os.Getenv(killEnvTag)))
 			return err
@@ -395,57 +453,209 @@ func TestKillHarnessChild(t *testing.T) {
 		t.Fatalf("unknown op %q", op)
 	}
 
-	// fd 3 is the pipe runKillChild waits on: the kill delay starts here.
-	ready := os.NewFile(3, "ready")
-	if _, err := ready.Write([]byte{1}); err != nil {
+	// The kill delay starts here.
+	if _, err := ready.Write([]byte{killReady}); err != nil {
 		t.Fatalf("signal ready: %v", err)
 	}
-	_ = ready.Close()
 	if err := run(); err != nil {
 		t.Fatalf("%s: %v", os.Getenv(killEnvOp), err)
 	}
 }
 
+// sequentialSource hides the ConcurrentOpen of the source it wraps, so a
+// backup reads its files one at a time inside the walk: the path of a source
+// that is a stream, such as the tar stream of a docker volume.
+type sequentialSource struct{ ark.Source }
+
+// treeSource returns the arkfs source of dir, or the same behind a
+// sequentialSource.
+func treeSource(t *testing.T, dir string, sequential bool) ark.Source {
+	t.Helper()
+	src, err := arkfs.NewSource(dir)
+	if err != nil {
+		t.Fatalf("NewSource: %v", err)
+	}
+	if sequential {
+		return sequentialSource{src}
+	}
+	return src
+}
+
+// killReady is the byte a child writes on fd 3 before its op starts. The
+// bytes after it are its writes: an upper case letter of killWrites before a
+// Put or Delete, the lower case one once it returned.
+const killReady = 1
+
+var killWrites = []struct {
+	event byte
+	name  string
+}{
+	{'P', "pack put"}, {'I', "index put"}, {'M', "manifest put"},
+	{'X', "index delete"}, {'D', "pack delete"}, {'F', "manifest delete"},
+}
+
+// killProbe reports the pack, index and manifest writes of a child to w.
+type killProbe struct {
+	ark.Backend
+	w io.Writer
+}
+
+func (p killProbe) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
+	var event byte
+	switch h.Type { //nolint:exhaustive // the other objects are not reported
+	case ark.DataPackFile, ark.TreePackFile:
+		event = 'P'
+	case ark.DataIndexFile, ark.TreeIndexFile:
+		event = 'I'
+	case ark.SnapshotFile:
+		event = 'M'
+	}
+	return p.report(event, func() error { return p.Backend.Put(ctx, h, r) })
+}
+
+func (p killProbe) Delete(ctx context.Context, h ark.Handle) error {
+	var event byte
+	switch h.Type { //nolint:exhaustive // the other objects are not reported
+	case ark.DataPackFile, ark.TreePackFile:
+		event = 'D'
+	case ark.DataIndexFile, ark.TreeIndexFile:
+		event = 'X'
+	case ark.SnapshotFile:
+		event = 'F'
+	}
+	return p.report(event, func() error { return p.Backend.Delete(ctx, h) })
+}
+
+func (p killProbe) report(event byte, write func() error) error {
+	if event == 0 {
+		return write()
+	}
+	_, _ = p.w.Write([]byte{event})
+	err := write()
+	_, _ = p.w.Write([]byte{event - 'A' + 'a'})
+	return err
+}
+
+// killWindow names where a kill landed, from the events the child reported
+// until then: during a write that had not returned, or after the last one
+// that had. A backup killed "during pack put" died in a pack flush, "after
+// pack put" between a pack and its index object, "after index put" between
+// an index object and the manifest. A prune stores packs only to repack, so
+// its kills during or after a pack put landed in a repack; the other three
+// steps of a prune are the index put, the index delete and the pack delete.
+func killWindow(events []byte) string {
+	if len(events) == 0 {
+		return "before the first write"
+	}
+	open := map[byte]int{}
+	for _, e := range events {
+		if e >= 'a' {
+			open[e-'a'+'A']--
+		} else {
+			open[e]++
+		}
+	}
+	last := events[len(events)-1]
+	for _, w := range killWrites {
+		if open[w.event] > 0 {
+			return "during " + w.name
+		}
+	}
+	for _, w := range killWrites {
+		if w.event == last-'a'+'A' {
+			return "after " + w.name
+		}
+	}
+	return fmt.Sprintf("after an unknown event %q", last)
+}
+
+// killRun is what one child did: took is the time from its ready byte to its
+// exit, sinceWrite the time from the first write it reported to its exit,
+// zero when it reported none. killed is false when the child exited first.
+// events is what the child reported after the ready byte, see killProbe.
+type killRun struct {
+	took, sinceWrite time.Duration
+	killed           bool
+	out, events      []byte
+}
+
 // runKillChild runs one op in a child process with env added to its
 // environment and kills it delay after the child reports it is about to
-// start; a zero delay lets it finish. took is the time from that report to
-// the exit. killed is false when the child exited first, err is set when it
-// exited unsuccessfully.
-func runKillChild(env []string, delay time.Duration) (took time.Duration, killed bool, out []byte, err error) {
+// start, or with fromWrite delay after it reports its first write; a zero
+// delay lets it finish, and so does a child that never writes. err is set
+// when the child exited unsuccessfully.
+func runKillChild(env []string, delay time.Duration, fromWrite bool) (killRun, error) {
 	var buf bytes.Buffer
 	ready, w, err := os.Pipe()
 	if err != nil {
-		return 0, false, nil, err
+		return killRun{}, err
 	}
 	defer func() { _ = ready.Close() }()
 	cmd, err := startChild("TestKillHarnessChild", env, &buf, w)
 	if err != nil {
-		return 0, false, nil, err
+		return killRun{}, err
 	}
 	// The read returns once the child writes its byte, or with EOF once it
 	// exits without writing one.
 	var b [1]byte
 	if _, err := ready.Read(b[:]); err != nil {
 		err = cmd.Wait()
-		return 0, false, buf.Bytes(), fmt.Errorf("child exited before the op started: %w", err)
+		return killRun{out: buf.Bytes()}, fmt.Errorf("child exited before the op started: %w", err)
 	}
 	start := time.Now()
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-
-	var timeout <-chan time.Time
-	if delay > 0 {
-		timeout = time.After(delay)
-	}
-	select {
-	case err := <-done:
-		return time.Since(start), false, buf.Bytes(), err
-	case <-timeout:
-		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			return 0, true, nil, err
+	// The pipe ends when the child does: nothing else holds its write end.
+	// wrote is set before written closes, at the first event.
+	var wrote time.Time
+	written, reported := make(chan struct{}), make(chan []byte, 1)
+	go func() {
+		var events []byte
+		chunk := make([]byte, 256)
+		for {
+			n, err := ready.Read(chunk)
+			if n > 0 && len(events) == 0 {
+				wrote = time.Now()
+				close(written)
+			}
+			events = append(events, chunk[:n]...)
+			if err != nil {
+				reported <- events
+				return
+			}
 		}
-		<-done
-		return time.Since(start), true, buf.Bytes(), nil
+	}()
+	finish := func(killed bool) killRun {
+		run := killRun{took: time.Since(start), killed: killed, out: buf.Bytes(), events: <-reported}
+		if len(run.events) > 0 {
+			run.sinceWrite = time.Since(wrote)
+		}
+		return run
+	}
+
+	// armed starts the delay: at once, or at the first write.
+	var timeout <-chan time.Time
+	armed := written
+	if !fromWrite {
+		armed = make(chan struct{})
+		close(armed)
+	}
+	for {
+		select {
+		case err := <-done:
+			return finish(false), err
+		case <-armed:
+			armed = nil
+			if delay > 0 {
+				timeout = time.After(delay)
+			}
+		case <-timeout:
+			if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				return killRun{killed: true}, err
+			}
+			<-done
+			return finish(true), nil
+		}
 	}
 }
 
@@ -546,10 +756,29 @@ func (st *killState) check(ctx context.Context, t *testing.T, b ark.Backend, poi
 	maps.Copy(st.must, found)
 }
 
-const killTreeFiles = 24
+// The tree of the harness: killTreeFiles files in killDirs directories. The
+// first killHotFiles of them are hot: half of the changes write one of them
+// anew, so its chunks die with the few snapshots that hold them, in packs
+// they share with the chunks of the other files. A forget then leaves packs
+// that are partly dead, which is what a prune repacks; two directories hold no
+// hot file, so tree packs keep nodes that outlive their snapshot as well.
+const (
+	killTreeFiles = 24
+	killHotFiles  = 4
+	killDirs      = 6
+)
 
 func killFilePath(root string, i int) string {
-	return filepath.Join(root, fmt.Sprintf("d%d", i%3), fmt.Sprintf("f%02d.bin", i))
+	return filepath.Join(root, fmt.Sprintf("d%d", i%killDirs), fmt.Sprintf("f%02d.bin", i))
+}
+
+// killFileSize bounds the size of file i: the hot files are the larger ones,
+// so what a forget frees is more than a prune leaves unused.
+func killFileSize(i int) int {
+	if i < killHotFiles {
+		return 128 << 10
+	}
+	return 64 << 10
 }
 
 func writeKillFile(t *testing.T, bytesSrc *rand.ChaCha8, root string, i, size int) {
@@ -570,21 +799,28 @@ func writeTestFile(t *testing.T, path string, data []byte) {
 	}
 }
 
-// mutateKillTree deletes, recreates or edits four random files. An edit
-// replaces one 4 KiB window, so most chunks dedupe against the parent.
+// mutateKillTree changes four files: a hot one, written anew, or any one,
+// edited. Either may delete the file instead, and a deleted file is created
+// again. An edit replaces one 4 KiB window, so most chunks dedupe against the
+// parent.
 func mutateKillTree(t *testing.T, rng *rand.Rand, bytesSrc *rand.ChaCha8, root string) {
 	t.Helper()
 	for range 4 {
-		i := rng.IntN(killTreeFiles)
+		hot, i := rng.IntN(2) == 0, rng.IntN(killTreeFiles)
+		if hot {
+			i %= killHotFiles
+		}
 		path := killFilePath(root, i)
 		data, err := os.ReadFile(path)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
-			writeKillFile(t, bytesSrc, root, i, rng.IntN(256<<10))
+			writeKillFile(t, bytesSrc, root, i, rng.IntN(killFileSize(i)))
 			continue
 		case err != nil:
 		case rng.IntN(5) == 0:
 			err = os.Remove(path)
+		case hot:
+			writeKillFile(t, bytesSrc, root, i, rng.IntN(killFileSize(i)))
 		default:
 			if len(data) > 0 {
 				off := rng.IntN(len(data))
