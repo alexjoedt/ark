@@ -125,15 +125,14 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
   index, so a later backup of the same data stores nothing and its snapshot fails Restore, Verify
   and Check, which also names the lost packs; it never restores other bytes:
   `TestReplayedIndexObjectNeverRestoresOtherBytes`.
-- Object sizes, counts and times show. Per namespace the size of every pack and index object is
-  visible, and with the index sizes the number of chunks and trees: a record is 44 bytes. Packs
-  close at about 16 MiB, so a run's last, short pack and the number of full ones give the size of
-  what a backup added. A sealed chunk is its zstd frame plus 41 bytes and a pack is its sealed
-  chunks plus a sealed table, so the stored bytes show, while the boundaries between the blobs of a
-  pack do not: they sit in the sealed table. The names of packs are the SHA-256 of their bytes and
-  carry no information beyond that. The backend host keeps its own modification times, so it shows
-  when each pack and index object was written, and with it when backups ran and how long they
-  took; ark hides none of this: `TestListingRevealsCountsAndSizes`.
+- Object sizes and counts per namespace show: the size of every pack and index object, and with the
+  index sizes the number of chunks and trees. A sealed chunk is its zstd frame plus 41 bytes and a
+  pack is its sealed chunks plus a sealed table, so the stored bytes show, while the boundaries
+  between the blobs of a pack do not, they sit in the sealed table:
+  `TestListingRevealsCountsAndSizes`.
+- The number of packs shows the size of what a backup added: a pack closes once its blobs reach
+  16 MiB, so the number of full packs and the size of the run's last, short one give it:
+  `TestPackWriterClosesPacksAtTheTargetSize`.
 - The argon2id parameters and the config are plaintext: `TestInitWritesOneKeyFile`,
   `TestConfigHoldsOnlyItsPlaintextFields`.
 - Lock names carry the millisecond they were created: `TestLockNamesCarryTheirTime`.
@@ -153,6 +152,8 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
 - Repositories created with `WithoutPassword` or `--insecure-no-password`: the master key is stored
   unprotected, so anyone who reads the backend can read and forge them.
 - TLS for `ark serve`: terminate it in a reverse proxy.
+- Metadata the storage host keeps on its own, such as modification times: they show when each pack
+  and index object was written, and with it when backups ran and how long they took.
 
 ## Reporting a vulnerability
 

@@ -40,24 +40,31 @@ A pack is the sealed blobs in arrival order, then the sealed blob table, then th
 sealed table as 4 bytes little endian.
 
 - A blob is one chunk or one directory node, sealed on its own like a single object, with the
-  associated data `<namespace>/<name>`. A blob moved within a pack or into another does not open.
+  associated data `chunks/<name>` for a chunk and `trees/<name>` for a directory node, `<name>`
+  being the blob's hex name. No object is stored under `chunks` or `trees`: the associated data
+  only binds a blob to its type and name, so the bytes of one blob read where the index lists
+  another do not open.
 - The table has one entry per blob: its 32-byte name and its sealed length as 4 bytes little
   endian. Offsets follow from the order. The table is sealed with the data key and the associated
-  data `<pack namespace>/<hex SHA-256 of the blob section>`, so it opens only behind the blobs it
-  describes.
+  data `datapacks/<hex SHA-256 of the blob section>` or `treepacks/<...>` by the pack's namespace,
+  so it opens only behind the blobs it describes.
 - A pack is named by the hex SHA-256 of all its bytes. `sha256sum` on the storage host therefore
   checks every pack against its name without ark and without the key:
 
   ```bash
-  cd /srv/ark && sha256sum datapacks/*/* treepacks/*/* | awk '{ n=split($2,p,"/"); if ($1 != p[n]) print "damaged:", $2 }'
+  cd /srv/ark && find datapacks treepacks -type f -exec sha256sum {} + |
+    awk '{ n=split($2,p,"/"); if ($1 != p[n]) print "damaged:", $2 }'
   ```
 
   An index object, a manifest or a lock is named differently and cannot be checked this way.
-- A pack closes once it holds at least 16 MiB of blobs, so it overshoots by one blob at most. The
-  last pack of a run is as short as it is. Offsets and lengths are 32 bits, so a pack and a blob
-  stay below 4 GiB.
-- Chunks go into `datapacks`, directory nodes into `treepacks`. Tree packs are fetched whole;
-  chunks are read by range.
+- A pack closes once it holds at least 16 MiB of blobs, so it overshoots by one blob at most; a
+  blob of 16 MiB or more gets a pack of its own. The last pack of a run is as short as it is.
+- Offsets and lengths in the table and the index are 32 bits. The writer refuses a sealed blob of
+  4 GiB or more, so the blob section of a pack it stores is below 32 MiB or one blob below 4 GiB;
+  a pack whose table lists 4 GiB or more does not parse. The sealed table and its length come on
+  top of the blob section.
+- Chunks go into `datapacks`, directory nodes into `treepacks`. A tree pack is fetched whole when
+  a node of it is first read and serves the nodes beside it from memory; chunks are read by range.
 
 Chunk and node names are the hex HMAC-SHA256 of their plaintext under the repository's ID key;
 the name of a pack is not keyed.
@@ -71,15 +78,21 @@ pack and the sealed length. Every number is 4 bytes little endian, a record is 4
 records are sorted by blob name. The object is sealed like any single object and named by the keyed
 hash of its content.
 
-A backup writes index objects for the packs it stored and never merges them, so there is at least
-one index object per run and type. An index object lists at least 50 000 blobs when it is
-closed, and the blobs of one pack are never split across two objects. Prune merges them.
+A backup writes index objects for the packs it stored: at a checkpoint, when a pack is stored
+while 50 000 blobs wait for an index entry or 10 minutes have passed since the last one, and at
+its end. A type of which a run stored no pack gets no index object, so a backup that stores
+nothing new writes none. A backup never merges index objects. An object is closed once it lists
+at least 50 000 blobs, the last one of each write is as short as it is, and the blobs of one pack
+are never split across two objects. Prune writes the index of a type anew when a listed pack
+goes or is rewritten, when an index object does not open, or when there are more objects than
+one per 50 000 blobs listed.
 
 ark loads an index when the first lookup of its type needs it: a repository is opened without
 reading any index object, an incremental backup with no changed file reads the tree index only.
 The index is trusted: a lookup returns the pack, offset and length it lists and reads that range.
 Two writers may store the same new blob, so a blob can be listed for two packs; a read takes the
-copy in the pack with the smaller name, and prune removes the other.
+copy in the pack with the smaller name. Prune does not remove such a second copy on its own: it
+goes when prune deletes or rewrites the pack that holds it, see below.
 
 ## Order of writes
 
@@ -91,21 +104,34 @@ its last step. A pack that no index lists is left behind and removed by the next
 
 ## Prune
 
-Prune runs under the exclusive lock and works to a budget: at most 5% of the blob bytes may be
-unused when it ends. Packs without a referenced blob are deleted. Packs that hold both referenced
-and unreferenced blobs are rewritten, those with the largest unused share first, until the budget
-holds; a tree pack with an unreferenced node is always rewritten. A rewrite copies the sealed bytes
-of the referenced blobs into new packs without opening them. Then it writes the new index, deletes
-the old index objects and last the old packs, with a synchronisation between the steps. Prune
-deletes nothing when a snapshot references a blob that no index lists.
+Prune runs under the exclusive lock. It counts each referenced blob as live in one pack: of
+several copies, the one in the stored pack with the smallest share of unreferenced bytes, of
+several such the one in the pack with the smallest name. Every other blob byte is unused: blobs
+no snapshot references and the other copies. Packs without a live blob are deleted, and so are
+packs no index lists. A tree pack that holds an unreferenced node is always rewritten. Data packs
+that hold an unreferenced blob are rewritten, those with the largest unused share first, until
+their unused bytes are at most 5% of the blob bytes left after the prune. A pack whose only unused
+bytes are second copies is never rewritten and its second copies do not count against the 5%, and
+a pack the index lists that is gone is left for `Check` to report and counts nowhere; so the
+unused bytes a prune reports can be more than 5%.
+
+A rewrite copies the sealed bytes of the live blobs into new packs as they are, without sealing
+them again, but opens each one first; so does prune with the copy that stays of a blob whose other
+copy goes with its pack. A blob that does not open ends the prune with nothing deleted. Then prune
+writes the new index, deletes the old index objects and last the old packs, with a
+synchronisation between the steps. Prune deletes nothing when a snapshot references a blob that no
+index lists.
 
 ## Check and repairing the index
 
-`Check` verifies every snapshot and compares the index with the packs that are stored. It reports as
-errors a pack the index lists that is gone, and a pack whose own table disagrees with the index; as
-warnings it reports a pack no index lists and an index object that does not open. While the index is
-intact it opens no pack table, so a changed table in a pack whose blobs no snapshot reads is found
-by `sha256sum` on the pack, not by `Check`.
+`Check` verifies every snapshot: it reads every chunk and directory node a snapshot references
+through the index and reports one that is missing or does not open as an error. It compares the
+index with the packs that are stored: a pack the index lists that is gone is an error, a pack no
+index lists and an index object that does not open are warnings. A pack in which a referenced blob
+did not open is then read whole and its own table compared with the index; a table that lists that
+blob elsewhere or not at all is an error, since there the index is wrong and the pack may be whole.
+`Check` opens no other pack table, so a changed table in a pack whose referenced blobs all open, or
+whose blobs no snapshot references, is found by `sha256sum` on the pack, not by `Check`.
 
 The index can be rebuilt from the packs. `Repository.RebuildIndex` reads every pack whole, checks
 that the pack is named by the hash of its bytes, writes a new index from the tables and deletes the

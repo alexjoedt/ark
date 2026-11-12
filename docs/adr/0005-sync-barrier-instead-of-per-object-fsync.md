@@ -1,6 +1,6 @@
 # 0005: Sync barrier instead of per-object fsync
 
-Status: accepted
+Status: partly superseded by 0012
 Date: 2026-11-08
 
 ## Context
