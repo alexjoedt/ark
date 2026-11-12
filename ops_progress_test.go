@@ -27,6 +27,11 @@ func (b *ioBackend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error
 	return b.Backend.Get(ctx, h)
 }
 
+func (b *ioBackend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
+	b.calls.Add(1)
+	return b.Backend.GetRange(ctx, h, offset, length)
+}
+
 func (b *ioBackend) Exists(ctx context.Context, h ark.Handle) (bool, error) {
 	b.calls.Add(1)
 	return b.Backend.Exists(ctx, h)
@@ -240,11 +245,17 @@ func TestVerifyReportsProgress(t *testing.T) {
 	if len(fetches) == 0 {
 		t.Fatalf("no fetch events, got %v", phaseList(got))
 	}
+	// One event per data pack read, counting the chunk references settled.
+	done, total := 0, snaps[1].Stats.ChunksTotal
 	for i, e := range fetches {
-		if e.Phase != ark.PhaseFetch || e.ChunksDone != i+1 || e.ChunksTotal != len(fetches) {
-			t.Errorf("fetch event %d = %s %d/%d, want fetch %d/%d",
-				i, e.Phase, e.ChunksDone, e.ChunksTotal, i+1, len(fetches))
+		if e.Phase != ark.PhaseFetch || e.ChunksDone <= done || e.ChunksTotal != total {
+			t.Errorf("fetch event %d = %s %d/%d after %d, want fetch with a growing count of %d",
+				i, e.Phase, e.ChunksDone, e.ChunksTotal, done, total)
 		}
+		done = e.ChunksDone
+	}
+	if done != total {
+		t.Errorf("the last fetch event reports %d chunk references, want all %d", done, total)
 	}
 	if got[0].CurrentPath != "" {
 		t.Errorf("load event carries CurrentPath %q, want none before the prefix is resolved", got[0].CurrentPath)
@@ -269,8 +280,9 @@ func TestCheckReportsProgress(t *testing.T) {
 		t.Errorf("finalize reports %d/%d snapshots, want %d", final.FilesDone, final.FilesTotal, len(snaps))
 	}
 
-	// Per snapshot: its verify's fetch events with chunk counters starting
-	// at one, then one event counting it as checked.
+	// Per snapshot: its verify's fetch events with chunk counters that
+	// restart, at one for these snapshots of one chunk each, then one event
+	// counting it as checked.
 	checked := 0
 	var current string
 	for _, e := range got[1 : len(got)-1] {
@@ -331,30 +343,10 @@ func TestFailedOperationsReportNoFinalize(t *testing.T) {
 	}
 }
 
-// faultBackend fails Put and Delete for one handle type once fail is set.
-type faultBackend struct {
-	ark.Backend
-	fail ark.HandleType
-}
-
 var errInjected = errors.New("injected fault")
 
-func (b *faultBackend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
-	if h.Type == b.fail {
-		return errInjected
-	}
-	return b.Backend.Put(ctx, h, r)
-}
-
-func (b *faultBackend) Delete(ctx context.Context, h ark.Handle) error {
-	if h.Type == b.fail {
-		return errInjected
-	}
-	return b.Backend.Delete(ctx, h)
-}
-
-// openFaulty is openRecorded over a faultBackend that starts failing once the
-// returned function names a handle type.
+// openFaulty is openRecorded over a faultBackend that fails every Put and
+// Delete of a handle type once the returned function names one.
 func openFaulty(t *testing.T) (*ark.Repository, *recorder, []*ark.Snapshot, func(ark.HandleType)) {
 	t.Helper()
 	ctx := context.Background()
@@ -378,7 +370,7 @@ func openFaulty(t *testing.T) (*ark.Repository, *recorder, []*ark.Snapshot, func
 		snaps = append(snaps, s)
 	}
 	rec.reset()
-	return repo, rec, snaps, func(h ark.HandleType) { fb.fail = h }
+	return repo, rec, snaps, func(h ark.HandleType) { fb.arm("", h, -1) }
 }
 
 func TestBackendFaultsFailTheOperation(t *testing.T) {
@@ -416,7 +408,7 @@ func TestBackendFaultsFailTheOperation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Prune dry run: %v", err)
 		}
-		fail(ark.BlobFile)
+		fail(ark.DataPackFile)
 		res, err := repo.Prune(ctx)
 		if err != nil {
 			t.Fatalf("Prune: %v", err)
@@ -425,12 +417,14 @@ func TestBackendFaultsFailTheOperation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Prune dry run: %v", err)
 		}
-		// The trees go, the chunks stay: what stays is neither removed nor freed.
-		if res.BlobsRemoved == 0 || after.BlobsRemoved == 0 {
-			t.Fatalf("removed %d, %d left, the test needs both trees and chunks orphaned",
-				res.BlobsRemoved, after.BlobsRemoved)
+		// The tree pack goes, the data pack stays: what stays is neither
+		// removed nor freed. The index no longer lists the pack that stayed,
+		// so the next prune frees its bytes without knowing its blobs.
+		if res.BytesFreed == 0 || after.BytesFreed == 0 {
+			t.Fatalf("freed %d bytes, %d left, the test needs both a tree and a data pack orphaned",
+				res.BytesFreed, after.BytesFreed)
 		}
-		if res.BlobsRemoved+after.BlobsRemoved != before.BlobsRemoved ||
+		if res.BlobsRemoved == 0 || res.BlobsRemoved >= before.BlobsRemoved || after.BlobsRemoved != 0 ||
 			res.BytesFreed+after.BytesFreed != before.BytesFreed {
 			t.Errorf("prune removed %d blobs / %d bytes, %d / %d left, of %d / %d orphaned",
 				res.BlobsRemoved, res.BytesFreed, after.BlobsRemoved, after.BytesFreed,

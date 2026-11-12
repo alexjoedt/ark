@@ -2,6 +2,7 @@ package ark
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -10,7 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
+	"sync"
 
 	"github.com/klauspost/compress/zstd"
 	"golang.org/x/crypto/chacha20poly1305"
@@ -30,6 +33,9 @@ var (
 	// errNameMismatch is returned by a verifying store when an object opens
 	// but its content does not hash to its name.
 	errNameMismatch = errors.New("ark: object content does not match its name")
+	// errNotIndexed says why an object is missing: no index object lists it.
+	// The pack that holds it may still be stored.
+	errNotIndexed = errors.New("no index object lists it")
 )
 
 // objectCodec seals and opens data objects and key files.
@@ -69,6 +75,16 @@ func (c *objectCodec) seal(key *[32]byte, aad string, data []byte) []byte {
 // open reverses seal. A changed byte, an unknown format byte, a different key
 // or a different aad all return errSealBroken.
 func (c *objectCodec) open(key *[32]byte, aad string, obj []byte) ([]byte, error) {
+	frame, err := unseal(key, aad, obj)
+	if err != nil {
+		return nil, err
+	}
+	return c.dec.DecodeAll(frame, nil)
+}
+
+// unseal authenticates obj and returns the zstd frame it seals: all of open
+// but the decompression.
+func unseal(key *[32]byte, aad string, obj []byte) ([]byte, error) {
 	if len(obj) == 0 {
 		return nil, fmt.Errorf("%w: object is empty", errSealBroken)
 	}
@@ -84,7 +100,7 @@ func (c *objectCodec) open(key *[32]byte, aad string, obj []byte) ([]byte, error
 	if err != nil {
 		return nil, errSealBroken
 	}
-	return c.dec.DecodeAll(frame, nil)
+	return frame, nil
 }
 
 // objectAAD is the associated data an object is sealed with, so an object
@@ -110,6 +126,19 @@ func (r *Repository) getSealed(ctx context.Context, h Handle) ([]byte, error) {
 // readSealed reads and opens the object under h. Errors wrap ErrNotFound from
 // the backend, and errSealBroken for an object that was changed or moved.
 func readSealed(ctx context.Context, b Backend, c *objectCodec, key *[32]byte, h Handle) ([]byte, error) {
+	obj, err := readWhole(ctx, b, h)
+	if err != nil {
+		return nil, err
+	}
+	data, err := c.open(key, objectAAD(h), obj)
+	if err != nil {
+		return nil, fmt.Errorf("ark: failed to open %s object %s: %w", h.Type, h.Name, err)
+	}
+	return data, nil
+}
+
+// readWhole returns the whole object stored under h, as stored.
+func readWhole(ctx context.Context, b Backend, h Handle) ([]byte, error) {
 	rc, err := b.Get(ctx, h)
 	if err != nil {
 		return nil, fmt.Errorf("ark: failed to read %s object %s: %w", h.Type, h.Name, err)
@@ -120,54 +149,90 @@ func readSealed(ctx context.Context, b Backend, c *objectCodec, key *[32]byte, h
 	if err != nil {
 		return nil, fmt.Errorf("ark: failed to read %s object %s: %w", h.Type, h.Name, err)
 	}
-	data, err := c.open(key, objectAAD(h), obj)
-	if err != nil {
-		return nil, fmt.Errorf("ark: failed to open %s object %s: %w", h.Type, h.Name, err)
-	}
-	return data, nil
+	return obj, nil
 }
 
-// objectStore is a content-addressable store over one backend namespace.
-// An object is named by the HMAC-SHA256 of its raw content under the ID key
-// and sealed with the data key, so its name reveals nothing without the keys
-// and does not depend on how it is encoded.
+// treePackCacheBytes bounds the whole tree packs an operation keeps in memory:
+// a walk reads the nodes of one pack close together, so a pack is fetched
+// once and its neighbours stay for the walks that follow.
+const treePackCacheBytes = 64 << 20
+
+// objectStore is a content-addressable store of the chunks or the tree nodes
+// of a repository. An object is named by the HMAC-SHA256 of its raw content
+// under the ID key and sealed with the data key, so its name reveals nothing
+// without the keys and does not depend on how it is encoded. The sealed
+// objects are stored in packs, and an object is present once an index object
+// lists it.
+//
+// A store serves one operation: its index is loaded at the first lookup and
+// never listed again, so it does not see what another writer stores later.
 type objectStore struct {
 	backend Backend
-	typ     HandleType
-	codec   *objectCodec
-	dataKey *[32]byte
-	idKey   []byte
-	// corruptErr is the sentinel Get wraps an object that does not open in.
-	corruptErr error
+	space   *packSpace
+	index   *packIndex
 	// verify makes Get recompute the name of every object it reads.
 	verify bool
-	// repair makes putNamed read an object that exists and store it again
-	// when it does not open to its name, so an object a crash left torn is
-	// replaced and an intact one, which a snapshot may reference, is never
-	// written over.
-	repair bool
+	// packs holds whole packs, by name. With it Get fetches the pack of an
+	// object whole and serves the objects beside it from memory; without it
+	// every Get is one range read.
+	packs *packCache
+	// suspects, when set, collects the blobs Get could not open, by pack.
+	// Check sets it: nothing that reads concurrently does.
+	suspects map[string][]packEntry
+	// held and writer take what putNamed stores. They are set on the stores
+	// of a packSession; any other store only reads.
+	held   *heldBlobs
+	writer *packWriter
 }
 
-// newObjectStore returns the store of the chunk (BlobFile) or tree (TreeFile)
-// namespace. Any other type panics: it has no corruption sentinel.
-func newObjectStore(b Backend, t HandleType, c *objectCodec, key *masterKey) *objectStore {
-	var corruptErr error
-	switch t { //nolint:exhaustive // only chunks and trees are object stores
-	case BlobFile:
-		corruptErr = ErrCorruptChunk
-	case TreeFile:
-		corruptErr = ErrCorruptTree
-	default:
-		panic(fmt.Sprintf("ark: no object store for %s", t))
+// stores returns the chunk and the tree store of one operation. They issue no
+// request before their first use.
+func (r *Repository) stores() (chunks, trees *objectStore) {
+	open := func(blobs HandleType) *objectStore {
+		space := newPackSpace(r.codec, r.key, blobs)
+		return &objectStore{backend: r.backend, space: space, index: newPackIndex(r.backend, space, r.logger)}
 	}
-	return &objectStore{
-		backend:    b,
-		typ:        t,
-		codec:      c,
-		dataKey:    (*[32]byte)(&key.DataKey),
-		idKey:      key.IDKey[:],
-		corruptErr: corruptErr,
+	chunks, trees = open(BlobFile), open(TreeFile)
+	trees.packs = newPackCache()
+	return chunks, trees
+}
+
+// packCache is the LRU of whole tree packs of one operation. A pack pushed
+// out is read by range for a while: fetching it whole for every blob would
+// cost a pack per blob in a walk larger than the cache. Once those range reads
+// have cost what the pack does, a request counted as packRangeGap bytes, it is
+// fetched whole again, so the walks of many snapshots over the same trees do
+// not end at one request per node either.
+type packCache struct {
+	*chunkCache
+	mu sync.Mutex
+	// credit is what the range reads of a pack may still cost, by pack. A
+	// pack has none before it was fetched whole.
+	credit map[string]int64
+}
+
+func newPackCache() *packCache {
+	return &packCache{chunkCache: newChunkCache(treePackCacheBytes), credit: make(map[string]int64)}
+}
+
+// put holds whole, the pack named pack as it was just fetched.
+func (c *packCache) put(pack string, whole []byte) {
+	c.chunkCache.put(pack, whole)
+	c.mu.Lock()
+	c.credit[pack] = int64(len(whole))
+	c.mu.Unlock()
+}
+
+// byRange reports whether a blob of length bytes in the pack named pack,
+// which c does not hold, is read by range, and charges the pack for it.
+func (c *packCache) byRange(pack string, length uint32) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.credit[pack] <= 0 {
+		return false
 	}
+	c.credit[pack] -= int64(length) + packRangeGap
+	return true
 }
 
 // verifying returns a copy of s whose Get fails with errNameMismatch when an
@@ -178,112 +243,204 @@ func (s *objectStore) verifying() *objectStore {
 	return &v
 }
 
-// repairing returns a copy of s whose putNamed stores again every object that
-// is missing or does not open to its name.
-func (s *objectStore) repairing() *objectStore {
-	v := *s
-	v.repair = true
-	return &v
-}
-
-func (s *objectStore) handle(name string) Handle { return Handle{Type: s.typ, Name: name} }
-
 // name returns the object name of data: its HMAC-SHA256 under the ID key, hex.
-func (s *objectStore) name(data []byte) string {
-	mac := hmac.New(sha256.New, s.idKey)
+func (s *objectStore) name(data []byte) string { return keyedName(s.space.idKey, data) }
+
+// keyedName returns the name of an object that is named by its content: the
+// HMAC-SHA256 of data under the ID key, hex.
+func keyedName(idKey, data []byte) string {
+	mac := hmac.New(sha256.New, idKey)
 	mac.Write(data)
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// Put stores data under its name and returns that name with the number of
-// bytes written. A stored size of 0 means the object was already present and
-// nothing was written.
-func (s *objectStore) Put(ctx context.Context, data []byte) (string, int, error) {
-	name := s.name(data)
-	size, err := s.putNamed(ctx, name, data)
-	return name, size, err
-}
-
-// putNamed is Put for a caller that already holds the name of data.
+// putNamed stores data, whose name the caller holds, and returns the number
+// of bytes it adds to a pack. A stored size of 0 means the object was already
+// present, in the index or in a pack this run wrote, and nothing was written.
+// The object is durable and present for others only once the session of s
+// has listed its pack in an index object.
 func (s *objectStore) putNamed(ctx context.Context, name string, data []byte) (int, error) {
-	h := s.handle(name)
-	present, err := s.present(ctx, name)
+	_, _, present, err := s.index.lookup(ctx, name)
 	if err != nil || present {
 		return 0, err
 	}
-
-	obj := s.codec.seal(s.dataKey, objectAAD(h), data)
-	if err := s.backend.Put(ctx, h, bytes.NewReader(obj)); err != nil {
-		return 0, fmt.Errorf("ark: failed to store %s object %s: %w", s.typ, name, err)
+	blob, _ := parseName(name) // lookup rejected a name that is none
+	if !s.held.claim(blob) {
+		return 0, nil
+	}
+	obj := s.space.codec.seal(s.space.dataKey, objectAAD(Handle{Type: s.space.blobs, Name: name}), data)
+	if err := s.writer.add(ctx, name, obj); err != nil {
+		s.held.release(blob)
+		return 0, err
 	}
 	return len(obj), nil
 }
 
-// present reports whether the object named name is stored and needs no Put.
-// A repairing store counts only an object that opens and hashes to its name.
-func (s *objectStore) present(ctx context.Context, name string) (bool, error) {
-	if !s.repair {
-		exists, err := s.backend.Exists(ctx, s.handle(name))
-		if err != nil {
-			return false, fmt.Errorf("ark: failed to check %s object %s: %w", s.typ, name, err)
-		}
-		return exists, nil
-	}
-	_, err := s.verifying().Get(ctx, name)
-	switch {
-	case err == nil:
-		return true, nil
-	case errors.Is(err, ErrNotFound), errors.Is(err, s.corruptErr):
-		return false, nil
-	}
-	return false, err
-}
-
-// Get returns the raw content of the object stored under name. An object that
-// was changed or moved from another name fails to open, with ErrCorruptChunk
-// or ErrCorruptTree by namespace.
+// Get returns the raw content of the object stored under name. An object no
+// index lists, or whose pack is gone, wraps ErrNotFound. One that was changed
+// or moved from another name fails to open, with ErrCorruptChunk or
+// ErrCorruptTree by namespace.
 func (s *objectStore) Get(ctx context.Context, name string) ([]byte, error) {
-	data, err := readSealed(ctx, s.backend, s.codec, s.dataKey, s.handle(name))
-	if errors.Is(err, errSealBroken) {
-		return nil, fmt.Errorf("%w: %w", s.corruptErr, err)
-	}
+	pack, e, err := s.locate(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	if s.verify && s.name(data) != name {
-		return nil, fmt.Errorf("%w: %s object %s: %w", s.corruptErr, s.typ, name, errNameMismatch)
+	var data []byte
+	if s.packs == nil {
+		data, err = s.space.readBlob(ctx, s.backend, pack, e)
+	} else {
+		data, err = s.fromWholePack(ctx, pack, e)
+	}
+	return s.checked(pack, e, data, err)
+}
+
+// locate returns the pack and the place in it of the object stored under name.
+// An object no index lists wraps ErrNotFound.
+func (s *objectStore) locate(ctx context.Context, name string) (string, packEntry, error) {
+	pack, e, ok, err := s.index.lookup(ctx, name)
+	if err == nil && !ok {
+		err = fmt.Errorf("ark: failed to read %s object %s: %w: %w", s.space.blobs, name, ErrNotFound, errNotIndexed)
+	}
+	return pack, e, err
+}
+
+// checked is what every read does with data and err, the outcome of reading
+// and opening the blob at e of the pack named pack. A blob that did not open
+// is noted when s collects such blobs, and a verifying store fails one that
+// does not hash to its name.
+func (s *objectStore) checked(pack string, e packEntry, data []byte, err error) ([]byte, error) {
+	if err != nil {
+		if s.suspects != nil && errors.Is(err, s.space.corruptErr) {
+			s.suspects[pack] = append(s.suspects[pack], e)
+		}
+		return nil, err
+	}
+	if s.verify && s.name(data) != hex.EncodeToString(e.name[:]) {
+		return nil, fmt.Errorf("%w: %s object %x: %w", s.space.corruptErr, s.space.blobs, e.name, errNameMismatch)
 	}
 	return data, nil
 }
 
-// Exists reports whether the object named name is present.
-func (s *objectStore) Exists(ctx context.Context, name string) (bool, error) {
-	return s.backend.Exists(ctx, s.handle(name))
-}
-
-// Delete removes the object named name.
-func (s *objectStore) Delete(ctx context.Context, name string) error {
-	return s.backend.Delete(ctx, s.handle(name))
-}
-
-// StoredSize returns the size of the object as stored, header byte included.
-func (s *objectStore) StoredSize(ctx context.Context, name string) (int64, error) {
-	info, err := s.backend.Stat(ctx, s.handle(name))
-	if err != nil {
-		return 0, fmt.Errorf("ark: failed to stat %s object %s: %w", s.typ, name, err)
-	}
-	return info.Size, nil
-}
-
-// Names returns the name of every object currently in the namespace.
-func (s *objectStore) Names(ctx context.Context) ([]string, error) {
-	var names []string
-	err := s.backend.List(ctx, s.typ, func(info BlobInfo) error {
-		names = append(names, info.Name)
-		return nil
+// getMany reads the blobs at entries, which are sorted by offset, from the
+// pack named pack and calls fn for each with what a Get of it returns. Blobs
+// at most packRangeGap apart share one range read, so every byte range is
+// asked for once, and each blob is opened on its own: a changed byte fails
+// the blob it lies in and no other. A pack that ends inside a range is asked
+// for its size once, and the blobs behind its end fail without a request of
+// their own. An error from fn ends the call and is returned.
+//
+// It reads by range whether or not s holds whole packs.
+func (s *objectStore) getMany(
+	ctx context.Context, pack string, entries []packEntry, fn func(e packEntry, data []byte, err error) error,
+) error {
+	return s.sealedMany(ctx, pack, entries, func(e packEntry, sealed []byte, err error) error {
+		var data []byte
+		if err == nil {
+			data, err = s.space.openBlob(pack, e, sealed)
+		}
+		data, err = s.checked(pack, e, data, err)
+		return fn(e, data, err)
 	})
-	if err != nil {
-		return nil, fmt.Errorf("ark: failed to list %s objects: %w", s.typ, err)
+}
+
+// sealedMany is getMany before a blob is opened: yield gets the sealed bytes of
+// each blob as the pack holds them, which are only valid during the call, or
+// the error of the read that should have returned them.
+func (s *objectStore) sealedMany(
+	ctx context.Context, pack string, entries []packEntry, yield func(e packEntry, sealed []byte, err error) error,
+) error {
+	h := Handle{Type: s.space.packs, Name: pack}
+	// size is where the pack ends, once a read ran past it.
+	size, sized := uint64(0), false
+	for len(entries) > 0 {
+		start := uint64(entries[0].offset)
+		if sized && entries[0].end() > size {
+			if err := yield(entries[0], nil, s.space.endsBefore(pack, entries[0], io.ErrUnexpectedEOF)); err != nil {
+				return err
+			}
+			entries = entries[1:]
+			continue
+		}
+		limit := uint64(math.MaxUint64)
+		if sized {
+			limit = size
+		}
+		n, stop := oneRange(entries, limit)
+		whole, err := s.backend.GetRange(ctx, h, int64(start), int64(stop-start))
+		if errors.Is(err, io.ErrUnexpectedEOF) && !sized {
+			info, statErr := s.backend.Stat(ctx, h)
+			if statErr == nil && uint64(info.Size) < stop {
+				size, sized = uint64(info.Size), true
+				continue
+			}
+			err = cmp.Or(statErr, err)
+		}
+		if err != nil {
+			// A pack that does not answer fails every blob still wanted from
+			// it: one request says so, not one per range.
+			err = fmt.Errorf("ark: failed to read %s object %s: %w", h.Type, pack, err)
+			n = len(entries)
+		}
+		for _, e := range entries[:n] {
+			var sealed []byte
+			if err == nil {
+				sealed = whole[uint64(e.offset)-start:][:e.length]
+			}
+			if err := yield(e, sealed, err); err != nil {
+				return err
+			}
+		}
+		entries = entries[n:]
 	}
-	return names, nil
+	return nil
+}
+
+// end is where the blob at e stops in its pack.
+func (e packEntry) end() uint64 { return uint64(e.offset) + uint64(e.length) }
+
+// oneRange returns how many of entries, which are sorted by offset, one range
+// read takes and where it stops: the first, and those behind it that lie at
+// most packRangeGap apart and end at limit or before.
+func oneRange(entries []packEntry, limit uint64) (n int, stop uint64) {
+	n, stop = 1, entries[0].end()
+	for n < len(entries) && uint64(entries[n].offset) <= stop+packRangeGap && entries[n].end() <= limit {
+		stop = max(stop, entries[n].end())
+		n++
+	}
+	return n, stop
+}
+
+// fromWholePack returns the content of the blob at e in the pack named pack,
+// fetching the pack whole unless s holds it or the walk pushed it out.
+func (s *objectStore) fromWholePack(ctx context.Context, pack string, e packEntry) ([]byte, error) {
+	whole, ok := s.packs.get(pack)
+	if !ok && s.packs.byRange(pack, e.length) {
+		return s.space.readBlob(ctx, s.backend, pack, e)
+	}
+	for retried := false; ; retried = true {
+		if !ok {
+			var err error
+			if whole, err = readWhole(ctx, s.backend, Handle{Type: s.space.packs, Name: pack}); err != nil {
+				return nil, err
+			}
+			s.packs.put(pack, whole)
+		}
+		data, err := s.blobIn(pack, e, whole)
+		if retried || !errors.Is(err, s.space.corruptErr) {
+			return data, err
+		}
+		// A read that came back short or garbled looks like a damaged pack,
+		// and what s holds is served to every later read: ask once more.
+		s.packs.drop(pack)
+		ok = false
+	}
+}
+
+// blobIn returns the content of the blob at e in whole, the pack named pack.
+func (s *objectStore) blobIn(pack string, e packEntry, whole []byte) ([]byte, error) {
+	end := uint64(e.offset) + uint64(e.length)
+	if end > uint64(len(whole)) {
+		return nil, s.space.endsBefore(pack, e, io.ErrUnexpectedEOF)
+	}
+	return s.space.openBlob(pack, e, whole[e.offset:end])
 }

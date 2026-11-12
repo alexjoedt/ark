@@ -17,8 +17,9 @@ import (
 
 // repoFormatVersion is the on-disk format version this build writes and is the
 // only one it reads. Open rejects anything else with ErrUnsupportedFormat.
-// Version 2 requires masterKey.ConfigHash.
-const repoFormatVersion = 2
+// Version 2 added masterKey.ConfigHash; version 3 stores chunks and tree
+// nodes in packs behind an index, where version 2 stored one object each.
+const repoFormatVersion = 3
 
 // configName is the name of the single object in the config namespace.
 const configName = "config"

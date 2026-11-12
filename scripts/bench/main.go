@@ -27,7 +27,7 @@ func main() {
 	}
 }
 
-const usage = "usage: bench gen|mutate|hash|run -dir DIR [-seed N] [-small] [-ark BIN] [-restic BIN]"
+const usage = "usage: bench gen|mutate|hash|run -dir DIR [-seed N] [-small|-files] [-ark BIN] [-ark-ref BIN] [-restic BIN] [-sftp-dir DIR]"
 
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
@@ -40,7 +40,12 @@ func run(ctx context.Context, args []string) error {
 	dir := fs.String("dir", "", "dataset directory (required)")
 	seed := fs.Int64("seed", 1, "seed")
 	small := fs.Bool("small", false, "scaled-down dataset (~120 MiB) for a smoke run")
+	files := fs.Bool("files", false, "many-small-files dataset (40k files of 1 to 64 KiB, ~600 MiB)")
+	sftpDir := fs.String("sftp-dir", "", "run: local directory the sftp URI's path is served from, "+
+		"enables the disk ratio of sftp repositories and removes them after each run")
 	arkBin := fs.String("ark", "bin/ark", "run: ark binary")
+	refBin := fs.String("ark-ref", "", "run: reference ark binary the docker volume row is judged against, "+
+		"such as the build before a format change")
 	resticBin := fs.String("restic", "restic", "run: restic binary")
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -51,9 +56,17 @@ func run(ctx context.Context, args []string) error {
 	if *dir == "" {
 		return errors.New("-dir is required")
 	}
-	sp := fullSpec
-	if *small {
-		sp = smallSpec
+	if *sftpDir != "" && (args[0] != "run" || os.Getenv("ARK_SFTP_TEST_URI") == "") {
+		return errors.New("-sftp-dir needs the run subcommand and ARK_SFTP_TEST_URI")
+	}
+	sp, need := fullSpec, uint64(minFree)
+	switch {
+	case *small && *files:
+		return errors.New("-small and -files exclude each other")
+	case *small:
+		sp, need = smallSpec, minFreeSmall
+	case *files:
+		sp, need = filesSpec, minFreeFiles
 	}
 	switch args[0] {
 	case "gen":
@@ -63,7 +76,7 @@ func run(ctx context.Context, args []string) error {
 		}
 		_, _ = fmt.Fprintf(os.Stdout, "%d files, %.2f GiB\n", files, float64(n)/(1<<30))
 	case "mutate":
-		return mutate(ctx, *dir, *seed)
+		return mutate(ctx, *dir, *seed, sp.logSizes)
 	case "hash":
 		sum, files, n, err := hashTree(ctx, *dir)
 		if err != nil {
@@ -71,7 +84,7 @@ func run(ctx context.Context, args []string) error {
 		}
 		_, _ = fmt.Fprintf(os.Stdout, "%s  %d files, %d bytes\n", sum, files, n)
 	case "run":
-		return runBench(ctx, os.Stdout, *dir, sp, *small, *seed, *arkBin, *resticBin)
+		return runBench(ctx, os.Stdout, *dir, sp, need, *seed, *arkBin, *refBin, *resticBin, *sftpDir)
 	}
 	return nil
 }

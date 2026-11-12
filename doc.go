@@ -88,9 +88,15 @@
 //
 // # Memory
 //
-// Restore, Export and Verify stream: they walk the snapshot in order and read
-// the chunks of the file at hand, so their memory is the restore chunk cache
+// Restore and Export stream: they walk the snapshot in order and read the
+// chunks of the file at hand, so their memory is the restore chunk cache
 // (256 MiB by default, see WithRestoreCache) plus one chunk per worker in
 // flight, where the workers are capped by WithConcurrency. Neither the size of
 // the snapshot nor the size of a single file changes that.
+//
+// Verify and Check read pack by pack instead: they hold the names and places
+// of the distinct chunks of one snapshot, about 150 bytes each, and one range
+// of a pack at a time, which is at most a pack of about 20 MiB. Check reads a
+// chunk several snapshots share once, and keeps what it found for every
+// distinct chunk of the repository, about 60 bytes each.
 package ark

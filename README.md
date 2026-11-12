@@ -6,6 +6,11 @@
 
 Deduplicated backups as a Go library, with a CLI on top.
 
+> [!WARNING]
+> ark is under active development. Breaking changes are expected: the Go API, the CLI and the
+> on-disk repository format can change between releases without a migration path. Don't rely on it
+> as your only backup yet.
+
 ark backs up anything you can walk as a tree of files: a directory, a Docker volume, a database dump,
 an API export. Content is split with FastCDC, stored once, compressed with zstd and encrypted.
 
@@ -92,8 +97,8 @@ b := arkmem.New() // its objects are gone on Close
 key file is unlocked with `ARK_SFTP_KEY_PASSPHRASE`. Secrets never go into `Config` or a URI.
 `arkuri` takes the non-secret options as query parameters: `known_hosts`, `identity` and `insecure`.
 
-Anything else, such as S3 or a NAS API, is an `ark.Backend`: seven methods (`Put`, `Get`, `Exists`,
-`Delete`, `List`, `Stat`, `Close`). The suite in `arktest` checks the same contract the built-in
+Anything else, such as S3 or a NAS API, is an `ark.Backend`: nine methods (`Put`, `Get`, `GetRange`,
+`Exists`, `Delete`, `Sync`, `List`, `Stat`, `Close`). The suite in `arktest` checks the same contract the built-in
 backends pass:
 
 ```go
@@ -274,11 +279,17 @@ file.
 /srv/ark/
 ├── config      format version and chunker settings, plaintext, its hash sealed in the master key
 ├── keys/       the master key, sealed under the password
-├── chunks/     compressed, encrypted content, named by an HMAC, sharded by prefix
-├── trees/      one encrypted object per directory, named the same way
+├── datapacks/  packs of about 16 MiB of compressed, encrypted content chunks, sharded by prefix
+├── treepacks/  packs of the encrypted directory nodes
+├── dataindex/  encrypted index objects: which pack holds a chunk, and where
+├── treeindex/  the same for directory nodes
 ├── snapshots/  one encrypted manifest per snapshot, named by a random id
 └── locks/      encrypted shared and exclusive locks, stale after 30 minutes without a refresh
 ```
+
+A pack is named by the SHA-256 of its bytes, so `sha256sum` on the storage host checks packs
+without ark and without the key. Repositories of format version 2 are not read and not migrated:
+re-initialise them. The byte layout is in [docs/FORMAT.md](docs/FORMAT.md).
 
 ## Development
 
@@ -299,3 +310,10 @@ Releases: [docs/RELEASING.md](docs/RELEASING.md). Architecture decisions: [docs/
 ## License
 
 Apache License 2.0, see [LICENSE](LICENSE).
+
+## Disclaimer
+
+Use ark at your own risk. You are responsible for your data, including verifying that backups are
+complete and restorable. The developer and contributors accept no liability for data loss,
+corruption or any other damage resulting from the use of this software. See the warranty and
+liability sections of the [LICENSE](LICENSE).

@@ -36,12 +36,13 @@ ark keeps no freshness anchor. A replay never makes a restore return different b
 objects are bound to their name and namespace by their associated data, but a rollback of the
 repository state is accepted and not detected: a forgotten snapshot manifest comes back until a
 prune removed its data, an old key file reopens the repository under the old passphrase after
-ChangePassword (restic documents the same), a replayed lock blocks until it is stale and a
-replayed marker forces repair mode.
+ChangePassword (restic documents the same), a replayed lock blocks until it is stale and the
+replayed index objects of a pruned backup make a later backup of the same data reference blobs
+that are gone (see 0012).
 
 Snapshot IDs are 128 random bits, so a listing reveals no snapshot time; the encoding is a detail
-the ID format may change. Locks and markers keep a millisecond timestamp in their name, since
-staleness and cleanup read it. Object sizes and counts per namespace, the chunk-size distribution,
+the ID format may change. Locks keep a millisecond timestamp in their name, since staleness and
+cleanup read it. Object sizes and counts per namespace, the chunk-size distribution,
 the argon2id parameters and the config plaintext are accepted and documented at their exact extent.
 
 The passphrase never appears in a log (debug included), in a URI or in argv. It is read from

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -30,6 +31,7 @@ type spec struct {
 	smallN, medN, largeN int
 	medMin, medMax       int
 	largeSize            int
+	logSizes             bool // small files log-uniform in size instead of uniform
 }
 
 var (
@@ -48,6 +50,12 @@ var (
 		medMax:    10 << 20,
 		largeN:    2,
 		largeSize: 16 << 20,
+	}
+	// filesSpec is many small files only, like a source tree: ~40k files,
+	// ~600 MiB, where per-object cost dominates.
+	filesSpec = spec{
+		smallN:   40000,
+		logSizes: true,
 	}
 )
 
@@ -174,18 +182,19 @@ type job struct {
 	i, n int
 	min  int
 	max  int
+	log  bool
 }
 
 func (s spec) jobs() []job {
 	jobs := make([]job, 0, s.smallN+s.medN+s.largeN)
 	for i := range s.smallN {
-		jobs = append(jobs, job{bandSmall, i, s.smallN, smallMin, smallMax})
+		jobs = append(jobs, job{bandSmall, i, s.smallN, smallMin, smallMax, s.logSizes})
 	}
 	for i := range s.medN {
-		jobs = append(jobs, job{bandMedium, i, s.medN, s.medMin, s.medMax})
+		jobs = append(jobs, job{bandMedium, i, s.medN, s.medMin, s.medMax, false})
 	}
 	for i := range s.largeN {
-		jobs = append(jobs, job{bandLarge, i, s.largeN, s.largeSize, s.largeSize})
+		jobs = append(jobs, job{bandLarge, i, s.largeN, s.largeSize, s.largeSize, false})
 	}
 	return jobs
 }
@@ -205,10 +214,7 @@ func generate(ctx context.Context, dir string, sp spec, seed int64) (int, int64,
 	err := parallel(ctx, len(jobs), func(k int) error {
 		j := jobs[k]
 		c := stream(seed, fmt.Sprintf("%s/%d/0", j.band, j.i))
-		size := int64(j.min)
-		if j.max > j.min {
-			size += int64(rand.New(c).IntN(j.max - j.min + 1))
-		}
+		size := fileSize(rand.New(c), j.min, j.max, j.log)
 		text := j.i%2 == 0
 		ext := extRandom
 		if text {
@@ -232,12 +238,25 @@ func generate(ctx context.Context, dir string, sp spec, seed int64) (int, int64,
 	return len(jobs), total, nil
 }
 
+// fileSize draws a size in [lo, hi], log-uniform when log is set.
+func fileSize(r *rand.Rand, lo, hi int, log bool) int64 {
+	switch {
+	case hi <= lo:
+		return int64(lo)
+	case log:
+		return int64(float64(lo) * math.Pow(float64(hi)/float64(lo), r.Float64()))
+	}
+	return int64(lo + r.IntN(hi-lo+1))
+}
+
 // mutate applies the incremental change set in place, deterministic from
 // seed and the current tree: rewrite 5% of the non-large files, delete and add
-// len/200 small files, and append to 1% (at least one) of the large ones. dir
-// must be the dataset root. Names and content depend on a digest of the file
+// len/200 small files, and append to 1% (at least one) of the large ones, if
+// any. dir must be the dataset root. Names and content depend on a digest of the file
 // list, so repeated rounds change different files instead of repeating.
-func mutate(ctx context.Context, dir string, seed int64) error {
+// Added files follow the dataset's small-file sizes, log-uniform when
+// logSizes is set.
+func mutate(ctx context.Context, dir string, seed int64, logSizes bool) error {
 	files, err := listFiles(dir)
 	if err != nil {
 		return fmt.Errorf("mutate: %w", err)
@@ -263,13 +282,8 @@ func mutate(ctx context.Context, dir string, seed int64) error {
 		}
 		cand = append(cand, f)
 	}
-	if len(small) == 0 || len(large) == 0 {
-		return fmt.Errorf(
-			"mutate: %s has no %s/ or %s/ files, -dir must be the dataset root",
-			dir,
-			bandSmall,
-			bandLarge,
-		)
+	if len(small) == 0 {
+		return fmt.Errorf("mutate: %s has no %s/ files, -dir must be the dataset root", dir, bandSmall)
 	}
 	tag := hex.EncodeToString(tagSum.Sum(nil))[:8]
 	changes := max(1, len(files)/changeShare)
@@ -329,7 +343,7 @@ func mutate(ctx context.Context, dir string, seed int64) error {
 		c := stream(seed, fmt.Sprintf("add/%s/%d", tag, k))
 		rr := rand.New(c)
 		d := smallDirs[rr.IntN(len(smallDirs))]
-		size := int64(smallMin + rr.IntN(smallMax-smallMin+1))
+		size := fileSize(rr, smallMin, smallMax, logSizes)
 		text := k%2 == 0
 		ext := extRandom
 		if text {

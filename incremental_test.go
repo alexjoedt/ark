@@ -373,8 +373,11 @@ func TestBackupStoresOnlyChangedTreeNodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first backup: %v", err)
 	}
-	if got := b.take(); got[ark.TreeFile] != 5 {
-		t.Fatalf("first backup stored %d tree nodes, want 5 (%v)", got[ark.TreeFile], got)
+	// Tree nodes and chunks go into packs, so what a backup stored shows in
+	// the index: the blobs it lists more than before.
+	trees, chunks := len(blobNames(t, repo, ark.TreeFile)), len(blobNames(t, repo, ark.BlobFile))
+	if got := b.take(); trees != 5 || got[ark.TreePackFile] != 1 {
+		t.Fatalf("first backup stored %d tree nodes in %d packs, want 5 in 1 (%v)", trees, got[ark.TreePackFile], got)
 	}
 
 	// Nothing changed: the nodes are in the repository under the same names.
@@ -383,7 +386,8 @@ func TestBackupStoresOnlyChangedTreeNodes(t *testing.T) {
 		t.Fatalf("second backup: %v", err)
 	}
 	got := b.take()
-	if got[ark.TreeFile] != 0 || got[ark.BlobFile] != 0 || got[ark.SnapshotFile] != 1 {
+	delete(got, ark.LockFile)
+	if len(got) != 1 || got[ark.SnapshotFile] != 1 {
 		t.Errorf("unchanged backup stored %v, want only the manifest", got)
 	}
 	if sameRoot, parentRoot := rootTree(t, repo, same.ID), rootTree(t, repo, parent.ID); sameRoot != parentRoot {
@@ -399,8 +403,11 @@ func TestBackupStoresOnlyChangedTreeNodes(t *testing.T) {
 		t.Fatalf("third backup: %v", err)
 	}
 	got = b.take()
-	if got[ark.TreeFile] != 3 || got[ark.BlobFile] != 1 {
-		t.Errorf("changed backup stored %v, want 3 tree nodes and 1 blob", got)
+	newTrees := len(blobNames(t, repo, ark.TreeFile)) - trees
+	newChunks := len(blobNames(t, repo, ark.BlobFile)) - chunks
+	if newTrees != 3 || newChunks != 1 || got[ark.TreePackFile] != 1 || got[ark.DataPackFile] != 1 {
+		t.Errorf("changed backup stored %d tree nodes and %d chunks in %v, want 3 and 1 in one pack each",
+			newTrees, newChunks, got)
 	}
 	st := child.Stats
 	if st.ChunksNew != 1 || st.ChunksReused != parent.Stats.ChunksTotal-1 || st.StoredSize == 0 ||

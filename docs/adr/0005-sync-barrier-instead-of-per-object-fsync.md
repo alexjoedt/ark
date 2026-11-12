@@ -1,6 +1,6 @@
 # 0005: Sync barrier instead of per-object fsync
 
-Status: accepted
+Status: partly superseded by 0012
 Date: 2026-11-08
 
 ## Context
@@ -36,7 +36,8 @@ under its full name, which a later backup's Exists check would trust. A backup t
 marker, durable before its first object, and deletes it once its manifest is durable. While any
 marker exists, backups read every object they would reuse and store again one that does not
 open to its name. A marker whose lock is gone is stale, and prune removes it after sweeping the
-unreferenced objects (`marker.go`).
+unreferenced objects. This paragraph is superseded by 0012: with packs, an index entry written
+after a Sync says what is present, and markers and repair mode are gone.
 
 The repository format number stays, and pack files stay open for a later decision.
 
@@ -53,7 +54,5 @@ this change alone, and later work brought it to 0.82x (see 0002). The `Backend`
 interface broke, which the v0 line allows (see 0004); every backend now has to implement Sync and
 the conformance suite calls it. Durability depends on the barrier points being in the right
 places, which `TestDurabilityBarriers` in `sync_test.go` pins by counting the Syncs of each
-operation. After an unclean end, the next backup pays for reading every reused object until a
-prune clears the stale marker; a cancelled backup keeps its marker too.
-`TestBackupAfterUncleanEndRewritesTornChunks` and `TestBackupBesideMarkerVerifiesReusedChunks` in
-`marker_test.go` pin the repair path.
+operation. After an unclean end, the next backup paid for reading every reused object until a
+prune cleared the stale marker; a cancelled backup kept its marker too. That cost ended with 0012.

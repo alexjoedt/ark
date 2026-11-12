@@ -86,6 +86,33 @@ func (b *Backend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error) 
 	return io.NopCloser(bytes.NewReader(bytes.Clone(data))), nil
 }
 
+// GetRange returns a copy of length bytes of the object stored under h,
+// starting at offset.
+func (b *Backend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	k, err := key(h)
+	if err != nil {
+		return nil, err
+	}
+	if offset < 0 || length < 0 {
+		return nil, fmt.Errorf("arkmem: invalid range %d+%d of %s", offset, length, h.Name)
+	}
+
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	data, ok := b.objects[k]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ark.ErrNotFound, h.Name)
+	}
+	if offset > int64(len(data)) || length > int64(len(data))-offset {
+		return nil, fmt.Errorf("arkmem: range %d+%d of %s (%d bytes): %w",
+			offset, length, h.Name, len(data), io.ErrUnexpectedEOF)
+	}
+	return bytes.Clone(data[offset : offset+length]), nil
+}
+
 // Exists reports whether the object identified by h is present.
 func (b *Backend) Exists(ctx context.Context, h ark.Handle) (bool, error) {
 	if err := ctx.Err(); err != nil {

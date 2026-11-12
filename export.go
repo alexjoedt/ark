@@ -73,7 +73,9 @@ func (r *Repository) runExport(ctx context.Context, snapshotID string, w io.Writ
 
 	// Same streaming path as restore: the chunks of the upcoming files are
 	// fetched while the current one is written to the archive.
-	fetcher := r.newChunkFetcher(newChunkCache(defaultRestoreCache))
+	chunks, trees := r.stores()
+	fetcher := r.newChunkFetcher(ctx, chunks, newChunkCache(defaultRestoreCache))
+	defer fetcher.close()
 
 	tw := tar.NewWriter(w)
 
@@ -90,7 +92,7 @@ func (r *Repository) runExport(ctx context.Context, snapshotID string, w io.Writ
 	}
 
 	files := 0
-	err = streamSnapshot(ctx, r.trees, fetcher, m, pathFilter{}, func(entry openEntry) error {
+	err = streamSnapshot(ctx, trees, fetcher, m, pathFilter{}, func(entry openEntry) error {
 		fe := entry.fe
 		files++
 		header := &tar.Header{
@@ -149,7 +151,7 @@ func (r *Repository) runExport(ctx context.Context, snapshotID string, w io.Writ
 	return nil
 }
 
-func (r *Repository) runImport(ctx context.Context, reader io.Reader, chunks, trees *objectStore) (*manifest, error) {
+func (r *Repository) runImport(ctx context.Context, reader io.Reader, session *packSession) (*manifest, error) {
 	logger := r.logger.With("component", "import")
 
 	rd, closeGzip, err := maybeGunzip(reader)
@@ -162,7 +164,7 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader, chunks, tr
 
 	var m *manifest
 	cr := chunker.New(nil, r.chunker)
-	w := newChunkWriter(ctx, chunks, r.concurrency)
+	w := newChunkWriter(ctx, session.chunks, r.concurrency)
 	defer func() { _ = w.wait() }()
 	var collectedEntries []fileEntry
 	var stats SnapshotStats
@@ -275,11 +277,14 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader, chunks, tr
 	w.stats(&stats, collectedEntries)
 
 	// Rebuild the Merkle tree from the re-chunked entries.
-	rootHash, err := buildTree(ctx, trees, collectedEntries, r.concurrency)
+	rootHash, err := buildTree(ctx, session.trees, collectedEntries, r.concurrency)
 	if err != nil {
 		return nil, fmt.Errorf("import: failed to build snapshot tree: %w", err)
 	}
 	m.RootTree = rootHash
+	if err := session.finish(ctx); err != nil {
+		return nil, fmt.Errorf("import: failed to store packs: %w", err)
+	}
 
 	// The chunk boundaries are this repository's, not the exporting one's, so
 	// the statistics are recomputed rather than carried over.
