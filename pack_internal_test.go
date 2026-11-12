@@ -10,6 +10,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -262,10 +263,32 @@ func TestPackWriterRejectsNamesThatAreNotObjectNames(t *testing.T) {
 	s := testPackSpaces(t)[0]
 	w := newPackWriter(newStubBackend(), s, newPackUploads(), func(string, []packEntry) {})
 	good := testBlobs(s, 3, 10)[0]
-	for _, name := range []string{"", good.name[:62], good.name + "00", "zz" + good.name[2:]} {
+	upper := strings.ToUpper(good.name)
+	if upper == good.name {
+		t.Fatal("fixture name has no letter")
+	}
+	for _, name := range []string{"", good.name[:62], good.name + "00", "zz" + good.name[2:], upper} {
 		if err := w.add(context.Background(), name, good.sealed); err == nil {
 			t.Errorf("add accepted the name %q", name)
 		}
+	}
+}
+
+// A blob shorter than a seal never opens: it is refused when written, not
+// found at restore.
+func TestPackWriterRejectsBlobsTooShortToBeSealed(t *testing.T) {
+	ctx := context.Background()
+	s := testPackSpaces(t)[0]
+	var log packLog
+	w := newPackWriter(newStubBackend(), s, newPackUploads(), log.stored)
+	good := testBlobs(s, 3, 10)[0]
+	for _, sealed := range [][]byte{nil, good.sealed[:sealOverhead-1]} {
+		if err := w.add(ctx, good.name, sealed); err == nil {
+			t.Errorf("add accepted a sealed blob of %d bytes", len(sealed))
+		}
+	}
+	if err := w.flush(ctx); err != nil || len(log.order) != 0 {
+		t.Errorf("rejected blobs left %d packs behind, flush: %v", len(log.order), err)
 	}
 }
 
@@ -527,6 +550,102 @@ func TestPackWriterAddStopsOnCancelWhileUploadsAreHeld(t *testing.T) {
 	}
 }
 
+// A pack that is not stored held blobs whose add had returned, so the writer
+// reports it on every later call: no run ends well without them.
+func TestPackWriterFailsForGoodAfterALostPack(t *testing.T) {
+	ctx := context.Background()
+	s := testPackSpaces(t)[0]
+	errPut := errors.New("put failed")
+	b := &gatedBackend{stubBackend: newStubBackend()}
+	b.hook = func(_ context.Context, call int32) error {
+		if call == 1 {
+			return errPut
+		}
+		return nil
+	}
+	var log packLog
+	w := newPackWriter(b, s, newPackUploads(), log.stored)
+	blobs := testBlobs(s, 9, 100, 100, 100, 300)
+	w.target = len(blobs[0].sealed) + 1
+
+	if err := w.add(ctx, blobs[0].name, blobs[0].sealed); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.add(ctx, blobs[1].name, blobs[1].sealed); !errors.Is(err, errPut) {
+		t.Fatalf("the add that fills the pack: %v, want %v", err, errPut)
+	}
+	// The first add had returned nil and its blob went with the pack.
+	for _, blob := range blobs[2:] {
+		if err := w.add(ctx, blob.name, blob.sealed); !errors.Is(err, errPut) {
+			t.Errorf("add of %d bytes after a lost pack: %v, want %v", len(blob.sealed), err, errPut)
+		}
+	}
+	if err := w.flush(ctx); !errors.Is(err, errPut) {
+		t.Errorf("flush after a lost pack: %v, want %v", err, errPut)
+	}
+	if len(log.order) != 0 || b.calls.Load() != 1 {
+		t.Errorf("%d packs reported and %d Puts after a lost pack, want 0 and 1", len(log.order), b.calls.Load())
+	}
+}
+
+// No add or flush waits longer than its context lives, for the open pack or
+// for an upload slot, and a blob whose add failed is in no pack.
+func TestPackWriterWaitsEndWithTheContext(t *testing.T) {
+	live := context.Background()
+	s := testPackSpaces(t)[0]
+	b := newStubBackend()
+	var log packLog
+	uploads := newPackUploads()
+	w := newPackWriter(b, s, uploads, log.stored)
+	blobs := testBlobs(s, 11, 100, 100, 100)
+	w.target = len(blobs[0].sealed) + 1
+	for range packUploads {
+		uploads <- struct{}{}
+	}
+
+	if err := w.add(live, blobs[0].name, blobs[0].sealed); err != nil {
+		t.Fatal(err)
+	}
+	// The add that fills the pack holds it while it waits for a slot.
+	ctx, cancel := context.WithCancel(live)
+	defer cancel()
+	filled := make(chan error, 1)
+	go func() { filled <- w.add(ctx, blobs[1].name, blobs[1].sealed) }()
+	waitFor(t, "the add that waits for a slot", func() bool { return len(w.open) == 1 })
+
+	short, stop := context.WithTimeout(live, 20*time.Millisecond)
+	defer stop()
+	if err := w.add(short, blobs[2].name, blobs[2].sealed); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("add behind a held pack: %v, want the deadline", err)
+	}
+	if err := w.flush(short); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("flush behind a held pack: %v, want the deadline", err)
+	}
+	cancel()
+	if err := <-filled; !errors.Is(err, context.Canceled) {
+		t.Errorf("add waiting for a slot: %v, want the context error", err)
+	}
+
+	for range packUploads {
+		<-uploads
+	}
+	if err := w.add(ctx, blobs[2].name, blobs[2].sealed); !errors.Is(err, context.Canceled) {
+		t.Errorf("add with a done context: %v, want the context error", err)
+	}
+	if err := w.flush(live); err != nil {
+		t.Fatal(err)
+	}
+	checkPacks(t, s, b, &log, blobs[:1])
+
+	// The rejected blobs can be added again.
+	for _, blob := range blobs[1:] {
+		if err := w.add(live, blob.name, blob.sealed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checkPacks(t, s, b, &log, blobs)
+}
+
 func TestPackWriterConcurrentAdds(t *testing.T) {
 	ctx := context.Background()
 	for _, s := range testPackSpaces(t) {
@@ -584,22 +703,22 @@ func TestPackTableThatDisagreesWithItsBlobsIsRejected(t *testing.T) {
 				{length: uint32(len(blobs[0].sealed))},
 				{offset: uint32(len(blobs[0].sealed)), length: uint32(len(blobs[1].sealed))},
 			}
-			pack, _ := s.finish(bytes.Clone(section), entries)
-			if got, err := s.parse(pack); err != nil || !slices.Equal(got, entries) {
+			tail, _ := s.finish(slices.Clone(entries), section)
+			if got, err := s.parse(slices.Concat(section, tail)); err != nil || !slices.Equal(got, entries) {
 				t.Fatalf("control pack does not parse: %v", err)
 			}
 
 			short := slices.Clone(entries)
 			short[1].length--
-			pack, _ = s.finish(bytes.Clone(section), short)
-			if _, err := s.parse(pack); !errors.Is(err, s.corruptErr) {
+			tail, _ = s.finish(short, section)
+			if _, err := s.parse(slices.Concat(section, tail)); !errors.Is(err, s.corruptErr) {
 				t.Errorf("a table listing fewer bytes than the pack holds: got %v, want %v", err, s.corruptErr)
 			}
 
 			// One entry covering the whole section, then a stray byte.
 			table := binary.LittleEndian.AppendUint32(make([]byte, sha256.Size), uint32(len(section)))
 			sum := sha256.Sum256(section)
-			tail := s.codec.seal(s.dataKey, s.tableAAD(sum[:]), append(table, 0))
+			tail = s.codec.seal(s.dataKey, s.tableAAD(sum[:]), append(table, 0))
 			tail = append(tail, byte(len(tail)), 0, 0, 0)
 			if _, err := s.parse(slices.Concat(section, tail)); !errors.Is(err, s.corruptErr) {
 				t.Errorf("a table with a cut entry: got %v, want %v", err, s.corruptErr)

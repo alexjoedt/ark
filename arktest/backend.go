@@ -338,7 +338,7 @@ func testGetRange(t *testing.T, newBackend func(*testing.T) ark.Backend) {
 		payload[i] = byte(i*7 + i/251)
 	}
 	size := int64(len(payload))
-	for _, typ := range []ark.HandleType{ark.BlobFile, ark.TreeFile} {
+	for _, typ := range []ark.HandleType{ark.BlobFile, ark.TreeFile, ark.DataPackFile, ark.TreePackFile} {
 		h := ark.Handle{Type: typ, Name: objectName(typ, "range")}
 		put(t, b, h, payload)
 

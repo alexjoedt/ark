@@ -59,6 +59,8 @@ var allHandleTypes = []ark.HandleType{
 	ark.SnapshotFile,
 	ark.LockFile,
 	ark.MarkerFile,
+	ark.DataPackFile,
+	ark.TreePackFile,
 }
 
 // scanForMarker fails when an object name, Stat field or body in b contains

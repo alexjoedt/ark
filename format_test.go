@@ -151,7 +151,9 @@ func TestSameFilesInTwoRepositoriesShareNoNames(t *testing.T) {
 			continue
 		}
 		names := objectNames(t, one, typ)
-		if len(names) == 0 && typ != ark.LockFile && typ != ark.MarkerFile {
+		// A finished backup leaves no lock and no marker, and writes no pack yet.
+		leftEmpty := []ark.HandleType{ark.LockFile, ark.MarkerFile, ark.DataPackFile, ark.TreePackFile}
+		if len(names) == 0 && !slices.Contains(leftEmpty, typ) {
 			t.Errorf("namespace %s is empty", typ)
 		}
 		for _, name := range objectNames(t, two, typ) {
