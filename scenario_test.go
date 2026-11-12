@@ -211,7 +211,7 @@ func TestScenarioSecondBackupReusesEveryChunk(t *testing.T) {
 	if first.Stats.ChunksNew == 0 {
 		t.Fatalf("the first backup stored no new chunks")
 	}
-	before := len(objectNames(t, b, ark.BlobFile))
+	before := len(blobNames(t, repo, ark.BlobFile))
 
 	second := backupDir(t, repo, root)
 	if second.Stats.ChunksNew != 0 {
@@ -225,13 +225,16 @@ func TestScenarioSecondBackupReusesEveryChunk(t *testing.T) {
 		t.Errorf("the second backup counts %d chunks, the first counted %d",
 			second.Stats.ChunksTotal, first.Stats.ChunksTotal)
 	}
-	if after := len(objectNames(t, b, ark.BlobFile)); after != before {
-		t.Errorf("the chunk namespace grew from %d to %d objects", before, after)
+	if after := len(blobNames(t, repo, ark.BlobFile)); after != before {
+		t.Errorf("the data index grew from %d to %d chunks", before, after)
+	}
+	if n := len(objectNames(t, b, ark.DataPackFile)); n != 1 {
+		t.Errorf("%d data packs after an unchanged backup, want the first one's", n)
 	}
 }
 
-// TestScenarioVerifyFindsACorruptChunk breaks a chunk in place and by
-// copying another chunk's object over it. The first fails the tag, the second
+// TestScenarioVerifyFindsACorruptChunk breaks a chunk in place, inside its
+// pack, and by copying another chunk's sealed bytes over it. The first fails the tag, the second
 // is a valid object sealed for another name, which the name in the tag's
 // associated data rejects.
 func TestScenarioVerifyFindsACorruptChunk(t *testing.T) {
@@ -255,17 +258,15 @@ func TestScenarioVerifyFindsACorruptChunk(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Backup: %v", err)
 			}
-			if _, err := repo.Backup(ctx, stubSource{name: "other", content: "other contents"}); err != nil {
+			// As long as the original, so its sealed bytes fit in place.
+			if _, err := repo.Backup(ctx, stubSource{name: "other", content: "some different stuff!"}); err != nil {
 				t.Fatalf("Backup: %v", err)
 			}
 
 			corrupted := ark.ObjectName(repo, []byte("the original contents"))
-			obj := readObject(t, b, ark.BlobFile, corrupted)
-			other := readObject(t, b, ark.BlobFile, ark.ObjectName(repo, []byte("other contents")))
-			h := ark.Handle{Type: ark.BlobFile, Name: corrupted}
-			if err := b.Put(ctx, h, bytes.NewReader(tt.tamper(obj, other))); err != nil {
-				t.Fatalf("overwrite chunk: %v", err)
-			}
+			obj := readBlob(t, b, repo, ark.BlobFile, corrupted)
+			other := readBlob(t, b, repo, ark.BlobFile, ark.ObjectName(repo, []byte("some different stuff!")))
+			writeBlob(t, b, repo, ark.BlobFile, corrupted, tt.tamper(obj, other))
 
 			result, err := repo.Verify(ctx, snap.ID)
 			if err != nil {
@@ -295,15 +296,13 @@ func TestScenarioVerifyFindsACorruptTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
-	trees := objectNames(t, b, ark.TreeFile)
+	trees := blobNames(t, repo, ark.TreeFile)
 	if len(trees) != 1 {
 		t.Fatalf("the snapshot holds %d trees, want 1", len(trees))
 	}
-	obj := readObject(t, b, ark.TreeFile, trees[0])
+	obj := readBlob(t, b, repo, ark.TreeFile, trees[0])
 	obj[len(obj)-1] ^= 0x01
-	if err := b.Put(ctx, ark.Handle{Type: ark.TreeFile, Name: trees[0]}, bytes.NewReader(obj)); err != nil {
-		t.Fatalf("overwrite tree: %v", err)
-	}
+	writeBlob(t, b, repo, ark.TreeFile, trees[0], obj)
 
 	_, err = repo.Verify(ctx, snap.ID)
 	if !errors.Is(err, ark.ErrCorruptTree) || !strings.Contains(err.Error(), trees[0]) {
@@ -444,8 +443,8 @@ func assertCorruptManifest(t *testing.T, repo *ark.Repository, id string) {
 	}
 }
 
-// TestScenarioVerifyFindsAMissingChunk is the other half: the object is gone,
-// which is a different result field from a corrupt one.
+// TestScenarioVerifyFindsAMissingChunk is the other half: the pack that holds
+// the chunk is gone, which is a different result field from a corrupt one.
 func TestScenarioVerifyFindsAMissingChunk(t *testing.T) {
 	ctx := context.Background()
 	b := arkmem.New()
@@ -456,14 +455,12 @@ func TestScenarioVerifyFindsAMissingChunk(t *testing.T) {
 		t.Fatalf("Backup: %v", err)
 	}
 
-	names := objectNames(t, b, ark.BlobFile)
+	names := blobNames(t, repo, ark.BlobFile)
 	if len(names) != 1 {
 		t.Fatalf("the snapshot holds %d chunks, want 1", len(names))
 	}
 	gone := names[0]
-	if err := b.Delete(ctx, ark.Handle{Type: ark.BlobFile, Name: gone}); err != nil {
-		t.Fatalf("delete chunk: %v", err)
-	}
+	deletePackOf(t, b, repo, ark.BlobFile, gone)
 
 	result, err := repo.Verify(ctx, snap.ID)
 	if err != nil {
@@ -508,9 +505,7 @@ func TestScenarioCheckCoversEverySnapshot(t *testing.T) {
 	// content, so exactly one of them loses it.
 	broken := snaps[1]
 	chunk := ark.ObjectName(repo, []byte("two"))
-	if err := b.Delete(ctx, ark.Handle{Type: ark.BlobFile, Name: chunk}); err != nil {
-		t.Fatalf("delete chunk: %v", err)
-	}
+	deletePackOf(t, b, repo, ark.BlobFile, chunk)
 
 	result, err = repo.Check(ctx)
 	if err != nil {

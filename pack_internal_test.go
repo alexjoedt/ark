@@ -24,7 +24,7 @@ type packLog struct {
 	order []string
 }
 
-func (l *packLog) stored(pack string, entries []packEntry) {
+func (l *packLog) stored(_ context.Context, pack string, entries []packEntry) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.packs == nil {
@@ -32,6 +32,7 @@ func (l *packLog) stored(pack string, entries []packEntry) {
 	}
 	l.packs[pack] = entries
 	l.order = append(l.order, pack)
+	return nil
 }
 
 type testBlob struct {
@@ -261,7 +262,8 @@ func TestPackBlobsReadBackThroughOneRangeRead(t *testing.T) {
 
 func TestPackWriterRejectsNamesThatAreNotObjectNames(t *testing.T) {
 	s := testPackSpaces(t)[0]
-	w := newPackWriter(newStubBackend(), s, newPackUploads(), func(string, []packEntry) {})
+	var log packLog
+	w := newPackWriter(newStubBackend(), s, newPackUploads(), log.stored)
 	good := testBlobs(s, 3, 10)[0]
 	upper := strings.ToUpper(good.name)
 	if upper == good.name {

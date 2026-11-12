@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/alexjoedt/ark"
@@ -14,8 +12,10 @@ import (
 )
 
 // The replay tests pin what a backend attacker gets by putting an old, valid
-// object back under its old name. Chunks and trees are content-addressed, so
-// a replayed one is the object itself; these cover the named namespaces.
+// object back under its old name. Chunks, trees, packs and index objects are
+// content-addressed, so a replayed one is the object itself; these cover the
+// named namespaces, and the one replay of a content-addressed object that
+// changes what the repository claims to hold: an old index object.
 // There is no freshness anchor: a rollback of the repository state is
 // accepted, the guarantee is that a replay never restores different bytes.
 // Locks and the config are in replay_internal_test.go.
@@ -79,7 +79,9 @@ func TestReplayedManifestRestoresOnlyItsOwnBytes(t *testing.T) {
 		}
 		putObject(t, b, ark.SnapshotFile, id, manifest)
 
-		for _, typ := range []ark.HandleType{ark.TreeFile, ark.BlobFile} {
+		for _, typ := range []ark.HandleType{
+			ark.DataPackFile, ark.TreePackFile, ark.DataIndexFile, ark.TreeIndexFile,
+		} {
 			if n := len(objectNames(t, b, typ)); n != 0 {
 				t.Fatalf("prune left %d %s objects", n, typ)
 			}
@@ -156,110 +158,57 @@ func TestReplayedKeyFileOpensUnderTheOldPassword(t *testing.T) {
 	}
 }
 
-// markerBackend keeps a copy of every marker written and counts chunk reads:
-// a backup reads chunks it reuses only in repair mode.
-type markerBackend struct {
-	ark.Backend
-
-	mu        sync.Mutex
-	markers   map[string][]byte
-	chunkGets int
-}
-
-func (b *markerBackend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
-	if h.Type != ark.MarkerFile {
-		return b.Backend.Put(ctx, h, r)
-	}
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return err
-	}
-	b.mu.Lock()
-	b.markers[h.Name] = data
-	b.mu.Unlock()
-	return b.Backend.Put(ctx, h, bytes.NewReader(data))
-}
-
-func (b *markerBackend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error) {
-	if h.Type == ark.BlobFile {
-		b.mu.Lock()
-		b.chunkGets++
-		b.mu.Unlock()
-	}
-	return b.Backend.Get(ctx, h)
-}
-
-func (b *markerBackend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
-	if h.Type == ark.BlobFile {
-		b.mu.Lock()
-		b.chunkGets++
-		b.mu.Unlock()
-	}
-	return b.Backend.GetRange(ctx, h, offset, length)
-}
-
-func (b *markerBackend) takeMarkers() map[string][]byte {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	m := b.markers
-	b.markers = map[string][]byte{}
-	return m
-}
-
-func (b *markerBackend) takeChunkGets() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	n := b.chunkGets
-	b.chunkGets = 0
-	return n
-}
-
-// TestReplayedMarkerForcesRepairMode replays the marker of a finished
-// backup. It costs the next backup the reads of every chunk it reuses and
-// shows in Check as a warning, until Prune removes it.
-func TestReplayedMarkerForcesRepairMode(t *testing.T) {
+// TestReplayedIndexObjectNeverRestoresOtherBytes replays the index objects of
+// a pruned backup. They list packs that are gone, and a backup trusts the
+// index: one of the same contents stores nothing and its snapshot does not
+// restore. That is the accepted cost of a rollback by someone who can write
+// to the backend, who could delete the packs as well. What holds is that the
+// snapshot fails Restore, Verify and Check and never yields other bytes.
+func TestReplayedIndexObjectNeverRestoresOtherBytes(t *testing.T) {
 	ctx := context.Background()
-	b := &markerBackend{Backend: arkmem.New(), markers: map[string][]byte{}}
+	b := &putCountingBackend{Backend: arkmem.New(), puts: map[ark.HandleType]int{}}
 	repo := openRepo(t, b)
 	src := stubSource{name: "app", content: victimContent}
-	if _, err := repo.Backup(ctx, src); err != nil {
+	snap, err := repo.Backup(ctx, src)
+	if err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
-	replayed := b.takeMarkers()
-	if len(replayed) != 1 || countMarkers(t, b) != 0 {
-		t.Fatalf("backup wrote %d markers and left %d, want 1 and 0", len(replayed), countMarkers(t, b))
+	index := map[ark.Handle][]byte{}
+	for _, typ := range []ark.HandleType{ark.DataIndexFile, ark.TreeIndexFile} {
+		for _, name := range objectNames(t, b, typ) {
+			index[ark.Handle{Type: typ, Name: name}] = readObject(t, b, typ, name)
+		}
 	}
-	if _, err := repo.Backup(ctx, src); err != nil {
-		t.Fatalf("Backup: %v", err)
+	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{snap.ID}}); err != nil {
+		t.Fatalf("Forget: %v", err)
 	}
-	if n := b.takeChunkGets(); n != 0 {
-		t.Fatalf("backup without a marker read %d chunks, want 0", n)
-	}
-
-	for name, data := range replayed {
-		putObject(t, b.Backend, ark.MarkerFile, name, data)
-	}
-	if res, err := repo.Check(ctx); err != nil || len(res.Errors) != 0 || len(res.Warnings) != 1 {
-		t.Fatalf("Check = %+v, %v; want one warning", res, err)
-	}
-	b.takeChunkGets() // Check verifies every chunk
-	if _, err := repo.Backup(ctx, src); err != nil {
-		t.Fatalf("Backup: %v", err)
-	}
-	if n := b.takeChunkGets(); n == 0 {
-		t.Fatal("backup beside the replayed marker read no chunk, want repair mode")
-	}
-
 	if _, err := repo.Prune(ctx); err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
-	if n := countMarkers(t, b); n != 0 {
-		t.Fatalf("Prune left %d markers", n)
+	if len(index) != 2 || len(objectNames(t, b, ark.DataPackFile)) != 0 {
+		t.Fatalf("%d index objects kept, %d data packs after the prune, want 2 and 0",
+			len(index), len(objectNames(t, b, ark.DataPackFile)))
 	}
-	if _, err := repo.Backup(ctx, src); err != nil {
+	for h, obj := range index {
+		putObject(t, b, h.Type, h.Name, obj)
+	}
+
+	b.take()
+	again, err := repo.Backup(ctx, src)
+	if err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
-	if n := b.takeChunkGets(); n != 0 {
-		t.Errorf("backup after Prune read %d chunks, want 0", n)
+	if got := b.take(); got[ark.DataPackFile] != 0 || got[ark.TreePackFile] != 0 {
+		t.Fatalf("backup beside the replayed index stored packs (%v), the test does not show the replay", got)
+	}
+	if got, err := restoreData(t, repo, again.ID); !errors.Is(err, ark.ErrNotFound) || got != "" {
+		t.Errorf("Restore = %q, %v; want ErrNotFound and no bytes", got, err)
+	}
+	if res, err := repo.Verify(ctx, again.ID); !errors.Is(err, ark.ErrNotFound) || (res != nil && res.OK) {
+		t.Errorf("Verify = %+v, %v; want ErrNotFound and OK false", res, err)
+	}
+	check, err := repo.Check(ctx)
+	if err != nil || len(check.Errors) != 1 || !strings.Contains(check.Errors[0], again.ID) {
+		t.Errorf("Check = %+v, %v; want the snapshot under Errors", check, err)
 	}
 }

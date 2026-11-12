@@ -23,6 +23,10 @@ import (
 // namespace sees. The config object is plaintext and has its own row,
 // TestTamperedConfigIsRejected.
 //
+// A chunk or tree node is sealed on its own and stored inside a pack. Its
+// cells change its sealed bytes where the pack holds them; the cells that
+// replace a whole object (truncated, swapped, moved) do that to its pack.
+//
 // Consumers per namespace:
 //
 //	keys       Open fails with ErrWrongPassword or ErrUnsupportedFormat
@@ -30,15 +34,21 @@ import (
 //	           CorruptChunks with OK false, Check lists it under Errors
 //	trees      Restore and Verify fail with ErrCorruptTree, Check lists the
 //	           snapshot under Errors
+//	dataindex  the object is skipped, so its chunks are missing: Restore
+//	           fails with ErrNotFound, Verify lists the chunk in MissingChunks
+//	           with OK false, Check lists it under Errors
+//	treeindex  the object is skipped, so its tree nodes are missing: Restore
+//	           and Verify fail with ErrNotFound, Check lists the snapshot
+//	           under Errors
 //	snapshots  Snapshots, Restore and Verify fail with ErrCorruptManifest,
 //	           Check lists the snapshot under Errors
 //	locks      the lock is absent for Locks and Backup, Check lists it under
 //	           Warnings
-//	markers    Check lists the marker under Warnings with no identity
 //
 // The tag binds key, namespace and name (objectAAD), so it alone rejects
 // every cell: Restore reads through a non-verifying store and still fails on
-// a moved or swapped chunk or tree.
+// a moved or swapped chunk or tree. No cell restores other bytes than the
+// backup held.
 func TestTamperedObjectsAreRejected(t *testing.T) {
 	for _, ns := range tamperNamespaces {
 		for _, mut := range tamperMutations {
@@ -123,6 +133,8 @@ type tamperFixture struct {
 	b             *arkmem.Backend
 	repo          *ark.Repository
 	victim, other *ark.Snapshot
+	// index names the index object each backup wrote, the victim's first.
+	index map[ark.HandleType][2]string
 }
 
 func newTamperFixture(t *testing.T) *tamperFixture {
@@ -134,10 +146,44 @@ func newTamperFixture(t *testing.T) *tamperFixture {
 	if f.victim, err = f.repo.Backup(ctx, stubSource{name: "victim", content: victimContent}); err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
+	first := map[ark.HandleType][]string{}
+	for _, typ := range []ark.HandleType{ark.DataIndexFile, ark.TreeIndexFile} {
+		first[typ] = objectNames(t, f.b, typ)
+	}
 	if f.other, err = f.repo.Backup(ctx, stubSource{name: "other", content: otherContent}); err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
+	f.index = make(map[ark.HandleType][2]string)
+	for typ, victim := range first {
+		other := slices.DeleteFunc(objectNames(t, f.b, typ), func(n string) bool { return slices.Contains(victim, n) })
+		if len(victim) != 1 || len(other) != 1 {
+			t.Fatalf("%s objects per backup: %v and %v, want one each", typ, victim, other)
+		}
+		f.index[typ] = [2]string{victim[0], other[0]}
+	}
 	return f
+}
+
+// stored returns the object that stores name of namespace typ, and where in
+// it the sealed bytes are: the pack of a chunk or tree node, else the object
+// itself.
+func (f *tamperFixture) stored(t *testing.T, typ ark.HandleType, name string) (ark.Handle, int64, int64) {
+	t.Helper()
+	if typ != ark.BlobFile && typ != ark.TreeFile {
+		return ark.Handle{Type: typ, Name: name}, 0, int64(len(readObject(t, f.b, typ, name)))
+	}
+	pack, offset, length, err := ark.BlobPlace(context.Background(), f.repo, typ, name)
+	if err != nil {
+		t.Fatalf("place of %s/%s: %v", typ, name, err)
+	}
+	return pack, offset, length
+}
+
+// whole returns the stored object of name and its handle.
+func (f *tamperFixture) whole(t *testing.T, typ ark.HandleType, name string) (ark.Handle, []byte) {
+	t.Helper()
+	h, _, _ := f.stored(t, typ, name)
+	return h, readObject(t, f.b, h.Type, h.Name)
 }
 
 func (f *tamperFixture) put(t *testing.T, typ ark.HandleType, name string, obj []byte) {
@@ -182,14 +228,22 @@ func sealedAs(t *testing.T, repo *ark.Repository, b ark.Backend, h ark.Handle, d
 }
 
 // editSealed rewrites the sealed bytes of the object under name: the whole
-// object, or the hex sealed key inside a key file.
+// object, the bytes of a chunk or tree node in its pack, or the hex sealed
+// key inside a key file. A pack is cut off behind bytes that edit shortened.
 func (f *tamperFixture) editSealed(t *testing.T, typ ark.HandleType, name string, edit func([]byte) []byte) {
 	t.Helper()
-	obj := readObject(t, f.b, typ, name)
 	if typ != ark.KeyFile {
-		f.put(t, typ, name, edit(obj))
+		h, offset, length := f.stored(t, typ, name)
+		whole := readObject(t, f.b, h.Type, h.Name)
+		edited := edit(bytes.Clone(whole[offset : offset+length]))
+		out := append(bytes.Clone(whole[:offset]), edited...)
+		if int64(len(edited)) == length {
+			out = append(out, whole[offset+length:]...)
+		}
+		f.put(t, h.Type, h.Name, out)
 		return
 	}
+	obj := readObject(t, f.b, typ, name)
 	var kf map[string]any
 	if err := json.Unmarshal(obj, &kf); err != nil {
 		t.Fatalf("parse key file: %v", err)
@@ -230,12 +284,13 @@ const (
 //
 //nolint:exhaustive // see above
 var foreignNamespace = map[ark.HandleType]ark.HandleType{
-	ark.KeyFile:      ark.SnapshotFile,
-	ark.BlobFile:     ark.TreeFile,
-	ark.TreeFile:     ark.BlobFile,
-	ark.SnapshotFile: ark.LockFile,
-	ark.LockFile:     ark.MarkerFile,
-	ark.MarkerFile:   ark.LockFile,
+	ark.KeyFile:       ark.SnapshotFile,
+	ark.BlobFile:      ark.TreeFile,
+	ark.TreeFile:      ark.BlobFile,
+	ark.DataIndexFile: ark.TreeIndexFile,
+	ark.TreeIndexFile: ark.DataIndexFile,
+	ark.SnapshotFile:  ark.LockFile,
+	ark.LockFile:      ark.SnapshotFile,
 }
 
 type tamperMutation struct {
@@ -254,17 +309,21 @@ var tamperMutations = []tamperMutation{
 		f.editSealed(t, typ, victim, func(obj []byte) []byte { return obj[:len(obj)/2] })
 	}},
 	{"swapped", func(t *testing.T, f *tamperFixture, typ ark.HandleType, victim, other string) {
-		v, o := readObject(t, f.b, typ, victim), readObject(t, f.b, typ, other)
-		f.put(t, typ, victim, o)
-		f.put(t, typ, other, v)
+		hv, v := f.whole(t, typ, victim)
+		ho, o := f.whole(t, typ, other)
+		f.put(t, hv.Type, hv.Name, o)
+		f.put(t, ho.Type, ho.Name, v)
 	}},
 	{"moved", func(t *testing.T, f *tamperFixture, typ ark.HandleType, victim, other string) {
-		f.put(t, typ, victim, readObject(t, f.b, typ, other))
-		f.del(t, typ, other)
+		hv, _ := f.whole(t, typ, victim)
+		ho, o := f.whole(t, typ, other)
+		f.put(t, hv.Type, hv.Name, o)
+		f.del(t, ho.Type, ho.Name)
 	}},
 	{"other namespace", func(t *testing.T, f *tamperFixture, typ ark.HandleType, victim, _ string) {
 		h := ark.Handle{Type: foreignNamespace[typ], Name: victim}
-		f.put(t, typ, victim, sealedAs(t, f.repo, f.b, h, f.plaintext(t, typ, victim)))
+		obj := sealedAs(t, f.repo, f.b, h, f.plaintext(t, typ, victim))
+		f.editSealed(t, typ, victim, func([]byte) []byte { return obj })
 	}},
 	{"other repository", func(t *testing.T, f *tamperFixture, typ ark.HandleType, victim, _ string) {
 		b2 := arkmem.New()
@@ -275,7 +334,8 @@ var tamperMutations = []tamperMutation{
 			return
 		}
 		h := ark.Handle{Type: typ, Name: victim}
-		f.put(t, typ, victim, sealedAs(t, repo2, b2, h, f.plaintext(t, typ, victim)))
+		obj := sealedAs(t, repo2, b2, h, f.plaintext(t, typ, victim))
+		f.editSealed(t, typ, victim, func([]byte) []byte { return obj })
 	}},
 }
 
@@ -393,17 +453,34 @@ var tamperNamespaces = []tamperNamespace{
 		},
 	},
 	{
-		typ: ark.MarkerFile,
-		setup: func(t *testing.T, f *tamperFixture) (string, string) {
-			putTamperLock(t, f, ark.MarkerFile, "victim-marker", false)
-			putTamperLock(t, f, ark.MarkerFile, "other-marker", false)
-			return "victim-marker", "other-marker"
+		typ: ark.DataIndexFile,
+		setup: func(_ *testing.T, f *tamperFixture) (string, string) {
+			return f.index[ark.DataIndexFile][0], f.index[ark.DataIndexFile][1]
 		},
-		accepted: func(t *testing.T, f *tamperFixture, victim string) {
-			assertCheckWarning(t, f, victim, "elsewhere.example")
+		accepted: acceptedSnapshot,
+		rejected: func(t *testing.T, f *tamperFixture, _ string) {
+			chunk := ark.ObjectName(f.repo, []byte(victimContent))
+			assertRestoreFails(t, f, ark.ErrNotFound)
+			res, err := f.repo.Verify(context.Background(), f.victim.ID)
+			if err != nil {
+				t.Fatalf("Verify: %v", err)
+			}
+			if res.OK || !slices.Contains(res.MissingChunks, chunk) {
+				t.Errorf("Verify = OK %v, missing %v, want not OK with chunk %s", res.OK, res.MissingChunks, chunk)
+			}
+			assertCheckError(t, f, chunk)
 		},
-		rejected: func(t *testing.T, f *tamperFixture, victim string) {
-			assertCheckWarning(t, f, victim, "identity unknown")
+	},
+	{
+		typ: ark.TreeIndexFile,
+		setup: func(_ *testing.T, f *tamperFixture) (string, string) {
+			return f.index[ark.TreeIndexFile][0], f.index[ark.TreeIndexFile][1]
+		},
+		accepted: acceptedSnapshot,
+		rejected: func(t *testing.T, f *tamperFixture, _ string) {
+			assertRestoreFails(t, f, ark.ErrNotFound)
+			assertVerifyFails(t, f, ark.ErrNotFound)
+			assertCheckError(t, f, f.victim.ID)
 		},
 	},
 }
@@ -417,8 +494,7 @@ func snapshotTree(t *testing.T, f *tamperFixture, id string) string {
 	return tree
 }
 
-// putTamperLock stores a lock object of another host under name in the locks
-// or markers namespace.
+// putTamperLock stores a lock object of another host under name.
 func putTamperLock(t *testing.T, f *tamperFixture, typ ark.HandleType, name string, exclusive bool) {
 	t.Helper()
 	data, err := json.Marshal(map[string]any{
@@ -515,14 +591,15 @@ func assertCheckWarning(t *testing.T, f *tamperFixture, name, detail string) {
 	}
 }
 
-// blobGetBackend runs onGet before every chunk read; a non-nil error fails it.
+// blobGetBackend runs onGet before every read of a data pack, which is every
+// chunk read; a non-nil error fails it.
 type blobGetBackend struct {
 	ark.Backend
 	onGet func() error
 }
 
 func (b *blobGetBackend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error) {
-	if h.Type == ark.BlobFile {
+	if h.Type == ark.DataPackFile {
 		if err := b.onGet(); err != nil {
 			return nil, err
 		}
@@ -531,7 +608,7 @@ func (b *blobGetBackend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, 
 }
 
 func (b *blobGetBackend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
-	if h.Type == ark.BlobFile {
+	if h.Type == ark.DataPackFile {
 		if err := b.onGet(); err != nil {
 			return nil, err
 		}

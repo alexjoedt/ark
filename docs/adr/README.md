@@ -25,3 +25,4 @@ is replaced keeps its file; the new ADR is added and the old status becomes `sup
 | 0009 | [Exclude patterns on the snapshot](0009-exclude-patterns-on-the-snapshot.md) | accepted | 2026-11-11 |
 | 0010 | [Pack object layout and blob binding](0010-pack-object-layout-and-blob-binding.md) | accepted | 2026-11-11 |
 | 0011 | [Pack index format and loading](0011-pack-index-format-and-loading.md) | accepted | 2026-11-11 |
+| 0012 | [Crash and concurrent-writer model for packs](0012-crash-and-writer-model-for-packs.md) | accepted | 2026-11-11 |

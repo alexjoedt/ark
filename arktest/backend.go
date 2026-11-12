@@ -38,22 +38,21 @@ var conformanceTypes = []ark.HandleType{
 	ark.SnapshotFile,
 	ark.LockFile,
 	ark.KeyFile,
-	ark.MarkerFile,
 	ark.DataPackFile,
 	ark.TreePackFile,
 	ark.DataIndexFile,
 	ark.TreeIndexFile,
 }
 
-// chunkNameLen is the length of a chunk name the suite generates: a content
+// chunkNameLen is the length of a hash name the suite generates: a content
 // hash in hex, long enough for a backend that shards on the first characters.
 const chunkNameLen = 64
 
-// objectName returns a distinct name for type typ and suffix. Chunk names look
-// like a content hash, 64 hex characters, so a backend that shards on the first
-// few is exercised; the rest are opaque.
+// objectName returns a distinct name for type typ and suffix. Chunk and pack
+// names look like a content hash, 64 hex characters, so a backend that shards
+// on the first few is exercised; the rest are opaque.
 func objectName(typ ark.HandleType, suffix string) string {
-	if typ == ark.BlobFile {
+	if typ == ark.BlobFile || typ == ark.DataPackFile || typ == ark.TreePackFile {
 		h := fmt.Sprintf("%x", suffix)
 		return strings.Repeat("f", chunkNameLen-len(h)) + h
 	}
@@ -440,13 +439,13 @@ func testListSizes(t *testing.T, newBackend func(*testing.T) ark.Backend) {
 
 	want := make(map[string]int64)
 	for i := range 12 {
-		h := ark.Handle{Type: ark.BlobFile, Name: objectName(ark.BlobFile, fmt.Sprintf("%02d", i))}
+		h := ark.Handle{Type: ark.DataPackFile, Name: objectName(ark.DataPackFile, fmt.Sprintf("%02d", i))}
 		payload := bytes.Repeat([]byte{byte('a' + i)}, i*97)
 		put(t, b, h, payload)
 		want[h.Name] = int64(len(payload))
 	}
 
-	got := list(t, b, ark.BlobFile)
+	got := list(t, b, ark.DataPackFile)
 	if len(got) != len(want) {
 		t.Fatalf("List returned %d objects, want %d", len(got), len(want))
 	}
@@ -495,7 +494,7 @@ func testConcurrentPuts(t *testing.T, newBackend func(*testing.T) ark.Backend) {
 	var wg sync.WaitGroup
 	for i := range workers {
 		wg.Go(func() {
-			h := ark.Handle{Type: ark.BlobFile, Name: objectName(ark.BlobFile, fmt.Sprintf("%02d", i))}
+			h := ark.Handle{Type: ark.DataPackFile, Name: objectName(ark.DataPackFile, fmt.Sprintf("%02d", i))}
 			if err := b.Put(ctx, h, bytes.NewReader(bytes.Repeat([]byte("x"), i+1))); err != nil {
 				t.Errorf("Put %v: %v", h, err)
 			}
@@ -503,12 +502,12 @@ func testConcurrentPuts(t *testing.T, newBackend func(*testing.T) ark.Backend) {
 	}
 	wg.Wait()
 
-	got := list(t, b, ark.BlobFile)
+	got := list(t, b, ark.DataPackFile)
 	if len(got) != workers {
 		t.Fatalf("List after %d concurrent puts returned %d objects", workers, len(got))
 	}
 	for i := range workers {
-		name := objectName(ark.BlobFile, fmt.Sprintf("%02d", i))
+		name := objectName(ark.DataPackFile, fmt.Sprintf("%02d", i))
 		if got[name] != int64(i+1) {
 			t.Errorf("size of %q = %d, want %d", name, got[name], i+1)
 		}
@@ -576,7 +575,7 @@ func testConcurrentMixed(t *testing.T, newBackend func(*testing.T) ark.Backend) 
 func testSync(t *testing.T, newBackend func(*testing.T) ark.Backend) {
 	ctx := context.Background()
 	b := newBackend(t)
-	h := ark.Handle{Type: ark.BlobFile, Name: objectName(ark.BlobFile, "sync")}
+	h := ark.Handle{Type: ark.DataPackFile, Name: objectName(ark.DataPackFile, "sync")}
 	put(t, b, h, []byte("durable"))
 	if err := b.Sync(ctx); err != nil {
 		t.Fatalf("Sync after Put = %v, want nil", err)

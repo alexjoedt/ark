@@ -28,11 +28,12 @@ func TestRoundTripPerNamespace(t *testing.T) {
 	ctx := context.Background()
 	b := newBackend(t)
 
-	// A chunk name long enough to shard, and one object per remaining type.
+	// Pack names long enough to shard, and one object per remaining type.
 	handles := []ark.Handle{
 		{Type: ark.ConfigFile, Name: "config"},
-		{Type: ark.BlobFile, Name: "abcdef0123456789"},
-		{Type: ark.TreeFile, Name: "0011223344556677"},
+		{Type: ark.DataPackFile, Name: "abcdef0123456789"},
+		{Type: ark.TreePackFile, Name: "0011223344556677"},
+		{Type: ark.DataIndexFile, Name: "abcdef0123456789"},
 		{Type: ark.SnapshotFile, Name: "01hxyz"},
 		{Type: ark.LockFile, Name: "lock-1"},
 	}
@@ -76,10 +77,13 @@ func TestRoundTripPerNamespace(t *testing.T) {
 		}
 	}
 
-	// Chunks are sharded two levels deep.
-	shard := filepath.Join(b.BasePath(), "chunks", "ab", "cd", "abcdef0123456789")
-	if _, err := os.Stat(shard); err != nil {
-		t.Errorf("expected sharded chunk at %s: %v", shard, err)
+	// Packs are sharded one level deep, nothing else is.
+	for _, p := range []string{
+		"datapacks/ab/abcdef0123456789", "treepacks/00/0011223344556677", "dataindex/abcdef0123456789",
+	} {
+		if _, err := os.Stat(filepath.Join(b.BasePath(), filepath.FromSlash(p))); err != nil {
+			t.Errorf("expected object at %s: %v", p, err)
+		}
 	}
 }
 

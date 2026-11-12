@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"slices"
 	"sync/atomic"
@@ -71,8 +70,9 @@ type indexTable struct {
 	// its slices one after another are the records in order. A table grows
 	// them one by one as it is filled: it never holds all records twice.
 	records [1 << indexBucketBits][]indexRecord
-	// unreadable names the index objects a load skipped.
-	unreadable []string
+	// objects names the index objects a load listed, unreadable those of
+	// them it skipped.
+	objects, unreadable []string
 }
 
 // newIndexTable returns the sorted table that lists the blobs of packs.
@@ -295,7 +295,7 @@ func (x *packIndex) load(ctx context.Context) (*indexTable, error) {
 	// every object is sorted. Load with the repository's concurrency once a
 	// backend with slow round trips shows the wait, merge the sorted objects
 	// once the load nears its budget (BenchmarkIndexLoad).
-	t := &indexTable{}
+	t := &indexTable{objects: names}
 	for _, name := range names {
 		err := x.read(ctx, name, t)
 		if errors.Is(err, ErrCorruptIndex) {
@@ -426,14 +426,9 @@ func (x *packIndex) scanPack(ctx context.Context, name string) ([]packEntry, err
 	if !ok {
 		return nil, fmt.Errorf("%w: %s object %q has no pack name", x.space.corruptErr, h.Type, name)
 	}
-	rc, err := x.backend.Get(ctx, h)
+	pack, err := readWhole(ctx, x.backend, h)
 	if err != nil {
-		return nil, fmt.Errorf("ark: failed to read %s object %s: %w", h.Type, name, err)
-	}
-	defer rc.Close()
-	pack, err := io.ReadAll(rc)
-	if err != nil {
-		return nil, fmt.Errorf("ark: failed to read %s object %s: %w", h.Type, name, err)
+		return nil, err
 	}
 	// The table of a pack stored under another name still opens: it is bound
 	// to the blobs, not to the name.

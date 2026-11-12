@@ -52,7 +52,8 @@ func (s multiSource) Walk(_ context.Context, fn ark.WalkFunc) error {
 	return nil
 }
 
-// countingBackend records every chunk read and how many ran at once.
+// countingBackend records every chunk read and how many ran at once. A chunk
+// is read as a range of its data pack, so a read counts by pack and offset.
 type countingBackend struct {
 	ark.Backend
 
@@ -67,15 +68,15 @@ func newCountingBackend() *countingBackend {
 }
 
 func (b *countingBackend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error) {
-	if h.Type == ark.BlobFile {
+	if h.Type == ark.DataPackFile {
 		defer b.enter(h.Name)()
 	}
 	return b.Backend.Get(ctx, h)
 }
 
 func (b *countingBackend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
-	if h.Type == ark.BlobFile {
-		defer b.enter(h.Name)()
+	if h.Type == ark.DataPackFile {
+		defer b.enter(fmt.Sprintf("%s@%d", h.Name, offset))()
 	}
 	return b.Backend.GetRange(ctx, h, offset, length)
 }

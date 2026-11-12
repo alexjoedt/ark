@@ -6,8 +6,8 @@ package ark_test
 //	no plaintext in any object name or body   TestBackendHoldsNoPlaintext
 //	key file plaintext is exactly its fields   TestInitWritesOneKeyFile (keys_test.go)
 //	config plaintext is exactly its fields     TestConfigHoldsOnlyItsPlaintextFields
-//	keyed names, none shared across repos      TestChunksAndTreesAreSealedUnderKeyedNames,
-//	                                          TestSameFilesInTwoRepositoriesShareNoNames (format_test.go)
+//	keyed chunk, tree node and index names,   TestChunksAndTreesAreSealedUnderKeyedNames,
+//	no object name shared across repos        TestSameFilesInTwoRepositoriesShareNoNames (format_test.go)
 //	snapshot names carry no time               TestSnapshotIDsCarryNoTimestamp
 //	wrong password fails before data reads    TestWrongPasswordReadsOnlyConfigAndKeys (keys_test.go)
 //	every sealed namespace x every mutation   TestTamperedObjectsAreRejected (tamper_test.go)
@@ -19,10 +19,11 @@ package ark_test
 //
 // The accepted leaks, pinned so a widening fails:
 //
-//	object sizes and counts per namespace     TestListingRevealsCountsAndSizes
+//	pack and index counts and sizes           TestListingRevealsCountsAndSizes
+//	pack size = sealed chunks + sealed table  TestListingRevealsCountsAndSizes
 //	sealed chunk size = zstd frame + overhead TestListingRevealsCountsAndSizes
 //	KDF parameters and config in plaintext    TestInitWritesOneKeyFile, TestConfigHoldsOnlyItsPlaintextFields
-//	ms timestamp in lock and marker names     TestLockAndMarkerNamesCarryTheirTime
+//	ms timestamp in lock names                TestLockNamesCarryTheirTime
 
 import (
 	"bytes"
@@ -58,7 +59,6 @@ var allHandleTypes = []ark.HandleType{
 	ark.TreeFile,
 	ark.SnapshotFile,
 	ark.LockFile,
-	ark.MarkerFile,
 	ark.DataPackFile,
 	ark.TreePackFile,
 	ark.DataIndexFile,
@@ -168,8 +168,8 @@ func TestBackendHoldsNoPlaintext(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Backup: %v", err)
 			}
-			if during[ark.LockFile] == 0 || during[ark.MarkerFile] == 0 {
-				t.Error("no lock or marker seen during the backup, the scan did not cover them")
+			if during[ark.LockFile] == 0 {
+				t.Error("no lock seen during the backup, the scan did not cover it")
 			}
 			if len(snap.Excludes) != 1 || !strings.Contains(snap.Excludes[0], marker) {
 				t.Fatalf("the exclude pattern did not reach the snapshot: %q", snap.Excludes)
@@ -191,13 +191,16 @@ func TestBackendHoldsNoPlaintext(t *testing.T) {
 			}
 
 			after := scanForMarker(t, b)
-			for _, typ := range []ark.HandleType{ark.ConfigFile, ark.KeyFile, ark.BlobFile, ark.TreeFile, ark.SnapshotFile} {
+			for _, typ := range []ark.HandleType{
+				ark.ConfigFile, ark.KeyFile, ark.SnapshotFile,
+				ark.DataPackFile, ark.TreePackFile, ark.DataIndexFile, ark.TreeIndexFile,
+			} {
 				if after[typ] == 0 {
 					t.Errorf("no %s object scanned", typ)
 				}
 			}
-			if after[ark.BlobFile] < 3 {
-				t.Errorf("%d chunks scanned, the large file should span several", after[ark.BlobFile])
+			if n := len(blobNames(t, repo, ark.BlobFile)); n < 3 {
+				t.Errorf("%d chunks in the scanned packs, the large file should span several", n)
 			}
 		})
 	}
@@ -371,29 +374,26 @@ func TestSnapshotIDsCarryNoTimestamp(t *testing.T) {
 	}
 }
 
-// TestLockAndMarkerNamesCarryTheirTime pins an accepted leak: lock and marker
-// names start with the millisecond they were taken, so a zero-byte lock can
-// age out without a key.
-func TestLockAndMarkerNamesCarryTheirTime(t *testing.T) {
+// TestLockNamesCarryTheirTime pins an accepted leak: a lock name starts with
+// the millisecond it was taken, so a zero-byte lock can age out without a
+// key.
+func TestLockNamesCarryTheirTime(t *testing.T) {
 	ctx := context.Background()
 	b := arkmem.New()
 	repo := openRepo(t, b)
-	var locks, markers []string
+	var locks []string
 	var once sync.Once
 	start := time.Now().Truncate(time.Millisecond)
 	_, err := repo.Backup(ctx, stubSource{name: "app", content: "contents"},
 		ark.WithBackupProgress(func(ark.ProgressEvent) {
-			once.Do(func() {
-				locks = objectNames(t, b, ark.LockFile)
-				markers = objectNames(t, b, ark.MarkerFile)
-			})
+			once.Do(func() { locks = objectNames(t, b, ark.LockFile) })
 		}))
 	if err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
 	end := time.Now()
-	if len(locks) != 1 || !slices.Equal(locks, markers) {
-		t.Fatalf("locks %v and markers %v during the backup, want one each under the same name", locks, markers)
+	if len(locks) != 1 {
+		t.Fatalf("locks %v during the backup, want one", locks)
 	}
 	if at := idPrefixTime(t, locks[0]); at.Before(start) || at.After(end) {
 		t.Errorf("lock %s decodes to %s, want a time between %s and %s", locks[0], at, start, end)
@@ -401,10 +401,12 @@ func TestLockAndMarkerNamesCarryTheirTime(t *testing.T) {
 }
 
 // TestListingRevealsCountsAndSizes pins the accepted leaks of a listing: one
-// tree per directory, one object per new chunk, one per snapshot and key
-// file, every size as stored, and a sealed chunk only a fixed overhead plus
-// its zstd frame larger than its content. Padding would narrow this; anything
-// that widens it fails.
+// data pack, one tree pack and one index object each for a small backup, one
+// object per snapshot and key file, every size as stored. No chunk and no
+// tree node is listed: a pack is its sealed chunks, each only a fixed
+// overhead plus its zstd frame larger than its content, and a sealed table
+// of one entry per chunk, so its size shows the bytes it holds and not where
+// one chunk ends. Padding would narrow this; anything that widens it fails.
 func TestListingRevealsCountsAndSizes(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -438,11 +440,11 @@ func TestListingRevealsCountsAndSizes(t *testing.T) {
 	}
 
 	want := map[ark.HandleType]int{
-		ark.ConfigFile: 1, ark.KeyFile: 1, ark.SnapshotFile: 1, ark.TreeFile: 3,
-		ark.BlobFile: snap.Stats.ChunksNew, ark.LockFile: 0, ark.MarkerFile: 0,
-		ark.DataPackFile: 0, ark.TreePackFile: 0, ark.DataIndexFile: 0, ark.TreeIndexFile: 0,
+		ark.ConfigFile: 1, ark.KeyFile: 1, ark.SnapshotFile: 1, ark.LockFile: 0,
+		ark.BlobFile: 0, ark.TreeFile: 0,
+		ark.DataPackFile: 1, ark.TreePackFile: 1, ark.DataIndexFile: 1, ark.TreeIndexFile: 1,
 	}
-	var plain int64
+	sizes := make(map[ark.HandleType]int64)
 	for _, typ := range allHandleTypes {
 		var infos []ark.BlobInfo
 		if err := b.List(ctx, typ, func(info ark.BlobInfo) error {
@@ -458,21 +460,42 @@ func TestListingRevealsCountsAndSizes(t *testing.T) {
 			if n := int64(len(readObject(t, b, typ, info.Name))); info.Size != n {
 				t.Errorf("%s/%s listed at %d bytes, stored %d", typ, info.Name, info.Size, n)
 			}
-			if typ != ark.BlobFile {
-				continue
-			}
-			// zstd stores random data in raw blocks behind a frame header
-			// and checksum, a few bytes per chunk.
-			const zstdFrameSlack = 24
-			p := int64(len(openObject(t, repo, typ, info.Name)))
-			plain += p
-			if extra := info.Size - ark.SealOverhead - p; extra < 0 || extra > zstdFrameSlack {
-				t.Errorf("chunk of %d bytes sealed at %d, want %d plus at most %d",
-					p, info.Size, p+ark.SealOverhead, zstdFrameSlack)
-			}
+			sizes[typ] += info.Size
+		}
+	}
+
+	// zstd stores random data in raw blocks behind a frame header and
+	// checksum, a few bytes per chunk.
+	const zstdFrameSlack = 24
+	chunks := blobNames(t, repo, ark.BlobFile)
+	if len(chunks) != snap.Stats.ChunksNew {
+		t.Errorf("the data index lists %d chunks, the backup stored %d", len(chunks), snap.Stats.ChunksNew)
+	}
+	if n := len(blobNames(t, repo, ark.TreeFile)); n != 3 {
+		t.Errorf("the tree index lists %d nodes, want one per directory, 3", n)
+	}
+	var plain, sealed int64
+	for _, name := range chunks {
+		size := int64(len(readBlob(t, b, repo, ark.BlobFile, name)))
+		p := int64(len(openObject(t, repo, ark.BlobFile, name)))
+		plain += p
+		sealed += size
+		if extra := size - ark.SealOverhead - p; extra < 0 || extra > zstdFrameSlack {
+			t.Errorf("chunk of %d bytes sealed at %d, want %d plus at most %d",
+				p, size, p+ark.SealOverhead, zstdFrameSlack)
 		}
 	}
 	if plain != snap.Stats.TotalSize {
 		t.Errorf("chunks hold %d bytes, the snapshot %d", plain, snap.Stats.TotalSize)
+	}
+	if sealed != snap.Stats.StoredSize {
+		t.Errorf("chunks are sealed to %d bytes, the snapshot counts %d stored", sealed, snap.Stats.StoredSize)
+	}
+	// The rest of the pack is the sealed table, 36 bytes per chunk before
+	// compression, and its 4 byte length.
+	const tableEntry = 36
+	table := sizes[ark.DataPackFile] - sealed
+	if limit := int64(len(chunks)*tableEntry + ark.SealOverhead + zstdFrameSlack + 4); table <= 4 || table > limit {
+		t.Errorf("the data pack holds %d bytes besides its chunks, want a table of at most %d", table, limit)
 	}
 }

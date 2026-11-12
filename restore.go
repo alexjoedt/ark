@@ -58,7 +58,8 @@ func (r *Repository) runRestore(
 	if opts.cacheSet {
 		limit = opts.cacheLimit
 	}
-	fetcher := r.newChunkFetcher(newChunkCache(limit))
+	chunks, trees := r.stores()
+	fetcher := r.newChunkFetcher(chunks, newChunkCache(limit))
 	fetcher.onRead = func(read int) {
 		opts.progress(ProgressEvent{Phase: PhaseFetch, ChunksDone: read, ChunksTotal: m.Stats.ChunksTotal})
 	}
@@ -66,7 +67,7 @@ func (r *Repository) runRestore(
 	logger.InfoContext(ctx, "starting restore", "files", m.Stats.FileCount, "chunks", m.Stats.ChunksTotal)
 
 	var stats restoreStats
-	err = streamSnapshot(ctx, r.trees, fetcher, m, newPathFilter(opts.paths), func(entry openEntry) error {
+	err = streamSnapshot(ctx, trees, fetcher, m, newPathFilter(opts.paths), func(entry openEntry) error {
 		return receive(ctx, sink, entry, m, &stats, opts)
 	})
 	if err != nil {

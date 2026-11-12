@@ -421,7 +421,7 @@ func TestBackendFaultsFailTheOperation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Prune dry run: %v", err)
 		}
-		fail(ark.BlobFile)
+		fail(ark.DataPackFile)
 		res, err := repo.Prune(ctx)
 		if err != nil {
 			t.Fatalf("Prune: %v", err)
@@ -430,12 +430,14 @@ func TestBackendFaultsFailTheOperation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Prune dry run: %v", err)
 		}
-		// The trees go, the chunks stay: what stays is neither removed nor freed.
-		if res.BlobsRemoved == 0 || after.BlobsRemoved == 0 {
-			t.Fatalf("removed %d, %d left, the test needs both trees and chunks orphaned",
-				res.BlobsRemoved, after.BlobsRemoved)
+		// The tree pack goes, the data pack stays: what stays is neither
+		// removed nor freed. The index no longer lists the pack that stayed,
+		// so the next prune frees its bytes without knowing its blobs.
+		if res.BytesFreed == 0 || after.BytesFreed == 0 {
+			t.Fatalf("freed %d bytes, %d left, the test needs both a tree and a data pack orphaned",
+				res.BytesFreed, after.BytesFreed)
 		}
-		if res.BlobsRemoved+after.BlobsRemoved != before.BlobsRemoved ||
+		if res.BlobsRemoved == 0 || res.BlobsRemoved >= before.BlobsRemoved || after.BlobsRemoved != 0 ||
 			res.BytesFreed+after.BytesFreed != before.BytesFreed {
 			t.Errorf("prune removed %d blobs / %d bytes, %d / %d left, of %d / %d orphaned",
 				res.BlobsRemoved, res.BytesFreed, after.BlobsRemoved, after.BytesFreed,

@@ -15,9 +15,11 @@ type HandleType uint8
 const (
 	// ConfigFile is the repository config object. One per repository.
 	ConfigFile HandleType = 1 + iota
-	// BlobFile is a CAS content chunk. Backends shard these by name prefix.
+	// BlobFile is the namespace a content chunk is sealed under. Chunks are
+	// stored inside data packs, so a repository holds no object of this type.
 	BlobFile
-	// TreeFile is a tree node, named by the hash of its canonical JSON.
+	// TreeFile is the namespace a tree node is sealed under, named by the
+	// hash of its canonical JSON. Tree nodes are stored inside tree packs.
 	TreeFile
 	// SnapshotFile is a snapshot manifest, named by the snapshot id.
 	SnapshotFile
@@ -25,15 +27,11 @@ const (
 	LockFile
 	// KeyFile holds the master key sealed under one password.
 	KeyFile
-	// MarkerFile marks a backup in progress, named like its lock. One left
-	// behind by a backup that never finished makes later backups distrust
-	// Exists until Prune.
-	MarkerFile
 	// DataPackFile is a pack object holding sealed chunks, named by the
-	// SHA-256 of its bytes.
+	// SHA-256 of its bytes. Directory backends shard these by name prefix.
 	DataPackFile
 	// TreePackFile is a pack object holding sealed tree nodes, named by the
-	// SHA-256 of its bytes.
+	// SHA-256 of its bytes. Directory backends shard these by name prefix.
 	TreePackFile
 	// DataIndexFile is an index object locating chunks in data packs, named
 	// by the keyed hash of its content.
@@ -63,8 +61,6 @@ func (t HandleType) String() string {
 		return "locks"
 	case KeyFile:
 		return "keys"
-	case MarkerFile:
-		return "markers"
 	case DataPackFile:
 		return "datapacks"
 	case TreePackFile:
@@ -96,9 +92,11 @@ type BlobInfo struct {
 // WithConcurrency operations at a time, defaulting to [runtime.NumCPU]*2, so a
 // remote backend can size its connection pool from that bound.
 //
-// A backend maps Handle.Type to a namespace by its String() value and applies
-// sharding only to BlobFile. An unknown type maps to the namespace "unknown";
-// implementations may reject it instead.
+// A backend maps Handle.Type to a namespace by its String() value. A backend
+// that stores objects as files shards DataPackFile and TreePackFile one level
+// deep by the first two characters of the name, 256 directories created on
+// first use, and nothing else. An unknown type maps to the namespace
+// "unknown"; implementations may reject it instead.
 type Backend interface {
 	// Put stores r under h atomically: a reader never observes a partial
 	// object. Implementations write to a temporary name in the same
@@ -128,8 +126,11 @@ type Backend interface {
 
 	// Sync is the durability barrier: every Put and Delete that returned
 	// before the call has reached stable storage when Sync returns, so a
-	// power loss cannot undo it. A backend that already makes each Put and
-	// Delete durable returns nil without doing anything.
+	// power loss cannot undo it. That covers every object visible at the
+	// repository location, whoever wrote it: another process or host that
+	// writes to the same repository relies on this Sync for its objects
+	// too. A backend that already makes each Put and Delete durable returns
+	// nil without doing anything.
 	Sync(ctx context.Context) error
 
 	// List calls fn once for each object of the given type with its name and

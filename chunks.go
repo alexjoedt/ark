@@ -51,7 +51,7 @@ type flight struct {
 	err  error
 }
 
-func (r *Repository) newChunkFetcher(cache *chunkCache) *chunkFetcher {
+func (r *Repository) newChunkFetcher(chunks *objectStore, cache *chunkCache) *chunkFetcher {
 	workers := r.concurrency
 	if workers < 1 {
 		workers = runtime.NumCPU() * 2
@@ -64,7 +64,7 @@ func (r *Repository) newChunkFetcher(cache *chunkCache) *chunkFetcher {
 	turn := make(chan struct{})
 	close(turn)
 	return &chunkFetcher{
-		store:   r.chunks,
+		store:   chunks,
 		cache:   cache,
 		workers: workers,
 		sem:     make(chan struct{}, workers),

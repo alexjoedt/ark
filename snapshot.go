@@ -163,9 +163,12 @@ type RestoreResult struct {
 
 // PruneResult is returned by Prune.
 type PruneResult struct {
+	// BlobsRemoved counts the chunks and tree nodes the index listed in the
+	// packs that were deleted. A pack no index listed adds its bytes only.
 	BlobsRemoved int
-	BytesFreed   int64
-	DryRun       bool
+	// BytesFreed is the stored size of the deleted packs.
+	BytesFreed int64
+	DryRun     bool
 }
 
 // VerifyResult is returned by Verify.
