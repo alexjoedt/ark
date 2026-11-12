@@ -1,6 +1,11 @@
 package ark
 
-import "context"
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"math/rand/v2"
+)
 
 // OpenObject returns the raw content of an object of r for the tests in
 // package ark_test, which cannot unseal an object themselves. A chunk or tree
@@ -48,3 +53,34 @@ func SetPrefetchBytes(r *Repository, n int64) { r.prefetchBytes = n }
 
 // LockClass names the class of a lock as lock errors do.
 func LockClass(exclusive bool) string { return lockClass(exclusive) }
+
+// WriteSyntheticIndex stores data index objects that list blobs blobs of
+// random names, perPack to a pack, without storing a pack.
+func WriteSyntheticIndex(ctx context.Context, r *Repository, blobs, perPack int) error {
+	rng := rand.NewChaCha8([32]byte{13})
+	packs := make([]indexedPack, 0, blobs/perPack+1)
+	for left := blobs; left > 0; left -= perPack {
+		var name [sha256.Size]byte
+		_, _ = rng.Read(name[:])
+		p := indexedPack{name: hex.EncodeToString(name[:]), entries: make([]packEntry, min(perPack, left))}
+		for i := range p.entries {
+			_, _ = rng.Read(p.entries[i].name[:])
+			p.entries[i].length = 1 << 20
+		}
+		place(p.entries)
+		packs = append(packs, p)
+	}
+	_, err := newPackIndex(r.backend, newPackSpace(r.codec, r.key, BlobFile), r.logger).write(ctx, packs)
+	return err
+}
+
+// LoadDataIndex loads the data index of r from the backend, as the first
+// lookup of a run does, and returns the number of blobs it lists with the
+// table, for a caller that measures what the table keeps alive.
+func LoadDataIndex(ctx context.Context, r *Repository) (int, any, error) {
+	t, err := newPackIndex(r.backend, newPackSpace(r.codec, r.key, BlobFile), r.logger).load(ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	return len(t.records), t, nil
+}

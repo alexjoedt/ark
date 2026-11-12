@@ -24,3 +24,4 @@ is replaced keeps its file; the new ADR is added and the old status becomes `sup
 | 0008 | [Path matcher package](0008-path-matcher-package.md) | accepted | 2026-11-11 |
 | 0009 | [Exclude patterns on the snapshot](0009-exclude-patterns-on-the-snapshot.md) | accepted | 2026-11-11 |
 | 0010 | [Pack object layout and blob binding](0010-pack-object-layout-and-blob-binding.md) | accepted | 2026-11-11 |
+| 0011 | [Pack index format and loading](0011-pack-index-format-and-loading.md) | accepted | 2026-11-11 |

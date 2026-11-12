@@ -51,9 +51,11 @@ type packEntry struct {
 type packSpace struct {
 	codec   *objectCodec
 	dataKey *[32]byte
+	idKey   []byte
 	// blobs is the namespace the blobs are sealed under, packs the one the
-	// pack objects are stored in.
-	blobs, packs HandleType
+	// pack objects are stored in, index the one of the objects that say which
+	// pack holds a blob.
+	blobs, packs, index HandleType
 	// corruptErr is the sentinel a pack or blob that does not open wraps.
 	corruptErr error
 }
@@ -61,16 +63,27 @@ type packSpace struct {
 // newPackSpace returns the pack namespace of chunks (BlobFile) or tree nodes
 // (TreeFile). Any other type panics: it is not stored in packs.
 func newPackSpace(c *objectCodec, key *masterKey, blobs HandleType) *packSpace {
-	s := &packSpace{codec: c, dataKey: (*[32]byte)(&key.DataKey), blobs: blobs}
+	s := &packSpace{codec: c, dataKey: (*[32]byte)(&key.DataKey), idKey: key.IDKey[:], blobs: blobs}
 	switch blobs { //nolint:exhaustive // only chunks and trees are packed
 	case BlobFile:
-		s.packs, s.corruptErr = DataPackFile, ErrCorruptChunk
+		s.packs, s.index, s.corruptErr = DataPackFile, DataIndexFile, ErrCorruptChunk
 	case TreeFile:
-		s.packs, s.corruptErr = TreePackFile, ErrCorruptTree
+		s.packs, s.index, s.corruptErr = TreePackFile, TreeIndexFile, ErrCorruptTree
 	default:
 		panic(fmt.Sprintf("ark: no packs for %s", blobs))
 	}
 	return s
+}
+
+// parseName returns the 32 bytes a blob or pack name spells. Only the bytes are
+// kept and a reader spells them in lower case, so a name in any other spelling
+// is none: it would seal a blob that never opens.
+func parseName(name string) (b [sha256.Size]byte, ok bool) {
+	if len(name) != hex.EncodedLen(len(b)) {
+		return b, false
+	}
+	_, err := hex.Decode(b[:], []byte(name))
+	return b, err == nil && hex.EncodeToString(b[:]) == name
 }
 
 // tableAAD binds a blob table to the blob section with the hash sum.
@@ -236,20 +249,15 @@ func (w *packWriter) failure() error {
 // the target size gets a pack of its own. sealed is not kept. After an error
 // the blob is in no pack, and adding it again is safe.
 func (w *packWriter) add(ctx context.Context, name string, sealed []byte) error {
-	var e packEntry
-	if len(name) != hex.EncodedLen(len(e.name)) {
-		return fmt.Errorf("ark: invalid %s name %q", w.space.blobs, name)
-	}
-	// Only the bytes are kept and a reader spells them in lower case, so a
-	// name in any other spelling would seal a blob that never opens.
-	if _, err := hex.Decode(e.name[:], []byte(name)); err != nil || hex.EncodeToString(e.name[:]) != name {
+	blob, ok := parseName(name)
+	if !ok {
 		return fmt.Errorf("ark: invalid %s name %q", w.space.blobs, name)
 	}
 	if len(sealed) < sealOverhead || uint64(len(sealed)) > math.MaxUint32 {
 		return fmt.Errorf("ark: %s object %s is no sealed blob a pack holds: %d bytes",
 			w.space.blobs, name, len(sealed))
 	}
-	e.length = uint32(len(sealed))
+	e := packEntry{name: blob, length: uint32(len(sealed))}
 	if err := w.failure(); err != nil {
 		return err
 	}

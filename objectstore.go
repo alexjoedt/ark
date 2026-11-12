@@ -189,8 +189,12 @@ func (s *objectStore) repairing() *objectStore {
 func (s *objectStore) handle(name string) Handle { return Handle{Type: s.typ, Name: name} }
 
 // name returns the object name of data: its HMAC-SHA256 under the ID key, hex.
-func (s *objectStore) name(data []byte) string {
-	mac := hmac.New(sha256.New, s.idKey)
+func (s *objectStore) name(data []byte) string { return keyedName(s.idKey, data) }
+
+// keyedName returns the name of an object that is named by its content: the
+// HMAC-SHA256 of data under the ID key, hex.
+func keyedName(idKey, data []byte) string {
+	mac := hmac.New(sha256.New, idKey)
 	mac.Write(data)
 	return hex.EncodeToString(mac.Sum(nil))
 }

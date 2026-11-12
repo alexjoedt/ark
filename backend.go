@@ -35,6 +35,12 @@ const (
 	// TreePackFile is a pack object holding sealed tree nodes, named by the
 	// SHA-256 of its bytes.
 	TreePackFile
+	// DataIndexFile is an index object locating chunks in data packs, named
+	// by the keyed hash of its content.
+	DataIndexFile
+	// TreeIndexFile is an index object locating tree nodes in tree packs,
+	// named by the keyed hash of its content.
+	TreeIndexFile
 )
 
 // UnknownNamespace is the namespace name String returns for a handle type this
@@ -63,6 +69,10 @@ func (t HandleType) String() string {
 		return "datapacks"
 	case TreePackFile:
 		return "treepacks"
+	case DataIndexFile:
+		return "dataindex"
+	case TreeIndexFile:
+		return "treeindex"
 	default:
 		return UnknownNamespace
 	}

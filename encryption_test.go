@@ -61,6 +61,8 @@ var allHandleTypes = []ark.HandleType{
 	ark.MarkerFile,
 	ark.DataPackFile,
 	ark.TreePackFile,
+	ark.DataIndexFile,
+	ark.TreeIndexFile,
 }
 
 // scanForMarker fails when an object name, Stat field or body in b contains
@@ -438,7 +440,7 @@ func TestListingRevealsCountsAndSizes(t *testing.T) {
 	want := map[ark.HandleType]int{
 		ark.ConfigFile: 1, ark.KeyFile: 1, ark.SnapshotFile: 1, ark.TreeFile: 3,
 		ark.BlobFile: snap.Stats.ChunksNew, ark.LockFile: 0, ark.MarkerFile: 0,
-		ark.DataPackFile: 0, ark.TreePackFile: 0,
+		ark.DataPackFile: 0, ark.TreePackFile: 0, ark.DataIndexFile: 0, ark.TreeIndexFile: 0,
 	}
 	var plain int64
 	for _, typ := range allHandleTypes {

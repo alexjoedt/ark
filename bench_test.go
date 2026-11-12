@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -171,5 +172,52 @@ func BenchmarkRestore(b *testing.B) {
 		if _, err := repo.Restore(ctx, snap.ID, discardSink{}); err != nil {
 			b.Fatalf("Restore: %v", err)
 		}
+	}
+}
+
+// BenchmarkIndexLoad is the budget of the on-demand index: the first lookup
+// of a repository of a million blobs, 16 to a pack as 1 MiB chunks fill one,
+// loads and merges 20 index objects in at most a second and keeps at most 48
+// bytes of heap per blob.
+func BenchmarkIndexLoad(b *testing.B) {
+	const (
+		blobs, perPack = 1_000_000, 16
+		maxHeapPerBlob = 48
+		maxLoad        = time.Second
+	)
+	ctx := context.Background()
+	repo := benchRepo(b)
+	if err := ark.WriteSyntheticIndex(ctx, repo, blobs, perPack); err != nil {
+		b.Fatalf("write the index: %v", err)
+	}
+
+	var before, after runtime.MemStats
+	var heap float64
+	for b.Loop() {
+		b.StopTimer()
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		b.StartTimer()
+
+		n, table, err := ark.LoadDataIndex(ctx, repo)
+
+		b.StopTimer()
+		if err != nil || n != blobs {
+			b.Fatalf("loaded %d blobs, want %d: %v", n, blobs, err)
+		}
+		runtime.GC()
+		runtime.ReadMemStats(&after)
+		heap = max(heap, float64(after.HeapAlloc)-float64(before.HeapAlloc))
+		runtime.KeepAlive(table)
+		b.StartTimer()
+	}
+
+	perBlob := heap / blobs
+	b.ReportMetric(perBlob, "heap-B/blob")
+	if perBlob > maxHeapPerBlob {
+		b.Errorf("the loaded index keeps %.1f B of heap per blob, the budget is %d", perBlob, maxHeapPerBlob)
+	}
+	if load := b.Elapsed() / time.Duration(b.N); load > maxLoad {
+		b.Errorf("loading and merging took %v, the budget is %v", load, maxLoad)
 	}
 }
