@@ -56,7 +56,7 @@ func TestPutAndDeleteSyncOnlyWhenAnnounced(t *testing.T) {
 		}
 		return nil
 	}
-	h := ark.Handle{Type: ark.BlobFile, Name: "abcdef0123456789"}
+	h := ark.Handle{Type: ark.DataPackFile, Name: "abcdef0123456789"}
 
 	if b.fsync {
 		t.Fatal("in-process server announced fsync@openssh.com; test needs a server without it")
@@ -78,17 +78,17 @@ func TestPutAndDeleteSyncOnlyWhenAnnounced(t *testing.T) {
 		want []string
 	}{
 		{"first Put", func() error { return b.Put(ctx, h, strings.NewReader("y")) },
-			[]string{"chunks/ab", "chunks", ".", "..", "tmp", "chunks/ab/cd"}},
+			[]string{"datapacks", ".", "..", "tmp", "datapacks/ab"}},
 		{"Put into known dir", func() error { return b.Put(ctx, h, strings.NewReader("y")) },
-			[]string{"tmp", "chunks/ab/cd"}},
+			[]string{"tmp", "datapacks/ab"}},
 		{"Put after its shard dir was removed", func() error {
-			if err := b.client.RemoveAll(path.Join(b.basePath, "chunks", "ab")); err != nil {
+			if err := b.client.RemoveAll(path.Join(b.basePath, "datapacks", "ab")); err != nil {
 				return err
 			}
 			return b.Put(ctx, h, strings.NewReader("y"))
-		}, []string{"chunks/ab", "chunks", ".", "..", "tmp", "chunks/ab/cd"}},
-		{"Delete", func() error { return b.Delete(ctx, h) }, []string{"chunks/ab/cd"}},
-		{"Delete missing", func() error { return b.Delete(ctx, h) }, []string{"chunks/ab/cd"}},
+		}, []string{"datapacks", ".", "..", "tmp", "datapacks/ab"}},
+		{"Delete", func() error { return b.Delete(ctx, h) }, []string{"datapacks/ab"}},
+		{"Delete missing", func() error { return b.Delete(ctx, h) }, []string{"datapacks/ab"}},
 		{"Delete in missing namespace", func() error {
 			return b.Delete(ctx, ark.Handle{Type: ark.TreeFile, Name: "t1"})
 		}, nil},
@@ -138,7 +138,7 @@ func (c *cmdRecorder) takeRemoved() []string {
 
 func TestPutRemovesTheTempFileOnlyOnFailure(t *testing.T) {
 	ctx := context.Background()
-	h := ark.Handle{Type: ark.BlobFile, Name: "abcdef0123456789"}
+	h := ark.Handle{Type: ark.DataPackFile, Name: "abcdef0123456789"}
 
 	newBackend := func(t *testing.T, fsync, posixRename bool) (*Backend, *cmdRecorder) {
 		t.Helper()

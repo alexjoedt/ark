@@ -510,7 +510,7 @@ func (b *Backend) namespace(t ark.HandleType) (string, error) {
 
 // remotePath maps a Handle to its absolute path on the remote server. Names are
 // opaque object names, never paths, so anything that could escape the namespace
-// is rejected. Chunks are sharded two levels: chunks/aa/bb/<name>.
+// is rejected. Packs are sharded one level: datapacks/aa/<name>.
 func (b *Backend) remotePath(h ark.Handle) (string, error) {
 	dir, err := b.namespace(h.Type)
 	if err != nil {
@@ -520,8 +520,8 @@ func (b *Backend) remotePath(h ark.Handle) (string, error) {
 		strings.ContainsAny(h.Name, `/\`) || strings.HasPrefix(h.Name, tmpPrefix) {
 		return "", fmt.Errorf("arksftp: invalid object name %q", h.Name)
 	}
-	if h.Type == ark.BlobFile && len(h.Name) >= 4 {
-		return path.Join(dir, h.Name[:2], h.Name[2:4], h.Name), nil
+	if (h.Type == ark.DataPackFile || h.Type == ark.TreePackFile) && len(h.Name) >= 2 {
+		return path.Join(dir, h.Name[:2], h.Name), nil
 	}
 	return path.Join(dir, h.Name), nil
 }

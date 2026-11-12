@@ -1,8 +1,9 @@
 // Package arklocal implements ark.Backend on the local filesystem.
 //
 // Objects live under <dir>/<namespace>/<name>, where the namespace is
-// ark.HandleType.String(). Chunks are sharded two levels deep by the first
-// four characters of their name: chunks/aa/bb/<name>.
+// ark.HandleType.String(). Packs are sharded one level deep by the first two
+// characters of their name, 256 directories created on first use:
+// datapacks/aa/<name>.
 package arklocal
 
 import (
@@ -67,8 +68,8 @@ func (b *Backend) path(h ark.Handle) (string, error) {
 		strings.ContainsAny(h.Name, `/\`) || strings.HasPrefix(h.Name, tmpPrefix) {
 		return "", fmt.Errorf("arklocal: invalid object name %q", h.Name)
 	}
-	if h.Type == ark.BlobFile && len(h.Name) >= 4 {
-		return filepath.Join(dir, h.Name[:2], h.Name[2:4], h.Name), nil
+	if (h.Type == ark.DataPackFile || h.Type == ark.TreePackFile) && len(h.Name) >= 2 {
+		return filepath.Join(dir, h.Name[:2], h.Name), nil
 	}
 	return filepath.Join(dir, h.Name), nil
 }
