@@ -25,6 +25,7 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0008 | [Path matcher package](0008-path-matcher-package.md) | accepted | 2026-11-11 |
 | 0009 | [Exclude patterns on the snapshot](0009-exclude-patterns-on-the-snapshot.md) | accepted | 2026-11-11 |
 | 0010 | [Pack object layout and blob binding](0010-pack-object-layout-and-blob-binding.md) | accepted | 2026-11-11 |
-| 0011 | [Pack index format and loading](0011-pack-index-format-and-loading.md) | accepted | 2026-11-11 |
-| 0012 | [Crash and concurrent-writer model for packs](0012-crash-and-writer-model-for-packs.md) | accepted | 2026-11-11 |
+| 0011 | [Pack index format and loading](0011-pack-index-format-and-loading.md) | partly superseded by 0014 | 2026-11-11 |
+| 0012 | [Crash and concurrent-writer model for packs](0012-crash-and-writer-model-for-packs.md) | partly superseded by 0014 | 2026-11-11 |
 | 0013 | [Prune repacks by a repository-wide unused budget](0013-prune-repacks-by-an-unused-budget.md) | accepted | 2026-11-11 |
+| 0014 | [Index records of packs that are not stored are passed over](0014-index-records-of-packs-that-are-not-stored.md) | accepted | 2026-11-12 |

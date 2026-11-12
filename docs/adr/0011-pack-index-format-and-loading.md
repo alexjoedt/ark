@@ -1,6 +1,6 @@
 # 0011: Pack index format and loading
 
-Status: accepted
+Status: partly superseded by 0014
 Date: 2026-11-11
 
 ## Context
@@ -45,11 +45,14 @@ and merge a million blobs from memory.
 
 An index object that does not open is skipped with a warning. The blobs only it lists count as
 missing: a backup stores them again, a restore that needs one fails. A record whose pack is gone
-fails the read like a missing object does. A pack no index lists is garbage for prune.
+fails the read like a missing object does. A pack no index lists is garbage for prune. The
+sentence about a record whose pack is gone is superseded by 0014: a load lists the packs and a
+lookup passes over such a record.
 
 Two writers may store the same new blob, so a blob can be listed in several packs. A read takes
 the first copy of the merged table, which is the one in the pack with the smallest name, and does
-not fall back to another.
+not fall back to another. This too is superseded by 0014: a read takes the first copy in a pack
+that is stored.
 
 A lost index is rebuilt from the packs, each of which carries its own blob table. That is to be a
 library function, not a command.

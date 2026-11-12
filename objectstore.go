@@ -33,9 +33,10 @@ var (
 	// errNameMismatch is returned by a verifying store when an object opens
 	// but its content does not hash to its name.
 	errNameMismatch = errors.New("ark: object content does not match its name")
-	// errNotIndexed says why an object is missing: no index object lists it.
-	// The pack that holds it may still be stored.
-	errNotIndexed = errors.New("no index object lists it")
+	// errNotIndexed says why an object is missing: no index object lists it
+	// in a pack that was stored when the index was loaded. A pack that holds
+	// it may still be stored, unlisted.
+	errNotIndexed = errors.New("no index object lists it in a stored pack")
 )
 
 // objectCodec seals and opens data objects and key files.

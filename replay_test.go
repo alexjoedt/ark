@@ -159,13 +159,12 @@ func TestReplayedKeyFileOpensUnderTheOldPassword(t *testing.T) {
 	}
 }
 
-// TestReplayedIndexObjectNeverRestoresOtherBytes replays the index objects of
-// a pruned backup. They list packs that are gone, and a backup trusts the
-// index: one of the same contents stores nothing and its snapshot does not
-// restore. That is the accepted cost of a rollback by someone who can write
-// to the backend, who could delete the packs as well. What holds is that the
-// snapshot fails Restore, Verify and Check and never yields other bytes.
-func TestReplayedIndexObjectNeverRestoresOtherBytes(t *testing.T) {
+// TestReplayedIndexObjectIsPassedOver replays the index objects of a pruned
+// backup. They list packs that are gone, and a load of the index passes over
+// what is listed in a pack the backend does not hold: a backup of the same
+// contents stores them again and its snapshot restores. Check names the two
+// packs the replayed objects list until a prune drops the entries.
+func TestReplayedIndexObjectIsPassedOver(t *testing.T) {
 	ctx := context.Background()
 	b := &putCountingBackend{Backend: arkmem.New(), puts: map[ark.HandleType]int{}}
 	repo := openRepo(t, b)
@@ -199,24 +198,33 @@ func TestReplayedIndexObjectNeverRestoresOtherBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
-	if got := b.take(); got[ark.DataPackFile] != 0 || got[ark.TreePackFile] != 0 {
-		t.Fatalf("backup beside the replayed index stored packs (%v), the test does not show the replay", got)
+	if got := b.take(); got[ark.DataPackFile] != 1 || got[ark.TreePackFile] != 1 {
+		t.Fatalf("backup beside the replayed index stored %v, want one data pack and one tree pack", got)
 	}
-	if got, err := restoreData(t, repo, again.ID); !errors.Is(err, ark.ErrNotFound) || got != "" {
-		t.Errorf("Restore = %q, %v; want ErrNotFound and no bytes", got, err)
+	if got, err := restoreData(t, repo, again.ID); err != nil || got != victimContent {
+		t.Errorf("Restore = %q, %v; want %q", got, err, victimContent)
 	}
-	if res, err := repo.Verify(ctx, again.ID); !errors.Is(err, ark.ErrNotFound) || (res != nil && res.OK) {
-		t.Errorf("Verify = %+v, %v; want ErrNotFound and OK false", res, err)
+	if res, err := repo.Verify(ctx, again.ID); err != nil || !res.OK {
+		t.Errorf("Verify = %+v, %v; want OK", res, err)
 	}
-	// Check names the snapshot and, whether or not a snapshot references
-	// them, the two packs the replayed index lists that are gone.
+	// Check names the two packs the replayed index lists that are gone, and
+	// no snapshot: none reads from them.
 	check, err := repo.Check(ctx)
-	if err != nil || len(check.Errors) != 3 {
-		t.Fatalf("Check = %+v, %v; want the snapshot and both lost packs under Errors", check, err)
+	if err != nil || len(check.Errors) != 2 {
+		t.Fatalf("Check = %+v, %v; want both lost packs under Errors and nothing else", check, err)
 	}
-	for _, want := range []string{again.ID, "datapacks object", "treepacks object"} {
+	for _, want := range []string{"datapacks object", "treepacks object"} {
 		if !slices.ContainsFunc(check.Errors, func(e string) bool { return strings.Contains(e, want) }) {
 			t.Errorf("Check errors %q name no %s", check.Errors, want)
 		}
+	}
+	if _, err := repo.Prune(ctx); err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	if check, err := repo.Check(ctx); err != nil || len(check.Errors) != 0 || len(check.Warnings) != 0 {
+		t.Errorf("Check after the prune = %+v, %v; want no findings", check, err)
+	}
+	if got, err := restoreData(t, repo, again.ID); err != nil || got != victimContent {
+		t.Errorf("Restore after the prune = %q, %v; want %q", got, err, victimContent)
 	}
 }

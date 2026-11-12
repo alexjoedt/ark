@@ -27,8 +27,9 @@ type indexBackend struct {
 	mu          sync.Mutex
 	lists, gets map[HandleType]int
 	other       int
-	// onList runs inside every List before it is answered.
-	onList func()
+	// onList runs inside every List before it is answered, with the namespace
+	// listed.
+	onList func(HandleType)
 	// getErr fails every Get while it is set.
 	getErr error
 	// cutGets is the number of coming Gets that are answered with the first
@@ -68,7 +69,7 @@ func (b *indexBackend) List(ctx context.Context, t HandleType, fn func(BlobInfo)
 	onList := b.onList
 	b.mu.Unlock()
 	if onList != nil {
-		onList()
+		onList(t)
 	}
 	return b.Backend.List(ctx, t, fn)
 }
@@ -157,7 +158,8 @@ func writeTestIndex(t *testing.T, x *packIndex, packs []indexedPack) []string {
 }
 
 // syntheticPack returns a pack that was never stored: a name and count
-// entries of random blob names.
+// entries of random blob names. An index that loads it passes over its blobs
+// until storePlaceholders has stored an object under its name.
 func syntheticPack(rng *rand.ChaCha8, count int) indexedPack {
 	var name [sha256.Size]byte
 	_, _ = rng.Read(name[:])
@@ -168,6 +170,15 @@ func syntheticPack(rng *rand.ChaCha8, count int) indexedPack {
 	}
 	place(p.entries)
 	return p
+}
+
+// storePlaceholders stores an empty object under the name of every pack, which
+// is all a load asks of a pack: that the namespace lists it.
+func storePlaceholders(t *testing.T, b Backend, s *packSpace, packs ...indexedPack) {
+	t.Helper()
+	for _, p := range packs {
+		putObject(t, b, Handle{Type: s.packs, Name: p.name}, nil)
+	}
 }
 
 // allRecords returns the records of table in the order it keeps them.
@@ -266,6 +277,7 @@ func TestIndexFindsWhatItWroteAfterLoading(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := newIndexBackend(newStubBackend())
+			storePlaceholders(t, b, s, one, two, three)
 			x := newPackIndex(b, s, quietLogger)
 			for _, packs := range c.before {
 				writeTestIndex(t, x, packs)
@@ -413,24 +425,29 @@ func TestIndexLoadsLazilyAndOncePerType(t *testing.T) {
 	if _, _, ok := mustLookup(t, treeIndex, stored[trees][0].name); !ok {
 		t.Fatal("the first tree lookup found nothing")
 	}
-	treeLoad := 1 + objects[trees]
+	// One List of the index objects, one Get of each, one List of the packs.
+	treeLoad := 2 + objects[trees]
 	check("first tree lookup", TreeIndexFile, 1, objects[trees], treeLoad)
+	check("first tree lookup", TreePackFile, 1, 0, treeLoad)
 	check("first tree lookup", DataIndexFile, 0, 0, treeLoad)
+	check("first tree lookup", DataPackFile, 0, 0, treeLoad)
 
 	lookupAll(treeIndex, stored[trees])
 	mustLookup(t, treeIndex, strings.Repeat("0", 64))
 	check("later tree lookups", TreeIndexFile, 1, objects[trees], treeLoad)
+	check("later tree lookups", TreePackFile, 1, 0, treeLoad)
 
 	lookupAll(dataIndex, stored[data])
-	check("data lookups", DataIndexFile, 1, objects[data], treeLoad+1+objects[data])
-	check("data lookups", TreeIndexFile, 1, objects[trees], treeLoad+1+objects[data])
+	check("data lookups", DataIndexFile, 1, objects[data], treeLoad+2+objects[data])
+	check("data lookups", DataPackFile, 1, 0, treeLoad+2+objects[data])
+	check("data lookups", TreeIndexFile, 1, objects[trees], treeLoad+2+objects[data])
 
 	t.Run("concurrent first lookups", func(t *testing.T) {
 		b.reset()
 		entered, release := make(chan struct{}), make(chan struct{})
 		var once sync.Once
 		b.mu.Lock()
-		b.onList = func() {
+		b.onList = func(HandleType) {
 			once.Do(func() { close(entered) })
 			<-release
 		}
@@ -460,7 +477,8 @@ func TestIndexLoadsLazilyAndOncePerType(t *testing.T) {
 				t.Error(err)
 			}
 		}
-		check("concurrent first lookups", DataIndexFile, 1, objects[data], 1+objects[data])
+		check("concurrent first lookups", DataIndexFile, 1, objects[data], 2+objects[data])
+		check("concurrent first lookups", DataPackFile, 1, 0, 2+objects[data])
 	})
 }
 
@@ -477,6 +495,8 @@ func TestIndexObjectClosesAtTheRecordCap(t *testing.T) {
 	for i, size := range sizes {
 		packs[i] = syntheticPack(rng, size)
 	}
+
+	storePlaceholders(t, b, s, packs...)
 
 	names := writeTestIndex(t, x, packs)
 	if len(names) != len(want) {
@@ -543,6 +563,7 @@ func TestIndexDuplicateBlobResolvesToTheFirstCopy(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := newStubBackend()
+			storePlaceholders(t, b, s, one, two)
 			x := newPackIndex(b, s, quietLogger)
 			for _, packs := range objects {
 				writeTestIndex(t, x, packs)
@@ -558,6 +579,179 @@ func TestIndexDuplicateBlobResolvesToTheFirstCopy(t *testing.T) {
 					len(table.packs), table.count(), len(one.entries)+len(two.entries))
 			}
 		})
+	}
+}
+
+// TestIndexPassesOverAPackThatIsNotStored deletes a pack its index object
+// still lists. A lookup of a blob in it finds nothing, and the copy of a blob
+// in a stored pack instead, while the table keeps every record for Check, a
+// prune and a rebuild. The load pays one List of the pack namespace for it.
+// What the index writes after its load is not held against that listing.
+func TestIndexPassesOverAPackThatIsNotStored(t *testing.T) {
+	ctx := context.Background()
+	for _, s := range testPackSpaces(t) {
+		t.Run(s.packs.String(), func(t *testing.T) {
+			b := newIndexBackend(newStubBackend())
+			if _, _, ok := mustLookup(t, newPackIndex(b, s, quietLogger), strings.Repeat("0", 64)); ok {
+				t.Fatal("found a blob in an empty repository")
+			}
+			if lists, _, total := b.calls(s.packs); lists != 0 || total != 1 {
+				t.Errorf("an index that lists no pack: %d Lists of the packs, %d requests; want 0 and 1", lists, total)
+			}
+			packs, _ := storeTestPacks(t, b, s, 1, 20)
+			// The lost pack has the smallest name, the one a lookup prefers. A
+			// second copy of one of its blobs is listed in the pack that sorts
+			// last.
+			lost := slices.MinFunc(packs, func(a, b indexedPack) int { return strings.Compare(a.name, b.name) })
+			last := slices.MaxFunc(packs, func(a, b indexedPack) int { return strings.Compare(a.name, b.name) })
+			twice := lost.entries[0].name
+			copyOf := packEntry{name: twice, offset: 7, length: 9}
+			listed := slices.Clone(packs)
+			for i, p := range listed {
+				if p.name == last.name {
+					listed[i].entries = append(slices.Clone(p.entries), copyOf)
+				}
+			}
+			objects := len(writeTestIndex(t, newPackIndex(b, s, quietLogger), listed))
+			if err := b.Delete(ctx, Handle{Type: s.packs, Name: lost.name}); err != nil {
+				t.Fatalf("delete pack: %v", err)
+			}
+			b.reset()
+
+			x := newPackIndex(b, s, quietLogger)
+			records := 0
+			for _, p := range listed {
+				for _, e := range p.entries {
+					records++
+					name := hex.EncodeToString(e.name[:])
+					pack, got, ok := mustLookup(t, x, name)
+					switch {
+					case e.name == twice:
+						if !ok || pack != last.name || got != copyOf {
+							t.Errorf("lookup of the blob in two packs = %s %+v %v, want the stored copy %s %+v",
+								pack, got, ok, last.name, copyOf)
+						}
+					case p.name == lost.name:
+						if ok {
+							t.Errorf("lookup found %s in %s, which is not stored", name, pack)
+						}
+					case !ok || pack != p.name || got != e:
+						t.Errorf("lookup = %s %+v %v, want %s %+v", pack, got, ok, p.name, e)
+					}
+					if is, err := x.lists(ctx, name); err != nil || !is {
+						t.Errorf("lists(%s) = %v, %v; want true: the record stays", name, is, err)
+					}
+				}
+			}
+			table := x.table.Load()
+			gone, _ := table.pack(lost.name)
+			if table.count() != records || len(table.packs) != len(packs) ||
+				len(table.gone) != len(packs) || !table.gone[gone] || countTrue(table.gone) != 1 {
+				t.Errorf("table: %d records of %d packs, gone %v; want %d of %d and only pack %d gone",
+					table.count(), len(table.packs), table.gone, records, len(packs), gone)
+			}
+			if lists, gets, total := b.calls(s.packs); lists != 1 || gets != 0 || total != 2+objects {
+				t.Errorf("pack namespace: %d Lists, %d Gets, %d requests in all; want 1, 0 and %d",
+					lists, gets, total, 2+objects)
+			}
+
+			rng := rand.NewChaCha8([32]byte{7})
+			fresh := syntheticPack(rng, 5)
+			writeTestIndex(t, x, []indexedPack{fresh})
+			for _, e := range fresh.entries {
+				if pack, _, ok := mustLookup(t, x, hex.EncodeToString(e.name[:])); !ok || pack != fresh.name {
+					t.Errorf("lookup of a blob written after the load = %s %v, want %s", pack, ok, fresh.name)
+				}
+			}
+			if lists, _, _ := b.calls(s.packs); lists != 1 {
+				t.Errorf("%d Lists of the pack namespace after a write, want still 1", lists)
+			}
+		})
+	}
+}
+
+func countTrue(marks []bool) int {
+	n := 0
+	for _, m := range marks {
+		if m {
+			n++
+		}
+	}
+	return n
+}
+
+// TestIndexListsThePacksAfterItReadTheIndex has another writer store a pack
+// and the index object that lists it while a load lists the index namespace.
+// The load reads that object, so its pack listing has to be younger than it:
+// taken first, it would lack the pack and the load would pass over blobs that
+// are stored.
+func TestIndexListsThePacksAfterItReadTheIndex(t *testing.T) {
+	s := testPackSpaces(t)[0]
+	b := newIndexBackend(newStubBackend())
+	packs, _ := storeTestPacks(t, b, s, 1, 12)
+	writeTestIndex(t, newPackIndex(b, s, quietLogger), packs)
+
+	late := syntheticPack(rand.NewChaCha8([32]byte{9}), 5)
+	var once sync.Once
+	b.onList = func(typ HandleType) {
+		if typ != s.index {
+			return
+		}
+		once.Do(func() {
+			storePlaceholders(t, b, s, late)
+			writeTestIndex(t, newPackIndex(b.Backend, s, quietLogger), []indexedPack{late})
+		})
+	}
+	x := newPackIndex(b, s, quietLogger)
+	for _, p := range append(packs, late) {
+		for _, e := range p.entries {
+			if pack, _, ok := mustLookup(t, x, hex.EncodeToString(e.name[:])); !ok || pack != p.name {
+				t.Fatalf("lookup = %s %v, want %s: the pack was stored before its index object", pack, ok, p.name)
+			}
+		}
+	}
+	if x.table.Load().gone != nil {
+		t.Error("a load marked packs as gone that are all stored")
+	}
+}
+
+// listErrBackend fails the List of one namespace while err is set.
+type listErrBackend struct {
+	Backend
+	typ HandleType
+	err error
+}
+
+func (b *listErrBackend) List(ctx context.Context, t HandleType, fn func(BlobInfo) error) error {
+	if t == b.typ && b.err != nil {
+		return b.err
+	}
+	return b.Backend.List(ctx, t, fn)
+}
+
+// TestIndexLoadFailsWhenThePacksCannotBeListed: without the listing nothing
+// says which packs are stored. The lookup fails instead of answering either
+// way, and the next one loads again.
+func TestIndexLoadFailsWhenThePacksCannotBeListed(t *testing.T) {
+	ctx := context.Background()
+	s := testPackSpaces(t)[0]
+	errList := errors.New("list failed")
+	b := &listErrBackend{Backend: newStubBackend(), typ: s.packs, err: errList}
+	packs, blobs := storeTestPacks(t, b, s, 1, 12)
+	writeTestIndex(t, newPackIndex(b, s, quietLogger), packs)
+
+	x := newPackIndex(b, s, quietLogger)
+	if _, _, ok, err := x.lookup(ctx, blobs[0].name); !errors.Is(err, errList) || ok {
+		t.Fatalf("lookup = %v, %v; want %v", ok, err, errList)
+	}
+	if x.table.Load() != nil {
+		t.Fatal("a load whose pack listing failed left a table")
+	}
+	b.err = nil
+	for _, blob := range blobs {
+		if _, _, ok := mustLookup(t, x, blob.name); !ok {
+			t.Fatalf("blob %s is missing after the listing answered", blob.name)
+		}
 	}
 }
 

@@ -340,8 +340,8 @@ func TestPruneLeavesALostPackToCheck(t *testing.T) {
 	if got := b.take(); got["put datapacks"] != 0 || got["put treepacks"] != 1 || res.BytesUnused != 0 {
 		t.Errorf("Prune = %+v, %v; want the tree pack rewritten and no byte of the lost data pack counted", *res, got)
 	}
-	if now, _, _ := place(t, repo, a[0]); now != lost {
-		t.Errorf("chunk of the lost pack resolves to %s, want its entry kept", now)
+	if !slices.Contains(blobNames(t, repo, ark.BlobFile), ark.ObjectName(repo, []byte(a[0]))) {
+		t.Error("the index lists the chunk of the lost pack no more, want its entry kept")
 	}
 	if check := mustCheck(t, repo); !naming(check.Errors, lost) {
 		t.Errorf("Check errors = %v, want one naming the lost pack %s", check.Errors, lost)
@@ -572,11 +572,6 @@ func TestPruneCountsALostCopyOnlyWithoutAStoredOne(t *testing.T) {
 
 	if _, err := repo.Prune(ctx); err != nil {
 		t.Fatalf("Prune: %v", err)
-	}
-	// A lookup may still resolve to the lost pack, which has the smaller name
-	// or not. The rebuild lists what is stored.
-	if _, err := repo.RebuildIndex(ctx); err != nil {
-		t.Fatalf("RebuildIndex: %v", err)
 	}
 	for _, content := range x[:2] {
 		name := ark.ObjectName(repo, []byte(content))

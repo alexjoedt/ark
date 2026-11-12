@@ -37,8 +37,8 @@ objects are bound to their name and namespace by their associated data, but a ro
 repository state is accepted and not detected: a forgotten snapshot manifest comes back until a
 prune removed its data, an old key file reopens the repository under the old passphrase after
 ChangePassword (restic documents the same), a replayed lock blocks until it is stale and the
-replayed index objects of a pruned backup make a later backup of the same data reference blobs
-that are gone (see 0012).
+replayed index objects of a pruned backup list packs that are gone, which check reports and a
+backup passes over (see 0012 and 0014).
 
 Snapshot IDs are 128 random bits, so a listing reveals no snapshot time; the encoding is a detail
 the ID format may change. Locks keep a millisecond timestamp in their name, since staleness and

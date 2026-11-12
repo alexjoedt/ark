@@ -199,7 +199,7 @@ func TestBuildTreeStopsOnFirstError(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		b := newIndexBackend(newStubBackend())
-		b.onList = cancel
+		b.onList = func(HandleType) { cancel() }
 		_, err := buildTree(ctx, testSession(b, codec, key).trees, treeFixture(), 4)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("buildTree returned %v, want %v", err, context.Canceled)

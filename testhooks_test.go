@@ -1,6 +1,7 @@
 package ark
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -60,7 +61,8 @@ func SetPrefetchBytes(r *Repository, n int64) { r.prefetchBytes = n }
 func LockClass(exclusive bool) string { return lockClass(exclusive) }
 
 // WriteSyntheticIndex stores data index objects that list blobs blobs of
-// random names, perPack to a pack, without storing a pack.
+// random names, perPack to a pack, and an empty object under the name of
+// every pack: a load finds each listed pack stored, as in a whole repository.
 func WriteSyntheticIndex(ctx context.Context, r *Repository, blobs, perPack int) error {
 	rng := rand.NewChaCha8([32]byte{13})
 	packs := make([]indexedPack, 0, blobs/perPack+1)
@@ -74,6 +76,9 @@ func WriteSyntheticIndex(ctx context.Context, r *Repository, blobs, perPack int)
 		}
 		place(p.entries)
 		packs = append(packs, p)
+		if err := r.backend.Put(ctx, Handle{Type: DataPackFile, Name: p.name}, bytes.NewReader(nil)); err != nil {
+			return err
+		}
 	}
 	_, err := newPackIndex(r.backend, newPackSpace(r.codec, r.key, BlobFile), r.logger).write(ctx, packs)
 	return err

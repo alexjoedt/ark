@@ -175,9 +175,10 @@ func verifyChunks(
 }
 
 // checkPacks compares the index of s with the packs that are stored. A pack
-// the index lists that is gone is an error: every blob in it is lost, and a
-// backup would still skip storing them. A pack no index lists and an index
-// object that does not open are warnings.
+// the index lists that is gone is an error: what only it held is lost, and
+// its records are passed over by every lookup until a prune or a rebuild
+// drops them. A pack no index lists and an index object that does not open
+// are warnings.
 func (s *objectStore) checkPacks(ctx context.Context, result *CheckResult) error {
 	space := s.space
 	t, err := s.index.load(ctx)

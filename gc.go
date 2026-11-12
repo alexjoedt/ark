@@ -89,7 +89,9 @@ func (r *Repository) runGC(ctx context.Context, dryRun bool, progress ProgressFu
 		}
 	}
 	for name := range liveChunks {
-		_, _, ok, err := chunks.index.lookup(ctx, name)
+		// Listed in a lost pack counts here: the plan leaves such a chunk
+		// where it is and the prune goes on with the rest.
+		ok, err := chunks.index.lists(ctx, name)
 		if err != nil {
 			return nil, fmt.Errorf("gc: %w", err)
 		}
@@ -155,8 +157,9 @@ func notIndexedHint(err error) error {
 	if !errors.Is(err, errNotIndexed) {
 		return err
 	}
-	return fmt.Errorf("%w: a snapshot references it, so an index object was lost or does not open; "+
-		"nothing was deleted, RebuildIndex restores the index from the packs", err)
+	return fmt.Errorf("%w: a snapshot references it, so an index object or the pack it lists was lost, "+
+		"or an index object does not open; nothing was deleted, RebuildIndex restores the index from "+
+		"the packs that are stored and Check names the snapshots that miss it", err)
 }
 
 // plan loads the index, lists the packs of p's namespace and counts what

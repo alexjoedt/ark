@@ -533,8 +533,7 @@ func TestScenarioCheckCoversEverySnapshot(t *testing.T) {
 	}
 
 	// The lost pack stays a finding once no snapshot references it: the
-	// index still lists its chunk, and a backup of that content would store
-	// nothing.
+	// index still lists its chunk, until a prune or a rebuild drops the entry.
 	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{broken.ID}}); err != nil {
 		t.Fatalf("Forget: %v", err)
 	}

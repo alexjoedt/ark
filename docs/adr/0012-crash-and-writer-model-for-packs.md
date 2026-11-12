@@ -1,6 +1,6 @@
 # 0012: Crash and concurrent-writer model for packs
 
-Status: accepted
+Status: partly superseded by 0014
 Date: 2026-11-11
 
 ## Context
@@ -66,7 +66,8 @@ This supersedes the part of 0005 about torn objects, markers and repair mode. Th
 - Not a final index only, because a backup interrupted after ten hours would upload ten hours
   again.
 - Not self-healing in backup, because verifying what the index lists would read the packs on every
-  run. A damaged repository is a finding for check.
+  run. A damaged repository is a finding for check. Superseded by 0014 for a pack that is gone: a
+  listing of the pack namespace finds that without reading a pack.
 
 ## Consequences
 
@@ -83,9 +84,12 @@ index is rewritten without it. Until packs are repacked, a pack with one referen
 whole, so forgetting a snapshot frees only packs that are entirely unreferenced. 0013 adds the
 repacking.
 
-The index is trusted. Someone who can write to the backend can put back the index objects of a
-pruned backup; a later backup of the same data then stores nothing and its snapshot does not
-restore. It never restores other bytes, and check reports it:
-`TestReplayedIndexObjectNeverRestoresOtherBytes`.
+The index was trusted when this was decided, and the index objects of a pruned backup, put back
+by someone who can write to the backend, made a later backup of the same data store nothing. 0014
+supersedes that: a load of the index passes over what is listed in a pack that is not stored, so
+the later backup stores the data again and its snapshot restores, while check names the packs the
+replayed objects list until a prune drops the entries: `TestReplayedIndexObjectIsPassedOver`. A
+replay is still not detected as one, and what an index object lists in a stored pack is still
+taken as it is.
 
 Old repositories do not open: `TestOpenRejectsTheFormatBeforePacks`.

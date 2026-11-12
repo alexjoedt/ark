@@ -78,8 +78,12 @@ writer, every accepted risk included.
   entry from it, so a rebuilt index never points a name at other bytes:
   `TestTamperedObjectsAreRejected`.
 - A pack that is gone while the index lists it is an error of Check whether or not a snapshot
-  references it, as is a pack whose own table disagrees with the index:
-  `TestScenarioCheckCoversEverySnapshot`, `TestCheckReportsAPackThatDisagreesWithTheIndex`.
+  references it, as is a pack whose own table disagrees with the index. A backup passes over what
+  the index lists in a pack that is gone and stores again what it reads, while a file it takes as
+  unchanged from its parent keeps the parent's references to the lost chunks:
+  `TestScenarioCheckCoversEverySnapshot`, `TestCheckReportsAPackThatDisagreesWithTheIndex`,
+  `TestBackupStoresAgainWhatALostPackHeld`,
+  `TestUnchangedFileKeepsTheChunksOfItsParentAfterALostPack`.
 - A lock under the same mutations is treated as absent, Check lists it under warnings, and only a
   forced unlock deletes it: `TestTamperedObjectsAreRejected`,
   `TestTamperedLockIsIgnoredUntilForced`.
@@ -121,10 +125,11 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
   repository under it again: `TestReplayedKeyFileOpensUnderTheOldPassword`.
 - An old config put back together with its old key file opens: `TestReplayedConfigOpensOnlyWithItsKeyFile`.
 - A replayed lock blocks writers until it is stale: `TestReplayedLockIsHonouredUntilItIsStale`.
-- The index objects of a pruned backup, put back, list packs that are gone. A backup trusts the
-  index, so a later backup of the same data stores nothing and its snapshot fails Restore, Verify
-  and Check, which also names the lost packs; it never restores other bytes:
-  `TestReplayedIndexObjectNeverRestoresOtherBytes`.
+- The index objects of a pruned backup, put back, list packs that are gone. A load of the index
+  lists the packs that are stored and passes over what is listed in any other, so a later backup
+  of the same data stores it again and its snapshot restores. The replay is not detected as one:
+  Check names the packs it lists as lost until a prune or a rebuild of the index drops the
+  entries: `TestReplayedIndexObjectIsPassedOver`.
 - Object sizes and counts per namespace show: the size of every pack and index object, and with the
   index sizes the number of chunks and trees. A sealed chunk is its zstd frame plus 41 bytes and a
   pack is its sealed chunks plus a sealed table, so the stored bytes show, while the boundaries

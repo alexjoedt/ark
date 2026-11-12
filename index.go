@@ -73,6 +73,11 @@ type indexTable struct {
 	// objects names the index objects a load listed, unreadable those of
 	// them it skipped.
 	objects, unreadable []string
+	// gone marks, by their number in packs, the packs a load found listed and
+	// not stored. find passes over their records; they stay in the table for
+	// Check to report and for a prune or a rebuild to drop. Nil when every
+	// pack is stored.
+	gone []bool
 }
 
 // newIndexTable returns the sorted table that lists the blobs of packs.
@@ -250,22 +255,36 @@ func (t *indexTable) parse(data []byte) error {
 	return nil
 }
 
-// find returns the pack of the first record of the blob named name and the
-// blob's place in it. t is sorted.
-func (t *indexTable) find(name [sha256.Size]byte) (pack [sha256.Size]byte, e packEntry, ok bool) {
+// copies returns every record of the blob named name, in the order of their
+// pack names, whether those packs are stored or not. t is sorted.
+func (t *indexTable) copies(name [sha256.Size]byte) []indexRecord {
 	records := t.records[name[0]>>(8-indexBucketBits)]
-	i, ok := slices.BinarySearchFunc(records, name, func(r indexRecord, name [sha256.Size]byte) int {
+	i, _ := slices.BinarySearchFunc(records, name, func(r indexRecord, name [sha256.Size]byte) int {
 		return compareNames(r.name, name)
 	})
-	if !ok {
-		return pack, e, false
+	n := i
+	for n < len(records) && records[n].name == name {
+		n++
 	}
-	return t.packs[records[i].pack], records[i].packEntry, true
+	return records[i:n]
+}
+
+// find returns the pack of the first record of the blob named name whose
+// pack is stored, and the blob's place in it. t is sorted.
+func (t *indexTable) find(name [sha256.Size]byte) (pack [sha256.Size]byte, e packEntry, ok bool) {
+	for _, r := range t.copies(name) {
+		if t.gone == nil || !t.gone[r.pack] {
+			return t.packs[r.pack], r.packEntry, true
+		}
+	}
+	return pack, e, false
 }
 
 // packIndex is the index of one blob type. Nothing is read before the first
-// lookup: that one lists the index namespace once, loads every object and
-// merges them into the table all later lookups search. What it stores after
+// lookup: that one lists the index namespace once, loads every object, merges
+// them into the table all later lookups search and then lists the pack
+// namespace once, to pass over what the table lists in a pack that is not
+// stored. What it stores after
 // that load it keeps beside the table, so a lookup finds a blob whether its
 // index object was written before the load or after it. It is safe for
 // concurrent use.
@@ -289,9 +308,10 @@ func newPackIndex(b Backend, s *packSpace, logger *slog.Logger) *packIndex {
 }
 
 // lookup returns the pack that holds the blob named name and the blob's place
-// in it. ok is false when no index object lists the blob; a name that is none
-// is an error. A blob in several packs resolves to the same one on every
-// lookup: the one with the smallest name.
+// in it. ok is false when no index object lists the blob in a pack that was
+// stored when the index was loaded; a name that is none is an error. A blob
+// in several packs resolves to the same one on every lookup: of those stored,
+// the one with the smallest name.
 func (x *packIndex) lookup(ctx context.Context, name string) (pack string, e packEntry, ok bool, err error) {
 	blob, ok := parseName(name)
 	if !ok {
@@ -321,10 +341,25 @@ func (x *packIndex) find(
 	return pack, e, ok, nil
 }
 
+// lists reports whether an index object lists the blob named name, in a pack
+// that is stored or in one that is not. A prune asks this: what a lost pack
+// held stays listed for Check to report.
+func (x *packIndex) lists(ctx context.Context, name string) (bool, error) {
+	blob, ok := parseName(name)
+	if !ok {
+		return false, fmt.Errorf("ark: invalid %s name %q", x.space.blobs, name)
+	}
+	t, err := x.load(ctx)
+	if err != nil {
+		return false, err
+	}
+	return len(t.copies(blob)) > 0, nil
+}
+
 // load returns the merged table, reading it on the first call. An index
 // object that does not open is read a second time and then skipped with a
 // warning: the blobs only it lists count as missing. Any other error fails the
-// call and the next one loads again.
+// call, also one from listing the packs, and the next one loads again.
 func (x *packIndex) load(ctx context.Context) (*indexTable, error) {
 	if t := x.table.Load(); t != nil {
 		return t, nil
@@ -364,8 +399,42 @@ func (x *packIndex) load(ctx context.Context) (*indexTable, error) {
 		}
 	}
 	t.sort()
+	if err := x.markGone(ctx, t); err != nil {
+		return nil, err
+	}
 	x.table.Store(t)
 	return t, nil
+}
+
+// markGone lists the pack namespace once and marks the packs of t that the
+// listing lacks. It runs after the index objects were read, never before: an
+// index object is stored once its packs are durable, so a pack missing from a
+// listing taken later is gone, while one taken earlier would miss the packs
+// of an index object another writer stored in between. A listing that fails
+// marks nothing and fails the load: a record is passed over only for a pack
+// that a complete listing lacks.
+func (x *packIndex) markGone(ctx context.Context, t *indexTable) error {
+	if len(t.packs) == 0 {
+		return nil
+	}
+	gone := slices.Repeat([]bool{true}, len(t.packs))
+	n := len(gone)
+	err := x.backend.List(ctx, x.space.packs, func(info BlobInfo) error {
+		if i, listed := t.pack(info.Name); listed && gone[i] {
+			gone[i] = false
+			n--
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("ark: failed to list %s objects: %w", x.space.packs, err)
+	}
+	if n > 0 {
+		x.logger.WarnContext(ctx, "the index lists packs that are not stored, what only they hold counts as missing",
+			"namespace", x.space.packs.String(), "packs", n)
+		t.gone = gone
+	}
+	return nil
 }
 
 // names lists the objects of namespace typ, sorted.

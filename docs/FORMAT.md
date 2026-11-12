@@ -89,9 +89,12 @@ one per 50 000 blobs listed.
 
 ark loads an index when the first lookup of its type needs it: a repository is opened without
 reading any index object, an incremental backup with no changed file reads the tree index only.
-The index is trusted: a lookup returns the pack, offset and length it lists and reads that range.
-Two writers may store the same new blob, so a blob can be listed for two packs; a read takes the
-copy in the pack with the smaller name. Prune does not remove such a second copy on its own: it
+A load ends with one listing of the pack namespace, taken after the index objects were read, and a
+lookup passes over what the index lists in a pack that listing lacks: such a blob counts as
+missing, so a backup that reads its content stores it again. A listing that fails fails the load.
+Otherwise a lookup returns the pack, offset and length the index lists and reads that range. Two
+writers may store the same new blob, so a blob can be listed for two packs; a read takes the copy
+in the stored pack with the smaller name. Prune does not remove such a second copy on its own: it
 goes when prune deletes or rewrites the pack that holds it, see below.
 
 ## Order of writes
