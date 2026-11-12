@@ -175,7 +175,7 @@ func TestHeldLockRefreshesItself(t *testing.T) {
 		t.Fatalf("load lock: %v", err)
 	}
 
-	clock.advance(lockRefreshTimeout)
+	clock.advance(time.Minute)
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -681,6 +681,70 @@ func TestRefreshAfterALongStopAborts(t *testing.T) {
 	case <-lockCtx.Done():
 	case <-time.After(2 * time.Second):
 		t.Fatal("the operation runs on after its lock went unrefreshed past the timeout")
+	}
+}
+
+// Tickers stop while a host is suspended, so after a resume the next refresh
+// is up to lockRefreshInterval away. The operation must stop at the next
+// check of the wall clock, not keep writing until then.
+func TestResumedHostAbortsBeforeTheNextRefresh(t *testing.T) {
+	ctx := context.Background()
+	repo, _, clock := lockRepo(t)
+
+	restore := lockCheckInterval
+	lockCheckInterval = time.Millisecond
+	defer func() { lockCheckInterval = restore }()
+
+	lockCtx, lock, err := repo.acquire(ctx, false)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer lock.release(ctx)
+
+	clock.advance(lockRefreshTimeout)
+
+	select {
+	case <-lockCtx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("the operation runs on until the next refresh after its host slept past the timeout")
+	}
+}
+
+// A lock past its refresh timeout may already have been broken by others: a
+// refresh then would republish it. keepAlive gives it up without a write.
+func TestNoRefreshOnceTheTimeoutPassed(t *testing.T) {
+	ctx := context.Background()
+	repo, _, clock := lockRepo(t)
+
+	interval, check := lockRefreshInterval, lockCheckInterval
+	lockRefreshInterval, lockCheckInterval = time.Millisecond, time.Hour
+	defer func() { lockRefreshInterval, lockCheckInterval = interval, check }()
+
+	lockCtx, lock, err := repo.acquire(ctx, false)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer lock.release(ctx)
+	first, err := repo.loadLock(ctx, lock.name)
+	if err != nil {
+		t.Fatalf("load lock: %v", err)
+	}
+
+	clock.advance(lockRefreshTimeout)
+	select {
+	case <-lock.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the lock is still refreshed after its timeout passed")
+	}
+	if lockCtx.Err() == nil {
+		t.Fatal("the refresh stopped but the operation runs on")
+	}
+	last, err := repo.loadLock(ctx, lock.name)
+	if err != nil {
+		t.Fatalf("load lock: %v", err)
+	}
+	if !last.Time.Equal(first.Time) {
+		t.Errorf("the lock object was rewritten at %s after its timeout passed", last.Time)
 	}
 }
 
