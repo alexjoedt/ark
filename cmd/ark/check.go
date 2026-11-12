@@ -36,8 +36,8 @@ func checkCommand() *cli.Command {
 			if p.Mode().JSON {
 				if err := p.JSON(map[string]any{
 					"snapshots_checked": res.SnapshotsChecked,
-					"errors":            cliTexts(nonNil(res.Errors)),
-					"warnings":          cliTexts(nonNil(res.Warnings)),
+					"errors":            nonNil(res.Errors),
+					"warnings":          nonNil(res.Warnings),
 				}); err != nil {
 					return err
 				}
@@ -47,10 +47,10 @@ func checkCommand() *cli.Command {
 				return nil
 			}
 			for _, w := range res.Warnings {
-				p.Warnf("%s", cliText(w))
+				p.Warnf("%s", w)
 			}
 			for _, e := range res.Errors {
-				p.Linef("%s", cliText(e))
+				p.Linef("%s", e)
 			}
 			if len(res.Errors) > 0 {
 				return exitcode.Verify(fmt.Errorf("%d problems in %d snapshots", len(res.Errors), res.SnapshotsChecked))

@@ -39,7 +39,7 @@ Two writers may store the same new blob. Both copies stay, readers take the firs
 merged index, and prune decides later which pack keeps it.
 
 Prune runs under the exclusive lock. It loads both indexes, walks every snapshot, and deletes
-nothing when a snapshot references a blob no index lists: the error names `RebuildIndex`. Only then
+nothing when a snapshot references a blob no index lists: the error advises an index rebuild. Only then
 do packs without a referenced blob, packs no index lists and index objects that do not open count
 as garbage. It stores the complete new index, syncs, deletes the old index objects, syncs, and only
 then deletes packs, with a barrier at the end. The Sync between the index and the packs is

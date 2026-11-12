@@ -458,8 +458,8 @@ func TestPruneAbortsWhenTheIndexHidesALiveBlob(t *testing.T) {
 			b.take()
 			for _, opts := range [][]ark.PruneOption{{ark.WithPruneDryRun()}, nil} {
 				_, err = repo.Prune(ctx, opts...)
-				if !errors.Is(err, ark.ErrNotFound) || !strings.Contains(fmt.Sprint(err), "RebuildIndex") {
-					t.Fatalf("Prune = %v, want ErrNotFound naming RebuildIndex", err)
+				if !errors.Is(err, ark.ErrNotFound) || !strings.Contains(fmt.Sprint(err), "index rebuild") {
+					t.Fatalf("Prune = %v, want ErrNotFound advising an index rebuild", err)
 				}
 			}
 			got := b.take()

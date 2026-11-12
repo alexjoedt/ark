@@ -3,17 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
 	"github.com/urfave/cli/v3"
 )
-
-// cliText names the CLI command where a library message names the method
-// that does the same.
-func cliText(s string) string {
-	return strings.ReplaceAll(s, "RebuildIndex", "ark repair index")
-}
 
 func repairCommand() *cli.Command {
 	return &cli.Command{
@@ -55,7 +48,7 @@ func repairIndexCommand() *cli.Command {
 				pr.Fail()
 				return fmt.Errorf("repair index: %w", err)
 			}
-			pr.Donef("indexed %d packs", res.PacksIndexed)
+			pr.Donef("rebuilt the index")
 
 			if p.Mode().JSON {
 				if err := p.JSON(map[string]any{
@@ -80,12 +73,4 @@ func repairIndexCommand() *cli.Command {
 			return nil
 		},
 	}
-}
-
-func cliTexts(ss []string) []string {
-	out := make([]string, len(ss))
-	for i, s := range ss {
-		out[i] = cliText(s)
-	}
-	return out
 }

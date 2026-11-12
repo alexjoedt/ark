@@ -393,7 +393,7 @@ func TestCheckReportsAPackThatDisagreesWithTheIndex(t *testing.T) {
 				// The pack holds the other one: a rebuild reads no table from
 				// a pack that is not named by its hash, and the finding says so.
 				if !naming(check.Errors, pack.Type.String()+" object "+pack.Name, "disagrees with the index",
-					blobs[i], "holds the pack "+packs[1-i].Name, "RebuildIndex takes nothing from it") {
+					blobs[i], "holds the pack "+packs[1-i].Name, "an index rebuild takes nothing from it") {
 					t.Errorf("Check errors %q have none saying that pack %s holds pack %s and disagrees "+
 						"with the index about %s", check.Errors, pack.Name, packs[1-i].Name, blobs[i])
 				}
@@ -471,8 +471,8 @@ func TestCheckWarnsAboutWhatPruneRemoves(t *testing.T) {
 	if chunks != 5 || len(check.Errors) != 5 {
 		t.Errorf("Check without the data index reports %v, want the 5 chunks of %s as missing", check.Errors, snap.ID)
 	}
-	if !naming(check.Warnings, "datapacks", "no index lists", "RebuildIndex") {
-		t.Errorf("Check warnings %q do not say that the pack is unlisted and RebuildIndex lists it", check.Warnings)
+	if !naming(check.Warnings, "datapacks", "no index lists", "an index rebuild lists them") {
+		t.Errorf("Check warnings %q do not say that the pack is unlisted and an index rebuild lists it", check.Warnings)
 	}
 }
 
@@ -504,8 +504,8 @@ func TestRebuildIndexRestoresALostIndex(t *testing.T) {
 	if check := mustCheck(t, repo); len(check.Errors) != len(sources) {
 		t.Fatalf("Check without an index reports %v, want one error per snapshot", check.Errors)
 	}
-	if _, err := repo.Prune(ctx); !errors.Is(err, ark.ErrNotFound) || !strings.Contains(err.Error(), "RebuildIndex") {
-		t.Fatalf("Prune without an index = %v, want ErrNotFound naming RebuildIndex", err)
+	if _, err := repo.Prune(ctx); !errors.Is(err, ark.ErrNotFound) || !strings.Contains(err.Error(), "index rebuild") {
+		t.Fatalf("Prune without an index = %v, want ErrNotFound advising an index rebuild", err)
 	}
 
 	putForeignLock(t, repo, false)

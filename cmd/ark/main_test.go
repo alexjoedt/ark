@@ -1067,11 +1067,12 @@ func TestRepairIndex(t *testing.T) {
 			}
 		}
 	}
-	if _, out := runCapture(t, "-r", repo, "prune", "--yes"); strings.Contains(out, "RebuildIndex") {
-		t.Fatalf("library name in stdout: %s", out)
+	code, out := runCapture(t, "--json", "-r", repo, "prune", "--yes")
+	if code != 4 || !strings.Contains(out, "an index rebuild restores the index") {
+		t.Fatalf("prune over a lost index: exit %d, %s", code, out)
 	}
-	code, out := runCapture(t, "--json", "-r", repo, "check")
-	if code != 5 || !strings.Contains(out, "ark repair index") || strings.Contains(out, "RebuildIndex") {
+	code, out = runCapture(t, "--json", "-r", repo, "check")
+	if code != 5 || !strings.Contains(out, "an index rebuild lists them") {
 		t.Fatalf("check over a lost index: exit %d, %s", code, out)
 	}
 	repair(0)
@@ -1087,5 +1088,12 @@ func TestRepairIndex(t *testing.T) {
 	}
 	if res := repair(5); len(res.UnreadablePacks) != len(packs) {
 		t.Fatalf("damaged pack: %+v", res)
+	}
+
+	for _, args := range [][]string{{"repair"}, {"repair", "indx"}} {
+		if code, out := runCapture(t, append([]string{"--json", "-r", repo}, args...)...); code != 2 ||
+			!strings.Contains(out, `"usage"`) {
+			t.Errorf("ark %v: exit %d, %s, want a usage error", args, code, out)
+		}
 	}
 }

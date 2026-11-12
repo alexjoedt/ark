@@ -53,10 +53,10 @@ func run(args []string) int {
 	case exitcode.IsSilent(err):
 	case jsonRequested(args):
 		outputJSON(map[string]any{
-			"error": map[string]string{"code": kind, "message": cliText(err.Error())},
+			"error": map[string]string{"code": kind, "message": err.Error()},
 		})
 	default:
-		fmt.Fprintf(os.Stderr, "ark: %s\n", cliText(err.Error()))
+		fmt.Fprintf(os.Stderr, "ark: %s\n", err.Error())
 	}
 	return code
 }
@@ -174,10 +174,24 @@ func newApp() *cli.Command {
 
 // setUsageErrors turns flag and argument parse errors into exit 2 on every
 // command. urfave/cli does not inherit OnUsageError, so the tree is walked.
+// A command that only groups others exits 2 on an unknown or missing
+// subcommand; urfave/cli would print help and exit 0 or 3. ark alone still
+// prints help.
 func setUsageErrors(cmd *cli.Command) {
 	if cmd.OnUsageError == nil {
 		cmd.OnUsageError = func(_ context.Context, _ *cli.Command, err error, _ bool) error {
 			return exitcode.Usagef("%v", err)
+		}
+	}
+	if len(cmd.Commands) > 0 && cmd.Action == nil {
+		cmd.Action = func(_ context.Context, c *cli.Command) error {
+			if c.Args().Present() {
+				return exitcode.Usagef("unknown command %q, see %s --help", c.Args().First(), c.FullName())
+			}
+			if c.Root() == c {
+				return cli.ShowRootCommandHelp(c)
+			}
+			return exitcode.Usagef("%s needs a command, see %s --help", c.FullName(), c.FullName())
 		}
 	}
 	for _, sub := range cmd.Commands {

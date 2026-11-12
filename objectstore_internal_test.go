@@ -361,8 +361,8 @@ func TestCheckComparesASuspectPackWithTheIndex(t *testing.T) {
 	if len(result.Errors) != 1 || len(result.Warnings) != 0 ||
 		!strings.Contains(result.Errors[0], packs[0].name+": its own table disagrees with the index") ||
 		!strings.Contains(result.Errors[0], names[0]) ||
-		!strings.Contains(result.Errors[0], "RebuildIndex restores the index from the packs") {
+		!strings.Contains(result.Errors[0], "an index rebuild restores the index from the packs") {
 		t.Errorf("findings %+v, want one error saying that pack %s disagrees with the index about %s "+
-			"and that RebuildIndex repairs it", result, packs[0].name, names[0])
+			"and that an index rebuild repairs it", result, packs[0].name, names[0])
 	}
 }

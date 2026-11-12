@@ -157,15 +157,15 @@ func (r *Repository) runGC(ctx context.Context, dryRun bool, progress ProgressFu
 func notIndexedHint(err error) error {
 	if errors.Is(err, errPackLost) {
 		return fmt.Errorf("%w: a snapshot references it and the pack that held it is lost; nothing was "+
-			"deleted, RebuildIndex cannot bring it back, Check names the snapshots that miss it and "+
+			"deleted, an index rebuild cannot bring it back, a check names the snapshots that miss it and "+
 			"the prune runs once they are forgotten", err)
 	}
 	if !errors.Is(err, errNotIndexed) {
 		return err
 	}
 	return fmt.Errorf("%w: a snapshot references it, so an index object or the pack it lists was lost, "+
-		"or an index object does not open; nothing was deleted, RebuildIndex restores the index from "+
-		"the packs that are stored and Check names the snapshots that miss it", err)
+		"or an index object does not open; nothing was deleted, an index rebuild restores the index from "+
+		"the packs that are stored and a check names the snapshots that miss it", err)
 }
 
 // plan loads the index, lists the packs of p's namespace and counts what
@@ -369,7 +369,7 @@ func (r *Repository) readAndCopy(
 			if err != nil {
 				if !u.repack && errors.Is(err, p.store.space.corruptErr) {
 					err = fmt.Errorf("%w: another pack holds a copy of it that this prune would delete; "+
-						"nothing was deleted, and RebuildIndex lists the blob there alone if this pack was changed", err)
+						"nothing was deleted, and an index rebuild lists the blob there alone if this pack was changed", err)
 				}
 				return err
 			}

@@ -189,7 +189,7 @@ func (s *objectStore) checkPacks(ctx context.Context, result *CheckResult) error
 	for _, name := range t.unreadable {
 		result.Warnings = append(result.Warnings, fmt.Sprintf(
 			"%s object %s does not open and is skipped: what only it lists counts as missing; "+
-				"Prune removes it, RebuildIndex lists the packs again", space.index, name))
+				"a prune removes it, an index rebuild lists the packs again", space.index, name))
 	}
 
 	stored := make([]bool, len(t.packs))
@@ -209,7 +209,7 @@ func (s *objectStore) checkPacks(ctx context.Context, result *CheckResult) error
 		slices.Sort(unlisted)
 		result.Warnings = append(result.Warnings, fmt.Sprintf(
 			"%s objects no index lists: %s; a backup that is running or did not finish leaves such packs "+
-				"and Prune removes them, RebuildIndex lists them when a snapshot misses what they hold",
+				"and a prune removes them, an index rebuild lists them when a snapshot misses what they hold",
 			space.packs, nameList(unlisted)))
 	}
 
@@ -236,7 +236,7 @@ func (s *objectStore) checkPacks(ctx context.Context, result *CheckResult) error
 		default:
 			result.Warnings = append(result.Warnings, fmt.Sprintf(
 				"%s object %x is listed by the index and not stored; a stored pack holds every %s object "+
-					"it listed, Prune or RebuildIndex drops what the index says about it",
+					"it listed, a prune or an index rebuild drops what the index says about it",
 				space.packs, pack, space.blobs))
 		}
 	}
@@ -285,10 +285,10 @@ func (s *objectStore) checkSuspects(ctx context.Context, result *CheckResult) er
 		// A table is bound to its blobs, not to the name of its pack, so it
 		// opens under any name. A rebuild reads only packs named by their
 		// hash: for any other it keeps what the index says.
-		advice := "RebuildIndex restores the index from the packs"
+		advice := "an index rebuild restores the index from the packs"
 		if sum := sha256.Sum256(whole); hex.EncodeToString(sum[:]) != pack {
 			advice = fmt.Sprintf("it is not named by its hash but holds the pack %x, "+
-				"so RebuildIndex takes nothing from it", sum)
+				"so an index rebuild takes nothing from it", sum)
 		}
 		result.Errors = append(result.Errors, fmt.Sprintf(
 			"%s object %s: its own table disagrees with the index about %s objects %s; %s",

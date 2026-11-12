@@ -146,8 +146,8 @@ func TestPruneStopsOnATreeOfALostPack(t *testing.T) {
 	packs := objectNames(t, b, ark.DataPackFile)
 	_, err := repo.Prune(ctx)
 	if !errors.Is(err, ark.ErrNotFound) || !strings.Contains(err.Error(), "the pack that held it is lost") ||
-		strings.Contains(err.Error(), "RebuildIndex restores") {
-		t.Fatalf("Prune = %v, want ErrNotFound saying the pack is lost and not advising RebuildIndex", err)
+		strings.Contains(err.Error(), "index rebuild restores") {
+		t.Fatalf("Prune = %v, want ErrNotFound saying the pack is lost and not advising an index rebuild", err)
 	}
 	if got := objectNames(t, b, ark.DataPackFile); !slices.Equal(got, packs) {
 		t.Errorf("data packs after the prune = %v, want %v untouched", got, packs)
