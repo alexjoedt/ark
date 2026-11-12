@@ -170,9 +170,11 @@ func TestWholePackReadThatComesBackShortIsAskedAgain(t *testing.T) {
 	}
 }
 
-// TestTreePackPushedOutOfTheCacheIsReadByRange: a walk whose tree packs do
-// not fit the cache must not fetch a pack whole for every node it reads.
-func TestTreePackPushedOutOfTheCacheIsReadByRange(t *testing.T) {
+// TestTreePackPushedOutOfTheCacheIsReadByRangeForAWhile: walks whose tree
+// packs do not fit the cache must neither fetch a pack whole for every node
+// they read nor, once it was pushed out, ask for every node on its own for
+// the rest of the operation, as the walks of many snapshots would.
+func TestTreePackPushedOutOfTheCacheIsReadByRangeForAWhile(t *testing.T) {
 	ctx := context.Background()
 	codec := newObjectCodec()
 	defer codec.Close()
@@ -181,8 +183,9 @@ func TestTreePackPushedOutOfTheCacheIsReadByRange(t *testing.T) {
 
 	session := testSession(b, codec, key)
 	nodes := map[string][]byte{}
-	for i := range 8 {
-		data := fmt.Appendf(nil, "tree node %d", i)
+	for range 8 { // a pack of 8 MiB, worth a few requests
+		data := make([]byte, 1<<20)
+		rand.Read(data)
 		nodes[session.trees.name(data)] = data
 		if _, err := session.trees.putNamed(ctx, session.trees.name(data), data); err != nil {
 			t.Fatal(err)
@@ -198,15 +201,61 @@ func TestTreePackPushedOutOfTheCacheIsReadByRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.reset()
-	for name, want := range nodes {
-		got, err := trees.Get(ctx, name)
-		if err != nil || !bytes.Equal(got, want) {
-			t.Fatalf("Get %s = %q, %v, want %q", name, got, err, want)
+	const walks = 4
+	for range walks {
+		for name, want := range nodes {
+			got, err := trees.Get(ctx, name)
+			if err != nil || !bytes.Equal(got, want) {
+				t.Fatalf("Get %s returned %d bytes, %v, want the %d stored", name, len(got), err, len(want))
+			}
 		}
 	}
-	if _, gets, total := b.calls(TreePackFile); gets != 1 || total != len(nodes) {
-		t.Errorf("%d whole reads of the tree pack and %d requests for %d nodes, want 1 and %d",
-			gets, total, len(nodes), len(nodes))
+	reads := walks * len(nodes)
+	if _, gets, total := b.calls(TreePackFile); gets < 2 || gets > reads/4 || total != reads {
+		t.Errorf("%d whole reads of the tree pack and %d requests for %d node reads, want 2 to %d and %d",
+			gets, total, reads, reads/4, reads)
+	}
+}
+
+// TestTreePackWhoseFetchFailedIsFetchedWholeAgain: a pack the store never got
+// is not one the walk pushed out, so the next node asks for it whole.
+func TestTreePackWhoseFetchFailedIsFetchedWholeAgain(t *testing.T) {
+	ctx := context.Background()
+	codec := newObjectCodec()
+	defer codec.Close()
+	key := newMasterKey("repo")
+	b := newIndexBackend(newStubBackend())
+
+	session := testSession(b, codec, key)
+	var names []string
+	for i := range 8 {
+		data := fmt.Appendf(nil, "tree node %d", i)
+		names = append(names, session.trees.name(data))
+		if _, err := session.trees.putNamed(ctx, names[i], data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := session.finish(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	_, trees := (&Repository{backend: b, codec: codec, key: key, logger: quietLogger}).stores()
+	if _, err := trees.index.load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b.getErr = errors.New("the backend is away")
+	if _, err := trees.Get(ctx, names[0]); !errors.Is(err, b.getErr) {
+		t.Fatalf("Get from a backend that is away returned %v", err)
+	}
+	b.getErr = nil
+	b.reset()
+	for _, name := range names {
+		if _, err := trees.Get(ctx, name); err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+	}
+	if _, gets, total := b.calls(TreePackFile); gets != 1 || total != 1 {
+		t.Errorf("%d whole reads of the tree pack and %d requests for %d nodes, want 1 and 1", gets, total, len(names))
 	}
 }
 

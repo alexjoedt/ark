@@ -21,16 +21,29 @@ const defaultPrefetchBytes int64 = 64 << 20
 // All streams of one fetcher share its worker slots and its byte budget, so a
 // caller may open the streams of upcoming files ahead of time: the fetches of
 // the file being read overlap with the fetches of the next ones, and memory
-// stays at the budget plus the cache, whatever the number of files.
+// stays at twice the budget plus the cache, whatever the number of files: the
+// chunks the budget counts, and the sealed ranges of the reads running.
 //
-// Chunks are read by pack: a pack has at most one read running, and the chunks
-// wanted from it meanwhile share the next one, a few ranges for a pack's worth
-// of small files instead of one round trip each.
+// Chunks are read by pack: while a pack is being read, the chunks wanted from
+// it wait and share its next reads, a few ranges for a pack's worth of small
+// files instead of one round trip each. Ranges that lie apart are read side
+// by side.
+//
+// Every read runs under the ctx the fetcher was made with, so no stream fails
+// a chunk another one waits for. The caller closes the fetcher after its last
+// stream.
 type chunkFetcher struct {
 	store   *objectStore
 	cache   *chunkCache
 	workers int
 	budget  *byteBudget // bytes fetched and not yet handed to a Read
+	// span is the most bytes one read asks for: a worker's share of the
+	// budget, so the reads running hold a budget of sealed bytes at most.
+	span uint64
+
+	// ctx is what the reads run under: they outlive the calls that want.
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	// turn is the done channel of the last stream handed out. Streams start
 	// their fetches in the order reader was called, so the budget is granted
@@ -45,8 +58,8 @@ type chunkFetcher struct {
 	flights map[string]*flight
 	pending map[string][]*flight // by pack, wanted and in no read yet
 	order   []string             // packs with pending chunks, oldest first
-	reading map[string]bool      // packs with a read running
-	running int                  // pack reads running, at most workers
+	reading map[string]int       // reads running, by pack
+	running int                  // reads running, at most workers
 	reads   sync.WaitGroup
 
 	// countMu serialises onRead, so a progress handler is never called from
@@ -58,12 +71,13 @@ type chunkFetcher struct {
 
 // flight is one chunk wanted from a pack. done closes once data or err is set.
 type flight struct {
-	id   string
-	ctx  context.Context // the read of its pack runs under the first one's
-	at   packEntry
-	done chan struct{}
-	data []byte
-	err  error
+	id string
+	at packEntry
+	// waiting counts the wants no stream took back, under the fetcher's mu.
+	waiting int
+	done    chan struct{}
+	data    []byte
+	err     error
 }
 
 func landed(data []byte, err error) *flight {
@@ -72,7 +86,7 @@ func landed(data []byte, err error) *flight {
 	return fl
 }
 
-func (r *Repository) newChunkFetcher(chunks *objectStore, cache *chunkCache) *chunkFetcher {
+func (r *Repository) newChunkFetcher(ctx context.Context, chunks *objectStore, cache *chunkCache) *chunkFetcher {
 	workers := r.concurrency
 	if workers < 1 {
 		workers = runtime.NumCPU() * 2
@@ -81,37 +95,49 @@ func (r *Repository) newChunkFetcher(chunks *objectStore, cache *chunkCache) *ch
 	if floor <= 0 {
 		floor = defaultPrefetchBytes
 	}
-	return newFetcher(chunks, cache, workers, max(floor, int64(workers)*int64(r.chunker.MaxSize)))
+	return newFetcher(ctx, chunks, cache, workers, max(floor, int64(workers)*int64(r.chunker.MaxSize)))
 }
 
-func newFetcher(chunks *objectStore, cache *chunkCache, workers int, budget int64) *chunkFetcher {
+func newFetcher(ctx context.Context, chunks *objectStore, cache *chunkCache, workers int, budget int64) *chunkFetcher {
 	turn := make(chan struct{})
 	close(turn)
+	ctx, cancel := context.WithCancel(ctx)
 	return &chunkFetcher{
 		store:   chunks,
 		cache:   cache,
 		workers: workers,
 		budget:  newByteBudget(budget),
+		span:    uint64(budget / int64(workers)),
+		ctx:     ctx,
+		cancel:  cancel,
 		turn:    turn,
 		flights: make(map[string]*flight),
 		pending: make(map[string][]*flight),
-		reading: make(map[string]bool),
+		reading: make(map[string]int),
 	}
+}
+
+// close stops the reads and returns once none runs: none may outlive the
+// operation, the repository may close next. Every stream is closed before.
+func (f *chunkFetcher) close() {
+	f.cancel()
+	f.reads.Wait()
 }
 
 // want returns the flight of the chunk id, starting the read of its pack when
 // a worker slot is free and the pack has no read running.
-func (f *chunkFetcher) want(ctx context.Context, id string) *flight {
+func (f *chunkFetcher) want(id string) *flight {
 	if data, ok := f.cache.get(id); ok {
 		return landed(data, nil)
 	}
-	pack, at, err := f.store.locate(ctx, id)
+	pack, at, err := f.store.locate(f.ctx, id)
 	if err != nil {
 		return landed(nil, err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if fl, ok := f.flights[id]; ok {
+		fl.waiting++
 		return fl
 	}
 	// A read caches before it leaves flights, so a flight that ended since
@@ -119,7 +145,7 @@ func (f *chunkFetcher) want(ctx context.Context, id string) *flight {
 	if data, ok := f.cache.get(id); ok {
 		return landed(data, nil)
 	}
-	fl := &flight{id: id, ctx: ctx, at: at, done: make(chan struct{})}
+	fl := &flight{id: id, at: at, waiting: 1, done: make(chan struct{})}
 	f.flights[id] = fl
 	if len(f.pending[pack]) == 0 {
 		f.order = append(f.order, pack)
@@ -129,45 +155,72 @@ func (f *chunkFetcher) want(ctx context.Context, id string) *flight {
 	return fl
 }
 
-// dispatch starts a read for every pack with pending chunks and no read
-// running, oldest first, while worker slots are free. f.mu is held.
-func (f *chunkFetcher) dispatch() {
-	for i := 0; i < len(f.order) && f.running < f.workers; {
-		pack := f.order[i]
-		if f.reading[pack] {
-			i++
-			continue
-		}
-		f.order = slices.Delete(f.order, i, i+1)
-		wants := f.pending[pack]
-		delete(f.pending, pack)
-		f.reading[pack] = true
-		f.running++
-		f.reads.Add(1)
-		go f.readPack(pack, wants)
+// drop takes back one want of fl, for a stream that closed before reading it.
+// A chunk nobody waits for is left out of the reads that have not started.
+func (f *chunkFetcher) drop(fl *flight) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.flights[fl.id] == fl {
+		fl.waiting--
 	}
 }
 
-// readPack reads the chunks wants from the pack named pack in as few ranges
-// as getMany needs, then lets the next read start.
-func (f *chunkFetcher) readPack(pack string, wants []*flight) {
-	defer f.reads.Done()
-	ctx := wants[0].ctx
-	slices.SortFunc(wants, func(a, b *flight) int { return cmp.Compare(a.at.offset, b.at.offset) })
-	entries := make([]packEntry, len(wants))
-	for i, fl := range wants {
-		entries[i] = fl.at
+// dispatch starts the reads of every pack with pending chunks and no read
+// running, oldest first, while worker slots are free: one read per range, so
+// ranges that lie apart do not wait for each other. f.mu is held.
+func (f *chunkFetcher) dispatch() {
+	for i := 0; i < len(f.order) && f.running < f.workers; {
+		pack := f.order[i]
+		if f.reading[pack] > 0 {
+			i++
+			continue
+		}
+		wants := slices.DeleteFunc(f.pending[pack], func(fl *flight) bool {
+			if fl.waiting == 0 {
+				delete(f.flights, fl.id)
+			}
+			return fl.waiting == 0
+		})
+		slices.SortFunc(wants, func(a, b *flight) int { return cmp.Compare(a.at.offset, b.at.offset) })
+		entries := make([]packEntry, len(wants))
+		for j, fl := range wants {
+			entries[j] = fl.at
+		}
+		for len(wants) > 0 && f.running < f.workers {
+			n, _ := oneRange(entries, uint64(entries[0].offset)+f.span)
+			f.reading[pack]++
+			f.running++
+			f.reads.Add(1)
+			go f.readRange(pack, wants[:n:n], entries[:n:n])
+			wants, entries = wants[n:], entries[n:]
+		}
+		if len(wants) > 0 {
+			// No worker is free for the rest: it waits for the next reads of
+			// the pack, with what is wanted from it until then.
+			f.pending[pack] = wants
+			return
+		}
+		delete(f.pending, pack)
+		f.order = slices.Delete(f.order, i, i+1)
 	}
+}
+
+// readRange reads wants, the chunks at entries of the pack named pack, which
+// oneRange put into one range, then lets the next reads start.
+func (f *chunkFetcher) readRange(pack string, wants []*flight, entries []packEntry) {
+	defer f.reads.Done()
 	next := 0
 	// fn never fails, so getMany calls it once for every entry, in order.
-	_ = f.store.getMany(ctx, pack, entries, func(_ packEntry, data []byte, err error) error {
+	_ = f.store.getMany(f.ctx, pack, entries, func(_ packEntry, data []byte, err error) error {
 		f.land(wants[next], data, err)
 		next++
 		return nil
 	})
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	delete(f.reading, pack)
+	if f.reading[pack]--; f.reading[pack] == 0 {
+		delete(f.reading, pack)
+	}
 	f.running--
 	f.dispatch()
 }
@@ -182,10 +235,6 @@ func (f *chunkFetcher) land(fl *flight, data []byte, err error) {
 	f.mu.Unlock()
 	close(fl.done)
 }
-
-// wait returns once every pack read has ended. Called after the last stream
-// is closed, when no read starts any more.
-func (f *chunkFetcher) wait() { f.reads.Wait() }
 
 // count reports one more chunk read, cache hits included, so progress tracks
 // the chunk count the manifest recorded.
@@ -226,12 +275,10 @@ func (f *chunkFetcher) ready(ctx context.Context) error {
 //
 // Streams must be read in the order reader handed them out, as a restore does
 // with the files of a snapshot. The caller closes the reader, including when
-// it stops early. Pack reads run under the ctx of the stream that wanted
-// first, so the streams of one fetcher share ctx; closing a stream early
-// cancels none of them.
-func (f *chunkFetcher) reader(ctx context.Context, refs []chunkRef) *chunkStream {
-	reads := ctx
-	ctx, cancel := context.WithCancel(ctx)
+// it stops early, which cancels no read: the chunks it has not read are left
+// out of the reads that have not started.
+func (f *chunkFetcher) reader(refs []chunkRef) *chunkStream {
+	ctx, cancel := context.WithCancel(f.ctx)
 	s := &chunkStream{
 		pending: make(chan wanted, len(refs)+1), // one spare for the error slot
 		cancel:  cancel,
@@ -265,7 +312,7 @@ func (f *chunkFetcher) reader(ctx context.Context, refs []chunkRef) *chunkStream
 				s.pending <- wanted{err: err}
 				return
 			}
-			s.pending <- wanted{fl: f.want(reads, ref.ID), held: ref.Length}
+			s.pending <- wanted{fl: f.want(ref.ID), held: ref.Length}
 		}
 	}()
 
@@ -310,11 +357,14 @@ func (s *chunkStream) Read(p []byte) (int, error) {
 }
 
 // Close stops the stream from asking for more chunks and gives back the budget
-// of those it did not read. It is safe to call more than once and after the
-// stream is drained.
+// of those it did not read; only a read that already runs still brings them.
+// It is safe to call more than once and after the stream is drained.
 func (s *chunkStream) Close() error {
 	s.cancel()
 	for w := range s.pending {
+		if w.fl != nil {
+			s.fetcher.drop(w.fl)
+		}
 		s.fetcher.budget.release(w.held)
 	}
 	s.current = nil

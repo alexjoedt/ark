@@ -59,7 +59,8 @@ func (r *Repository) runRestore(
 		limit = opts.cacheLimit
 	}
 	chunks, trees := r.stores()
-	fetcher := r.newChunkFetcher(chunks, newChunkCache(limit))
+	fetcher := r.newChunkFetcher(ctx, chunks, newChunkCache(limit))
+	defer fetcher.close()
 	fetcher.onRead = func(read int) {
 		opts.progress(ProgressEvent{Phase: PhaseFetch, ChunksDone: read, ChunksTotal: m.Stats.ChunksTotal})
 	}
@@ -125,8 +126,9 @@ const restoreLookahead = 4096
 // chunk streams of the upcoming files, so their fetches run while fn writes
 // the current one; the bytes held ahead are bounded by the fetcher's budget
 // and the cache, whatever the size of the snapshot. fn's error, or a
-// cancelled ctx, stops the walk and every fetch; the streams opened ahead are
-// drained and closed before streamSnapshot returns.
+// cancelled ctx, stops the walk; the streams opened ahead are drained and
+// closed before streamSnapshot returns, so only the reads that already run are
+// left for the caller to stop with fetcher.close.
 func streamSnapshot(
 	ctx context.Context,
 	trees *objectStore,
@@ -152,7 +154,7 @@ func streamSnapshot(
 				if err := fetcher.ready(ctx); err != nil {
 					return err
 				}
-				entry.stream = fetcher.reader(ctx, fe.Chunks)
+				entry.stream = fetcher.reader(fe.Chunks)
 			}
 			select {
 			case queue <- entry:
@@ -174,18 +176,14 @@ func streamSnapshot(
 			continue
 		}
 		err = fn(entry)
-		entry.close() // only cancels fetches still running
+		entry.close() // gives up the chunks fn left unread
 		if err != nil {
-			cancel() // stop the walk and every fetch before draining
+			cancel() // stop the walk before draining
 		}
 	}
 	if err == nil {
 		err = <-walkErr
 	}
-	// The reads of chunks nobody took any more run on under the cancelled
-	// ctx; none may outlive the call, the repository may close next.
-	cancel()
-	fetcher.wait()
 	return err
 }
 

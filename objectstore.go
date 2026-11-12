@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"sync"
 
@@ -186,28 +187,41 @@ func (r *Repository) stores() (chunks, trees *objectStore) {
 	return chunks, trees
 }
 
-// packCache is the LRU of whole tree packs of one operation. It remembers the
-// packs it was given, so a pack pushed out is read by range from then on and
-// a walk larger than the cache downloads every pack whole at most once.
+// packCache is the LRU of whole tree packs of one operation. A pack pushed
+// out is read by range for a while: fetching it whole for every blob would
+// cost a pack per blob in a walk larger than the cache. Once those range reads
+// have cost what the pack does, a request counted as packRangeGap bytes, it is
+// fetched whole again, so the walks of many snapshots over the same trees do
+// not end at one request per node either.
 type packCache struct {
 	*chunkCache
-	mu      sync.Mutex
-	fetched map[string]bool
+	mu sync.Mutex
+	// credit is what the range reads of a pack may still cost, by pack. A
+	// pack has none before it was fetched whole.
+	credit map[string]int64
 }
 
 func newPackCache() *packCache {
-	return &packCache{chunkCache: newChunkCache(treePackCacheBytes), fetched: make(map[string]bool)}
+	return &packCache{chunkCache: newChunkCache(treePackCacheBytes), credit: make(map[string]int64)}
 }
 
-// first reports whether pack was never fetched whole before, and notes that
-// it is now.
-func (c *packCache) first(pack string) bool {
+// put holds whole, the pack named pack as it was just fetched.
+func (c *packCache) put(pack string, whole []byte) {
+	c.chunkCache.put(pack, whole)
+	c.mu.Lock()
+	c.credit[pack] = int64(len(whole))
+	c.mu.Unlock()
+}
+
+// byRange reports whether a blob of length bytes in the pack named pack,
+// which c does not hold, is read by range, and charges the pack for it.
+func (c *packCache) byRange(pack string, length uint32) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.fetched[pack] {
+	if c.credit[pack] <= 0 {
 		return false
 	}
-	c.fetched[pack] = true
+	c.credit[pack] -= int64(length) + packRangeGap
 	return true
 }
 
@@ -310,7 +324,6 @@ func (s *objectStore) getMany(
 	ctx context.Context, pack string, entries []packEntry, fn func(e packEntry, data []byte, err error) error,
 ) error {
 	h := Handle{Type: s.space.packs, Name: pack}
-	end := func(e packEntry) uint64 { return uint64(e.offset) + uint64(e.length) }
 	yield := func(e packEntry, data []byte, err error) error {
 		data, err = s.checked(pack, e, data, err)
 		return fn(e, data, err)
@@ -318,19 +331,19 @@ func (s *objectStore) getMany(
 	// size is where the pack ends, once a read ran past it.
 	size, sized := uint64(0), false
 	for len(entries) > 0 {
-		n, start, stop := 1, uint64(entries[0].offset), end(entries[0])
-		if sized && stop > size {
+		start := uint64(entries[0].offset)
+		if sized && entries[0].end() > size {
 			if err := yield(entries[0], nil, s.space.endsBefore(pack, entries[0], io.ErrUnexpectedEOF)); err != nil {
 				return err
 			}
 			entries = entries[1:]
 			continue
 		}
-		for n < len(entries) && uint64(entries[n].offset) <= stop+packRangeGap &&
-			(!sized || end(entries[n]) <= size) {
-			stop = max(stop, end(entries[n]))
-			n++
+		limit := uint64(math.MaxUint64)
+		if sized {
+			limit = size
 		}
+		n, stop := oneRange(entries, limit)
 		whole, err := s.backend.GetRange(ctx, h, int64(start), int64(stop-start))
 		if errors.Is(err, io.ErrUnexpectedEOF) && !sized {
 			info, statErr := s.backend.Stat(ctx, h)
@@ -361,13 +374,26 @@ func (s *objectStore) getMany(
 	return nil
 }
 
+// end is where the blob at e stops in its pack.
+func (e packEntry) end() uint64 { return uint64(e.offset) + uint64(e.length) }
+
+// oneRange returns how many of entries, which are sorted by offset, one range
+// read takes and where it stops: the first, and those behind it that lie at
+// most packRangeGap apart and end at limit or before.
+func oneRange(entries []packEntry, limit uint64) (n int, stop uint64) {
+	n, stop = 1, entries[0].end()
+	for n < len(entries) && uint64(entries[n].offset) <= stop+packRangeGap && entries[n].end() <= limit {
+		stop = max(stop, entries[n].end())
+		n++
+	}
+	return n, stop
+}
+
 // fromWholePack returns the content of the blob at e in the pack named pack,
-// fetching the pack whole unless s holds it.
+// fetching the pack whole unless s holds it or the walk pushed it out.
 func (s *objectStore) fromWholePack(ctx context.Context, pack string, e packEntry) ([]byte, error) {
 	whole, ok := s.packs.get(pack)
-	if !ok && !s.packs.first(pack) {
-		// The walk outgrew the cache and pushed this pack out: fetching it
-		// whole again for every blob would cost a pack per blob.
+	if !ok && s.packs.byRange(pack, e.length) {
 		return s.space.readBlob(ctx, s.backend, pack, e)
 	}
 	for retried := false; ; retried = true {
