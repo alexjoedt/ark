@@ -14,10 +14,11 @@ import (
 	"github.com/alexjoedt/ark/arkmem"
 )
 
-// nthFaultBackend fails one write: the nth Put or Delete of a handle type since
-// it was armed. Every other request goes through, so the run that meets the
-// fault goes on to whatever it does about a failed write.
-type nthFaultBackend struct {
+// faultBackend fails writes of one handle type once it is armed: the nth Put
+// or Delete since then, or every one. Every other request goes through, so
+// the run that meets a single fault goes on to whatever it does about a
+// failed write.
+type faultBackend struct {
 	ark.Backend
 	mu      sync.Mutex
 	op      string
@@ -25,56 +26,57 @@ type nthFaultBackend struct {
 	n, seen int
 }
 
-// arm makes the nth op ("put" or "delete") of typ from now on fail.
-func (b *nthFaultBackend) arm(op string, typ ark.HandleType, n int) {
+// arm makes the nth op ("put" or "delete", "" for both) of typ from now on
+// fail, every one when n is negative.
+func (b *faultBackend) arm(op string, typ ark.HandleType, n int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.op, b.typ, b.n, b.seen = op, typ, n, 0
 }
 
-// disarm reports whether the armed write came, and fails nothing from now on.
-func (b *nthFaultBackend) disarm() bool {
+// disarm reports whether an armed write came, and fails nothing from now on.
+func (b *faultBackend) disarm() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	fired := b.n > 0 && b.seen >= b.n
+	fired := b.n != 0 && b.seen > 0 && b.seen >= b.n
 	b.n = 0
 	return fired
 }
 
-func (b *nthFaultBackend) fail(op string, h ark.Handle) error {
+func (b *faultBackend) fail(op string, h ark.Handle) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.n == 0 || op != b.op || h.Type != b.typ {
+	if b.n == 0 || (b.op != "" && op != b.op) || h.Type != b.typ {
 		return nil
 	}
-	if b.seen++; b.seen == b.n {
-		return fmt.Errorf("%s %s %d: %w", op, h.Type, b.n, errInjected)
+	if b.seen++; b.n < 0 || b.seen == b.n {
+		return fmt.Errorf("%s %s %d: %w", op, h.Type, b.seen, errInjected)
 	}
 	return nil
 }
 
-func (b *nthFaultBackend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
+func (b *faultBackend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 	if err := b.fail("put", h); err != nil {
 		return err
 	}
 	return b.Backend.Put(ctx, h, r)
 }
 
-func (b *nthFaultBackend) Delete(ctx context.Context, h ark.Handle) error {
+func (b *faultBackend) Delete(ctx context.Context, h ark.Handle) error {
 	if err := b.fail("delete", h); err != nil {
 		return err
 	}
 	return b.Backend.Delete(ctx, h)
 }
 
-// faultRepo returns a repository over an nthFaultBackend whose packs close at
+// faultRepo returns a repository over an faultBackend whose packs close at
 // packBytes and whose runs list their packs every eight blobs, so a small
 // fixture stores several packs and several index objects. It stores one
 // object at a time: what shares a pack follows from the order of the source.
-func faultRepo(t *testing.T, packBytes int) (*ark.Repository, *nthFaultBackend) {
+func faultRepo(t *testing.T, packBytes int) (*ark.Repository, *faultBackend) {
 	t.Helper()
 	ctx := context.Background()
-	b := &nthFaultBackend{Backend: arkmem.New()}
+	b := &faultBackend{Backend: arkmem.New()}
 	if err := ark.Init(ctx, b, ark.WithoutPassword()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}

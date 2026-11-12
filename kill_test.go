@@ -44,7 +44,7 @@ import (
 // of two sources: arkfs, which a backup reads in parallel, or the same tree
 // without ConcurrentOpen, which it reads file by file inside the walk as it
 // does a tar stream. A child reports each write of a pack, an index object
-// and a manifest, so the harness logs where its kills landed (killWindow).
+// and a manifest, so the harness logs where its kills landed (killWindows).
 // Half of the kill delays start at the first of those writes instead of at
 // the start of the op: an op spends most of its time before it writes, on its
 // lock and on reading the index and the snapshots, most of all over sftp, and
@@ -165,7 +165,7 @@ func runKillHarness(
 	}
 	ceil := map[string]time.Duration{} // kill delay ceiling per op and start of the delay
 	runsOf, kills := map[string]int{}, map[string]int{}
-	windows := map[string]int{} // kills by op and killWindow
+	windows := map[string]int{} // kills by op and killWindows
 	repacks := 0                // prunes that stored a pack
 	// raw is the open backend of the current repository, b wraps it for
 	// ark.Open. A failed run keeps its repository.
@@ -239,11 +239,13 @@ func runKillHarness(
 		// it by half, so the delays keep reaching the end of an op whose work
 		// grows, like a prune that has more to delete than the first one had.
 		// A delay that starts at the first write has a ceiling of its own, the
-		// time a finished run took from there; a run that wrote nothing was
-		// not killed and says nothing about it.
+		// time a finished run took from there; a run that wrote nothing says
+		// nothing about it. Until a finished run of the op wrote, that delay
+		// would be zero and kill nothing, so it starts at the start instead.
+		const fromFirstWrite = " from its first write"
 		phase, from := op, "its start"
-		if fromWrite {
-			phase, from = op+" from its first write", "its first write"
+		if fromWrite = fromWrite && ceil[op+fromFirstWrite] > 0; fromWrite {
+			phase, from = op+fromFirstWrite, "its first write"
 		}
 		delay := time.Duration(frac * float64(ceil[phase]))
 		run, err := runKillChild(env, delay, fromWrite)
@@ -252,15 +254,18 @@ func runKillHarness(
 		point := fmt.Sprintf("seed %d iteration %d, %s exited after %v", seed, i, op, run.took)
 		if killed {
 			kills[op]++
-			window := killWindow(events)
-			point = fmt.Sprintf("seed %d iteration %d, %s killed %v after %s, %s", seed, i, op, delay, from, window)
+			landed := killWindows(events)
+			point = fmt.Sprintf("seed %d iteration %d, %s killed %v after %s, %s",
+				seed, i, op, delay, from, strings.Join(landed, " and "))
+			source := op
 			switch {
 			case op == "backup" && sequential:
-				windows["backup, sequential source: "+window]++
+				source = "backup, sequential source"
 			case op == "backup":
-				windows["backup, arkfs: "+window]++
-			default:
-				windows[op+": "+window]++
+				source = "backup, arkfs"
+			}
+			for _, window := range landed {
+				windows[source+": "+window]++
 			}
 		}
 		if err != nil {
@@ -270,10 +275,11 @@ func runKillHarness(
 		switch {
 		case killed:
 			ceil[phase] += ceil[phase] / 2
-		case !fromWrite:
-			ceil[phase] = run.took
-		case len(events) > 0:
-			ceil[phase] = run.sinceWrite
+		default:
+			ceil[op] = run.took
+			if len(events) > 0 {
+				ceil[op+fromFirstWrite] = run.sinceWrite
+			}
 		}
 
 		switch op {
@@ -317,6 +323,7 @@ func runKillHarness(
 		t.Logf("%s: %d runs, %d killed before finishing", op, runsOf[op], kills[op])
 	}
 	t.Logf("prune: %d of %d runs repacked, the rerun of a killed one included", repacks, runsOf["prune"])
+	// A kill during two kinds of write counts in both windows.
 	for _, w := range slices.Sorted(maps.Keys(windows)) {
 		t.Logf("killed %s: %d", w, windows[w])
 	}
@@ -536,16 +543,17 @@ func (p killProbe) report(event byte, write func() error) error {
 	return err
 }
 
-// killWindow names where a kill landed, from the events the child reported
-// until then: during a write that had not returned, or after the last one
-// that had. A backup killed "during pack put" died in a pack flush, "after
-// pack put" between a pack and its index object, "after index put" between
-// an index object and the manifest. A prune stores packs only to repack, so
-// its kills during or after a pack put landed in a repack; the other three
-// steps of a prune are the index put, the index delete and the pack delete.
-func killWindow(events []byte) string {
+// killWindows names where a kill landed, from the events the child reported
+// until then: during every kind of write that had not returned, a backup has
+// several in flight, or after the last one that had. A backup killed "during
+// pack put" died in a pack flush, "after pack put" between a pack and its
+// index object, "after index put" between an index object and the manifest.
+// A prune stores packs only to repack, so its kills during or after a pack
+// put landed in a repack; the other three steps of a prune are the index
+// put, the index delete and the pack delete.
+func killWindows(events []byte) []string {
 	if len(events) == 0 {
-		return "before the first write"
+		return []string{"before the first write"}
 	}
 	open := map[byte]int{}
 	for _, e := range events {
@@ -555,18 +563,37 @@ func killWindow(events []byte) string {
 			open[e]++
 		}
 	}
-	last := events[len(events)-1]
+	var during []string
 	for _, w := range killWrites {
 		if open[w.event] > 0 {
-			return "during " + w.name
+			during = append(during, "during "+w.name)
 		}
 	}
+	if during != nil {
+		return during
+	}
+	last := events[len(events)-1]
 	for _, w := range killWrites {
 		if w.event == last-'a'+'A' {
-			return "after " + w.name
+			return []string{"after " + w.name}
 		}
 	}
-	return fmt.Sprintf("after an unknown event %q", last)
+	return []string{fmt.Sprintf("after an unknown event %q", last)}
+}
+
+func TestKillWindows(t *testing.T) {
+	for events, want := range map[string]string{
+		"":       "before the first write",
+		"PpPIp":  "during index put",
+		"PpPI":   "during pack put, during index put",
+		"PPpIi":  "during pack put",
+		"PpIiMm": "after manifest put",
+		"XxDd":   "after pack delete",
+	} {
+		if got := strings.Join(killWindows([]byte(events)), ", "); got != want {
+			t.Errorf("events %q: killed %s, want %s", events, got, want)
+		}
+	}
 }
 
 // killRun is what one child did: took is the time from its ready byte to its
@@ -650,11 +677,14 @@ func runKillChild(env []string, delay time.Duration, fromWrite bool) (killRun, e
 				timeout = time.After(delay)
 			}
 		case <-timeout:
-			if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-				return killRun{killed: true}, err
+			err := cmd.Process.Kill()
+			if errors.Is(err, os.ErrProcessDone) {
+				err = nil
 			}
+			// A kill that failed leaves the child running: it is waited for
+			// like any other, so its output is whole and it writes no more.
 			<-done
-			return finish(true), nil
+			return finish(err == nil), err
 		}
 	}
 }

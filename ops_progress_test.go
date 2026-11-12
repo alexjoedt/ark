@@ -343,30 +343,10 @@ func TestFailedOperationsReportNoFinalize(t *testing.T) {
 	}
 }
 
-// faultBackend fails Put and Delete for one handle type once fail is set.
-type faultBackend struct {
-	ark.Backend
-	fail ark.HandleType
-}
-
 var errInjected = errors.New("injected fault")
 
-func (b *faultBackend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
-	if h.Type == b.fail {
-		return errInjected
-	}
-	return b.Backend.Put(ctx, h, r)
-}
-
-func (b *faultBackend) Delete(ctx context.Context, h ark.Handle) error {
-	if h.Type == b.fail {
-		return errInjected
-	}
-	return b.Backend.Delete(ctx, h)
-}
-
-// openFaulty is openRecorded over a faultBackend that starts failing once the
-// returned function names a handle type.
+// openFaulty is openRecorded over a faultBackend that fails every Put and
+// Delete of a handle type once the returned function names one.
 func openFaulty(t *testing.T) (*ark.Repository, *recorder, []*ark.Snapshot, func(ark.HandleType)) {
 	t.Helper()
 	ctx := context.Background()
@@ -390,7 +370,7 @@ func openFaulty(t *testing.T) (*ark.Repository, *recorder, []*ark.Snapshot, func
 		snaps = append(snaps, s)
 	}
 	rec.reset()
-	return repo, rec, snaps, func(h ark.HandleType) { fb.fail = h }
+	return repo, rec, snaps, func(h ark.HandleType) { fb.arm("", h, -1) }
 }
 
 func TestBackendFaultsFailTheOperation(t *testing.T) {

@@ -83,10 +83,11 @@ func onEachBackend(t *testing.T, fn func(t *testing.T, e *Engine)) {
 		if err != nil {
 			t.Fatalf("open %s: %v", u.Redacted(), err)
 		}
-		e := testEngineOn(t, b)
-		// Before the repository closes the backend. Empty directories stay
-		// on the server.
+		// Registered first, so it runs last and also after a failed Init or
+		// Open; the repository gets a backend it cannot close before that.
+		// Empty directories stay on the server.
 		t.Cleanup(func() {
+			defer func() { _ = b.Close() }()
 			for _, typ := range []ark.HandleType{
 				ark.ConfigFile, ark.KeyFile, ark.SnapshotFile, ark.LockFile,
 				ark.DataPackFile, ark.TreePackFile, ark.DataIndexFile, ark.TreeIndexFile,
@@ -101,9 +102,14 @@ func onEachBackend(t *testing.T, fn func(t *testing.T, e *Engine)) {
 				}
 			}
 		})
-		fn(t, e)
+		fn(t, testEngineOn(t, keepOpen{b}))
 	})
 }
+
+// keepOpen is a backend that outlives the repository opened on it.
+type keepOpen struct{ ark.Backend }
+
+func (keepOpen) Close() error { return nil }
 
 // fixture is what the round trip carries: files, a directory, a hardlink and
 // a symlink, with a private mode on one file.

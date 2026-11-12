@@ -84,7 +84,9 @@ func (r *Repository) writeSession() *packSession {
 			func(ctx context.Context, pack string, entries []packEntry) error {
 				return p.packStored(ctx, i, indexedPack{name: pack, entries: entries})
 			})
-		s.writer.target = cmp.Or(r.packTarget, packTargetSize)
+		if r.packTarget > 0 {
+			s.writer.target = r.packTarget
+		}
 	}
 	return p
 }
