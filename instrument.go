@@ -17,13 +17,13 @@ var _ Backend = (*InstrumentedBackend)(nil)
 type InstrumentedBackend struct {
 	b Backend
 
-	put, get, exists, del, list, stat, sync methodCounters
+	put, get, getRange, exists, del, list, stat, sync methodCounters
 }
 
 // BackendStats is a snapshot of the counters of an [InstrumentedBackend], one
 // entry per Backend method. Close is not counted.
 type BackendStats struct {
-	Put, Get, Exists, Delete, List, Stat, Sync MethodStats
+	Put, Get, GetRange, Exists, Delete, List, Stat, Sync MethodStats
 }
 
 // MethodStats holds the counters of one Backend method. They only grow.
@@ -34,8 +34,8 @@ type BackendStats struct {
 // Calls only. Errors counts calls that returned a non-nil error, including
 // ErrNotFound and an error a List callback returned. Duration is the sum over
 // all calls, so concurrent calls can make it exceed wall time. Bytes is set
-// for Put (bytes the backend read from the caller) and Get (bytes the caller
-// read from the object) only.
+// for Put (bytes the backend read from the caller), Get (bytes the caller
+// read from the object) and GetRange (bytes returned) only.
 type MethodStats struct {
 	Calls    int64
 	Errors   int64
@@ -53,13 +53,14 @@ func Instrument(b Backend) *InstrumentedBackend {
 // also while operations run; Errors never exceeds Calls in the snapshot.
 func (ib *InstrumentedBackend) Stats() BackendStats {
 	return BackendStats{
-		Put:    ib.put.snapshot(),
-		Get:    ib.get.snapshot(),
-		Exists: ib.exists.snapshot(),
-		Delete: ib.del.snapshot(),
-		List:   ib.list.snapshot(),
-		Stat:   ib.stat.snapshot(),
-		Sync:   ib.sync.snapshot(),
+		Put:      ib.put.snapshot(),
+		Get:      ib.get.snapshot(),
+		GetRange: ib.getRange.snapshot(),
+		Exists:   ib.exists.snapshot(),
+		Delete:   ib.del.snapshot(),
+		List:     ib.list.snapshot(),
+		Stat:     ib.stat.snapshot(),
+		Sync:     ib.sync.snapshot(),
 	}
 }
 
@@ -83,6 +84,14 @@ func (ib *InstrumentedBackend) Get(ctx context.Context, h Handle) (io.ReadCloser
 	}
 	ib.get.calls.Add(1)
 	return &instrumentedReader{rc: rc, c: &ib.get, start: start}, nil
+}
+
+// GetRange forwards to the wrapped backend and counts the bytes it returns.
+func (ib *InstrumentedBackend) GetRange(ctx context.Context, h Handle, offset, length int64) ([]byte, error) {
+	start := time.Now()
+	data, err := ib.b.GetRange(ctx, h, offset, length)
+	ib.getRange.record(start, int64(len(data)), err)
+	return data, err
 }
 
 // Exists forwards to the wrapped backend.

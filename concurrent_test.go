@@ -34,6 +34,11 @@ import (
 // No two children may hold conflicting locks at once. The base snapshot is
 // taken afterwards.
 //
+// Every other backup child reads its source without ConcurrentOpen, file by
+// file inside the walk, as a backup reads a tar stream. All of them close
+// their packs and list them in the index as the children of the kill harness
+// do, so each stores several packs and index objects beside the others'.
+//
 //	ARK_CONC_RUNS  iterations, default 1
 //	ARK_CONC_SEED  seed of the file contents, printed on every run
 const (
@@ -41,6 +46,7 @@ const (
 	concEnvOp   = "ARK_CONC_CHILD_OP" // backup or prune
 	concEnvSrc  = "ARK_CONC_CHILD_SRC"
 	concEnvTag  = "ARK_CONC_CHILD_TAG"
+	concEnvSeq  = "ARK_CONC_CHILD_SEQ"
 )
 
 const concWriters = 8
@@ -109,7 +115,7 @@ func runConcurrentOnce(t *testing.T, newRepo func(context.Context, *testing.T) (
 	defer func() { _ = repo.Close() }()
 
 	want := map[string]map[string]string{}
-	backupEnv := func(tag string) []string {
+	backupEnv := func(tag string, sequential bool) []string {
 		src := t.TempDir()
 		writeSharedTree(t, src, shared)
 		for j := range 2 {
@@ -118,9 +124,13 @@ func runConcurrentOnce(t *testing.T, newRepo func(context.Context, *testing.T) (
 			writeTestFile(t, filepath.Join(src, fmt.Sprintf("own%d.bin", j)), data)
 		}
 		want[tag] = readTree(t, src)
-		return []string{concEnvRepo + "=" + ref, concEnvOp + "=backup", concEnvSrc + "=" + src, concEnvTag + "=" + tag}
+		env := []string{concEnvRepo + "=" + ref, concEnvOp + "=backup", concEnvSrc + "=" + src, concEnvTag + "=" + tag}
+		if sequential {
+			env = append(env, concEnvSeq+"=1")
+		}
+		return env
 	}
-	lateEnv := backupEnv("late")
+	lateEnv := backupEnv("late", true)
 
 	children := make([]*concChild, concWriters+2)
 	events := make(chan concEvent)
@@ -133,7 +143,7 @@ func runConcurrentOnce(t *testing.T, newRepo func(context.Context, *testing.T) (
 	}
 	for i := range concWriters {
 		tag := fmt.Sprintf("conc-%d", i)
-		start(i, tag, backupEnv(tag))
+		start(i, tag, backupEnv(tag, i%2 == 1))
 	}
 	ack := func(i int) {
 		if _, err := children[i].gate.Write([]byte{1}); err != nil {
@@ -402,13 +412,11 @@ func TestConcurrentChild(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = repo.Close() }()
+	ark.SetPackLimits(repo, killPackTarget, killCheckpointBlobs)
 
 	switch op := os.Getenv(concEnvOp); op {
 	case "backup":
-		src, err := arkfs.NewSource(os.Getenv(concEnvSrc))
-		if err != nil {
-			t.Fatalf("NewSource: %v", err)
-		}
+		src := treeSource(t, os.Getenv(concEnvSrc), os.Getenv(concEnvSeq) != "")
 		if _, err := repo.Backup(ctx, src, ark.WithTags(os.Getenv(concEnvTag))); err != nil {
 			t.Fatalf("Backup: %v", err)
 		}

@@ -161,11 +161,27 @@ type RestoreResult struct {
 	BytesRestored int64
 }
 
-// PruneResult is returned by Prune.
+// PruneResult is returned by Prune. A dry run fills it with what the same
+// prune would do.
 type PruneResult struct {
+	// BlobsRemoved counts the chunks and tree nodes the index listed in the
+	// packs that were deleted, less those copied into new packs. A pack no
+	// index listed adds its bytes only.
 	BlobsRemoved int
-	BytesFreed   int64
-	DryRun       bool
+	// BytesFreed is the stored size of the deleted packs less BytesRepacked.
+	BytesFreed int64
+	// PacksDeleted counts the packs that were deleted: those without a
+	// referenced object, those no index listed, and those whose referenced
+	// objects were copied into new packs.
+	PacksDeleted int
+	// BytesRepacked is the sealed size of the objects copied into new packs.
+	BytesRepacked int64
+	// BytesUnused is the sealed size of what stays in the repository without
+	// use, objects no snapshot references and second copies of objects: at
+	// most 5% of the object bytes, not counting the second copies in packs
+	// without an unreferenced object, which no prune rewrites.
+	BytesUnused int64
+	DryRun      bool
 }
 
 // VerifyResult is returned by Verify.
@@ -180,9 +196,28 @@ type VerifyResult struct {
 // CheckResult is returned by Check, which walks all snapshots.
 type CheckResult struct {
 	SnapshotsChecked int
-	Errors           []string
-	// Warnings are findings that leave every snapshot intact: a backup that
-	// did not finish, which Prune clears, or a lock that does not open, which
-	// Unlock WithForce removes.
+	// Errors are findings that break a snapshot or a later backup: a
+	// manifest, tree or chunk that is missing or does not open, a pack the
+	// index lists that is not stored, a pack whose own table disagrees with
+	// the index.
+	Errors []string
+	// Warnings are findings that leave every snapshot intact: a pack no index
+	// lists or an index object that does not open, both of which Prune
+	// removes, or a lock that does not open, which Unlock WithForce removes.
+	// A pack with a blob that did not open and that could not be read again
+	// to compare its table with the index is one as well, beside the errors
+	// about the blob.
 	Warnings []string
+}
+
+// RebuildIndexResult is returned by RebuildIndex.
+type RebuildIndexResult struct {
+	// PacksIndexed and BlobsIndexed count what the new index lists.
+	PacksIndexed int
+	BlobsIndexed int
+	// UnreadablePacks names the stored packs whose own table does not open,
+	// data and tree packs alike. The new index lists in them what the old
+	// one did, without the blobs a pack that opens holds as well, and
+	// nothing when the old one did not list them.
+	UnreadablePacks []string
 }

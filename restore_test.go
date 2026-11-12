@@ -52,45 +52,78 @@ func (s multiSource) Walk(_ context.Context, fn ark.WalkFunc) error {
 	return nil
 }
 
-// countingBackend records every chunk read and how many ran at once.
+// countingBackend records every chunk read, the bytes it asked for and how
+// many reads ran at once. Chunks are read as ranges of their data pack, so a
+// read counts by pack and offset. delay holds every data pack read, the round
+// trip of a remote backend. Whole tree pack reads count apart, by pack.
 type countingBackend struct {
 	ark.Backend
+	delay time.Duration
 
-	mu      sync.Mutex
-	gets    map[string]int
-	inABlob int
-	peak    int
+	mu       sync.Mutex
+	gets     map[string]int
+	bytes    int64
+	treeGets map[string]int
+	inABlob  int
+	peak     int
 }
 
 func newCountingBackend() *countingBackend {
-	return &countingBackend{Backend: arkmem.New(), gets: make(map[string]int)}
+	return &countingBackend{Backend: arkmem.New(), gets: make(map[string]int), treeGets: make(map[string]int)}
 }
 
 func (b *countingBackend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error) {
-	if h.Type != ark.BlobFile {
-		return b.Backend.Get(ctx, h)
+	if h.Type == ark.DataPackFile {
+		defer b.enter(h.Name)()
 	}
+	if h.Type == ark.TreePackFile {
+		b.mu.Lock()
+		b.treeGets[h.Name]++
+		b.mu.Unlock()
+	}
+	return b.Backend.Get(ctx, h)
+}
+
+func (b *countingBackend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
+	if h.Type == ark.DataPackFile {
+		defer b.enter(fmt.Sprintf("%s@%d", h.Name, offset))()
+		b.mu.Lock()
+		b.bytes += length
+		b.mu.Unlock()
+		time.Sleep(b.delay)
+	}
+	return b.Backend.GetRange(ctx, h, offset, length)
+}
+
+// enter counts one chunk read as running until the returned func is called.
+func (b *countingBackend) enter(name string) (leave func()) {
 	b.mu.Lock()
-	b.gets[h.Name]++
+	b.gets[name]++
 	b.inABlob++
 	if b.inABlob > b.peak {
 		b.peak = b.inABlob
 	}
 	b.mu.Unlock()
-
-	defer func() {
+	return func() {
 		b.mu.Lock()
 		b.inABlob--
 		b.mu.Unlock()
-	}()
-	return b.Backend.Get(ctx, h)
+	}
 }
 
 func (b *countingBackend) reset() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.gets = make(map[string]int)
+	b.bytes = 0
+	b.treeGets = make(map[string]int)
 	b.peak = 0
+}
+
+func (b *countingBackend) readBytes() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.bytes
 }
 
 func (b *countingBackend) totalGets() int {
@@ -158,14 +191,14 @@ func payload(seed int64) string {
 // chunkyRepo opens a repository whose chunks are small, so half a megabyte
 // becomes tens of chunks and "how much did the restore read" is a number with
 // something to say.
-func chunkyRepo(t *testing.T, b ark.Backend) *ark.Repository {
+func chunkyRepo(t *testing.T, b ark.Backend, opts ...ark.Option) *ark.Repository {
 	t.Helper()
 	ctx := context.Background()
 	cfg := chunker.Config{MinSize: 4 << 10, AvgSize: 8 << 10, MaxSize: 16 << 10}
 	if err := ark.Init(ctx, b, testPassword, ark.WithChunkerConfig(cfg)); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	repo, err := ark.Open(ctx, b, testPassword)
+	repo, err := ark.Open(ctx, b, testPassword, opts...)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -211,8 +244,7 @@ func TestRestoreDoesNotFetchThatWholeSnapshotUpFront(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
-	unique := snap.Stats.ChunksNew
-	if unique < 20 {
+	if unique := snap.Stats.ChunksNew; unique < 20 {
 		t.Fatalf("the fixture produced %d unique chunks, too few to tell streaming apart", unique)
 	}
 
@@ -225,10 +257,11 @@ func TestRestoreDoesNotFetchThatWholeSnapshotUpFront(t *testing.T) {
 	}
 
 	// A prefetching restore would have read every unique chunk before the
-	// sink ever saw the first file. A bounded one reads a budget's worth.
-	if fetched := b.totalGets(); fetched > unique/2 {
-		t.Errorf("the restore read %d chunks before failing on the first file, snapshot holds %d unique",
-			fetched, unique)
+	// sink ever saw the first file. A bounded one reads a budget's worth, plus
+	// the chunks of other files between those it wants.
+	if fetched, stored := b.readBytes(), snap.Stats.StoredSize; fetched > stored/2 {
+		t.Errorf("the restore read %d bytes before failing on the first file, snapshot stores %d",
+			fetched, stored)
 	}
 }
 
@@ -313,42 +346,59 @@ func TestRestoreKeepsItsFetchesWithinTheConcurrencyBound(t *testing.T) {
 func TestRestoreCacheServesRepeatedContent(t *testing.T) {
 	ctx := context.Background()
 	b := newCountingBackend()
-	repo := chunkyRepo(t, b)
+	// One writer stores the chunks in walk order, so the chunks a restore
+	// wants next are adjacent and no read covers a chunk it does not want.
+	repo := chunkyRepo(t, b, ark.WithConcurrency(1))
 
 	src := bigFiles(t)
 	snap, err := repo.Backup(ctx, src)
 	if err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
+	stored := snap.Stats.StoredSize
 
-	// Two files share their content, so a cache turns the second read of
-	// every shared chunk into a hit.
+	// Two files share their content, and a budget of one chunk has the
+	// first file read before the second asks for anything: only a cache
+	// turns the second read of every shared chunk into a hit.
+	ark.SetPrefetchBytes(repo, 1)
 	b.reset()
 	if _, err := repo.Restore(ctx, snap.ID, &recordingSink{}); err != nil {
 		t.Fatalf("Restore with the default cache: %v", err)
 	}
-	cached := b.totalGets()
+	cached := b.readBytes()
 
 	b.reset()
 	if _, err := repo.Restore(ctx, snap.ID, &recordingSink{}, ark.WithRestoreCache(0)); err != nil {
 		t.Fatalf("Restore without a cache: %v", err)
 	}
-	uncached := b.totalGets()
+	uncached := b.readBytes()
 
 	if cached >= uncached {
-		t.Errorf("the cache saved nothing: %d reads with it, %d without", cached, uncached)
+		t.Errorf("the cache saved nothing: %d bytes read with it, %d without", cached, uncached)
 	}
-	// The two files are fetched at the same time, so a miss of one must wait
-	// for the other's GET instead of repeating it.
-	if unique := snap.Stats.ChunksNew; cached != unique {
-		t.Errorf("the cached restore read %d chunks, the snapshot holds %d unique", cached, unique)
+	if cached != stored {
+		t.Errorf("the cached restore read %d bytes, the snapshot stores %d", cached, stored)
+	}
+
+	// With the budget to want both files at once, and reads slow enough for
+	// that to happen, a miss of the second waits for the first one's read
+	// instead of repeating it, cache or not.
+	ark.SetPrefetchBytes(repo, 0)
+	b.delay = 20 * time.Millisecond
+	b.reset()
+	if _, err := repo.Restore(ctx, snap.ID, &recordingSink{}, ark.WithRestoreCache(0)); err != nil {
+		t.Fatalf("Restore without a cache: %v", err)
+	}
+	if shared := b.readBytes(); shared != stored {
+		t.Errorf("the uncached restore read %d bytes, the snapshot stores %d", shared, stored)
 	}
 }
 
 func TestRestorePathsPruneTheWalk(t *testing.T) {
 	ctx := context.Background()
 	b := newCountingBackend()
-	repo := chunkyRepo(t, b)
+	// Chunks in walk order: a read of b/three.bin covers none of a/.
+	repo := chunkyRepo(t, b, ark.WithConcurrency(1))
 
 	snap, err := repo.Backup(ctx, bigFiles(t))
 	if err != nil {
@@ -376,7 +426,7 @@ func TestRestorePathsPruneTheWalk(t *testing.T) {
 	if _, err := repo.Restore(ctx, snap.ID, full, ark.WithRestoreCache(0)); err != nil {
 		t.Fatalf("full Restore: %v", err)
 	}
-	fullReads := b.totalGets()
+	fullReads := b.readBytes()
 
 	b.reset()
 	_, err = repo.Restore(ctx, snap.ID, &recordingSink{},
@@ -384,8 +434,8 @@ func TestRestorePathsPruneTheWalk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Restore with paths: %v", err)
 	}
-	if prunedReads := b.totalGets(); prunedReads >= fullReads {
-		t.Errorf("restoring one directory read %d chunks, the whole snapshot reads %d", prunedReads, fullReads)
+	if prunedReads := b.readBytes(); prunedReads >= fullReads {
+		t.Errorf("restoring one directory read %d bytes, the whole snapshot reads %d", prunedReads, fullReads)
 	}
 }
 
@@ -408,6 +458,64 @@ func TestRestoreContentSurvivesStreaming(t *testing.T) {
 			if got := sink.written[path]; got != want {
 				t.Errorf("cache %d: %s restored %d bytes, want %d", limit, path, len(got), len(want))
 			}
+		}
+	}
+}
+
+// TestRestoreReadsSmallFilesOfOnePackInAFewRanges restores a thousand small
+// files whose chunks share one pack from a backend whose every read takes a
+// round trip. A read per file would be a thousand round trips.
+func TestRestoreReadsSmallFilesOfOnePackInAFewRanges(t *testing.T) {
+	ctx := context.Background()
+	b := newCountingBackend()
+	repo := chunkyRepo(t, b)
+	src := smallFiles("app", 1000)
+	snap := mustBackup(t, repo, src)
+
+	b.delay = 20 * time.Millisecond
+	b.reset()
+	sink := &recordingSink{}
+	if _, err := repo.Restore(ctx, snap.ID, sink); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if reads := b.totalGets(); reads > 10 {
+		t.Errorf("restoring %d small files of one pack took %d range reads, want at most 10", len(src.files), reads)
+	}
+	for path, want := range src.files {
+		if got := sink.written[path]; got != want {
+			t.Fatalf("%s restored as %q, want %q", path, got, want)
+		}
+	}
+}
+
+// TestRestoreReadsEveryTreePackOnce walks a thousand directories whose nodes
+// fill a few tree packs: each pack is read whole once and serves every node
+// in it.
+func TestRestoreReadsEveryTreePackOnce(t *testing.T) {
+	ctx := context.Background()
+	b := newCountingBackend()
+	repo := chunkyRepo(t, b)
+	src := multiSource{name: "app", files: map[string]string{}}
+	for i := range 1000 {
+		dir := fmt.Sprintf("d%04d", i)
+		src.dirs = append(src.dirs, dir)
+		src.order = append(src.order, dir+"/f")
+		src.files[dir+"/f"] = "content of " + dir
+	}
+	snap := mustBackup(t, repo, src)
+
+	b.reset()
+	if _, err := repo.Restore(ctx, snap.ID, &recordingSink{}); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.treeGets) == 0 {
+		t.Fatal("the restore read no tree pack")
+	}
+	for pack, n := range b.treeGets {
+		if n != 1 {
+			t.Errorf("tree pack %s read %d times, want once", pack, n)
 		}
 	}
 }

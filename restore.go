@@ -58,7 +58,9 @@ func (r *Repository) runRestore(
 	if opts.cacheSet {
 		limit = opts.cacheLimit
 	}
-	fetcher := r.newChunkFetcher(newChunkCache(limit))
+	chunks, trees := r.stores()
+	fetcher := r.newChunkFetcher(ctx, chunks, newChunkCache(limit))
+	defer fetcher.close()
 	fetcher.onRead = func(read int) {
 		opts.progress(ProgressEvent{Phase: PhaseFetch, ChunksDone: read, ChunksTotal: m.Stats.ChunksTotal})
 	}
@@ -66,7 +68,7 @@ func (r *Repository) runRestore(
 	logger.InfoContext(ctx, "starting restore", "files", m.Stats.FileCount, "chunks", m.Stats.ChunksTotal)
 
 	var stats restoreStats
-	err = streamSnapshot(ctx, r.trees, fetcher, m, newPathFilter(opts.paths), func(entry openEntry) error {
+	err = streamSnapshot(ctx, trees, fetcher, m, newPathFilter(opts.paths), func(entry openEntry) error {
 		return receive(ctx, sink, entry, m, &stats, opts)
 	})
 	if err != nil {
@@ -114,13 +116,19 @@ func (e openEntry) close() {
 	}
 }
 
+// restoreLookahead is the most entries a restore opens ahead of the sink.
+// ponytail: a fixed count, a few MiB of entries at most; bound by bytes if
+// entries with long paths or many xattrs make that matter.
+const restoreLookahead = 4096
+
 // streamSnapshot hands every entry of the snapshot to fn in tree order with
 // its content already streaming. One goroutine walks the tree and opens the
 // chunk streams of the upcoming files, so their fetches run while fn writes
 // the current one; the bytes held ahead are bounded by the fetcher's budget
 // and the cache, whatever the size of the snapshot. fn's error, or a
-// cancelled ctx, stops the walk and every fetch; the streams opened ahead are
-// drained and closed before streamSnapshot returns.
+// cancelled ctx, stops the walk; the streams opened ahead are drained and
+// closed before streamSnapshot returns, so only the reads that already run are
+// left for the caller to stop with fetcher.close.
 func streamSnapshot(
 	ctx context.Context,
 	trees *objectStore,
@@ -132,17 +140,21 @@ func streamSnapshot(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// The queue holds the files opened ahead of fn. Its depth bounds the
-	// entries without content (directories, empty files); the byte budget
-	// bounds the rest.
-	queue := make(chan openEntry, 4*fetcher.workers)
+	// The queue holds the files opened ahead of fn. The byte budget bounds
+	// the files with content: the walk opens a stream only once the one before
+	// has its chunks, so a pack read takes the chunks of many small files.
+	// Its depth bounds the rest (directories, empty files).
+	queue := make(chan openEntry, restoreLookahead)
 	walkErr := make(chan error, 1)
 	go func() {
 		defer close(queue)
 		walkErr <- walkSnapshot(ctx, trees, m, filter, func(fe fileEntry) error {
 			entry := openEntry{fe: fe}
 			if fe.Type == FileTypeRegular {
-				entry.stream = fetcher.reader(ctx, fe.Chunks)
+				if err := fetcher.ready(ctx); err != nil {
+					return err
+				}
+				entry.stream = fetcher.reader(fe.Chunks)
 			}
 			select {
 			case queue <- entry:
@@ -164,9 +176,9 @@ func streamSnapshot(
 			continue
 		}
 		err = fn(entry)
-		entry.close() // only cancels fetches still running
+		entry.close() // gives up the chunks fn left unread
 		if err != nil {
-			cancel() // stop the walk and every fetch before draining
+			cancel() // stop the walk before draining
 		}
 	}
 	if err == nil {

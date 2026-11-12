@@ -16,7 +16,7 @@ import (
 // runBackup executes the CDC backup pipeline by walking src and chunking
 // every regular file into the CAS. Returns the completed manifest.
 func (r *Repository) runBackup(
-	ctx context.Context, src Source, opts backupOptions, chunks, trees *objectStore,
+	ctx context.Context, src Source, opts backupOptions, session *packSession,
 ) (*manifest, error) {
 	start := time.Now()
 
@@ -31,7 +31,7 @@ func (r *Repository) runBackup(
 		}
 	}
 
-	parent, err := r.parentFiles(ctx, parentID, meta.Name)
+	parent, err := r.parentFiles(ctx, session.trees, parentID, meta.Name)
 	if err != nil {
 		logger.WarnContext(ctx, "failed to load the parent snapshot, reading every file",
 			"parent", parentID, "error", err)
@@ -56,7 +56,7 @@ func (r *Repository) runBackup(
 	defer cancel()
 
 	var cr *chunker.Chunker
-	w := newChunkWriter(ctx, chunks, r.concurrency)
+	w := newChunkWriter(ctx, session.chunks, r.concurrency)
 	var scannedEntries []fileEntry
 	var stats SnapshotStats
 
@@ -183,11 +183,14 @@ func (r *Repository) runBackup(
 	}
 	w.stats(&stats, scannedEntries)
 
-	rootHash, err := buildTree(ctx, trees, scannedEntries, r.concurrency)
+	rootHash, err := buildTree(ctx, session.trees, scannedEntries, r.concurrency)
 	if err != nil {
 		return nil, fmt.Errorf("backup: failed to build snapshot tree: %w", err)
 	}
 	m.RootTree = rootHash
+	if err := session.finish(ctx); err != nil {
+		return nil, fmt.Errorf("backup: failed to store packs: %w", err)
+	}
 
 	stats.Duration = time.Since(start)
 
@@ -220,7 +223,9 @@ func (r *Repository) runBackup(
 // may take unread, keyed by path. An empty id has no parent and returns no
 // files. A parent of another source is refused: with only Size and ModTime to
 // compare, its files could match another volume's by accident.
-func (r *Repository) parentFiles(ctx context.Context, id, source string) (map[string]fileEntry, error) {
+func (r *Repository) parentFiles(
+	ctx context.Context, trees *objectStore, id, source string,
+) (map[string]fileEntry, error) {
 	if id == "" {
 		return map[string]fileEntry{}, nil
 	}
@@ -237,7 +242,11 @@ func (r *Repository) parentFiles(ctx context.Context, id, source string) (map[st
 	// ext3, NFS) and 2 s ticks (FAT).
 	racy := m.CreatedAt.Add(-2 * time.Second)
 	files := make(map[string]fileEntry)
-	err = walkTree(ctx, r.trees, m.RootTree, func(e fileEntry) error {
+	// Nothing reads a tree node after this walk: its whole packs go with it
+	// and do not stay in the store for the length of the run.
+	walk := *trees
+	walk.packs = newPackCache()
+	err = walkTree(ctx, &walk, m.RootTree, func(e fileEntry) error {
 		if e.Type == FileTypeRegular && e.ModTime.Before(racy) {
 			files[e.Path] = e
 		}

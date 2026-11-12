@@ -79,8 +79,8 @@ expect 3 "$locked" -r "$repo" prune --yes
 exec 3>&-
 wait "$held" || true
 
-# a corrupted chunk fails verification
-for c in "$repo"/chunks/*/*/*; do printf 'garbage' > "$c"; done
+# a data pack cut short fails verification: its chunks end before they should
+for c in "$repo"/datapacks/*/*; do printf 'garbage' > "$c"; done
 expect 5 "j['ok'] is False and j['corrupt_chunks']" -r "$repo" verify "$id"
 expect 5 "j['errors'] and j['snapshots_checked'] == 1" -r "$repo" check
 expect 5 "j['error']['code'] == 'verify_failed'" -r "$repo" restore "$id" "$tmp/restored"

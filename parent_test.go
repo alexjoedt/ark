@@ -136,12 +136,16 @@ func TestBackendHoldsNoLatestNamespace(t *testing.T) {
 	if slices.Contains(namespaces, "latest") {
 		t.Errorf("repository still has a latest namespace: %v", namespaces)
 	}
-	for _, want := range []string{"config", "chunks", "trees", "snapshots"} {
+	for _, want := range []string{"config", "datapacks", "treepacks", "dataindex", "treeindex", "snapshots"} {
 		if !slices.Contains(namespaces, want) {
 			t.Errorf("repository has no %s namespace: %v", want, namespaces)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, "latest")); !os.IsNotExist(err) {
-		t.Errorf("stat latest/: %v, want not exist", err)
+	// Chunks and tree nodes are inside the packs: the directories that held
+	// one object each, two levels deep for chunks, are not created any more.
+	for _, gone := range []string{"latest", "chunks", "trees", "markers"} {
+		if _, err := os.Stat(filepath.Join(dir, gone)); !os.IsNotExist(err) {
+			t.Errorf("stat %s/: %v, want not exist", gone, err)
+		}
 	}
 }
