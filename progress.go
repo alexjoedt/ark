@@ -15,7 +15,9 @@ package ark
 //   - prune: PhaseLoad, PhaseSweep with ChunksDone/ChunksTotal over the
 //     chunks and trees listed, PhaseFinalize
 //   - verify: PhaseLoad, PhaseFetch per data pack read with ChunksDone of
-//     ChunksTotal chunk references verified, PhaseFinalize; CurrentPath is
+//     ChunksTotal chunk references verified, and one before them when
+//     references were settled without a read (no index lists the chunk, or a
+//     check read it for an earlier snapshot), PhaseFinalize; CurrentPath is
 //     the resolved snapshot ID, empty on PhaseLoad
 //   - check: PhaseLoad, then per snapshot the PhaseFetch events of its verify
 //     and one PhaseFetch with FilesDone = snapshots checked, PhaseFinalize;

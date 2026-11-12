@@ -191,6 +191,9 @@ type CheckResult struct {
 	// Warnings are findings that leave every snapshot intact: a pack no index
 	// lists or an index object that does not open, both of which Prune
 	// removes, or a lock that does not open, which Unlock WithForce removes.
+	// A pack with a blob that did not open and that could not be read again
+	// to compare its table with the index is one as well, beside the errors
+	// about the blob.
 	Warnings []string
 }
 
@@ -201,6 +204,7 @@ type RebuildIndexResult struct {
 	BlobsIndexed int
 	// UnreadablePacks names the stored packs whose own table does not open,
 	// data and tree packs alike. The new index lists in them what the old
-	// one did, and nothing when the old one did not list them.
+	// one did, without the blobs a pack that opens holds as well, and
+	// nothing when the old one did not list them.
 	UnreadablePacks []string
 }

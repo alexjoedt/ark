@@ -182,6 +182,17 @@ func (t *indexTable) listed(keep []bool) []indexedPack {
 	return packs
 }
 
+// pack returns the number in t.packs of the pack stored under name. ok is
+// false for a pack t does not list and for a name that is no pack name. t is
+// sorted.
+func (t *indexTable) pack(name string) (i int, ok bool) {
+	sum, ok := parseName(name)
+	if !ok {
+		return 0, false
+	}
+	return slices.BinarySearchFunc(t.packs, sum, compareNames)
+}
+
 // encode returns the content of the index object that holds t, which is
 // sorted.
 func (t *indexTable) encode() []byte {
@@ -436,7 +447,8 @@ func (x *packIndex) write(ctx context.Context, packs []indexedPack) ([]string, e
 // scanPacks returns every stored pack with the blob table the pack itself
 // carries, which is what an index is rebuilt from, and the names of the
 // objects it skipped with a warning: a pack that does not open describes no
-// blob. Every pack is downloaded whole.
+// blob. Every pack is downloaded whole, and one that does not open a second
+// time before it is skipped.
 func (x *packIndex) scanPacks(ctx context.Context) (packs []indexedPack, unreadable []string, err error) {
 	names, err := x.names(ctx, x.space.packs)
 	if err != nil {
@@ -444,6 +456,12 @@ func (x *packIndex) scanPacks(ctx context.Context) (packs []indexedPack, unreada
 	}
 	for _, name := range names {
 		entries, err := x.scanPack(ctx, name)
+		if errors.Is(err, x.space.corruptErr) {
+			// A read that came back short or garbled looks like a damaged
+			// pack, and a rebuild that skips a pack lists none of its blobs:
+			// ask once more.
+			entries, err = x.scanPack(ctx, name)
+		}
 		if errors.Is(err, x.space.corruptErr) {
 			x.logger.WarnContext(ctx, "skipping a pack that does not open, a rebuilt index lists none of its blobs",
 				"namespace", x.space.packs.String(), "object", name, "error", err)

@@ -334,6 +334,30 @@ func TestIndexReadsAnObjectAgainBeforeSkippingIt(t *testing.T) {
 	}
 }
 
+// TestRebuildScanReadsAPackAgainBeforeSkippingIt pins that one read that came
+// back short does not leave a stored pack out of a rebuilt index.
+func TestRebuildScanReadsAPackAgainBeforeSkippingIt(t *testing.T) {
+	s := testPackSpaces(t)[0]
+	b := newIndexBackend(newStubBackend())
+	stored, _ := storeTestPacks(t, b, s, 1, 20)
+	b.reset()
+
+	var logged bytes.Buffer
+	b.cutGets = 1
+	scanner := newPackIndex(b, s, slog.New(slog.NewTextHandler(&logged, nil)))
+	packs, unreadable, err := scanner.scanPacks(context.Background())
+	if err != nil {
+		t.Fatalf("scanPacks: %v", err)
+	}
+	if len(packs) != len(stored) || len(unreadable) != 0 || logged.Len() != 0 {
+		t.Errorf("scan found %d of %d packs, unreadable %v, logged %q; want every pack and no warning",
+			len(packs), len(stored), unreadable, logged.String())
+	}
+	if _, gets, _ := b.calls(s.packs); gets != len(stored)+1 {
+		t.Errorf("%d Gets, want %d: each pack once, the short one again", gets, len(stored)+1)
+	}
+}
+
 func TestIndexLoadsLazilyAndOncePerType(t *testing.T) {
 	ctx := context.Background()
 	spaces := testPackSpaces(t)

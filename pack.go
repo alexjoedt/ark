@@ -170,12 +170,18 @@ func (s *packSpace) parse(pack []byte) ([]packEntry, error) {
 func (s *packSpace) readBlob(ctx context.Context, b Backend, pack string, e packEntry) ([]byte, error) {
 	obj, err := b.GetRange(ctx, Handle{Type: s.packs, Name: pack}, int64(e.offset), int64(e.length))
 	if errors.Is(err, io.ErrUnexpectedEOF) {
-		return nil, fmt.Errorf("%w: %s object %s ends before %x: %w", s.corruptErr, s.packs, pack, e.name, err)
+		return nil, s.endsBefore(pack, e, err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("ark: failed to read %s object %s: %w", s.packs, pack, err)
 	}
 	return s.openBlob(pack, e, obj)
+}
+
+// endsBefore is the error of a blob at e that the pack named pack is too
+// short to hold; err is what said so and wraps [io.ErrUnexpectedEOF].
+func (s *packSpace) endsBefore(pack string, e packEntry, err error) error {
+	return fmt.Errorf("%w: %s object %s ends before %x: %w", s.corruptErr, s.packs, pack, e.name, err)
 }
 
 // openBlob opens obj, the sealed bytes at e of the pack named pack.

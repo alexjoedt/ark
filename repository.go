@@ -2,6 +2,7 @@ package ark
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -504,7 +505,8 @@ func (r *Repository) Prune(ctx context.Context, opts ...PruneOption) (*PruneResu
 //
 // A pack whose own table does not open is named in the result. The new index
 // lists in it what the old one did, so a rebuild never loses a blob the old
-// index could locate.
+// index could locate, except for the blobs a pack that opens holds as well:
+// those are read from there.
 func (r *Repository) RebuildIndex(ctx context.Context) (*RebuildIndexResult, error) {
 	ctx, lock, err := r.acquire(ctx, true)
 	if err != nil {
@@ -563,7 +565,7 @@ func (r *Repository) Verify(ctx context.Context, id string) (*VerifyResult, erro
 		return nil, err
 	}
 	chunks, trees := r.stores()
-	result, err := r.runVerify(ctx, id, chunks, trees, progress)
+	result, err := r.runVerify(ctx, id, chunks, trees, nil, progress)
 	if err != nil {
 		return result, err
 	}
@@ -573,8 +575,9 @@ func (r *Repository) Verify(ctx context.Context, id string) (*VerifyResult, erro
 
 // Check verifies every snapshot in the repository, reading and authenticating
 // every object they reference, and compares the index with the packs that are
-// stored. What it finds is in the result; the error is for a check that could
-// not run.
+// stored. An object several snapshots share is read once and what was found
+// is reported for each of them. What it finds is in the result; the error is
+// for a check that could not run.
 func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 	progress := r.observer(OperationCheck, nil)
 	progress(ProgressEvent{Phase: PhaseLoad})
@@ -616,9 +619,13 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 			return nil, err
 		}
 	}
+	// ponytail: one verdict per chunk of the repository stays in memory, about
+	// 60 bytes each. Verify the union of all references pack by pack and keep
+	// only the failures once a repository is too large for that.
+	settled := make(map[[sha256.Size]byte]chunkVerdict)
 	for i, id := range ids {
 		// The inner verify reports as check, counters restart per snapshot.
-		vr, err := r.runVerify(ctx, id, chunks, trees, func(e ProgressEvent) {
+		vr, err := r.runVerify(ctx, id, chunks, trees, settled, func(e ProgressEvent) {
 			e.FilesDone, e.FilesTotal = i, len(ids)
 			progress(e)
 		})

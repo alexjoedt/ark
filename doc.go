@@ -96,5 +96,7 @@
 //
 // Verify and Check read pack by pack instead: they hold the names and places
 // of the distinct chunks of one snapshot, about 150 bytes each, and one range
-// of a pack at a time, which is at most a pack of about 20 MiB.
+// of a pack at a time, which is at most a pack of about 20 MiB. Check reads a
+// chunk several snapshots share once, and keeps what it found for every
+// distinct chunk of the repository, about 60 bytes each.
 package ark

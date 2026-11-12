@@ -92,7 +92,11 @@ later does (`TestIndexFindsWhatItWroteAfterLoading`).
 index; a pack that does not open or is not named by its hash is reported and describes nothing to
 a rebuild. `Repository.RebuildIndex` then keeps what the old index lists in that pack, because one
 changed byte makes the table of a pack unreadable and with it the place of every intact blob
-beside the damaged one (`TestRebuildIndexKeepsWhatTheOldIndexKnowsOfADamagedPack`).
+beside the damaged one (`TestRebuildIndexKeepsWhatTheOldIndexKnowsOfADamagedPack`). It keeps no
+entry for a blob that a pack which opens holds as well, since a lookup would resolve to the damaged
+copy when its pack has the smaller name (`TestRebuildIndexDropsADamagedCopyOfABlobStoredTwice`),
+and it reads a pack a second time before it skips it, as a load does with an index object
+(`TestRebuildScanReadsAPackAgainBeforeSkippingIt`).
 `BenchmarkIndexLoad` measures the budget on the memory backend, on its best run, and fails beyond
 it. The loaded table keeps its records in 64 slices by the leading bits of the blob name, so that
 loading never holds all records twice. The unit is `index.go`.

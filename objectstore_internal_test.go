@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -72,7 +73,7 @@ func TestVerifyingStoreRecomputesTheName(t *testing.T) {
 			refs[blob] = 1
 		}
 		res := &VerifyResult{OK: true}
-		if err := verifyChunks(ctx, s, refs, res, func(int) {}); err != nil {
+		if err := verifyChunks(ctx, s, refs, nil, res, func(int) {}); err != nil {
 			t.Fatalf("verifyChunks: %v", err)
 		}
 		if res.OK || !slices.Equal(res.CorruptChunks, []string{wrong}) || res.ChunksChecked != 1 {
@@ -194,7 +195,7 @@ func TestVerifyDoesNotBlameTheChunkForALostIndexObject(t *testing.T) {
 	result := &VerifyResult{OK: true}
 	blob, _ := parseName(name)
 	refs := map[[sha256.Size]byte]int{blob: 1}
-	if err := verifyChunks(ctx, chunks, refs, result, func(int) {}); !errors.Is(err, b.getErr) {
+	if err := verifyChunks(ctx, chunks, refs, nil, result, func(int) {}); !errors.Is(err, b.getErr) {
 		t.Errorf("verifyChunks returned %v, want the load error", err)
 	}
 	if !result.OK || len(result.MissingChunks) != 0 {
@@ -202,7 +203,77 @@ func TestVerifyDoesNotBlameTheChunkForALostIndexObject(t *testing.T) {
 	}
 
 	b.getErr = nil
-	if err := verifyChunks(ctx, chunks, refs, result, func(int) {}); err != nil || result.ChunksChecked != 1 {
+	if err := verifyChunks(ctx, chunks, refs, nil, result, func(int) {}); err != nil || result.ChunksChecked != 1 {
 		t.Errorf("verifyChunks after the index is back: %v, %d checked", err, result.ChunksChecked)
+	}
+}
+
+// TestCheckComparesASuspectPackWithTheIndex: an index that lists a chunk at
+// the place of another makes the chunk fail to open in a pack that is whole.
+// The pack's own table shows it, and since the pack is named by its hash a
+// rebuild repairs the index. A pack that cannot be read for the comparison
+// is a warning: the check goes on and keeps what it found.
+func TestCheckComparesASuspectPackWithTheIndex(t *testing.T) {
+	ctx := context.Background()
+	codec := newObjectCodec()
+	defer codec.Close()
+	key := newMasterKey("repo")
+	b := newIndexBackend(newStubBackend())
+	repo := &Repository{backend: b, codec: codec, key: key, logger: quietLogger}
+
+	session := repo.writeSession()
+	var names []string
+	for _, content := range []string{"one chunk", "another"} {
+		names = append(names, session.chunks.name([]byte(content)))
+		if _, err := session.chunks.putNamed(ctx, names[len(names)-1], []byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := session.finish(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	chunks, _ := repo.stores()
+	old, err := chunks.index.load(ctx)
+	if err != nil || len(old.packs) != 1 {
+		t.Fatalf("load: %v, %d packs, want one", err, len(old.packs))
+	}
+	packs := old.listed(slices.Repeat([]bool{true}, len(old.packs)))
+	entries := packs[0].entries
+	entries[0].name, entries[1].name = entries[1].name, entries[0].name
+	for _, name := range old.objects {
+		if err := b.Delete(ctx, Handle{Type: DataIndexFile, Name: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeTestIndex(t, newPackIndex(b, chunks.space, quietLogger), packs)
+
+	chunks, _ = repo.stores()
+	chunks.suspects = make(map[string][]packEntry)
+	if _, err := chunks.Get(ctx, names[0]); !errors.Is(err, ErrCorruptChunk) {
+		t.Fatalf("Get under the wrong index = %v, want ErrCorruptChunk", err)
+	}
+
+	b.getErr = errors.New("the backend is away")
+	result := &CheckResult{}
+	if err := chunks.checkSuspects(ctx, result); err != nil {
+		t.Errorf("checkSuspects with a pack that cannot be read = %v, want a finding and no error", err)
+	}
+	if len(result.Errors) != 0 || len(result.Warnings) != 1 ||
+		!strings.Contains(result.Warnings[0], packs[0].name) || !strings.Contains(result.Warnings[0], "is away") {
+		t.Errorf("findings %+v, want one warning naming pack %s and the read error", result, packs[0].name)
+	}
+
+	b.getErr = nil
+	result = &CheckResult{}
+	if err := chunks.checkSuspects(ctx, result); err != nil {
+		t.Fatalf("checkSuspects: %v", err)
+	}
+	if len(result.Errors) != 1 || len(result.Warnings) != 0 ||
+		!strings.Contains(result.Errors[0], packs[0].name+": its own table disagrees with the index") ||
+		!strings.Contains(result.Errors[0], names[0]) ||
+		!strings.Contains(result.Errors[0], "RebuildIndex restores the index from the packs") {
+		t.Errorf("findings %+v, want one error saying that pack %s disagrees with the index about %s "+
+			"and that RebuildIndex repairs it", result, packs[0].name, names[0])
 	}
 }

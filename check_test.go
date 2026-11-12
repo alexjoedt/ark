@@ -1,6 +1,7 @@
 package ark_test
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -65,6 +66,36 @@ func place(t *testing.T, repo *ark.Repository, content string) (pack string, off
 		t.Fatalf("BlobPlace: %v", err)
 	}
 	return h.Name, offset, length
+}
+
+// cutPack cuts the data pack that holds the chunks of src short, inside the
+// chunk in the middle of it, and returns the paths whose chunks the cut hit.
+// The chunks reach the pack in any order, so the middle is found by offset.
+func cutPack(t *testing.T, b ark.Backend, repo *ark.Repository, src multiSource) []string {
+	t.Helper()
+	type placed struct {
+		path, pack     string
+		offset, length int64
+	}
+	var chunks []placed
+	for _, p := range src.order {
+		pack, offset, length := place(t, repo, src.files[p])
+		chunks = append(chunks, placed{p, pack, offset, length})
+	}
+	slices.SortFunc(chunks, func(a, b placed) int { return cmp.Compare(a.offset, b.offset) })
+	mid := chunks[len(chunks)/2]
+	whole := readObject(t, b, ark.DataPackFile, mid.pack)
+	putObject(t, b, ark.DataPackFile, mid.pack, whole[:mid.offset+mid.length/2])
+	var hit []string
+	for _, c := range chunks {
+		if c.pack != mid.pack {
+			t.Fatalf("fixture: the chunks of %s lie in several packs", src.name)
+		}
+		if c.offset >= mid.offset {
+			hit = append(hit, c.path)
+		}
+	}
+	return hit
 }
 
 // TestVerifyReadsEachPackRangeOnce pins what a verify costs: the chunks it
@@ -188,20 +219,7 @@ func TestVerifyBlamesExactlyTheChunksADamageCovers(t *testing.T) {
 			return []string{hit}
 		}},
 		{"cut off", func(t *testing.T, b *arkmem.Backend, repo *ark.Repository) []string {
-			pack, offset, length := place(t, repo, src.files[src.order[4]])
-			cut := offset + length/2
-			whole := readObject(t, b, ark.DataPackFile, pack)
-			putObject(t, b, ark.DataPackFile, pack, whole[:cut])
-			var hit []string
-			for _, p := range src.order {
-				if _, at, n := place(t, repo, src.files[p]); at+n > cut {
-					hit = append(hit, p)
-				}
-			}
-			if len(hit) < 2 || len(hit) == len(src.order) {
-				t.Fatalf("fixture: the cut hits %d of %d chunks, want some and not all", len(hit), len(src.order))
-			}
-			return hit
+			return cutPack(t, b, repo, src)
 		}},
 	}
 	for _, tc := range cases {
@@ -234,6 +252,106 @@ func TestVerifyBlamesExactlyTheChunksADamageCovers(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestVerifyAsksForNoChunkBehindTheEndOfACutPack: the range that runs past
+// the end of a pack tells that it was cut, and its size tells where. The
+// chunks in front of the cut come in one more range read and the chunks
+// behind it are corrupt without a request each.
+func TestVerifyAsksForNoChunkBehindTheEndOfACutPack(t *testing.T) {
+	b := newCountingBackend()
+	repo := openRepo(t, b)
+	src := smallFiles("app", 40)
+	snap := mustBackup(t, repo, src)
+	hit := cutPack(t, b, repo, src)
+
+	b.reset()
+	res, err := repo.Verify(context.Background(), snap.ID)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if len(res.CorruptChunks) != len(hit) || len(res.MissingChunks) != 0 ||
+		res.ChunksChecked != len(src.files)-len(hit) {
+		t.Errorf("Verify = %d corrupt, %d missing, %d checked; want the %d chunks behind the cut corrupt "+
+			"and the other %d checked", len(res.CorruptChunks), len(res.MissingChunks), res.ChunksChecked,
+			len(hit), len(src.files)-len(hit))
+	}
+	if n := b.totalGets(); n != 2 {
+		t.Errorf("verify of a cut pack read %d ranges, want 2: the one past its end and the one in front of it", n)
+	}
+}
+
+// TestVerifyReportsTheChunksNoIndexListsAsProgress: a chunk without an index
+// entry is settled without a read, and a snapshot of nothing but such chunks
+// still reports them as done.
+func TestVerifyReportsTheChunksNoIndexListsAsProgress(t *testing.T) {
+	ctx := context.Background()
+	b := arkmem.New()
+	if err := ark.Init(ctx, b, testPassword); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	var fetches []ark.ProgressEvent
+	repo, err := ark.Open(ctx, b, testPassword, ark.WithProgress(func(e ark.ProgressEvent) {
+		if e.Operation == ark.OperationVerify && e.Phase == ark.PhaseFetch {
+			fetches = append(fetches, e)
+		}
+	}))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	snap := mustBackup(t, repo, smallFiles("app", 5))
+	for _, name := range objectNames(t, b, ark.DataIndexFile) {
+		if err := b.Delete(ctx, ark.Handle{Type: ark.DataIndexFile, Name: name}); err != nil {
+			t.Fatalf("delete index object: %v", err)
+		}
+	}
+
+	res, err := repo.Verify(ctx, snap.ID)
+	if err != nil || len(res.MissingChunks) != 5 {
+		t.Fatalf("Verify = %+v, %v; want 5 missing chunks", res, err)
+	}
+	if len(fetches) != 1 || fetches[0].ChunksDone != 5 || fetches[0].ChunksTotal != 5 {
+		t.Errorf("fetch events %+v, want one that reports 5 of 5 references", fetches)
+	}
+}
+
+// TestCheckReadsAChunkSeveralSnapshotsShareOnce: a check verifies every
+// snapshot, but what it read for one it does not read again for the next, and
+// a chunk that did not open is reported for every snapshot that references it.
+func TestCheckReadsAChunkSeveralSnapshotsShareOnce(t *testing.T) {
+	b := newCountingBackend()
+	repo := openRepo(t, b)
+	src := smallFiles("app", 9)
+	again := src
+	again.name = "copy"
+	snaps := []*ark.Snapshot{mustBackup(t, repo, src), mustBackup(t, repo, again)}
+	if snaps[1].Stats.ChunksNew != 0 {
+		t.Fatalf("fixture: the second backup stored %d new chunks, want none", snaps[1].Stats.ChunksNew)
+	}
+	broken := ark.ObjectName(repo, []byte(src.files[src.order[4]]))
+	obj := readBlob(t, b, repo, ark.BlobFile, broken)
+	obj[len(obj)/2] ^= 0x01
+	writeBlob(t, b, repo, ark.BlobFile, broken, obj)
+
+	b.reset()
+	check := mustCheck(t, repo)
+	b.mu.Lock()
+	gets := maps.Clone(b.gets)
+	b.mu.Unlock()
+	for r, n := range gets {
+		if n != 1 {
+			t.Errorf("check read %s of the data packs %d times, want once", r, n)
+		}
+	}
+	for _, snap := range snaps {
+		if !naming(check.Errors, "snapshot "+snap.ID, "corrupt chunk "+broken) {
+			t.Errorf("Check errors %q name no corrupt chunk %s of snapshot %s", check.Errors, broken, snap.ID)
+		}
+	}
+	if len(check.Errors) != len(snaps) {
+		t.Errorf("Check reports %d errors, want one per snapshot: %v", len(check.Errors), check.Errors)
 	}
 }
 
@@ -272,10 +390,12 @@ func TestCheckReportsAPackThatDisagreesWithTheIndex(t *testing.T) {
 
 			check := mustCheck(t, repo)
 			for i, pack := range packs {
+				// The pack holds the other one: a rebuild reads no table from
+				// a pack that is not named by its hash, and the finding says so.
 				if !naming(check.Errors, pack.Type.String()+" object "+pack.Name, "disagrees with the index",
-					blobs[i], "RebuildIndex") {
-					t.Errorf("Check errors %q have none saying that pack %s disagrees with the index about %s",
-						check.Errors, pack.Name, blobs[i])
+					blobs[i], "holds the pack "+packs[1-i].Name, "RebuildIndex takes nothing from it") {
+					t.Errorf("Check errors %q have none saying that pack %s holds pack %s and disagrees "+
+						"with the index about %s", check.Errors, pack.Name, packs[1-i].Name, blobs[i])
 				}
 				if !naming(check.Errors, "snapshot "+snaps[i], blobs[i]) {
 					t.Errorf("Check errors %q have none of snapshot %s naming %s", check.Errors, snaps[i], blobs[i])
@@ -506,5 +626,70 @@ func TestRebuildIndexKeepsWhatTheOldIndexKnowsOfADamagedPack(t *testing.T) {
 		if got != "" && got != src.files[p] {
 			t.Errorf("restore wrote other bytes for %s", p)
 		}
+	}
+}
+
+// TestRebuildIndexDropsADamagedCopyOfABlobStoredTwice: a backup that finds no
+// index stores every chunk again, and with the old index back each chunk is
+// in two packs. A lookup resolves it to the pack with the smaller name, so
+// when that pack is damaged the rebuild must not keep its entries for chunks
+// the other pack holds: they would hide the copy that opens.
+func TestRebuildIndexDropsADamagedCopyOfABlobStoredTwice(t *testing.T) {
+	ctx := context.Background()
+	b := arkmem.New()
+	repo := openRepo(t, b)
+	src := smallFiles("app", 6)
+	snap := mustBackup(t, repo, src)
+
+	saved := make(map[ark.Handle][]byte)
+	for _, typ := range []ark.HandleType{ark.DataIndexFile, ark.TreeIndexFile} {
+		for _, name := range objectNames(t, b, typ) {
+			h := ark.Handle{Type: typ, Name: name}
+			saved[h] = readObject(t, b, typ, name)
+			if err := b.Delete(ctx, h); err != nil {
+				t.Fatalf("delete index object: %v", err)
+			}
+		}
+	}
+	again := src
+	again.name = "copy"
+	mustBackup(t, repo, again)
+	for h, obj := range saved {
+		putObject(t, b, h.Type, h.Name, obj)
+	}
+	if n := len(objectNames(t, b, ark.DataPackFile)); n != 2 {
+		t.Fatalf("fixture: %d data packs, want the chunks in two", n)
+	}
+
+	content := src.files[src.order[2]]
+	broken := ark.ObjectName(repo, []byte(content))
+	pack, _, _ := place(t, repo, content)
+	obj := readBlob(t, b, repo, ark.BlobFile, broken)
+	obj[len(obj)/2] ^= 0x01
+	writeBlob(t, b, repo, ark.BlobFile, broken, obj)
+	if vr, err := repo.Verify(ctx, snap.ID); err != nil || !slices.Equal(vr.CorruptChunks, []string{broken}) {
+		t.Fatalf("fixture: Verify = %+v, %v; want chunk %s corrupt in the copy a lookup finds", vr, err, broken)
+	}
+
+	res, err := repo.RebuildIndex(ctx)
+	if err != nil {
+		t.Fatalf("RebuildIndex: %v", err)
+	}
+	if !slices.Equal(res.UnreadablePacks, []string{pack}) {
+		t.Errorf("RebuildIndex names the unreadable packs %v, want [%s]", res.UnreadablePacks, pack)
+	}
+	if now, _, _ := place(t, repo, content); now == pack {
+		t.Errorf("after the rebuild chunk %s still resolves to the damaged pack %s", broken, pack)
+	}
+	vr, err := repo.Verify(ctx, snap.ID)
+	if err != nil || !vr.OK || vr.ChunksChecked != len(src.files) {
+		t.Errorf("Verify after the rebuild = %+v, %v; want OK with all %d chunks read from the pack that opens",
+			vr, err, len(src.files))
+	}
+	// Every chunk of the damaged pack has a copy, so the index lists nothing
+	// in it any more and Prune removes it.
+	check := mustCheck(t, repo)
+	if len(check.Errors) != 0 || !naming(check.Warnings, "no index lists", pack) {
+		t.Errorf("Check after the rebuild = %+v, want no error and the damaged pack %s unlisted", check, pack)
 	}
 }

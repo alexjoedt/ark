@@ -160,9 +160,7 @@ func (p *prunePlan) plan(ctx context.Context, live map[string]struct{}) error {
 	err = p.store.backend.List(ctx, x.space.packs, func(info BlobInfo) error {
 		p.stored = append(p.stored, info)
 		lost, isDead := dead[info.Name]
-		sum, ok := parseName(info.Name)
-		_, listed := slices.BinarySearchFunc(t.packs, sum, compareNames)
-		if isDead || !ok || !listed {
+		if _, listed := t.pack(info.Name); isDead || !listed {
 			p.remove[info.Name] = lost
 		}
 		return nil
@@ -264,12 +262,11 @@ func (r *Repository) runRebuildIndex(ctx context.Context) (*RebuildIndexResult, 
 		// locates the blobs in it that are intact.
 		keep := make([]bool, len(old.packs))
 		for _, name := range unreadable {
-			sum, ok := parseName(name)
-			if i, listed := slices.BinarySearchFunc(old.packs, sum, compareNames); ok && listed {
+			if i, listed := old.pack(name); listed {
 				keep[i] = true
 			}
 		}
-		packs = append(packs, old.listed(keep)...)
+		packs = append(packs, withoutCopies(old.listed(keep), packs)...)
 
 		result.PacksIndexed += len(packs)
 		for _, p := range packs {
@@ -291,6 +288,34 @@ func (r *Repository) runRebuildIndex(ctx context.Context) (*RebuildIndexResult, 
 		"unreadable_packs", len(result.UnreadablePacks),
 	)
 	return result, nil
+}
+
+// withoutCopies returns kept, the packs that do not open with what the old
+// index lists in them, without the blobs a pack of readable holds as well. A
+// lookup resolves a blob in several packs to the pack with the smallest name,
+// so an entry kept for a damaged pack would hide the copy that still opens.
+func withoutCopies(kept, readable []indexedPack) []indexedPack {
+	copied := make(map[[sha256.Size]byte]bool)
+	for _, p := range kept {
+		for _, e := range p.entries {
+			copied[e.name] = false
+		}
+	}
+	if len(copied) == 0 {
+		return kept
+	}
+	for _, p := range readable {
+		for _, e := range p.entries {
+			if _, ok := copied[e.name]; ok {
+				copied[e.name] = true
+			}
+		}
+	}
+	for i := range kept {
+		kept[i].entries = slices.DeleteFunc(kept[i].entries, func(e packEntry) bool { return copied[e.name] })
+	}
+	// A pack left without a blob is no longer listed: Prune removes it.
+	return slices.DeleteFunc(kept, func(p indexedPack) bool { return len(p.entries) == 0 })
 }
 
 // sweep deletes the packs of p.remove and the index objects that do not

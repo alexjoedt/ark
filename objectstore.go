@@ -2,6 +2,7 @@ package ark
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -244,22 +245,88 @@ func (s *objectStore) Get(ctx context.Context, name string) ([]byte, error) {
 	} else {
 		data, err = s.fromWholePack(ctx, pack, e)
 	}
+	return s.checked(pack, e, data, err)
+}
+
+// checked is what every read does with data and err, the outcome of reading
+// and opening the blob at e of the pack named pack. A blob that did not open
+// is noted when s collects such blobs, and a verifying store fails one that
+// does not hash to its name.
+func (s *objectStore) checked(pack string, e packEntry, data []byte, err error) ([]byte, error) {
 	if err != nil {
-		s.suspect(pack, e, err)
+		if s.suspects != nil && errors.Is(err, s.space.corruptErr) {
+			s.suspects[pack] = append(s.suspects[pack], e)
+		}
 		return nil, err
 	}
-	if s.verify && s.name(data) != name {
-		return nil, fmt.Errorf("%w: %s object %s: %w", s.space.corruptErr, s.space.blobs, name, errNameMismatch)
+	if s.verify && s.name(data) != hex.EncodeToString(e.name[:]) {
+		return nil, fmt.Errorf("%w: %s object %x: %w", s.space.corruptErr, s.space.blobs, e.name, errNameMismatch)
 	}
 	return data, nil
 }
 
-// suspect notes that the blob at e of the pack named pack failed with err,
-// when s collects such blobs and err says the blob did not open.
-func (s *objectStore) suspect(pack string, e packEntry, err error) {
-	if s.suspects != nil && errors.Is(err, s.space.corruptErr) {
-		s.suspects[pack] = append(s.suspects[pack], e)
+// getMany reads the blobs at entries, which are sorted by offset, from the
+// pack named pack and calls fn for each with what a Get of it returns. Blobs
+// at most packRangeGap apart share one range read, so every byte range is
+// asked for once, and each blob is opened on its own: a changed byte fails
+// the blob it lies in and no other. A pack that ends inside a range is asked
+// for its size once, and the blobs behind its end fail without a request of
+// their own. An error from fn ends the call and is returned.
+//
+// It reads by range whether or not s holds whole packs.
+func (s *objectStore) getMany(
+	ctx context.Context, pack string, entries []packEntry, fn func(e packEntry, data []byte, err error) error,
+) error {
+	h := Handle{Type: s.space.packs, Name: pack}
+	end := func(e packEntry) uint64 { return uint64(e.offset) + uint64(e.length) }
+	yield := func(e packEntry, data []byte, err error) error {
+		data, err = s.checked(pack, e, data, err)
+		return fn(e, data, err)
 	}
+	// size is where the pack ends, once a read ran past it.
+	size, sized := uint64(0), false
+	for len(entries) > 0 {
+		n, start, stop := 1, uint64(entries[0].offset), end(entries[0])
+		if sized && stop > size {
+			if err := yield(entries[0], nil, s.space.endsBefore(pack, entries[0], io.ErrUnexpectedEOF)); err != nil {
+				return err
+			}
+			entries = entries[1:]
+			continue
+		}
+		for n < len(entries) && uint64(entries[n].offset) <= stop+packRangeGap &&
+			(!sized || end(entries[n]) <= size) {
+			stop = max(stop, end(entries[n]))
+			n++
+		}
+		whole, err := s.backend.GetRange(ctx, h, int64(start), int64(stop-start))
+		if errors.Is(err, io.ErrUnexpectedEOF) && !sized {
+			info, statErr := s.backend.Stat(ctx, h)
+			if statErr == nil && uint64(info.Size) < stop {
+				size, sized = uint64(info.Size), true
+				continue
+			}
+			err = cmp.Or(statErr, err)
+		}
+		if err != nil {
+			// A pack that does not answer fails every blob still wanted from
+			// it: one request says so, not one per range.
+			err = fmt.Errorf("ark: failed to read %s object %s: %w", h.Type, pack, err)
+			n = len(entries)
+		}
+		for _, e := range entries[:n] {
+			var data []byte
+			blobErr := err
+			if err == nil {
+				data, blobErr = s.space.openBlob(pack, e, whole[uint64(e.offset)-start:][:e.length])
+			}
+			if err := yield(e, data, blobErr); err != nil {
+				return err
+			}
+		}
+		entries = entries[n:]
+	}
+	return nil
 }
 
 // fromWholePack returns the content of the blob at e in the pack named pack,
@@ -289,8 +356,7 @@ func (s *objectStore) fromWholePack(ctx context.Context, pack string, e packEntr
 func (s *objectStore) blobIn(pack string, e packEntry, whole []byte) ([]byte, error) {
 	end := uint64(e.offset) + uint64(e.length)
 	if end > uint64(len(whole)) {
-		return nil, fmt.Errorf("%w: %s object %s ends before %x: %w",
-			s.space.corruptErr, s.space.packs, pack, e.name, io.ErrUnexpectedEOF)
+		return nil, s.space.endsBefore(pack, e, io.ErrUnexpectedEOF)
 	}
 	return s.space.openBlob(pack, e, whole[e.offset:end])
 }

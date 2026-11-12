@@ -7,20 +7,34 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"slices"
 	"strings"
 )
 
-// runVerify checks one snapshot and reports a PhaseFetch event per data pack
-// it read to progress, CurrentPath set to the snapshot ID and the chunk
-// counters at the references verified so far. Callers emit the events that
+// chunkVerdict is what a verify found out about one chunk.
+type chunkVerdict uint8
+
+const (
+	chunkChecked chunkVerdict = iota + 1
+	chunkMissing
+	chunkCorrupt
+)
+
+// runVerify checks one snapshot and reports PhaseFetch events to progress,
+// CurrentPath set to the snapshot ID and the chunk counters at the references
+// verified so far: one for the chunks that were settled without a read, when
+// there are any, and one per data pack it read. Callers emit the events that
 // open and close their operation.
+//
+// settled, when set, holds the verdict on every chunk an earlier call read
+// and takes those of this one: a check passes one map to the verify of every
+// snapshot, so a chunk several snapshots share is read once.
 func (r *Repository) runVerify(
 	ctx context.Context,
 	snapshotID string,
 	chunks, trees *objectStore,
+	settled map[[sha256.Size]byte]chunkVerdict,
 	progress ProgressFunc,
 ) (*VerifyResult, error) {
 	logger := r.logger.With("component", "verify", "snapshot", snapshotID)
@@ -52,7 +66,7 @@ func (r *Repository) runVerify(
 		return ctx.Err()
 	})
 	if err == nil {
-		err = verifyChunks(ctx, chunks, refs, result, func(done int) {
+		err = verifyChunks(ctx, chunks, refs, settled, result, func(done int) {
 			progress(ProgressEvent{Phase: PhaseFetch, CurrentPath: snapshotID, ChunksDone: done, ChunksTotal: total})
 		})
 	}
@@ -77,113 +91,86 @@ func (r *Repository) runVerify(
 }
 
 // verifyChunks reads every chunk of refs, which counts the references to
-// each, and records it as checked, missing or corrupt. It reads pack by pack,
-// in the order of the pack names, and calls progress after each pack with the
-// number of references settled so far. Only a failure that says nothing about
-// a chunk is returned as an error.
+// each, and records it as checked, missing or corrupt: one that fails its tag
+// or does not hash to its name is corrupt. A chunk settled holds a verdict on
+// is not read again, and every verdict found is added to settled unless it is
+// nil. The rest is read pack by pack, in the order of the pack names. progress
+// is called with the number of references settled so far: once for those that
+// needed no read, when there are any, then after each pack. Only a failure
+// that says nothing about a chunk is returned as an error.
 func verifyChunks(
 	ctx context.Context,
 	chunks *objectStore,
 	refs map[[sha256.Size]byte]int,
+	settled map[[sha256.Size]byte]chunkVerdict,
 	result *VerifyResult,
 	progress func(done int),
 ) error {
+	done := 0
+	record := func(blob [sha256.Size]byte, v chunkVerdict) {
+		switch v {
+		case chunkChecked:
+			result.ChunksChecked++
+		case chunkMissing:
+			result.MissingChunks = append(result.MissingChunks, hex.EncodeToString(blob[:]))
+		case chunkCorrupt:
+			result.CorruptChunks = append(result.CorruptChunks, hex.EncodeToString(blob[:]))
+		}
+		if settled != nil {
+			settled[blob] = v
+		}
+		done += refs[blob]
+	}
 	// A chunk no index lists, or whose pack is gone, is missing. An index
 	// that does not load says nothing about any chunk, also when the failure
 	// wraps ErrNotFound: an index object that was listed and is gone.
 	wanted := make(map[[sha256.Size]byte][]packEntry)
-	done := 0
-	for blob, n := range refs {
+	for blob := range refs {
+		if v, ok := settled[blob]; ok {
+			record(blob, v)
+			continue
+		}
 		pack, e, ok, err := chunks.index.find(ctx, blob)
 		if err != nil {
 			return fmt.Errorf("verify: %w", err)
 		}
 		if !ok {
-			result.MissingChunks = append(result.MissingChunks, hex.EncodeToString(blob[:]))
-			done += n
+			record(blob, chunkMissing)
 			continue
 		}
 		wanted[pack] = append(wanted[pack], e)
 	}
+	if done > 0 {
+		progress(done)
+	}
+	store := chunks.verifying()
 	for _, pack := range slices.SortedFunc(maps.Keys(wanted), compareNames) {
 		if err := ctx.Err(); err != nil {
 			return err //nolint:wrapcheck // the caller's own cancellation
 		}
 		entries := wanted[pack]
 		slices.SortFunc(entries, func(a, b packEntry) int { return cmp.Compare(a.offset, b.offset) })
-		if err := verifyPack(ctx, chunks, hex.EncodeToString(pack[:]), entries, result); err != nil {
+		err := store.getMany(ctx, hex.EncodeToString(pack[:]), entries, func(e packEntry, _ []byte, err error) error {
+			switch {
+			case err == nil:
+				record(e.name, chunkChecked)
+			case errors.Is(err, store.space.corruptErr):
+				record(e.name, chunkCorrupt)
+			case errors.Is(err, ErrNotFound):
+				record(e.name, chunkMissing)
+			default:
+				return fmt.Errorf("verify: failed to read chunk %x: %w", e.name, err)
+			}
+			return nil
+		})
+		if err != nil {
 			return err
-		}
-		for _, e := range entries {
-			done += refs[e.name]
 		}
 		progress(done)
 	}
 	slices.Sort(result.MissingChunks)
 	slices.Sort(result.CorruptChunks)
 	result.OK = len(result.MissingChunks)+len(result.CorruptChunks) == 0
-	return nil
-}
-
-// verifyPack reads the chunks at entries, sorted by offset, from the data
-// pack named pack. Chunks at most packRangeGap apart share one range read,
-// so every byte range is asked for once. Each chunk is opened on its own: a
-// changed byte fails the chunk it lies in and no other. One that fails its
-// tag or does not hash to its name is corrupt.
-func verifyPack(ctx context.Context, s *objectStore, pack string, entries []packEntry, result *VerifyResult) error {
-	h := Handle{Type: s.space.packs, Name: pack}
-	missing := func(entries []packEntry) {
-		for _, e := range entries {
-			result.MissingChunks = append(result.MissingChunks, hex.EncodeToString(e.name[:]))
-		}
-	}
-	for len(entries) > 0 {
-		n, start := 1, uint64(entries[0].offset)
-		end := start + uint64(entries[0].length)
-		for n < len(entries) && uint64(entries[n].offset) <= end+packRangeGap {
-			end = max(end, uint64(entries[n].offset)+uint64(entries[n].length))
-			n++
-		}
-		batch := entries[:n]
-		entries = entries[n:]
-
-		whole, err := s.backend.GetRange(ctx, h, int64(start), int64(end-start))
-		single := false
-		switch {
-		case errors.Is(err, ErrNotFound):
-			missing(batch)
-			missing(entries)
-			return nil
-		case errors.Is(err, io.ErrUnexpectedEOF):
-			// The pack ends inside the range. Reading the chunks one by one
-			// tells which of them it still holds.
-			single = true
-		case err != nil:
-			return fmt.Errorf("verify: failed to read %s object %s: %w", h.Type, pack, err)
-		}
-		for _, e := range batch {
-			var data []byte
-			if single {
-				data, err = s.space.readBlob(ctx, s.backend, pack, e)
-			} else {
-				data, err = s.space.openBlob(pack, e, whole[uint64(e.offset)-start:][:e.length])
-			}
-			name := hex.EncodeToString(e.name[:])
-			switch {
-			case err == nil && s.name(data) == name:
-				result.ChunksChecked++
-			case err == nil:
-				result.CorruptChunks = append(result.CorruptChunks, name)
-			case errors.Is(err, s.space.corruptErr):
-				result.CorruptChunks = append(result.CorruptChunks, name)
-				s.suspect(pack, e, err)
-			case errors.Is(err, ErrNotFound):
-				missing([]packEntry{e})
-			default:
-				return fmt.Errorf("verify: failed to read chunk %s: %w", name, err)
-			}
-		}
-	}
 	return nil
 }
 
@@ -206,8 +193,7 @@ func (s *objectStore) checkPacks(ctx context.Context, result *CheckResult) error
 	stored := make([]bool, len(t.packs))
 	var unlisted []string
 	err = s.backend.List(ctx, space.packs, func(info BlobInfo) error {
-		sum, ok := parseName(info.Name)
-		if i, listed := slices.BinarySearchFunc(t.packs, sum, compareNames); ok && listed {
+		if i, listed := t.pack(info.Name); listed {
 			stored[i] = true
 		} else {
 			unlisted = append(unlisted, info.Name)
@@ -248,7 +234,9 @@ func (s *objectStore) checkPacks(ctx context.Context, result *CheckResult) error
 // checkSuspects reads the packs in which a blob did not open and reports
 // those whose own table lists the blob elsewhere or not at all: there the
 // index is wrong and the pack may be whole. A pack whose table does not open
-// says nothing, its blobs were reported when they were read.
+// says nothing, its blobs were reported when they were read; one that cannot
+// be read now is a warning beside them. Only the caller's cancellation is
+// returned as an error.
 func (s *objectStore) checkSuspects(ctx context.Context, result *CheckResult) error {
 	space := s.space
 	for _, pack := range slices.Sorted(maps.Keys(s.suspects)) {
@@ -256,8 +244,13 @@ func (s *objectStore) checkSuspects(ctx context.Context, result *CheckResult) er
 		if errors.Is(err, ErrNotFound) {
 			continue
 		}
+		if ctx.Err() != nil {
+			return ctx.Err() //nolint:wrapcheck // the caller's own cancellation
+		}
 		if err != nil {
-			return err
+			result.Warnings = append(result.Warnings, fmt.Sprintf(
+				"%s object %s: its own table was not compared with the index: %v", space.packs, pack, err))
+			continue
 		}
 		entries, err := space.parse(whole)
 		if err != nil {
@@ -277,10 +270,17 @@ func (s *objectStore) checkSuspects(ctx context.Context, result *CheckResult) er
 			continue
 		}
 		slices.Sort(off)
+		// A table is bound to its blobs, not to the name of its pack, so it
+		// opens under any name. A rebuild reads only packs named by their
+		// hash: for any other it keeps what the index says.
+		advice := "RebuildIndex restores the index from the packs"
+		if sum := sha256.Sum256(whole); hex.EncodeToString(sum[:]) != pack {
+			advice = fmt.Sprintf("it is not named by its hash but holds the pack %x, "+
+				"so RebuildIndex takes nothing from it", sum)
+		}
 		result.Errors = append(result.Errors, fmt.Sprintf(
-			"%s object %s: its own table disagrees with the index about %s objects %s; "+
-				"RebuildIndex restores the index from the packs",
-			space.packs, pack, space.blobs, nameList(slices.Compact(off))))
+			"%s object %s: its own table disagrees with the index about %s objects %s; %s",
+			space.packs, pack, space.blobs, nameList(slices.Compact(off)), advice))
 	}
 	return nil
 }
