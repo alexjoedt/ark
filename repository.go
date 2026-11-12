@@ -668,7 +668,13 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 // Directory paths carry a trailing slash, the way tar names them; every other
 // entry carries the plain path a Source yielded.
 func (r *Repository) Walk(ctx context.Context, id string, fn func(FileInfo) error) error {
-	id, err := r.resolveID(ctx, id)
+	ctx, lock, err := r.acquire(ctx, false)
+	if err != nil {
+		return err
+	}
+	defer lock.release(ctx)
+
+	id, err = r.resolveID(ctx, id)
 	if err != nil {
 		return err
 	}

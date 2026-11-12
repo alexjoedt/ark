@@ -223,6 +223,11 @@ func (b *Backend) List(ctx context.Context, t ark.HandleType, fn func(ark.BlobIn
 	}
 	err = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if d == nil && errors.Is(err, fs.ErrNotExist) {
+				return nil // the namespace was never written
+			}
+			// A directory that vanished mid-walk leaves the listing partial:
+			// a caller would take the objects it held as not stored.
 			return err
 		}
 		if err := ctx.Err(); err != nil {
@@ -240,7 +245,7 @@ func (b *Backend) List(ctx context.Context, t ark.HandleType, fn func(ark.BlobIn
 		}
 		return fn(ark.BlobInfo{Name: d.Name(), Size: info.Size()})
 	})
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err != nil {
 		return fmt.Errorf("arklocal: list %s: %w", t, err)
 	}
 	return nil

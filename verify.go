@@ -175,10 +175,11 @@ func verifyChunks(
 }
 
 // checkPacks compares the index of s with the packs that are stored. A pack
-// the index lists that is gone is an error: what only it held is lost, and
-// its records are passed over by every lookup until a prune or a rebuild
-// drops them. A pack no index lists and an index object that does not open
-// are warnings.
+// the index lists that is gone is an error naming what only it held, which is
+// lost; its records are passed over by every lookup until a prune or a
+// rebuild drops them. Such a pack whose every blob a stored pack holds as
+// well, a pack no index lists and an index object that does not open are
+// warnings.
 func (s *objectStore) checkPacks(ctx context.Context, result *CheckResult) error {
 	space := s.space
 	t, err := s.index.load(ctx)
@@ -212,21 +213,31 @@ func (s *objectStore) checkPacks(ctx context.Context, result *CheckResult) error
 			space.packs, nameList(unlisted)))
 	}
 
+	// A blob of a lost pack that a stored pack holds as well is not lost.
 	lost := make(map[uint32][]string)
 	if slices.Contains(stored, false) {
 		for _, records := range &t.records {
 			for _, rec := range records {
-				if !stored[rec.pack] {
+				if !stored[rec.pack] && !slices.ContainsFunc(t.copies(rec.name), func(c indexRecord) bool {
+					return stored[c.pack]
+				}) {
 					lost[rec.pack] = append(lost[rec.pack], hex.EncodeToString(rec.name[:]))
 				}
 			}
 		}
 	}
 	for i, pack := range t.packs {
-		if !stored[i] {
+		switch {
+		case stored[i]:
+		case len(lost[uint32(i)]) > 0:
 			result.Errors = append(result.Errors, fmt.Sprintf(
-				"%s object %x is listed by the index and not stored, its %s objects are lost: %s",
+				"%s object %x is listed by the index and not stored, %s objects no stored pack holds are lost: %s",
 				space.packs, pack, space.blobs, nameList(lost[uint32(i)])))
+		default:
+			result.Warnings = append(result.Warnings, fmt.Sprintf(
+				"%s object %x is listed by the index and not stored; a stored pack holds every %s object "+
+					"it listed, Prune or RebuildIndex drops what the index says about it",
+				space.packs, pack, space.blobs))
 		}
 	}
 	return nil

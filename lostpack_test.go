@@ -2,7 +2,9 @@ package ark_test
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,7 +15,9 @@ import (
 // object that lists it. A backup that reads the same contents again finds
 // its blobs in no stored pack and stores them: its snapshot restores, and so
 // does the one that lost them, whose lookups now end at the new copies. Check
-// names the lost pack until a prune drops what the index says about it.
+// names the lost pack and its blobs as an error while no stored pack holds
+// them, then the pack alone as a warning until a prune drops what the index
+// says about it.
 func TestBackupStoresAgainWhatALostPackHeld(t *testing.T) {
 	ctx := context.Background()
 	for _, typ := range []ark.HandleType{ark.BlobFile, ark.TreeFile} {
@@ -28,6 +32,10 @@ func TestBackupStoresAgainWhatALostPackHeld(t *testing.T) {
 				t.Fatalf("BlobPlace: %v", err)
 			}
 			deletePackOf(t, b, repo, typ, blob)
+			if check := mustCheck(t, repo); !naming(check.Errors, lost.Name, blob) {
+				t.Errorf("Check errors before the backup = %q, want one naming the lost pack %s and %s",
+					check.Errors, lost.Name, blob)
+			}
 
 			b.take()
 			again := mustBackup(t, repo, src)
@@ -38,8 +46,10 @@ func TestBackupStoresAgainWhatALostPackHeld(t *testing.T) {
 			assertRestores(t, repo, first, src)
 
 			check := mustCheck(t, repo)
-			if len(check.Errors) != 1 || !naming(check.Errors, lost.Name, blob) {
-				t.Errorf("Check errors = %q, want one naming the lost pack %s and %s", check.Errors, lost.Name, blob)
+			if len(check.Errors) != 0 || len(check.Warnings) != 1 || !naming(check.Warnings, lost.Name) ||
+				naming(check.Warnings, blob) {
+				t.Errorf("Check = %+v, want no error and one warning naming the lost pack %s and not %s",
+					check, lost.Name, blob)
 			}
 			if _, err := repo.Prune(ctx); err != nil {
 				t.Fatalf("Prune: %v", err)
@@ -78,8 +88,9 @@ func TestRestoreReadsTheStoredCopyOfAChunkInTwoPacks(t *testing.T) {
 	if res, err := repo.Verify(ctx, snap.ID); err != nil || !res.OK {
 		t.Errorf("Verify = %+v, %v; want OK", res, err)
 	}
-	if check := mustCheck(t, repo); len(check.Errors) != 1 || !naming(check.Errors, lost) {
-		t.Errorf("Check errors = %q, want one naming the lost pack %s", check.Errors, lost)
+	if check := mustCheck(t, repo); len(check.Errors) != 0 || len(check.Warnings) != 1 ||
+		!naming(check.Warnings, lost) {
+		t.Errorf("Check = %+v, want no error and one warning naming the lost pack %s", check, lost)
 	}
 }
 
@@ -118,5 +129,27 @@ func TestUnchangedFileKeepsTheChunksOfItsParentAfterALostPack(t *testing.T) {
 	sink := &recordingSink{}
 	if _, err := repo.Restore(ctx, third.ID, sink); err != nil || sink.written["f"] != content {
 		t.Errorf("Restore of a backup that read the file = %q, %v; want its content", sink.written["f"], err)
+	}
+}
+
+// TestPruneStopsOnATreeOfALostPack deletes the tree pack of a snapshot. Prune
+// cannot walk the tree to the chunks it references, so it deletes nothing,
+// and its error says the pack is lost instead of sending the user to
+// RebuildIndex, which cannot bring the tree back.
+func TestPruneStopsOnATreeOfALostPack(t *testing.T) {
+	ctx := context.Background()
+	b := newOpCountingBackend()
+	repo := openRepo(t, b)
+	mustBackup(t, repo, smallFiles("app", 3))
+	deletePackOf(t, b, repo, ark.TreeFile, blobNames(t, repo, ark.TreeFile)[0])
+
+	packs := objectNames(t, b, ark.DataPackFile)
+	_, err := repo.Prune(ctx)
+	if !errors.Is(err, ark.ErrNotFound) || !strings.Contains(err.Error(), "the pack that held it is lost") ||
+		strings.Contains(err.Error(), "RebuildIndex restores") {
+		t.Fatalf("Prune = %v, want ErrNotFound saying the pack is lost and not advising RebuildIndex", err)
+	}
+	if got := objectNames(t, b, ark.DataPackFile); !slices.Equal(got, packs) {
+		t.Errorf("data packs after the prune = %v, want %v untouched", got, packs)
 	}
 }

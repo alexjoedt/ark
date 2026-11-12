@@ -152,8 +152,14 @@ func (r *Repository) runGC(ctx context.Context, dryRun bool, progress ProgressFu
 	return result, nil
 }
 
-// notIndexedHint says what to do about a referenced object no index lists.
+// notIndexedHint says what to do about a referenced object no index lists in
+// a stored pack.
 func notIndexedHint(err error) error {
+	if errors.Is(err, errPackLost) {
+		return fmt.Errorf("%w: a snapshot references it and the pack that held it is lost; nothing was "+
+			"deleted, RebuildIndex cannot bring it back, Check names the snapshots that miss it and "+
+			"the prune runs once they are forgotten", err)
+	}
 	if !errors.Is(err, errNotIndexed) {
 		return err
 	}

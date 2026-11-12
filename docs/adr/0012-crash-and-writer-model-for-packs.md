@@ -87,9 +87,9 @@ repacking.
 The index was trusted when this was decided, and the index objects of a pruned backup, put back
 by someone who can write to the backend, made a later backup of the same data store nothing. 0014
 supersedes that: a load of the index passes over what is listed in a pack that is not stored, so
-the later backup stores the data again and its snapshot restores, while check names the packs the
-replayed objects list until a prune drops the entries: `TestReplayedIndexObjectIsPassedOver`. A
-replay is still not detected as one, and what an index object lists in a stored pack is still
-taken as it is.
+the later backup stores the data again and its snapshot restores, while check warns about the
+packs the replayed objects list until a prune drops the entries:
+`TestReplayedIndexObjectIsPassedOver`. A replay is still not detected as one, and what an index
+object lists in a stored pack is still taken as it is.
 
 Old repositories do not open: `TestOpenRejectsTheFormatBeforePacks`.

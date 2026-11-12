@@ -297,6 +297,10 @@ type packIndex struct {
 	// objects: a mutex whose wait ends with the caller's context.
 	loading chan struct{}
 	table   atomic.Pointer[indexTable]
+	// pending is the table of a load whose pack listing failed, held under
+	// the loading token: the next load lists the packs again and reads
+	// nothing else.
+	pending *indexTable
 	// written lists the packs of the index objects stored after the table
 	// was loaded, which is never listed again.
 	written atomic.Pointer[indexTable]
@@ -353,13 +357,18 @@ func (x *packIndex) lists(ctx context.Context, name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return len(t.copies(blob)) > 0, nil
+	if len(t.copies(blob)) > 0 {
+		return true, nil
+	}
+	w := x.written.Load()
+	return w != nil && len(w.copies(blob)) > 0, nil
 }
 
 // load returns the merged table, reading it on the first call. An index
 // object that does not open is read a second time and then skipped with a
 // warning: the blobs only it lists count as missing. Any other error fails the
-// call, also one from listing the packs, and the next one loads again.
+// call and the next one loads again; after one from listing the packs it only
+// lists them again.
 func (x *packIndex) load(ctx context.Context) (*indexTable, error) {
 	if t := x.table.Load(); t != nil {
 		return t, nil
@@ -371,7 +380,25 @@ func (x *packIndex) load(ctx context.Context) (*indexTable, error) {
 	if t := x.table.Load(); t != nil {
 		return t, nil
 	}
+	t := x.pending
+	if t == nil {
+		var err error
+		if t, err = x.readAll(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if err := x.markGone(ctx, t); err != nil {
+		x.pending = t
+		return nil, err
+	}
+	x.pending = nil
+	x.table.Store(t)
+	return t, nil
+}
 
+// readAll lists the index namespace and reads every object into one sorted
+// table.
+func (x *packIndex) readAll(ctx context.Context) (*indexTable, error) {
 	names, err := x.names(ctx, x.space.index)
 	if err != nil {
 		return nil, err
@@ -399,10 +426,6 @@ func (x *packIndex) load(ctx context.Context) (*indexTable, error) {
 		}
 	}
 	t.sort()
-	if err := x.markGone(ctx, t); err != nil {
-		return nil, err
-	}
-	x.table.Store(t)
 	return t, nil
 }
 

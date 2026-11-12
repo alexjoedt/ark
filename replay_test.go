@@ -162,8 +162,9 @@ func TestReplayedKeyFileOpensUnderTheOldPassword(t *testing.T) {
 // TestReplayedIndexObjectIsPassedOver replays the index objects of a pruned
 // backup. They list packs that are gone, and a load of the index passes over
 // what is listed in a pack the backend does not hold: a backup of the same
-// contents stores them again and its snapshot restores. Check names the two
-// packs the replayed objects list until a prune drops the entries.
+// contents stores them again and its snapshot restores. Check warns about the
+// two packs the replayed objects list until a prune drops the entries: a
+// stored pack holds what they listed, so nothing is lost.
 func TestReplayedIndexObjectIsPassedOver(t *testing.T) {
 	ctx := context.Background()
 	b := &putCountingBackend{Backend: arkmem.New(), puts: map[ark.HandleType]int{}}
@@ -210,12 +211,12 @@ func TestReplayedIndexObjectIsPassedOver(t *testing.T) {
 	// Check names the two packs the replayed index lists that are gone, and
 	// no snapshot: none reads from them.
 	check, err := repo.Check(ctx)
-	if err != nil || len(check.Errors) != 2 {
-		t.Fatalf("Check = %+v, %v; want both lost packs under Errors and nothing else", check, err)
+	if err != nil || len(check.Errors) != 0 || len(check.Warnings) != 2 {
+		t.Fatalf("Check = %+v, %v; want both lost packs under Warnings and nothing else", check, err)
 	}
 	for _, want := range []string{"datapacks object", "treepacks object"} {
-		if !slices.ContainsFunc(check.Errors, func(e string) bool { return strings.Contains(e, want) }) {
-			t.Errorf("Check errors %q name no %s", check.Errors, want)
+		if !slices.ContainsFunc(check.Warnings, func(e string) bool { return strings.Contains(e, want) }) {
+			t.Errorf("Check warnings %q name no %s", check.Warnings, want)
 		}
 	}
 	if _, err := repo.Prune(ctx); err != nil {

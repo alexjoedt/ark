@@ -29,14 +29,19 @@ packs of an index object another backup stored in between, and the load would pa
 are stored.
 
 A listing that fails fails the load, and the operation with it. Nothing is passed over on a guess:
-a record is ignored only for a pack that a complete listing lacks.
+a record is ignored only for a pack that a complete listing lacks. The index objects already read
+are kept, so the next lookup only lists the packs again. A backend's `List` returns an error for a
+walk it did not finish: arklocal treats only an absent namespace as empty, not a directory that
+vanished while it walked.
 
-The records stay in the table. Check reports a listed pack that is not stored with the pack and
-its blobs named, as before. Prune still asks whether any index object lists a referenced chunk,
-stored or not, leaves the records of a lost pack that holds the only copy of a referenced blob
-for Check to report and does the rest of its work (see 0013); it drops the records of a lost pack
-once no snapshot needs what only that pack held, which is the case after a backup stored the blobs
-again. A rebuild of the index lists stored packs only and so drops them at once.
+The records stay in the table. Check reports a listed pack that is not stored as an error naming
+the pack and the blobs no stored pack holds, which are lost, and as a warning naming the pack when
+a stored pack holds each of its blobs, after a backup stored them again. Prune still asks whether
+any index object lists a referenced chunk, stored or not, leaves the records of a lost pack that
+holds the only copy of a referenced blob for Check to report and does the rest of its work (see
+0013); it drops the records of a lost pack once no snapshot needs what only that pack held, which
+is the case after a backup stored the blobs again. A rebuild of the index lists stored packs only
+and so drops them at once.
 
 What an index writes after its load is kept beside the loaded table and is not held against the
 listing: those are the packs of the run itself.
@@ -58,8 +63,11 @@ reference it, and Check reports it.
   store everything again.
 - Not removing the records at load, because Check would lose the finding and a backup would have
   to hold the exclusive lock to rewrite the index.
-- Not stopping prune on a referenced blob that is listed only in a lost pack, because one lost
+- Not stopping prune on a referenced chunk that is listed only in a lost pack, because one lost
   pack would then block every prune until the snapshots that need it are forgotten (see 0013).
+  A referenced tree listed only in a lost tree pack still stops it: without the tree the prune
+  does not know which chunks it references. Its error says the pack is lost, since a rebuild
+  cannot bring the tree back, and the prune runs once the snapshots Check names are forgotten.
 
 This supersedes two parts of 0011, that a record whose pack is gone fails the read and that a read
 does not fall to another copy, and the part of 0012 that says the index is trusted and that backup
@@ -89,6 +97,7 @@ A backend's `List` now decides what a backup stores again: one that returns a pa
 without an error makes stored packs look lost for that run, whose reads fail and whose backup
 stores their blobs a second time. No stored blob is deleted for it.
 
-Check and prune are unchanged: `TestScenarioCheckCoversEverySnapshot`,
-`TestPruneLeavesALostPackToCheck`. An error that names an object as not indexed now also covers an
-object listed only in a pack that is not stored.
+Prune is unchanged for data packs: `TestScenarioCheckCoversEverySnapshot`,
+`TestPruneLeavesALostPackToCheck`; on a tree of a lost pack it stops as before, with an error that
+says so: `TestPruneStopsOnATreeOfALostPack`. A read of an object listed only in a pack that is not
+stored fails with `ErrNotFound` and says that, apart from one that no index lists.

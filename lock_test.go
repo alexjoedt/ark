@@ -101,6 +101,9 @@ func TestEveryOperationTakesItsLockClass(t *testing.T) {
 			_, err := repo.Verify(ctx, snap.ID)
 			return err
 		}},
+		{"walk", false, b, func() error {
+			return repo.Walk(ctx, snap.ID, func(ark.FileInfo) error { return nil })
+		}},
 		{"check", false, b, func() error {
 			_, err := repo.Check(ctx)
 			return err

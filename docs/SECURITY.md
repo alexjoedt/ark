@@ -128,8 +128,9 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
 - The index objects of a pruned backup, put back, list packs that are gone. A load of the index
   lists the packs that are stored and passes over what is listed in any other, so a later backup
   of the same data stores it again and its snapshot restores. The replay is not detected as one:
-  Check names the packs it lists as lost until a prune or a rebuild of the index drops the
-  entries: `TestReplayedIndexObjectIsPassedOver`.
+  Check names the packs it lists as not stored, as a warning once a stored pack holds what they
+  listed, until a prune or a rebuild of the index drops the entries:
+  `TestReplayedIndexObjectIsPassedOver`.
 - Object sizes and counts per namespace show: the size of every pack and index object, and with the
   index sizes the number of chunks and trees. A sealed chunk is its zstd frame plus 41 bytes and a
   pack is its sealed chunks plus a sealed table, so the stored bytes show, while the boundaries

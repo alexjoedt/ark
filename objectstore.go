@@ -37,6 +37,9 @@ var (
 	// in a pack that was stored when the index was loaded. A pack that holds
 	// it may still be stored, unlisted.
 	errNotIndexed = errors.New("no index object lists it in a stored pack")
+	// errPackLost says why an object is missing: the index lists it only in
+	// packs that were not stored when the index was loaded.
+	errPackLost = errors.New("the index lists it only in packs that are not stored")
 )
 
 // objectCodec seals and opens data objects and key files.
@@ -296,13 +299,23 @@ func (s *objectStore) Get(ctx context.Context, name string) ([]byte, error) {
 }
 
 // locate returns the pack and the place in it of the object stored under name.
-// An object no index lists wraps ErrNotFound.
+// An object no index lists in a stored pack wraps ErrNotFound and says
+// whether a pack that is not stored lists it.
 func (s *objectStore) locate(ctx context.Context, name string) (string, packEntry, error) {
 	pack, e, ok, err := s.index.lookup(ctx, name)
-	if err == nil && !ok {
-		err = fmt.Errorf("ark: failed to read %s object %s: %w: %w", s.space.blobs, name, ErrNotFound, errNotIndexed)
+	if err != nil || ok {
+		return pack, e, err
 	}
-	return pack, e, err
+	listed, err := s.index.lists(ctx, name)
+	if err != nil {
+		return "", packEntry{}, err
+	}
+	why := errNotIndexed
+	if listed {
+		why = errPackLost
+	}
+	return "", packEntry{}, fmt.Errorf("ark: failed to read %s object %s: %w: %w",
+		s.space.blobs, name, ErrNotFound, why)
 }
 
 // checked is what every read does with data and err, the outcome of reading

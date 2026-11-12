@@ -662,6 +662,9 @@ func TestIndexPassesOverAPackThatIsNotStored(t *testing.T) {
 				if pack, _, ok := mustLookup(t, x, hex.EncodeToString(e.name[:])); !ok || pack != fresh.name {
 					t.Errorf("lookup of a blob written after the load = %s %v, want %s", pack, ok, fresh.name)
 				}
+				if is, err := x.lists(ctx, hex.EncodeToString(e.name[:])); err != nil || !is {
+					t.Errorf("lists of a blob written after the load = %v, %v; want true", is, err)
+				}
 			}
 			if lists, _, _ := b.calls(s.packs); lists != 1 {
 				t.Errorf("%d Lists of the pack namespace after a write, want still 1", lists)
@@ -731,7 +734,8 @@ func (b *listErrBackend) List(ctx context.Context, t HandleType, fn func(BlobInf
 
 // TestIndexLoadFailsWhenThePacksCannotBeListed: without the listing nothing
 // says which packs are stored. The lookup fails instead of answering either
-// way, and the next one loads again.
+// way, and the next one lists the packs again without reading the index
+// objects a second time.
 func TestIndexLoadFailsWhenThePacksCannotBeListed(t *testing.T) {
 	ctx := context.Background()
 	s := testPackSpaces(t)[0]
@@ -740,18 +744,23 @@ func TestIndexLoadFailsWhenThePacksCannotBeListed(t *testing.T) {
 	packs, blobs := storeTestPacks(t, b, s, 1, 12)
 	writeTestIndex(t, newPackIndex(b, s, quietLogger), packs)
 
-	x := newPackIndex(b, s, quietLogger)
+	counted := newIndexBackend(b)
+	x := newPackIndex(counted, s, quietLogger)
 	if _, _, ok, err := x.lookup(ctx, blobs[0].name); !errors.Is(err, errList) || ok {
 		t.Fatalf("lookup = %v, %v; want %v", ok, err, errList)
 	}
 	if x.table.Load() != nil {
 		t.Fatal("a load whose pack listing failed left a table")
 	}
+	_, read, _ := counted.calls(s.index)
 	b.err = nil
 	for _, blob := range blobs {
 		if _, _, ok := mustLookup(t, x, blob.name); !ok {
 			t.Fatalf("blob %s is missing after the listing answered", blob.name)
 		}
+	}
+	if lists, gets, _ := counted.calls(s.index); lists != 1 || gets != read {
+		t.Errorf("index namespace after the retry: %d Lists, %d Gets; want 1 and %d", lists, gets, read)
 	}
 }
 

@@ -180,6 +180,26 @@ func TestListReportsSizesAndDelete(t *testing.T) {
 	}
 }
 
+// TestListFailsWhenAShardVanishesMidWalk moves a pack shard away while List
+// walks the one before it. The listing then lacks packs that are stored, and
+// a caller that took it as complete would count them as lost: List fails.
+func TestListFailsWhenAShardVanishesMidWalk(t *testing.T) {
+	ctx := context.Background()
+	b := newBackend(t)
+	for _, name := range []string{"aa01", "bb01"} {
+		if err := b.Put(ctx, ark.Handle{Type: ark.DataPackFile, Name: name}, strings.NewReader(name)); err != nil {
+			t.Fatalf("Put %s: %v", name, err)
+		}
+	}
+	ns := filepath.Join(b.BasePath(), ark.DataPackFile.String())
+	err := b.List(ctx, ark.DataPackFile, func(ark.BlobInfo) error {
+		return os.Rename(filepath.Join(ns, "bb"), filepath.Join(b.BasePath(), "moved"))
+	})
+	if err == nil {
+		t.Fatal("List after a shard vanished mid-walk = nil, want an error")
+	}
+}
+
 func TestRejectsUnknownTypeAndEscapingNames(t *testing.T) {
 	ctx := context.Background()
 	b := newBackend(t)
