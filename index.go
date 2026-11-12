@@ -151,6 +151,37 @@ func (t *indexTable) sort() {
 	}
 }
 
+// listed returns the packs of t that keep marks, by their number in t.packs,
+// each with every blob t lists in it. That is a second copy of their records.
+func (t *indexTable) listed(keep []bool) []indexedPack {
+	blobs := make([]int, len(t.packs))
+	for _, records := range &t.records {
+		for _, rec := range records {
+			blobs[rec.pack]++
+		}
+	}
+	entries := make([][]packEntry, len(t.packs))
+	for i, n := range blobs {
+		if keep[i] {
+			entries[i] = make([]packEntry, 0, n)
+		}
+	}
+	for _, records := range &t.records {
+		for _, rec := range records {
+			if keep[rec.pack] {
+				entries[rec.pack] = append(entries[rec.pack], rec.packEntry)
+			}
+		}
+	}
+	var packs []indexedPack
+	for i, pack := range t.packs {
+		if keep[i] {
+			packs = append(packs, indexedPack{name: hex.EncodeToString(pack[:]), entries: entries[i]})
+		}
+	}
+	return packs
+}
+
 // encode returns the content of the index object that holds t, which is
 // sorted.
 func (t *indexTable) encode() []byte {
@@ -255,20 +286,28 @@ func (x *packIndex) lookup(ctx context.Context, name string) (pack string, e pac
 	if !ok {
 		return "", packEntry{}, false, fmt.Errorf("ark: invalid %s name %q", x.space.blobs, name)
 	}
-	t, err := x.load(ctx)
-	if err != nil {
+	in, e, ok, err := x.find(ctx, blob)
+	if err != nil || !ok {
 		return "", packEntry{}, false, err
 	}
-	in, e, ok := t.find(blob)
+	return hex.EncodeToString(in[:]), e, true, nil
+}
+
+// find is lookup by the bytes a blob name and a pack name spell.
+func (x *packIndex) find(
+	ctx context.Context, blob [sha256.Size]byte,
+) (pack [sha256.Size]byte, e packEntry, ok bool, err error) {
+	t, err := x.load(ctx)
+	if err != nil {
+		return pack, packEntry{}, false, err
+	}
+	pack, e, ok = t.find(blob)
 	if w := x.written.Load(); w != nil {
-		if p, we, found := w.find(blob); found && (!ok || compareNames(p, in) < 0) {
-			in, e, ok = p, we, true
+		if p, we, found := w.find(blob); found && (!ok || compareNames(p, pack) < 0) {
+			pack, e, ok = p, we, true
 		}
 	}
-	if !ok {
-		return "", packEntry{}, false, nil
-	}
-	return hex.EncodeToString(in[:]), e, true, nil
+	return pack, e, ok, nil
 }
 
 // load returns the merged table, reading it on the first call. An index

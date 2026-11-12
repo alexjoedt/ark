@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -58,6 +59,24 @@ func TestVerifyingStoreRecomputesTheName(t *testing.T) {
 
 		if _, err := s.verifying().Get(ctx, name); err != nil {
 			t.Errorf("%s: verifying Get of a correct object: %v", typ, err)
+		}
+
+		// Verify reads chunks pack by pack, not through Get, and recomputes
+		// the name as well.
+		if typ != BlobFile {
+			continue
+		}
+		refs := map[[sha256.Size]byte]int{}
+		for _, n := range []string{wrong, name} {
+			blob, _ := parseName(n)
+			refs[blob] = 1
+		}
+		res := &VerifyResult{OK: true}
+		if err := verifyChunks(ctx, s, refs, res, func(int) {}); err != nil {
+			t.Fatalf("verifyChunks: %v", err)
+		}
+		if res.OK || !slices.Equal(res.CorruptChunks, []string{wrong}) || res.ChunksChecked != 1 {
+			t.Errorf("verifyChunks = %+v, want only %s corrupt and the other chunk checked", res, wrong)
 		}
 	}
 }
@@ -150,10 +169,10 @@ func TestWholePackReadThatComesBackShortIsAskedAgain(t *testing.T) {
 	}
 }
 
-// TestVerifyChunkDoesNotBlameTheChunkForALostIndexObject: an index object
+// TestVerifyDoesNotBlameTheChunkForALostIndexObject: an index object
 // that was listed and is gone fails the load with ErrNotFound, which is no
 // verdict on any chunk.
-func TestVerifyChunkDoesNotBlameTheChunkForALostIndexObject(t *testing.T) {
+func TestVerifyDoesNotBlameTheChunkForALostIndexObject(t *testing.T) {
 	ctx := context.Background()
 	codec := newObjectCodec()
 	defer codec.Close()
@@ -173,15 +192,17 @@ func TestVerifyChunkDoesNotBlameTheChunkForALostIndexObject(t *testing.T) {
 	chunks, _ := (&Repository{backend: b, codec: codec, key: key, logger: quietLogger}).stores()
 	b.getErr = fmt.Errorf("%w: the index object", ErrNotFound)
 	result := &VerifyResult{OK: true}
-	if err := verifyChunk(ctx, chunks, name, result); !errors.Is(err, b.getErr) {
-		t.Errorf("verifyChunk returned %v, want the load error", err)
+	blob, _ := parseName(name)
+	refs := map[[sha256.Size]byte]int{blob: 1}
+	if err := verifyChunks(ctx, chunks, refs, result, func(int) {}); !errors.Is(err, b.getErr) {
+		t.Errorf("verifyChunks returned %v, want the load error", err)
 	}
 	if !result.OK || len(result.MissingChunks) != 0 {
 		t.Errorf("a failed index load reported the chunk: %+v", result)
 	}
 
 	b.getErr = nil
-	if err := verifyChunk(ctx, chunks, name, result); err != nil || result.ChunksChecked != 1 {
-		t.Errorf("verifyChunk after the index is back: %v, %d checked", err, result.ChunksChecked)
+	if err := verifyChunks(ctx, chunks, refs, result, func(int) {}); err != nil || result.ChunksChecked != 1 {
+		t.Errorf("verifyChunks after the index is back: %v, %d checked", err, result.ChunksChecked)
 	}
 }

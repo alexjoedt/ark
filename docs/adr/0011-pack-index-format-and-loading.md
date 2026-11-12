@@ -89,7 +89,10 @@ the run (`TestIndexReadsAnObjectAgainBeforeSkippingIt`). An index that has loade
 writes afterwards beside its table instead of listing again, and answers as an index that loads
 later does (`TestIndexFindsWhatItWroteAfterLoading`).
 `TestIndexRebuiltFromPacksEqualsTheWrittenOne` shows that the tables of the packs give the same
-index; a pack that does not open or is not named by its hash is left out of a rebuild and reported.
+index; a pack that does not open or is not named by its hash is reported and describes nothing to
+a rebuild. `Repository.RebuildIndex` then keeps what the old index lists in that pack, because one
+changed byte makes the table of a pack unreadable and with it the place of every intact blob
+beside the damaged one (`TestRebuildIndexKeepsWhatTheOldIndexKnowsOfADamagedPack`).
 `BenchmarkIndexLoad` measures the budget on the memory backend, on its best run, and fails beyond
 it. The loaded table keeps its records in 64 slices by the leading bits of the blob name, so that
 loading never holds all records twice. The unit is `index.go`.

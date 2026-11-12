@@ -183,9 +183,24 @@ type VerifyResult struct {
 // CheckResult is returned by Check, which walks all snapshots.
 type CheckResult struct {
 	SnapshotsChecked int
-	Errors           []string
-	// Warnings are findings that leave every snapshot intact: a backup that
-	// did not finish, which Prune clears, or a lock that does not open, which
-	// Unlock WithForce removes.
+	// Errors are findings that break a snapshot or a later backup: a
+	// manifest, tree or chunk that is missing or does not open, a pack the
+	// index lists that is not stored, a pack whose own table disagrees with
+	// the index.
+	Errors []string
+	// Warnings are findings that leave every snapshot intact: a pack no index
+	// lists or an index object that does not open, both of which Prune
+	// removes, or a lock that does not open, which Unlock WithForce removes.
 	Warnings []string
+}
+
+// RebuildIndexResult is returned by RebuildIndex.
+type RebuildIndexResult struct {
+	// PacksIndexed and BlobsIndexed count what the new index lists.
+	PacksIndexed int
+	BlobsIndexed int
+	// UnreadablePacks names the stored packs whose own table does not open,
+	// data and tree packs alike. The new index lists in them what the old
+	// one did, and nothing when the old one did not list them.
+	UnreadablePacks []string
 }

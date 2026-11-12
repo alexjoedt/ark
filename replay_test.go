@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -207,8 +208,15 @@ func TestReplayedIndexObjectNeverRestoresOtherBytes(t *testing.T) {
 	if res, err := repo.Verify(ctx, again.ID); !errors.Is(err, ark.ErrNotFound) || (res != nil && res.OK) {
 		t.Errorf("Verify = %+v, %v; want ErrNotFound and OK false", res, err)
 	}
+	// Check names the snapshot and, whether or not a snapshot references
+	// them, the two packs the replayed index lists that are gone.
 	check, err := repo.Check(ctx)
-	if err != nil || len(check.Errors) != 1 || !strings.Contains(check.Errors[0], again.ID) {
-		t.Errorf("Check = %+v, %v; want the snapshot under Errors", check, err)
+	if err != nil || len(check.Errors) != 3 {
+		t.Fatalf("Check = %+v, %v; want the snapshot and both lost packs under Errors", check, err)
+	}
+	for _, want := range []string{again.ID, "datapacks object", "treepacks object"} {
+		if !slices.ContainsFunc(check.Errors, func(e string) bool { return strings.Contains(e, want) }) {
+			t.Errorf("Check errors %q name no %s", check.Errors, want)
+		}
 	}
 }

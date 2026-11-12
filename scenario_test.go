@@ -29,6 +29,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -505,6 +506,10 @@ func TestScenarioCheckCoversEverySnapshot(t *testing.T) {
 	// content, so exactly one of them loses it.
 	broken := snaps[1]
 	chunk := ark.ObjectName(repo, []byte("two"))
+	pack, _, _, err := ark.BlobPlace(ctx, repo, ark.BlobFile, chunk)
+	if err != nil {
+		t.Fatalf("BlobPlace: %v", err)
+	}
 	deletePackOf(t, b, repo, ark.BlobFile, chunk)
 
 	result, err = repo.Check(ctx)
@@ -514,12 +519,39 @@ func TestScenarioCheckCoversEverySnapshot(t *testing.T) {
 	if result.SnapshotsChecked != 3 {
 		t.Errorf("Check looked at %d snapshots, want 3", result.SnapshotsChecked)
 	}
-	if len(result.Errors) != 1 {
-		t.Fatalf("Check reports %d errors, want 1: %v", len(result.Errors), result.Errors)
+	// One finding for the pack the index lists and the backend lost, one for
+	// the snapshot that references a chunk in it. Both name the chunk.
+	if len(result.Errors) != 2 {
+		t.Fatalf("Check reports %d errors, want 2: %v", len(result.Errors), result.Errors)
 	}
-	if !strings.Contains(result.Errors[0], broken.ID) || !strings.Contains(result.Errors[0], chunk) {
-		t.Errorf("Check reports %q, want it to name snapshot %s and chunk %s",
-			result.Errors[0], broken.ID, chunk)
+	for _, want := range []string{pack.Name, broken.ID} {
+		if !slices.ContainsFunc(result.Errors, func(e string) bool {
+			return strings.Contains(e, want) && strings.Contains(e, chunk)
+		}) {
+			t.Errorf("Check reports %q, want an error naming %s and chunk %s", result.Errors, want, chunk)
+		}
+	}
+
+	// The lost pack stays a finding once no snapshot references it: the
+	// index still lists its chunk, and a backup of that content would store
+	// nothing.
+	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{broken.ID}}); err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+	result, err = repo.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(result.Errors) != 1 || !strings.Contains(result.Errors[0], pack.Name) ||
+		!strings.Contains(result.Errors[0], chunk) {
+		t.Errorf("Check reports %q, want one error naming pack %s and chunk %s", result.Errors, pack.Name, chunk)
+	}
+	// A rebuilt index lists what is stored, so the finding ends there.
+	if _, err := repo.RebuildIndex(ctx); err != nil {
+		t.Fatalf("RebuildIndex: %v", err)
+	}
+	if result, err = repo.Check(ctx); err != nil || len(result.Errors) != 0 || len(result.Warnings) != 0 {
+		t.Errorf("Check after the rebuild = %+v, %v; want no findings", result, err)
 	}
 }
 

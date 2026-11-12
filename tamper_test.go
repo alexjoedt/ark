@@ -3,6 +3,8 @@ package ark_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -44,6 +46,16 @@ import (
 //	           Check lists the snapshot under Errors
 //	locks      the lock is absent for Locks and Backup, Check lists it under
 //	           Warnings
+//	datapacks  the blob table of a data pack: RebuildIndex names the pack
+//	           unreadable and lists none of its chunks, which then are
+//	           missing as under dataindex
+//	treepacks  the blob table of a tree pack: the same for its tree nodes,
+//	           which then are missing as under treeindex
+//
+// The blob table is the one sealed object inside a pack that no read through
+// the index opens: only RebuildIndex does. Its cells change the table and
+// store the pack under the name its bytes then hash to, so nothing but the
+// table's tag rejects it, and they delete the index before the rebuild.
 //
 // The tag binds key, namespace and name (objectAAD), so it alone rejects
 // every cell: Restore reads through a non-verifying store and still fails on
@@ -135,6 +147,9 @@ type tamperFixture struct {
 	victim, other *ark.Snapshot
 	// index names the index object each backup wrote, the victim's first.
 	index map[ark.HandleType][2]string
+	// tables maps the name a blob table is sealed under, the hex SHA-256 of
+	// its pack's blob section, to the pack. Only the pack table rows fill it.
+	tables map[string]ark.Handle
 }
 
 func newTamperFixture(t *testing.T) *tamperFixture {
@@ -179,22 +194,60 @@ func (f *tamperFixture) stored(t *testing.T, typ ark.HandleType, name string) (a
 	return pack, offset, length
 }
 
-// whole returns the stored object of name and its handle.
+// whole returns the stored object of name and its handle. A blob table is
+// its own object here, under the name it is sealed with.
 func (f *tamperFixture) whole(t *testing.T, typ ark.HandleType, name string) (ark.Handle, []byte) {
 	t.Helper()
+	if _, ok := f.tables[name]; ok {
+		_, table := f.table(t, name)
+		return ark.Handle{Type: typ, Name: name}, table
+	}
 	h, _, _ := f.stored(t, typ, name)
 	return h, readObject(t, f.b, h.Type, h.Name)
 }
 
+// table returns the blob section of the pack whose table is sealed under
+// name, and that sealed table.
+func (f *tamperFixture) table(t *testing.T, name string) (section, table []byte) {
+	t.Helper()
+	h := f.tables[name]
+	return splitPack(t, readObject(t, f.b, h.Type, h.Name))
+}
+
+// splitPack returns the blob section and the sealed blob table of a pack.
+func splitPack(t *testing.T, pack []byte) (section, table []byte) {
+	t.Helper()
+	body := len(pack) - 4
+	if body < 0 || int(binary.LittleEndian.Uint32(pack[body:])) > body {
+		t.Fatalf("a pack of %d bytes has no blob table", len(pack))
+	}
+	section = pack[:body-int(binary.LittleEndian.Uint32(pack[body:]))]
+	return section, pack[len(section):body]
+}
+
+// put stores obj under name. For a blob table it stores the table's pack
+// with obj as its table, under the name the new bytes hash to.
 func (f *tamperFixture) put(t *testing.T, typ ark.HandleType, name string, obj []byte) {
 	t.Helper()
+	if old, ok := f.tables[name]; ok {
+		section, _ := f.table(t, name)
+		pack := binary.LittleEndian.AppendUint32(append(bytes.Clone(section), obj...), uint32(len(obj)))
+		sum := sha256.Sum256(pack)
+		f.del(t, typ, name)
+		f.tables[name] = ark.Handle{Type: old.Type, Name: hex.EncodeToString(sum[:])}
+		name, obj = f.tables[name].Name, pack
+	}
 	if err := f.b.Put(context.Background(), ark.Handle{Type: typ, Name: name}, bytes.NewReader(obj)); err != nil {
 		t.Fatalf("put %s/%s: %v", typ, name, err)
 	}
 }
 
+// del deletes the object under name, for a blob table its pack.
 func (f *tamperFixture) del(t *testing.T, typ ark.HandleType, name string) {
 	t.Helper()
+	if h, ok := f.tables[name]; ok {
+		name = h.Name
+	}
 	if err := f.b.Delete(context.Background(), ark.Handle{Type: typ, Name: name}); err != nil {
 		t.Fatalf("delete %s/%s: %v", typ, name, err)
 	}
@@ -206,6 +259,14 @@ func (f *tamperFixture) plaintext(t *testing.T, typ ark.HandleType, name string)
 	t.Helper()
 	if typ == ark.KeyFile {
 		return readObject(t, f.b, typ, name)
+	}
+	if _, ok := f.tables[name]; ok {
+		h, table := f.whole(t, typ, name)
+		data, err := ark.UnsealObject(f.repo, h, table)
+		if err != nil {
+			t.Fatalf("open the blob table %s/%s: %v", typ, name, err)
+		}
+		return data
 	}
 	data, err := ark.OpenObject(context.Background(), f.repo, typ, name)
 	if err != nil {
@@ -228,10 +289,16 @@ func sealedAs(t *testing.T, repo *ark.Repository, b ark.Backend, h ark.Handle, d
 }
 
 // editSealed rewrites the sealed bytes of the object under name: the whole
-// object, the bytes of a chunk or tree node in its pack, or the hex sealed
-// key inside a key file. A pack is cut off behind bytes that edit shortened.
+// object, the bytes of a chunk or tree node in its pack, the blob table of a
+// pack, or the hex sealed key inside a key file. A pack is cut off behind the
+// bytes of a chunk or tree node that edit shortened.
 func (f *tamperFixture) editSealed(t *testing.T, typ ark.HandleType, name string, edit func([]byte) []byte) {
 	t.Helper()
+	if _, ok := f.tables[name]; ok {
+		_, table := f.whole(t, typ, name)
+		f.put(t, typ, name, edit(bytes.Clone(table)))
+		return
+	}
 	if typ != ark.KeyFile {
 		h, offset, length := f.stored(t, typ, name)
 		whole := readObject(t, f.b, h.Type, h.Name)
@@ -289,6 +356,8 @@ var foreignNamespace = map[ark.HandleType]ark.HandleType{
 	ark.TreeFile:      ark.BlobFile,
 	ark.DataIndexFile: ark.TreeIndexFile,
 	ark.TreeIndexFile: ark.DataIndexFile,
+	ark.DataPackFile:  ark.TreePackFile,
+	ark.TreePackFile:  ark.DataPackFile,
 	ark.SnapshotFile:  ark.LockFile,
 	ark.LockFile:      ark.SnapshotFile,
 }
@@ -458,18 +527,7 @@ var tamperNamespaces = []tamperNamespace{
 			return f.index[ark.DataIndexFile][0], f.index[ark.DataIndexFile][1]
 		},
 		accepted: acceptedSnapshot,
-		rejected: func(t *testing.T, f *tamperFixture, _ string) {
-			chunk := ark.ObjectName(f.repo, []byte(victimContent))
-			assertRestoreFails(t, f, ark.ErrNotFound)
-			res, err := f.repo.Verify(context.Background(), f.victim.ID)
-			if err != nil {
-				t.Fatalf("Verify: %v", err)
-			}
-			if res.OK || !slices.Contains(res.MissingChunks, chunk) {
-				t.Errorf("Verify = OK %v, missing %v, want not OK with chunk %s", res.OK, res.MissingChunks, chunk)
-			}
-			assertCheckError(t, f, chunk)
-		},
+		rejected: missingChunk,
 	},
 	{
 		typ: ark.TreeIndexFile,
@@ -477,12 +535,95 @@ var tamperNamespaces = []tamperNamespace{
 			return f.index[ark.TreeIndexFile][0], f.index[ark.TreeIndexFile][1]
 		},
 		accepted: acceptedSnapshot,
-		rejected: func(t *testing.T, f *tamperFixture, _ string) {
-			assertRestoreFails(t, f, ark.ErrNotFound)
-			assertVerifyFails(t, f, ark.ErrNotFound)
-			assertCheckError(t, f, f.victim.ID)
-		},
+		rejected: missingTree,
 	},
+	packTableRow(ark.BlobFile, ark.DataIndexFile, missingChunk, func(_ *testing.T, f *tamperFixture) (string, string) {
+		return ark.ObjectName(f.repo, []byte(victimContent)), ark.ObjectName(f.repo, []byte(otherContent))
+	}),
+	packTableRow(ark.TreeFile, ark.TreeIndexFile, missingTree, func(t *testing.T, f *tamperFixture) (string, string) {
+		return snapshotTree(t, f, f.victim.ID), snapshotTree(t, f, f.other.ID)
+	}),
+}
+
+// missingChunk asserts what the readers of the victim snapshot see once
+// nothing locates its chunk.
+func missingChunk(t *testing.T, f *tamperFixture, _ string) {
+	t.Helper()
+	chunk := ark.ObjectName(f.repo, []byte(victimContent))
+	assertRestoreFails(t, f, ark.ErrNotFound)
+	res, err := f.repo.Verify(context.Background(), f.victim.ID)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if res.OK || !slices.Contains(res.MissingChunks, chunk) {
+		t.Errorf("Verify = OK %v, missing %v, want not OK with chunk %s", res.OK, res.MissingChunks, chunk)
+	}
+	assertCheckError(t, f, chunk)
+}
+
+// missingTree is missingChunk for the root tree node of the victim snapshot.
+func missingTree(t *testing.T, f *tamperFixture, _ string) {
+	t.Helper()
+	assertRestoreFails(t, f, ark.ErrNotFound)
+	assertVerifyFails(t, f, ark.ErrNotFound)
+	assertCheckError(t, f, f.victim.ID)
+}
+
+// packTableRow is the row of the blob table in the packs that hold blobs.
+// The victim is the table of the pack with the blob blobsOf names first, the
+// other object that of the second; missing asserts what readers see when a
+// rebuilt index does not list the victim's pack.
+func packTableRow(
+	blobs, index ark.HandleType,
+	missing func(t *testing.T, f *tamperFixture, victim string),
+	blobsOf func(t *testing.T, f *tamperFixture) (victim, other string),
+) tamperNamespace {
+	// rebuild deletes the index of the type, so that only what the packs say
+	// about themselves locates a blob, and rebuilds it.
+	rebuild := func(t *testing.T, f *tamperFixture) *ark.RebuildIndexResult {
+		t.Helper()
+		for _, name := range objectNames(t, f.b, index) {
+			f.del(t, index, name)
+		}
+		res, err := f.repo.RebuildIndex(context.Background())
+		if err != nil {
+			t.Fatalf("RebuildIndex: %v", err)
+		}
+		return res
+	}
+	packs := ark.DataPackFile
+	if blobs == ark.TreeFile {
+		packs = ark.TreePackFile
+	}
+	return tamperNamespace{
+		typ: packs,
+		setup: func(t *testing.T, f *tamperFixture) (string, string) {
+			f.tables = make(map[string]ark.Handle)
+			var names [2]string
+			victim, other := blobsOf(t, f)
+			for i, blob := range []string{victim, other} {
+				pack, _, _ := f.stored(t, blobs, blob)
+				section, _ := splitPack(t, readObject(t, f.b, pack.Type, pack.Name))
+				sum := sha256.Sum256(section)
+				names[i] = hex.EncodeToString(sum[:])
+				f.tables[names[i]] = pack
+			}
+			return names[0], names[1]
+		},
+		accepted: func(t *testing.T, f *tamperFixture, victim string) {
+			if res := rebuild(t, f); len(res.UnreadablePacks) != 0 {
+				t.Errorf("RebuildIndex names the intact packs %v unreadable", res.UnreadablePacks)
+			}
+			acceptedSnapshot(t, f, victim)
+		},
+		rejected: func(t *testing.T, f *tamperFixture, victim string) {
+			if res := rebuild(t, f); !slices.Contains(res.UnreadablePacks, f.tables[victim].Name) {
+				t.Errorf("RebuildIndex names %v unreadable, want the pack %s with the mutated table",
+					res.UnreadablePacks, f.tables[victim].Name)
+			}
+			missing(t, f, victim)
+		},
+	}
 }
 
 func snapshotTree(t *testing.T, f *tamperFixture, id string) string {

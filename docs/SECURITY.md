@@ -72,6 +72,13 @@ writer, every accepted risk included.
   missing: Restore and Verify fail with `ErrNotFound` or report the chunk missing, Check lists it
   under errors, and prune deletes nothing while a snapshot references a blob no index lists:
   `TestTamperedObjectsAreRejected`, `TestPruneAbortsWhenTheIndexHidesALiveBlob`.
+- The blob table of a pack under the same mutations does not open, also when the pack is stored
+  under the name its changed bytes hash to: RebuildIndex names the pack unreadable and takes no
+  entry from it, so a rebuilt index never points a name at other bytes:
+  `TestTamperedObjectsAreRejected`.
+- A pack that is gone while the index lists it is an error of Check whether or not a snapshot
+  references it, as is a pack whose own table disagrees with the index:
+  `TestScenarioCheckCoversEverySnapshot`, `TestCheckReportsAPackThatDisagreesWithTheIndex`.
 - A lock under the same mutations is treated as absent, Check lists it under warnings, and only a
   forced unlock deletes it: `TestTamperedObjectsAreRejected`,
   `TestTamperedLockIsIgnoredUntilForced`.
@@ -115,7 +122,8 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
 - A replayed lock blocks writers until it is stale: `TestReplayedLockIsHonouredUntilItIsStale`.
 - The index objects of a pruned backup, put back, list packs that are gone. A backup trusts the
   index, so a later backup of the same data stores nothing and its snapshot fails Restore, Verify
-  and Check; it never restores other bytes: `TestReplayedIndexObjectNeverRestoresOtherBytes`.
+  and Check, which also names the lost packs; it never restores other bytes:
+  `TestReplayedIndexObjectNeverRestoresOtherBytes`.
 - Object sizes and counts per namespace show: the size of every pack and index object, and with the
   index sizes the number of chunks and trees. A sealed chunk is its zstd frame plus 41 bytes and a
   pack is its sealed chunks plus a sealed table, so the stored bytes show, while the boundaries

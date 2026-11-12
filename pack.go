@@ -34,6 +34,10 @@ const (
 	packEntrySize = sha256.Size + 4
 	// packTrailerSize is the length of the sealed table, at the pack's end.
 	packTrailerSize = 4
+	// packRangeGap is the most bytes between two wanted blobs of one pack
+	// that a single range read spans: reading them over costs less than a
+	// second request.
+	packRangeGap = 1 << 20
 )
 
 // packEntry locates one sealed blob in a pack.

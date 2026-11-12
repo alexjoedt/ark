@@ -245,11 +245,17 @@ func TestVerifyReportsProgress(t *testing.T) {
 	if len(fetches) == 0 {
 		t.Fatalf("no fetch events, got %v", phaseList(got))
 	}
+	// One event per data pack read, counting the chunk references settled.
+	done, total := 0, snaps[1].Stats.ChunksTotal
 	for i, e := range fetches {
-		if e.Phase != ark.PhaseFetch || e.ChunksDone != i+1 || e.ChunksTotal != len(fetches) {
-			t.Errorf("fetch event %d = %s %d/%d, want fetch %d/%d",
-				i, e.Phase, e.ChunksDone, e.ChunksTotal, i+1, len(fetches))
+		if e.Phase != ark.PhaseFetch || e.ChunksDone <= done || e.ChunksTotal != total {
+			t.Errorf("fetch event %d = %s %d/%d after %d, want fetch with a growing count of %d",
+				i, e.Phase, e.ChunksDone, e.ChunksTotal, done, total)
 		}
+		done = e.ChunksDone
+	}
+	if done != total {
+		t.Errorf("the last fetch event reports %d chunk references, want all %d", done, total)
 	}
 	if got[0].CurrentPath != "" {
 		t.Errorf("load event carries CurrentPath %q, want none before the prefix is resolved", got[0].CurrentPath)
@@ -274,8 +280,9 @@ func TestCheckReportsProgress(t *testing.T) {
 		t.Errorf("finalize reports %d/%d snapshots, want %d", final.FilesDone, final.FilesTotal, len(snaps))
 	}
 
-	// Per snapshot: its verify's fetch events with chunk counters starting
-	// at one, then one event counting it as checked.
+	// Per snapshot: its verify's fetch events with chunk counters that
+	// restart, at one for these snapshots of one chunk each, then one event
+	// counting it as checked.
 	checked := 0
 	var current string
 	for _, e := range got[1 : len(got)-1] {

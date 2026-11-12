@@ -15,7 +15,8 @@ func checkCommand() *cli.Command {
 		UsageText: `ark check
 
    Verifies every snapshot and reports missing or corrupt objects. Exit 5 on problems.
-   An unfinished backup is reported as a warning; prune cleans it up.`,
+   A pack no index lists, which an unfinished backup leaves, and an index object that
+   does not open are reported as warnings; prune removes both.`,
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			repo, err := openRepo(ctx, cmd)
 			if err != nil {

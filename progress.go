@@ -14,8 +14,9 @@ package ark
 //   - forget: PhaseLoad, PhaseFinalize with FilesDone = manifests removed
 //   - prune: PhaseLoad, PhaseSweep with ChunksDone/ChunksTotal over the
 //     chunks and trees listed, PhaseFinalize
-//   - verify: PhaseLoad, PhaseFetch per chunk reference, PhaseFinalize;
-//     CurrentPath is the resolved snapshot ID, empty on PhaseLoad
+//   - verify: PhaseLoad, PhaseFetch per data pack read with ChunksDone of
+//     ChunksTotal chunk references verified, PhaseFinalize; CurrentPath is
+//     the resolved snapshot ID, empty on PhaseLoad
 //   - check: PhaseLoad, then per snapshot the PhaseFetch events of its verify
 //     and one PhaseFetch with FilesDone = snapshots checked, PhaseFinalize;
 //     CurrentPath is the snapshot ID

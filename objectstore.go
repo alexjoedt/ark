@@ -163,6 +163,9 @@ type objectStore struct {
 	// object whole and serves the objects beside it from memory; without it
 	// every Get is one range read.
 	packs *chunkCache
+	// suspects, when set, collects the blobs Get could not open, by pack.
+	// Check sets it: nothing that reads concurrently does.
+	suspects map[string][]packEntry
 	// held and writer take what putNamed stores. They are set on the stores
 	// of a packSession; any other store only reads.
 	held   *heldBlobs
@@ -242,12 +245,21 @@ func (s *objectStore) Get(ctx context.Context, name string) ([]byte, error) {
 		data, err = s.fromWholePack(ctx, pack, e)
 	}
 	if err != nil {
+		s.suspect(pack, e, err)
 		return nil, err
 	}
 	if s.verify && s.name(data) != name {
 		return nil, fmt.Errorf("%w: %s object %s: %w", s.space.corruptErr, s.space.blobs, name, errNameMismatch)
 	}
 	return data, nil
+}
+
+// suspect notes that the blob at e of the pack named pack failed with err,
+// when s collects such blobs and err says the blob did not open.
+func (s *objectStore) suspect(pack string, e packEntry, err error) {
+	if s.suspects != nil && errors.Is(err, s.space.corruptErr) {
+		s.suspects[pack] = append(s.suspects[pack], e)
+	}
 }
 
 // fromWholePack returns the content of the blob at e in the pack named pack,

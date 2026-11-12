@@ -15,10 +15,8 @@ type prunePlan struct {
 	store *objectStore
 	table *indexTable
 	// referenced marks the packs of table.packs that hold a referenced blob
-	// and stay, blobs counts what the index lists in each. The index is
-	// written from the packs that stay when rewrite is set.
+	// and stay. The index is written from them when rewrite is set.
 	referenced []bool
-	blobs      []int
 	rewrite    bool
 	// stored is every pack in the namespace. remove names those of them that
 	// no index lists or that hold no referenced blob, with the number of
@@ -134,11 +132,11 @@ func (p *prunePlan) plan(ctx context.Context, live map[string]struct{}) error {
 	p.table = t
 
 	p.referenced = make([]bool, len(t.packs))
-	p.blobs = make([]int, len(t.packs))
+	blobs := make([]int, len(t.packs))
 	var name [2 * sha256.Size]byte
 	for _, records := range &t.records {
 		for _, rec := range records {
-			p.blobs[rec.pack]++
+			blobs[rec.pack]++
 			hex.Encode(name[:], rec.name[:])
 			if _, ok := live[string(name[:])]; ok {
 				p.referenced[rec.pack] = true
@@ -149,10 +147,10 @@ func (p *prunePlan) plan(ctx context.Context, live map[string]struct{}) error {
 	kept := 0
 	for i, pack := range t.packs {
 		if p.referenced[i] {
-			kept += p.blobs[i]
+			kept += blobs[i]
 			continue
 		}
-		dead[hex.EncodeToString(pack[:])] = p.blobs[i]
+		dead[hex.EncodeToString(pack[:])] = blobs[i]
 	}
 	// One object per indexMaxRecords blobs is what a rewrite leaves at most.
 	p.rewrite = len(dead) > 0 || len(t.unreadable) > 0 ||
@@ -161,11 +159,11 @@ func (p *prunePlan) plan(ctx context.Context, live map[string]struct{}) error {
 	p.remove = make(map[string]int)
 	err = p.store.backend.List(ctx, x.space.packs, func(info BlobInfo) error {
 		p.stored = append(p.stored, info)
-		blobs, isDead := dead[info.Name]
+		lost, isDead := dead[info.Name]
 		sum, ok := parseName(info.Name)
 		_, listed := slices.BinarySearchFunc(t.packs, sum, compareNames)
 		if isDead || !ok || !listed {
-			p.remove[info.Name] = blobs
+			p.remove[info.Name] = lost
 		}
 		return nil
 	})
@@ -175,67 +173,64 @@ func (p *prunePlan) plan(ctx context.Context, live map[string]struct{}) error {
 	return nil
 }
 
-// keep returns the packs that stay, each with every blob the index lists in
-// it. That is a second copy of their records, so only a rewrite asks for it.
-func (p *prunePlan) keep() []indexedPack {
-	entries := make([][]packEntry, len(p.table.packs))
-	for i, n := range p.blobs {
-		if p.referenced[i] {
-			entries[i] = make([]packEntry, 0, n)
-		}
-	}
-	for _, records := range &p.table.records {
-		for _, rec := range records {
-			if p.referenced[rec.pack] {
-				entries[rec.pack] = append(entries[rec.pack], rec.packEntry)
-			}
-		}
-	}
-	var keep []indexedPack
-	for i, pack := range p.table.packs {
-		if p.referenced[i] {
-			keep = append(keep, indexedPack{name: hex.EncodeToString(pack[:]), entries: entries[i]})
-		}
-	}
-	return keep
+// indexSet is the index of one blob type as a prune or a rebuild leaves it:
+// packs returns what the new index objects list, old names the objects they
+// replace.
+type indexSet struct {
+	space *packSpace
+	packs func() []indexedPack
+	old   []string
 }
 
-// rewriteIndexes stores the index of the packs that stay and then deletes
-// the index objects it replaces, each step made durable before the next.
+// rewriteIndexes stores the index of the packs that stay and deletes the
+// index objects it replaces. An object that does not open goes last, with
+// the packs.
 func (r *Repository) rewriteIndexes(ctx context.Context, plans []*prunePlan) error {
-	written := make([][]string, len(plans))
-	rewrite := false
-	for i, p := range plans {
+	var sets []indexSet
+	for _, p := range plans {
 		if !p.rewrite {
 			continue
 		}
-		rewrite = true
+		old := slices.DeleteFunc(slices.Clone(p.table.objects), func(name string) bool {
+			return slices.Contains(p.table.unreadable, name)
+		})
+		sets = append(sets, indexSet{
+			space: p.store.space,
+			packs: func() []indexedPack { return p.table.listed(p.referenced) },
+			old:   old,
+		})
+	}
+	return r.replaceIndexes(ctx, sets)
+}
+
+// replaceIndexes stores the index objects of every set and then deletes the
+// objects they replace, each step made durable before the next: at any point
+// a kill leaves an index that lists every blob the new one does.
+func (r *Repository) replaceIndexes(ctx context.Context, sets []indexSet) error {
+	if len(sets) == 0 {
+		return nil
+	}
+	written := make([][]string, len(sets))
+	for i, set := range sets {
 		// A fresh index: one that is loaded would merge what it writes into
 		// its table, which nothing reads here.
-		names, err := newPackIndex(r.backend, p.store.space, r.logger).write(ctx, p.keep())
+		names, err := newPackIndex(r.backend, set.space, r.logger).write(ctx, set.packs())
 		if err != nil {
 			return err
 		}
 		written[i] = names
 	}
-	if !rewrite {
-		return nil
-	}
 	if err := r.backend.Sync(ctx); err != nil {
 		return fmt.Errorf("failed to sync the new index: %w", err)
 	}
-	for i, p := range plans {
-		if !p.rewrite {
-			continue
-		}
-		for _, name := range p.table.objects {
+	for i, set := range sets {
+		for _, name := range set.old {
 			// An object named like a new one is the new one: the name is
-			// the hash of the content. One that does not open goes last,
-			// with the packs.
-			if slices.Contains(written[i], name) || slices.Contains(p.table.unreadable, name) {
+			// the hash of the content.
+			if slices.Contains(written[i], name) {
 				continue
 			}
-			h := Handle{Type: p.store.space.index, Name: name}
+			h := Handle{Type: set.space.index, Name: name}
 			if err := r.backend.Delete(ctx, h); err != nil {
 				return fmt.Errorf("failed to delete %s object %s: %w", h.Type, name, err)
 			}
@@ -247,6 +242,55 @@ func (r *Repository) rewriteIndexes(ctx context.Context, plans []*prunePlan) err
 		return fmt.Errorf("failed to sync the index: %w", err)
 	}
 	return nil
+}
+
+// runRebuildIndex replaces the index of both blob types with what the stored
+// packs say about themselves.
+func (r *Repository) runRebuildIndex(ctx context.Context) (*RebuildIndexResult, error) {
+	result := &RebuildIndexResult{}
+	var sets []indexSet
+	chunks, trees := r.stores()
+	for _, s := range []*objectStore{chunks, trees} {
+		old, err := s.index.load(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("rebuild index: %w", err)
+		}
+		packs, unreadable, err := s.index.scanPacks(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("rebuild index: %w", err)
+		}
+		// A pack that does not open describes none of its blobs, and no later
+		// rebuild could: what the old index says about it is all that still
+		// locates the blobs in it that are intact.
+		keep := make([]bool, len(old.packs))
+		for _, name := range unreadable {
+			sum, ok := parseName(name)
+			if i, listed := slices.BinarySearchFunc(old.packs, sum, compareNames); ok && listed {
+				keep[i] = true
+			}
+		}
+		packs = append(packs, old.listed(keep)...)
+
+		result.PacksIndexed += len(packs)
+		for _, p := range packs {
+			result.BlobsIndexed += len(p.entries)
+		}
+		result.UnreadablePacks = append(result.UnreadablePacks, unreadable...)
+		sets = append(sets, indexSet{
+			space: s.space,
+			packs: func() []indexedPack { return packs },
+			old:   old.objects,
+		})
+	}
+	if err := r.replaceIndexes(ctx, sets); err != nil {
+		return nil, fmt.Errorf("rebuild index: %w", err)
+	}
+	r.logger.InfoContext(ctx, "index rebuilt",
+		"packs", result.PacksIndexed,
+		"blobs", result.BlobsIndexed,
+		"unreadable_packs", len(result.UnreadablePacks),
+	)
+	return result, nil
 }
 
 // sweep deletes the packs of p.remove and the index objects that do not

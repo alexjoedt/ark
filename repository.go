@@ -496,6 +496,25 @@ func (r *Repository) Prune(ctx context.Context, opts ...PruneOption) (*PruneResu
 	return r.runGC(ctx, cfg.dryRun, progress)
 }
 
+// RebuildIndex replaces the index of the repository with what the stored
+// packs say about themselves: every pack is read whole, a new index is
+// written and the old index objects are deleted. It is the repair for a lost
+// or damaged index object, which Check and Prune report. It needs the
+// repository to itself, like Prune.
+//
+// A pack whose own table does not open is named in the result. The new index
+// lists in it what the old one did, so a rebuild never loses a blob the old
+// index could locate.
+func (r *Repository) RebuildIndex(ctx context.Context) (*RebuildIndexResult, error) {
+	ctx, lock, err := r.acquire(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.release(ctx)
+
+	return r.runRebuildIndex(ctx)
+}
+
 // Export writes a portable tar.gz archive of one snapshot to w. id is a full
 // snapshot id or a unique prefix.
 func (r *Repository) Export(ctx context.Context, id string, w io.Writer) error {
@@ -552,7 +571,10 @@ func (r *Repository) Verify(ctx context.Context, id string) (*VerifyResult, erro
 	return result, nil
 }
 
-// Check verifies every snapshot in the repository.
+// Check verifies every snapshot in the repository, reading and authenticating
+// every object they reference, and compares the index with the packs that are
+// stored. What it finds is in the result; the error is for a check that could
+// not run.
 func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 	progress := r.observer(OperationCheck, nil)
 	progress(ProgressEvent{Phase: PhaseLoad})
@@ -587,6 +609,13 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 	// One pair of stores for the check: the indexes load once and a tree pack
 	// several snapshots share is fetched once.
 	chunks, trees := r.stores()
+	stores := []*objectStore{chunks, trees}
+	for _, s := range stores {
+		s.suspects = make(map[string][]packEntry)
+		if err := s.checkPacks(ctx, result); err != nil {
+			return nil, err
+		}
+	}
 	for i, id := range ids {
 		// The inner verify reports as check, counters restart per snapshot.
 		vr, err := r.runVerify(ctx, id, chunks, trees, func(e ProgressEvent) {
@@ -606,6 +635,11 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 		}
 		for _, c := range vr.CorruptChunks {
 			result.Errors = append(result.Errors, fmt.Sprintf("snapshot %s: corrupt chunk %s", id, c))
+		}
+	}
+	for _, s := range stores {
+		if err := s.checkSuspects(ctx, result); err != nil {
+			return nil, err
 		}
 	}
 	progress(ProgressEvent{Phase: PhaseFinalize, FilesDone: len(ids), FilesTotal: len(ids)})
