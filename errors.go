@@ -39,9 +39,11 @@ var (
 	// fails its integrity check. Verify lists such a chunk in CorruptChunks.
 	ErrCorruptChunk = errors.New("ark: corrupt chunk")
 
-	// ErrCorruptIndex is returned when an index object does not authenticate
-	// or does not describe itself: it was changed, truncated or moved from
-	// another name or namespace.
+	// ErrCorruptIndex is the error of an index object that does not
+	// authenticate or does not describe itself: it was changed, truncated or
+	// moved from another name or namespace. An operation that only looks
+	// blobs up does not return it: it skips such an object with a warning and
+	// reports the blobs only that object lists as missing.
 	ErrCorruptIndex = errors.New("ark: corrupt index object")
 
 	// ErrMissingChunk is returned when a required chunk is absent from the CAS.

@@ -83,7 +83,13 @@ lookups by `TestIndexLoadsLazilyAndOncePerType`, the duplicate rule by
 `TestIndexDuplicateBlobResolvesToTheFirstCopy`. A changed, truncated or moved index object, and one
 whose content does not describe itself, fails with `ErrCorruptIndex`
 (`TestIndexTamperedObjectsAreRejected`) and is skipped by a load
-(`TestIndexSkipsAnObjectThatDoesNotOpen`), while a backend error fails the lookup.
+(`TestIndexSkipsAnObjectThatDoesNotOpen`), while a backend error fails the lookup. A load reads such
+an object a second time before it skips it, so one short read does not make its blobs missing for
+the run (`TestIndexReadsAnObjectAgainBeforeSkippingIt`). An index that has loaded keeps what it
+writes afterwards beside its table instead of listing again, and answers as an index that loads
+later does (`TestIndexFindsWhatItWroteAfterLoading`).
 `TestIndexRebuiltFromPacksEqualsTheWrittenOne` shows that the tables of the packs give the same
-index; a pack that does not open is left out of a rebuild and reported. `BenchmarkIndexLoad`
-measures the budget on the memory backend and fails beyond it. The unit is `index.go`.
+index; a pack that does not open or is not named by its hash is left out of a rebuild and reported.
+`BenchmarkIndexLoad` measures the budget on the memory backend, on its best run, and fails beyond
+it. The loaded table keeps its records in 64 slices by the leading bits of the blob name, so that
+loading never holds all records twice. The unit is `index.go`.

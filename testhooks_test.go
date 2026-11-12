@@ -82,5 +82,5 @@ func LoadDataIndex(ctx context.Context, r *Repository) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	return len(t.records), t, nil
+	return t.count(), t, nil
 }

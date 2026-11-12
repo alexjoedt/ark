@@ -31,6 +31,9 @@ type indexBackend struct {
 	onList func()
 	// getErr fails every Get while it is set.
 	getErr error
+	// cutGets is the number of coming Gets that are answered with the first
+	// half of the object and no error.
+	cutGets int
 }
 
 func newIndexBackend(b Backend) *indexBackend {
@@ -74,11 +77,21 @@ func (b *indexBackend) Get(ctx context.Context, h Handle) (io.ReadCloser, error)
 	b.mu.Lock()
 	b.gets[h.Type]++
 	err := b.getErr
+	cut := b.cutGets > 0
+	if cut {
+		b.cutGets--
+	}
 	b.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	return b.Backend.Get(ctx, h)
+	rc, err := b.Backend.Get(ctx, h)
+	if err != nil || !cut {
+		return rc, err
+	}
+	defer rc.Close()
+	obj, err := io.ReadAll(rc)
+	return io.NopCloser(bytes.NewReader(obj[:len(obj)/2])), err
 }
 
 func (b *indexBackend) count() {
@@ -157,6 +170,9 @@ func syntheticPack(rng *rand.ChaCha8, count int) indexedPack {
 	return p
 }
 
+// allRecords returns the records of table in the order it keeps them.
+func allRecords(table *indexTable) []indexRecord { return slices.Concat(table.records[:]...) }
+
 func mustLookup(t *testing.T, x *packIndex, name string) (string, packEntry, bool) {
 	t.Helper()
 	pack, e, ok, err := x.lookup(context.Background(), name)
@@ -197,14 +213,124 @@ func TestIndexAnswersLookupsForEveryBlob(t *testing.T) {
 					t.Errorf("blob %s read through the index has other content", blob.name)
 				}
 			}
-			for _, name := range []string{
-				strings.Repeat("0", 64), strings.Repeat("f", 64), strings.ToUpper(blobs[0].name), "short", "",
-			} {
+			for _, name := range []string{strings.Repeat("0", 64), strings.Repeat("f", 64)} {
 				if pack, _, ok := mustLookup(t, x, name); ok {
 					t.Errorf("lookup %q found pack %s, want no blob", name, pack)
 				}
 			}
 		})
+	}
+}
+
+func TestIndexLookupRejectsWhatIsNoName(t *testing.T) {
+	s := testPackSpaces(t)[0]
+	b := newIndexBackend(newStubBackend())
+	x := newPackIndex(b, s, quietLogger)
+	packs, blobs := storeTestPacks(t, b, s, 1, 12)
+	writeTestIndex(t, x, packs)
+	b.reset()
+
+	for _, name := range []string{strings.ToUpper(blobs[0].name), blobs[0].name[:63], blobs[0].name + "0", "short", ""} {
+		_, _, ok, err := x.lookup(context.Background(), name)
+		if ok || err == nil || !strings.Contains(err.Error(), "invalid") {
+			t.Errorf("lookup %q = %v, %v, want an invalid name error", name, ok, err)
+		}
+	}
+	if _, _, total := b.calls(s.index); total != 0 {
+		t.Errorf("%d backend requests for names that are none, want 0", total)
+	}
+}
+
+// TestIndexFindsWhatItWroteAfterLoading pins that the order of the first
+// lookup and a write does not matter: an index that has loaded its table
+// answers for the packs it lists afterwards, without listing again, as an
+// index that loads later does.
+func TestIndexFindsWhatItWroteAfterLoading(t *testing.T) {
+	s := testPackSpaces(t)[0]
+	rng := rand.NewChaCha8([32]byte{3})
+	one, two, three := syntheticPack(rng, 40), syntheticPack(rng, 40), syntheticPack(rng, 40)
+	// The same blob sits in the first two packs, at different places.
+	shared := one.entries[7].name
+	two.entries[31].name = shared
+	first, firstEntry := one, one.entries[7]
+	if two.name < one.name {
+		first, firstEntry = two, two.entries[31]
+	}
+
+	for name, c := range map[string]struct{ before, after [][]indexedPack }{
+		"all after":               {nil, [][]indexedPack{{one, two}, {three}}},
+		"all after, one by one":   {nil, [][]indexedPack{{three}, {two}, {one}}},
+		"a copy before":           {[][]indexedPack{{one}}, [][]indexedPack{{two}, {three}}},
+		"the other copy before":   {[][]indexedPack{{two, three}}, [][]indexedPack{{one}}},
+		"a pack listed both ways": {[][]indexedPack{{one, two}}, [][]indexedPack{{two, three}, {one}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newIndexBackend(newStubBackend())
+			x := newPackIndex(b, s, quietLogger)
+			for _, packs := range c.before {
+				writeTestIndex(t, x, packs)
+			}
+			if x.written.Load() != nil {
+				t.Error("an index that has loaded nothing keeps what it wrote, which its load will list")
+			}
+			if _, _, ok := mustLookup(t, x, strings.Repeat("0", 64)); ok {
+				t.Fatal("found a blob no pack holds")
+			}
+			for _, packs := range c.after {
+				writeTestIndex(t, x, packs)
+			}
+			b.reset()
+
+			for _, index := range []*packIndex{x, newPackIndex(b, s, quietLogger)} {
+				for _, p := range []indexedPack{one, two, three} {
+					for _, e := range p.entries {
+						want, wantEntry := p.name, e
+						if e.name == shared {
+							want, wantEntry = first.name, firstEntry
+						}
+						pack, got, ok := mustLookup(t, index, hex.EncodeToString(e.name[:]))
+						if !ok || pack != want || got != wantEntry {
+							t.Fatalf("lookup = %s %+v %v, want %s %+v", pack, got, ok, want, wantEntry)
+						}
+					}
+				}
+				if index == x {
+					if _, _, total := b.calls(s.index); total != 0 {
+						t.Errorf("%d backend requests to find what the index wrote itself, want 0", total)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestIndexReadsAnObjectAgainBeforeSkippingIt pins that one read that came
+// back short does not make the blobs of an index object missing.
+func TestIndexReadsAnObjectAgainBeforeSkippingIt(t *testing.T) {
+	s := testPackSpaces(t)[0]
+	b := newIndexBackend(newStubBackend())
+	writer := newPackIndex(b, s, quietLogger)
+	var blobs []testBlob
+	for seed := range byte(3) {
+		packs, stored := storeTestPacks(t, b, s, seed, 12)
+		writeTestIndex(t, writer, packs)
+		blobs = append(blobs, stored...)
+	}
+	b.reset()
+
+	var logged bytes.Buffer
+	x := newPackIndex(b, s, slog.New(slog.NewTextHandler(&logged, nil)))
+	b.cutGets = 1
+	for _, blob := range blobs {
+		if _, _, ok := mustLookup(t, x, blob.name); !ok {
+			t.Fatalf("blob %s is missing after one short read", blob.name)
+		}
+	}
+	if lists, gets, _ := b.calls(s.index); lists != 1 || gets != 4 {
+		t.Errorf("%d Lists and %d Gets, want 1 and 4: each of 3 objects once, the short one again", lists, gets)
+	}
+	if got := x.table.Load().unreadable; len(got) != 0 || logged.Len() != 0 {
+		t.Errorf("unreadable index objects %v, logged %q, want none", got, logged.String())
 	}
 }
 
@@ -333,8 +459,8 @@ func TestIndexObjectClosesAtTheRecordCap(t *testing.T) {
 		t.Fatalf("%d index objects, want %d", len(names), len(want))
 	}
 	for i, name := range names {
-		table, err := x.read(ctx, name)
-		if err != nil {
+		table := &indexTable{}
+		if err := x.read(ctx, name, table); err != nil {
 			t.Fatalf("read index object %d: %v", i, err)
 		}
 		var wantPacks []string
@@ -348,11 +474,11 @@ func TestIndexObjectClosesAtTheRecordCap(t *testing.T) {
 		for _, p := range table.packs {
 			gotPacks = append(gotPacks, hex.EncodeToString(p[:]))
 		}
-		if !slices.Equal(gotPacks, wantPacks) || len(table.records) != wantRecords {
+		if !slices.Equal(gotPacks, wantPacks) || table.count() != wantRecords {
 			t.Errorf("index object %d lists %d records of packs %v, want %d of %v",
-				i, len(table.records), gotPacks, wantRecords, wantPacks)
+				i, table.count(), gotPacks, wantRecords, wantPacks)
 		}
-		if !slices.IsSortedFunc(table.records, compareRecords) {
+		if !slices.IsSortedFunc(allRecords(table), compareRecords) {
 			t.Errorf("index object %d is not sorted by blob name", i)
 		}
 	}
@@ -403,9 +529,9 @@ func TestIndexDuplicateBlobResolvesToTheFirstCopy(t *testing.T) {
 					pack, e, ok, first.name, firstEntry)
 			}
 			table := x.table.Load()
-			if len(table.packs) != 2 || len(table.records) != len(one.entries)+len(two.entries) {
+			if len(table.packs) != 2 || table.count() != len(one.entries)+len(two.entries) {
 				t.Errorf("merged table has %d packs and %d records, want 2 and %d: nothing listed twice",
-					len(table.packs), len(table.records), len(one.entries)+len(two.entries))
+					len(table.packs), table.count(), len(one.entries)+len(two.entries))
 			}
 		})
 	}
@@ -478,10 +604,13 @@ func TestIndexRebuiltFromPacksEqualsTheWrittenOne(t *testing.T) {
 				t.Fatalf("load: %v", err)
 			}
 
-			// What is no pack is left out of a rebuild and reported.
+			// What is no pack is left out of a rebuild and reported: a pack
+			// cut short, one copied to another name, and a name that is none.
 			cut := Handle{Type: s.packs, Name: strings.Repeat("ab", 32)}
 			whole := getObject(t, b, Handle{Type: s.packs, Name: hex.EncodeToString(written.packs[0][:])})
 			putObject(t, b, cut, whole[:len(whole)-9])
+			copied := Handle{Type: s.packs, Name: strings.Repeat("cd", 32)}
+			putObject(t, b, copied, whole)
 			stray := Handle{Type: s.packs, Name: "not-a-pack"}
 			putObject(t, b, stray, whole)
 
@@ -491,20 +620,20 @@ func TestIndexRebuiltFromPacksEqualsTheWrittenOne(t *testing.T) {
 			if err != nil {
 				t.Fatalf("scanPacks: %v", err)
 			}
-			if want := []string{cut.Name, stray.Name}; !slices.Equal(unreadable, want) {
+			if want := []string{cut.Name, copied.Name, stray.Name}; !slices.Equal(unreadable, want) {
 				t.Errorf("unreadable packs %v, want %v", unreadable, want)
 			}
-			if n := strings.Count(logged.String(), "level=WARN"); n != 2 {
-				t.Errorf("%d warnings, want two: %s", n, logged.String())
+			if n := strings.Count(logged.String(), "level=WARN"); n != 3 {
+				t.Errorf("%d warnings, want three: %s", n, logged.String())
 			}
 			rebuilt, err := newIndexTable(packs)
 			if err != nil {
 				t.Fatalf("newIndexTable: %v", err)
 			}
-			if len(rebuilt.records) == 0 || !slices.Equal(rebuilt.packs, written.packs) ||
-				!slices.Equal(rebuilt.records, written.records) {
+			if rebuilt.count() == 0 || !slices.Equal(rebuilt.packs, written.packs) ||
+				!slices.Equal(allRecords(rebuilt), allRecords(written)) {
 				t.Errorf("rebuilt index has %d packs and %d records, the written one %d and %d, or they differ",
-					len(rebuilt.packs), len(rebuilt.records), len(written.packs), len(written.records))
+					len(rebuilt.packs), rebuilt.count(), len(written.packs), written.count())
 			}
 		})
 	}
@@ -526,10 +655,10 @@ func TestIndexTamperedObjectsAreRejected(t *testing.T) {
 				t.Fatalf("open the index object: %v", err)
 			}
 
-			if _, err := x.read(ctx, name); err != nil {
+			if err := x.read(ctx, name, &indexTable{}); err != nil {
 				t.Fatalf("read the unchanged index object: %v", err)
 			}
-			if _, err := x.read(ctx, strings.Repeat("0", 64)); !errors.Is(err, ErrNotFound) ||
+			if err := x.read(ctx, strings.Repeat("0", 64), &indexTable{}); !errors.Is(err, ErrNotFound) ||
 				errors.Is(err, ErrCorruptIndex) {
 				t.Errorf("read a missing index object: %v, want ErrNotFound", err)
 			}
@@ -570,8 +699,13 @@ func TestIndexTamperedObjectsAreRejected(t *testing.T) {
 				if c.at.Type != s.index {
 					reader = newPackIndex(b, other, quietLogger)
 				}
-				if _, err := reader.read(ctx, c.at.Name); !errors.Is(err, ErrCorruptIndex) {
+				table := &indexTable{}
+				if err := reader.read(ctx, c.at.Name, table); !errors.Is(err, ErrCorruptIndex) {
 					t.Errorf("%s: read = %v, want ErrCorruptIndex", cell, err)
+				}
+				if len(table.packs) != 0 || table.count() != 0 {
+					t.Errorf("%s: the rejected object left %d packs and %d records in the table",
+						cell, len(table.packs), table.count())
 				}
 			}
 		})
