@@ -12,10 +12,15 @@ package ark
 //   - restore: PhaseLoad, PhaseFetch and PhaseWrite interleaved, PhaseFinalize
 //     with the totals and the files, bytes and chunks restored
 //   - forget: PhaseLoad, PhaseFinalize with FilesDone = manifests removed
-//   - prune: PhaseLoad, PhaseSweep with ChunksDone/ChunksTotal over the
-//     chunks and trees listed, PhaseFinalize
-//   - verify: PhaseLoad, PhaseFetch per chunk reference, PhaseFinalize;
-//     CurrentPath is the resolved snapshot ID, empty on PhaseLoad
+//   - prune: PhaseLoad, PhaseStore with BytesDone/BytesTotal per pack whose
+//     referenced objects were copied into a new one, when there are any,
+//     PhaseSweep with ChunksDone/ChunksTotal over the packs listed,
+//     PhaseFinalize
+//   - verify: PhaseLoad, PhaseFetch per data pack read with ChunksDone of
+//     ChunksTotal chunk references verified, and one before them when
+//     references were settled without a read (no index lists the chunk, or a
+//     check read it for an earlier snapshot), PhaseFinalize; CurrentPath is
+//     the resolved snapshot ID, empty on PhaseLoad
 //   - check: PhaseLoad, then per snapshot the PhaseFetch events of its verify
 //     and one PhaseFetch with FilesDone = snapshots checked, PhaseFinalize;
 //     CurrentPath is the snapshot ID
@@ -23,7 +28,7 @@ type Phase string
 
 const (
 	PhaseScan     Phase = "scan"     // walking the source
-	PhaseStore    Phase = "store"    // chunking and writing
+	PhaseStore    Phase = "store"    // chunking and writing; prune: copying into new packs
 	PhaseFinalize Phase = "finalize" // the closing event of a successful operation
 	PhaseLoad     Phase = "load"     // manifests and trees
 	PhaseFetch    Phase = "fetch"    // chunks

@@ -70,7 +70,7 @@ func TestMutateDeterministic(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, d := range []string{a, b} {
-		if err := mutate(context.Background(), d, 7); err != nil {
+		if err := mutate(context.Background(), d, 7, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -100,7 +100,7 @@ func TestMutateRounds(t *testing.T) {
 	}
 	var sums []string
 	for range 2 {
-		if err := mutate(ctx, a, 7); err != nil {
+		if err := mutate(ctx, a, 7, false); err != nil {
 			t.Fatal(err)
 		}
 		s, n, _, err := hashTree(ctx, a)
@@ -135,7 +135,7 @@ func TestMutateRejectsWrongRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := mutate(ctx, parent, 7); err == nil {
+	if err := mutate(ctx, parent, 7, false); err == nil {
 		t.Fatal("mutate accepted a non-root directory")
 	}
 	after, _, _, err := hashTree(ctx, parent)
@@ -153,5 +153,29 @@ func TestGenerateCancelCleansUp(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 		t.Fatalf("%d entries left behind", len(entries))
+	}
+}
+
+func TestFilesOnlyDataset(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	ctx := context.Background()
+	n, total, err := generate(ctx, dir, spec{smallN: 400, logSizes: true}, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Log-uniform over 1 to 64 KiB has a mean of 63/ln(64) KiB, about 15 KiB.
+	if mean := total / int64(n); n != 400 || mean < 10<<10 || mean > 21<<10 {
+		t.Fatalf("%d files, mean %d bytes", n, mean)
+	}
+	before := sum(t, dir)
+	if err := mutate(ctx, dir, 3, true); err != nil {
+		t.Fatal(err)
+	}
+	if sum(t, dir) == before {
+		t.Fatal("mutate changed nothing")
+	}
+	r, err := diskRatio(dir)
+	if err != nil || r <= 0 {
+		t.Fatalf("diskRatio = %v, %v", r, err)
 	}
 }

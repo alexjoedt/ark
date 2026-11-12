@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"strings"
 	"sync"
 	"testing"
 
@@ -47,6 +48,19 @@ func (b *stubBackend) Get(_ context.Context, h Handle) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("%w: %s", ErrNotFound, h.Name)
 	}
 	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
+func (b *stubBackend) GetRange(_ context.Context, h Handle, offset, length int64) ([]byte, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	data, ok := b.objects[stubKey(h)]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, h.Name)
+	}
+	if offset < 0 || length < 0 || offset > int64(len(data)) || length > int64(len(data))-offset {
+		return nil, io.ErrUnexpectedEOF
+	}
+	return bytes.Clone(data[offset : offset+length]), nil
 }
 
 func (b *stubBackend) Exists(_ context.Context, h Handle) (bool, error) {
@@ -147,6 +161,29 @@ func TestOpenDefaultRepositoryUsesTheWrittenDefaults(t *testing.T) {
 	want.Seed, want.IDKey = repo.key.ChunkerSeed, repo.key.IDKey
 	if repo.chunker != want {
 		t.Errorf("repo.chunker = %+v, want the stored %+v", repo.chunker, want)
+	}
+}
+
+// TestOpenRejectsTheFormatBeforePacks opens a repository as the build before
+// packs wrote it: format version 2, its key bound to that config. Its chunks
+// and tree nodes are one object each, which this build does not read, so
+// Open refuses it and names both versions.
+func TestOpenRejectsTheFormatBeforePacks(t *testing.T) {
+	ctx := context.Background()
+	b := newStubBackend()
+	if err := Init(ctx, b, WithoutPassword()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	rebindConfig(t, b, func(cfg *repositoryConfig) { cfg.Version = 2 })
+
+	_, err := Open(ctx, b, WithoutPassword())
+	if !errors.Is(err, ErrUnsupportedFormat) {
+		t.Fatalf("Open = %v, want ErrUnsupportedFormat", err)
+	}
+	for _, want := range []string{"format version 2", "reads version 3"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Open = %q, want it to name %q", err, want)
+		}
 	}
 }
 

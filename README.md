@@ -97,8 +97,8 @@ b := arkmem.New() // its objects are gone on Close
 key file is unlocked with `ARK_SFTP_KEY_PASSPHRASE`. Secrets never go into `Config` or a URI.
 `arkuri` takes the non-secret options as query parameters: `known_hosts`, `identity` and `insecure`.
 
-Anything else, such as S3 or a NAS API, is an `ark.Backend`: seven methods (`Put`, `Get`, `Exists`,
-`Delete`, `List`, `Stat`, `Close`). The suite in `arktest` checks the same contract the built-in
+Anything else, such as S3 or a NAS API, is an `ark.Backend`: nine methods (`Put`, `Get`, `GetRange`,
+`Exists`, `Delete`, `Sync`, `List`, `Stat`, `Close`). The suite in `arktest` checks the same contract the built-in
 backends pass:
 
 ```go
@@ -279,11 +279,17 @@ file.
 /srv/ark/
 ├── config      format version and chunker settings, plaintext, its hash sealed in the master key
 ├── keys/       the master key, sealed under the password
-├── chunks/     compressed, encrypted content, named by an HMAC, sharded by prefix
-├── trees/      one encrypted object per directory, named the same way
+├── datapacks/  packs of about 16 MiB of compressed, encrypted content chunks, sharded by prefix
+├── treepacks/  packs of the encrypted directory nodes
+├── dataindex/  encrypted index objects: which pack holds a chunk, and where
+├── treeindex/  the same for directory nodes
 ├── snapshots/  one encrypted manifest per snapshot, named by a random id
 └── locks/      encrypted shared and exclusive locks, stale after 30 minutes without a refresh
 ```
+
+A pack is named by the SHA-256 of its bytes, so `sha256sum` on the storage host checks packs
+without ark and without the key. Repositories of format version 2 are not read and not migrated:
+re-initialise them. The byte layout is in [docs/FORMAT.md](docs/FORMAT.md).
 
 ## Development
 

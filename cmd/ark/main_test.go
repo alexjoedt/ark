@@ -359,10 +359,10 @@ func TestVerifyAndCheckExit5(t *testing.T) {
 		t.Fatalf("verify unknown id: exit %d, want 4", code)
 	}
 
-	// corrupt every chunk
-	chunks, _ := filepath.Glob(filepath.Join(repo, "chunks", "*", "*", "*"))
+	// corrupt every chunk: a data pack cut short ends before its chunks do
+	chunks, _ := filepath.Glob(filepath.Join(repo, "datapacks", "*", "*"))
 	if len(chunks) == 0 {
-		t.Fatal("no chunks on disk")
+		t.Fatal("no data packs on disk")
 	}
 	for _, c := range chunks {
 		if err := os.WriteFile(c, []byte("garbage"), 0o644); err != nil {

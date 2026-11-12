@@ -7,9 +7,9 @@ import (
 	"github.com/alexjoedt/ark/chunker"
 )
 
-// chunkWriter stores chunks in the background with a bounded number of
-// backend operations in flight, so compression and the backend round trips
-// overlap with reading and chunking the source.
+// chunkWriter stores chunks in the background with a bounded number being
+// sealed and added to a pack, so compression and the pack uploads overlap
+// with reading and chunking the source.
 //
 // Each distinct chunk is stored once per run and remembered with its sizes,
 // which is what stats counts: the chunk references in the snapshot carry no

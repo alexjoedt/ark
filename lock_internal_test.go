@@ -533,3 +533,117 @@ func TestCheckWarnsAboutAnOldZeroByteLock(t *testing.T) {
 		t.Errorf("Check warnings %q, want one naming %s", res.Warnings, old)
 	}
 }
+
+// slowAcquire lets the clock pass age once the first lock object is stored,
+// as an acquire does whose second listing is slow, and fails every lock write
+// after it.
+type slowAcquire struct {
+	*failingLocks
+	clock *testClock
+	age   time.Duration
+}
+
+func (b slowAcquire) Put(ctx context.Context, h Handle, r io.Reader) error {
+	err := b.failingLocks.Put(ctx, h, r)
+	if h.Type == LockFile && err == nil {
+		b.clock.advance(b.age)
+		b.breakLockWrites()
+	}
+	return err
+}
+
+// The others count a lock's age from the time its object carries, so the
+// refresh timeout runs from there and not from the end of the acquire.
+func TestRefreshTimeoutRunsFromTheStoredLockObject(t *testing.T) {
+	ctx := context.Background()
+	repo, b, clock := lockRepo(t)
+	const acquire = 10 * time.Minute
+	repo.backend = slowAcquire{&failingLocks{stubBackend: b}, clock, acquire}
+
+	restore := lockRefreshInterval
+	lockRefreshInterval = time.Millisecond
+	defer func() { lockRefreshInterval = restore }()
+
+	lockCtx, lock, err := repo.acquire(ctx, false)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer lock.release(ctx)
+
+	clock.advance(lockRefreshTimeout - acquire)
+
+	select {
+	case <-lockCtx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatalf("the operation runs on although its lock object is %s old", lockRefreshTimeout)
+	}
+}
+
+// hangingLocks blocks every lock write once hang is closed until free is,
+// whatever happens to the context of the write.
+type hangingLocks struct {
+	*stubBackend
+	hang, free chan struct{}
+}
+
+func (b hangingLocks) Put(ctx context.Context, h Handle, r io.Reader) error {
+	if h.Type == LockFile {
+		select {
+		case <-b.hang:
+			<-b.free
+		default:
+		}
+	}
+	return b.stubBackend.Put(ctx, h, r)
+}
+
+func TestOperationAbortsWhileALockRefreshHangs(t *testing.T) {
+	ctx := context.Background()
+	repo, b, _ := lockRepo(t)
+	hb := hangingLocks{b, make(chan struct{}), make(chan struct{})}
+	repo.backend = hb
+
+	interval, timeout := lockRefreshInterval, lockRefreshTimeout
+	lockRefreshInterval, lockRefreshTimeout = time.Millisecond, 100*time.Millisecond
+	defer func() { lockRefreshInterval, lockRefreshTimeout = interval, timeout }()
+
+	lockCtx, lock, err := repo.acquire(ctx, false)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer lock.release(ctx)
+	defer close(hb.free) // before the release, which waits for the refresh
+
+	// The clock stands still, so only the time that really passes can end
+	// the operation.
+	close(hb.hang)
+	select {
+	case <-lockCtx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the operation was not aborted while its lock refresh hung")
+	}
+}
+
+// landedThenFailed stores a lock object and reports the write as failed, as
+// a connection does that drops before the reply.
+type landedThenFailed struct{ *stubBackend }
+
+func (b landedThenFailed) Put(ctx context.Context, h Handle, r io.Reader) error {
+	if err := b.stubBackend.Put(ctx, h, r); err != nil || h.Type != LockFile {
+		return err
+	}
+	return errors.New("connection lost")
+}
+
+func TestFailedLockWriteLeavesNoLockBehind(t *testing.T) {
+	ctx := context.Background()
+	repo, b, _ := lockRepo(t)
+	repo.backend = landedThenFailed{b}
+
+	if _, _, err := repo.acquire(ctx, true); err == nil {
+		t.Fatal("acquire succeeded although its lock write failed")
+	}
+	if names := lockNames(t, b); len(names) != 0 {
+		t.Errorf("a failed acquire left the lock objects %v", names)
+	}
+}

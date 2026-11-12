@@ -1,8 +1,9 @@
 // Package arklocal implements ark.Backend on the local filesystem.
 //
 // Objects live under <dir>/<namespace>/<name>, where the namespace is
-// ark.HandleType.String(). Chunks are sharded two levels deep by the first
-// four characters of their name: chunks/aa/bb/<name>.
+// ark.HandleType.String(). Packs are sharded one level deep by the first two
+// characters of their name, 256 directories created on first use:
+// datapacks/aa/<name>.
 package arklocal
 
 import (
@@ -16,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/internal/rangeread"
 )
 
 // tmpPrefix marks in-flight objects written by Put. List skips them.
@@ -66,8 +68,8 @@ func (b *Backend) path(h ark.Handle) (string, error) {
 		strings.ContainsAny(h.Name, `/\`) || strings.HasPrefix(h.Name, tmpPrefix) {
 		return "", fmt.Errorf("arklocal: invalid object name %q", h.Name)
 	}
-	if h.Type == ark.BlobFile && len(h.Name) >= 4 {
-		return filepath.Join(dir, h.Name[:2], h.Name[2:4], h.Name), nil
+	if (h.Type == ark.DataPackFile || h.Type == ark.TreePackFile) && len(h.Name) >= 2 {
+		return filepath.Join(dir, h.Name[:2], h.Name), nil
 	}
 	return filepath.Join(dir, h.Name), nil
 }
@@ -129,6 +131,38 @@ func (b *Backend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	f, err := b.open(h)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// GetRange reads length bytes of the object stored under h at offset.
+func (b *Backend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := b.path(h); err != nil {
+		return nil, err
+	}
+	if offset < 0 || length < 0 {
+		return nil, fmt.Errorf("arklocal: invalid range %d+%d of %s", offset, length, h.Name)
+	}
+	f, err := b.open(h)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	buf, err := rangeread.Read(f, offset, length)
+	if err != nil {
+		return nil, fmt.Errorf("arklocal: range %d+%d of %s: %w", offset, length, h.Name, err)
+	}
+	return buf, nil
+}
+
+// open opens the object stored under h for reading.
+func (b *Backend) open(h ark.Handle) (*os.File, error) {
 	p, err := b.path(h)
 	if err != nil {
 		return nil, err

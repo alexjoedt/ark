@@ -29,13 +29,17 @@ writer, every accepted risk included.
 
 ## Format
 
-- Chunks, trees, manifests, locks and markers are sealed under the data key as `0x02 | 24-byte
-  nonce | XChaCha20-Poly1305(zstd frame)` with the associated data `<namespace>/<name>`; data is
-  compressed with zstd before it is sealed, and an object with any other format byte is rejected:
-  `TestUnknownFormatByteIsRejected`. A key file's `key` field is sealed the same way.
-- Chunk and tree names are the hex HMAC-SHA256 of their plaintext under the repository's ID key,
-  manifests, locks and markers are sealed under chosen names: snapshot IDs are 128 random bits in
-  26 Crockford base32 characters, lock and marker names a millisecond timestamp plus 80 random bits:
+- Chunks, trees, index objects, manifests and locks are sealed under the data key as `0x02 |
+  24-byte nonce | XChaCha20-Poly1305(zstd frame)` with the associated data `<namespace>/<name>`;
+  data is compressed with zstd before it is sealed, and an object with any other format byte is
+  rejected: `TestUnknownFormatByteIsRejected`. A key file's `key` field is sealed the same way.
+- Chunks and trees are stored inside pack objects: each one sealed on its own as above, followed
+  by a sealed table of their names and lengths that is bound to the SHA-256 of the bytes before
+  it. A pack is named by the SHA-256 of its bytes, which are ciphertext throughout. The layout
+  of packs and index objects is in [FORMAT.md](FORMAT.md).
+- Chunk, tree and index names are the hex HMAC-SHA256 of their plaintext under the repository's ID
+  key, manifests and locks are sealed under chosen names: snapshot IDs are 128 random bits in 26
+  Crockford base32 characters, lock names a millisecond timestamp plus 80 random bits:
   `TestChunksAndTreesAreSealedUnderKeyedNames`, `TestSnapshotIDsCarryNoTimestamp`.
 - The master key holds the data key, the ID key, the chunker seed (which keys the chunk boundaries),
   the repository ID and `config_hash`, the SHA-256 of the config bytes Init stored.
@@ -52,7 +56,8 @@ writer, every accepted risk included.
 ## Guarantees at rest
 
 - Without the passphrase no object name, body, listing or stat reveals file contents, paths, names,
-  symlink targets, xattrs, exclude patterns or snapshot metadata, markers included: `TestBackendHoldsNoPlaintext`.
+  symlink targets, xattrs, exclude patterns or snapshot metadata, packs and index objects included:
+  `TestBackendHoldsNoPlaintext`.
 - Object names are keyed: the same files in two repositories share no name in any namespace, and no
   chunk is named by the SHA-256 of its content: `TestSameFilesInTwoRepositoriesShareNoNames`,
   `TestChunksAndTreesAreSealedUnderKeyedNames`.
@@ -61,11 +66,22 @@ writer, every accepted risk included.
   `TestOpenChecksThePassphrase`, `TestWrongPasswordReadsOnlyConfigAndKeys`.
 - Every key file, chunk, tree and snapshot that is flipped in its format byte, nonce, ciphertext or
   tag, truncated, swapped, moved, copied from another namespace or replaced by the same-name object
-  of another repository is rejected: Open, Restore and Verify fail with the namespace's sentinel,
-  Check lists it under errors, no restore returns different bytes and no Verify reports OK:
+  of another repository is rejected, a chunk or tree in the place its pack holds it: Open, Restore
+  and Verify fail with the namespace's sentinel, Check lists it under errors, no restore returns
+  different bytes and no Verify reports OK: `TestTamperedObjectsAreRejected`.
+- An index object under the same mutations is skipped, so the chunks or trees it lists count as
+  missing: Restore and Verify fail with `ErrNotFound` or report the chunk missing, Check lists it
+  under errors, and prune deletes nothing while a snapshot references a blob no index lists:
+  `TestTamperedObjectsAreRejected`, `TestPruneAbortsWhenTheIndexHidesALiveBlob`.
+- The blob table of a pack under the same mutations does not open, also when the pack is stored
+  under the name its changed bytes hash to: RebuildIndex names the pack unreadable and takes no
+  entry from it, so a rebuilt index never points a name at other bytes:
   `TestTamperedObjectsAreRejected`.
-- A lock or marker under the same mutations is treated as absent, Check lists it under warnings,
-  and only a forced unlock deletes it: `TestTamperedObjectsAreRejected`,
+- A pack that is gone while the index lists it is an error of Check whether or not a snapshot
+  references it, as is a pack whose own table disagrees with the index:
+  `TestScenarioCheckCoversEverySnapshot`, `TestCheckReportsAPackThatDisagreesWithTheIndex`.
+- A lock under the same mutations is treated as absent, Check lists it under warnings, and only a
+  forced unlock deletes it: `TestTamperedObjectsAreRejected`,
   `TestTamperedLockIsIgnoredUntilForced`.
 - A key file with any byte changed, or one from another repository, does not open:
   `TestEveryFlippedKeyFileByteFailsOpen`, `TestKeyFileDoesNotOpenElsewhere`.
@@ -105,13 +121,21 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
   repository under it again: `TestReplayedKeyFileOpensUnderTheOldPassword`.
 - An old config put back together with its old key file opens: `TestReplayedConfigOpensOnlyWithItsKeyFile`.
 - A replayed lock blocks writers until it is stale: `TestReplayedLockIsHonouredUntilItIsStale`.
-- A replayed marker puts the next backup into repair mode, which re-reads the chunks it reuses,
-  until a prune clears it: `TestReplayedMarkerForcesRepairMode`.
-- Object sizes and counts per namespace show; a sealed chunk is its zstd frame plus 41 bytes, so
-  the chunk-size distribution and the rough size of small files show: `TestListingRevealsCountsAndSizes`.
+- The index objects of a pruned backup, put back, list packs that are gone. A backup trusts the
+  index, so a later backup of the same data stores nothing and its snapshot fails Restore, Verify
+  and Check, which also names the lost packs; it never restores other bytes:
+  `TestReplayedIndexObjectNeverRestoresOtherBytes`.
+- Object sizes and counts per namespace show: the size of every pack and index object, and with the
+  index sizes the number of chunks and trees. A sealed chunk is its zstd frame plus 41 bytes and a
+  pack is its sealed chunks plus a sealed table, so the stored bytes show, while the boundaries
+  between the blobs of a pack do not, they sit in the sealed table:
+  `TestListingRevealsCountsAndSizes`.
+- The number of packs shows the size of what a backup added: a pack closes once its blobs reach
+  16 MiB, so the number of full packs and the size of the run's last, short one give it:
+  `TestPackWriterClosesPacksAtTheTargetSize`.
 - The argon2id parameters and the config are plaintext: `TestInitWritesOneKeyFile`,
   `TestConfigHoldsOnlyItsPlaintextFields`.
-- Lock and marker names carry the millisecond they were created: `TestLockAndMarkerNamesCarryTheirTime`.
+- Lock names carry the millisecond they were created: `TestLockNamesCarryTheirTime`.
 - `ARK_PASSWORD` is visible to every process of the same user; `--password-file` is the safer
   input: `TestNoPasswordFlag`.
 
@@ -128,6 +152,8 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
 - Repositories created with `WithoutPassword` or `--insecure-no-password`: the master key is stored
   unprotected, so anyone who reads the backend can read and forge them.
 - TLS for `ark serve`: terminate it in a reverse proxy.
+- Metadata the storage host keeps on its own, such as modification times: they show when each pack
+  and index object was written, and with it when backups ran and how long they took.
 
 ## Reporting a vulnerability
 

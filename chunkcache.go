@@ -91,3 +91,21 @@ func (c *chunkCache) put(id string, data []byte) {
 		c.size -= int64(len(entry.data))
 	}
 }
+
+// drop removes the entry stored under id, if there is one.
+func (c *chunkCache) drop(id string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	el, ok := c.items[id]
+	if !ok {
+		return
+	}
+	if entry, ok := c.order.Remove(el).(*cacheEntry); ok {
+		c.size -= int64(len(entry.data))
+	}
+	delete(c.items, id)
+}

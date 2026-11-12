@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/internal/rangeread"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
@@ -39,9 +40,6 @@ var _ ark.Backend = (*Backend)(nil)
 
 // syncFile flushes f on the server. Tests swap it to observe the calls.
 var syncFile = (*sftp.File).Sync
-
-// removeFile deletes name on the server. Tests swap it to observe the calls.
-var removeFile = (*sftp.Client).Remove
 
 // Config describes how to reach an SFTP server. Zero values fall back to the
 // documented defaults. It holds no secrets.
@@ -176,7 +174,7 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 	defer func() {
 		_ = f.Close()
 		if !renamed {
-			_ = removeFile(b.client, tmp)
+			_ = b.client.Remove(tmp)
 		}
 	}()
 
@@ -318,12 +316,67 @@ func (b *Backend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	f, err := b.open(h)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
 
+// GetRange reads length bytes of the object stored under h at offset with
+// ReadAt on one handle, so the bytes before offset never cross the wire. It
+// returns as soon as ctx ends, see [awaitRead].
+func (b *Backend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := b.remotePath(h); err != nil {
+		return nil, err
+	}
+	if offset < 0 || length < 0 {
+		return nil, fmt.Errorf("arksftp: invalid range %d+%d of %s", offset, length, h.Name)
+	}
+	return awaitRead(ctx, func() ([]byte, error) {
+		f, err := b.open(h)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		buf, err := rangeread.Read(f, offset, length)
+		if err != nil {
+			return nil, fmt.Errorf("arksftp: range %d+%d of %s: %w", offset, length, h.Name, err)
+		}
+		return buf, nil
+	})
+}
+
+// awaitRead runs read and returns its result, or ctx's error as soon as ctx
+// ends. The sftp client cannot abort a request in flight, so a read left
+// behind that way ends on its own or with the connection.
+func awaitRead(ctx context.Context, read func() ([]byte, error)) ([]byte, error) {
+	type result struct {
+		buf []byte
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		buf, err := read()
+		done <- result{buf, err}
+	}()
+	select {
+	case r := <-done:
+		return r.buf, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// open opens the object stored under h for reading.
+func (b *Backend) open(h ark.Handle) (*sftp.File, error) {
 	p, err := b.remotePath(h)
 	if err != nil {
 		return nil, err
 	}
-
 	f, err := b.client.Open(p)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -331,7 +384,6 @@ func (b *Backend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error) 
 		}
 		return nil, fmt.Errorf("arksftp: open %s: %w", p, err)
 	}
-
 	return f, nil
 }
 
@@ -458,7 +510,7 @@ func (b *Backend) namespace(t ark.HandleType) (string, error) {
 
 // remotePath maps a Handle to its absolute path on the remote server. Names are
 // opaque object names, never paths, so anything that could escape the namespace
-// is rejected. Chunks are sharded two levels: chunks/aa/bb/<name>.
+// is rejected. Packs are sharded one level: datapacks/aa/<name>.
 func (b *Backend) remotePath(h ark.Handle) (string, error) {
 	dir, err := b.namespace(h.Type)
 	if err != nil {
@@ -468,8 +520,8 @@ func (b *Backend) remotePath(h ark.Handle) (string, error) {
 		strings.ContainsAny(h.Name, `/\`) || strings.HasPrefix(h.Name, tmpPrefix) {
 		return "", fmt.Errorf("arksftp: invalid object name %q", h.Name)
 	}
-	if h.Type == ark.BlobFile && len(h.Name) >= 4 {
-		return path.Join(dir, h.Name[:2], h.Name[2:4], h.Name), nil
+	if (h.Type == ark.DataPackFile || h.Type == ark.TreePackFile) && len(h.Name) >= 2 {
+		return path.Join(dir, h.Name[:2], h.Name), nil
 	}
 	return path.Join(dir, h.Name), nil
 }

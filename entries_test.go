@@ -17,7 +17,7 @@ import (
 // roundTrip backs up root into a fresh in-memory repository and restores the
 // snapshot into a new directory. The repository stays open: arkmem drops every
 // object on Close, so a second Open would read an empty backend.
-func roundTrip(t *testing.T, root string) (*ark.Repository, ark.Backend, *ark.Snapshot, string) {
+func roundTrip(t *testing.T, root string) (*ark.Repository, *ark.Snapshot, string) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -48,7 +48,7 @@ func roundTrip(t *testing.T, root string) (*ark.Repository, ark.Backend, *ark.Sn
 	if _, err := repo.Restore(ctx, snap.ID, sink); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	return repo, b, snap, dst
+	return repo, snap, dst
 }
 
 // entriesOf lists the snapshot entries by path.
@@ -88,7 +88,7 @@ func TestHardlinkIsStoredOnceAndRestoredAsALink(t *testing.T) {
 		t.Skipf("hardlinks unsupported here: %v", err)
 	}
 
-	repo, _, snap, dst := roundTrip(t, root)
+	repo, snap, dst := roundTrip(t, root)
 
 	entries := entriesOf(t, repo, snap.ID)
 	link, ok := entries["z-link.txt"]
@@ -139,7 +139,7 @@ func TestXattrsSurviveTheRoundTrip(t *testing.T) {
 		t.Skipf("directory xattrs unsupported here: %v", err)
 	}
 
-	repo, b, snap, dst := roundTrip(t, root)
+	repo, snap, dst := roundTrip(t, root)
 
 	entries := entriesOf(t, repo, snap.ID)
 	if got := string(entries["file.txt"].Xattrs["user.ark"]); got != "value" {
@@ -148,7 +148,7 @@ func TestXattrsSurviveTheRoundTrip(t *testing.T) {
 
 	// The tree entry, not FileInfo, owns the wire format: base64 values.
 	var found bool
-	for _, name := range objectNames(t, b, ark.TreeFile) {
+	for _, name := range blobNames(t, repo, ark.TreeFile) {
 		var node struct {
 			Entries []struct {
 				Name   string            `json:"name"`
@@ -192,7 +192,7 @@ func TestSpecialFilesAreSkippedAndCounted(t *testing.T) {
 		t.Skipf("fifos unsupported here: %v", err)
 	}
 
-	repo, _, snap, dst := roundTrip(t, root)
+	repo, snap, dst := roundTrip(t, root)
 
 	if snap.Stats.Skipped != 1 {
 		t.Errorf("stats count %d skipped entries, want 1", snap.Stats.Skipped)
@@ -219,7 +219,7 @@ func TestExportKeepsHardlinksAndXattrs(t *testing.T) {
 	}
 	xattrOK := unix.Setxattr(filepath.Join(root, "a.txt"), "user.ark", []byte("value"), 0) == nil
 
-	repo, _, snap, _ := roundTrip(t, root)
+	repo, snap, _ := roundTrip(t, root)
 
 	var archive bytes.Buffer
 	if err := repo.Export(ctx, snap.ID, &archive); err != nil {

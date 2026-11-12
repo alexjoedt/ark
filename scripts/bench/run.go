@@ -24,10 +24,15 @@ import (
 
 const (
 	budget       = 1.2
+	sftpBudget   = 1.5
+	refBudget    = 1.1
+	helperImage  = "busybox:stable"
 	maxSpread    = 0.10
 	benchPass    = "bench"
 	minFree      = 45 << 30
 	minFreeSmall = 1 << 30
+	minFreeFiles = 4 << 30
+	sftpRounds   = 3
 )
 
 var callerRepoEnv = []string{
@@ -41,14 +46,24 @@ var phases = [...]string{"initial", "incremental", "restore"}
 type times [len(phases)]time.Duration
 
 // tool is one CLI against one kind of repository. repo returns a fresh
-// repository location per call; local ones are removed after the run.
+// repository location per call and the local directory it lands in, "" when
+// that is unknown; known directories are removed after each run. volume
+// backs up and restores a Docker volume filled with the dataset instead of
+// the dataset directory.
 type tool struct {
-	name  string
-	bin   string
-	opts  []string
-	ark   bool
-	local bool
-	repo  func() string
+	name   string
+	bin    string
+	opts   []string
+	ark    bool
+	volume bool
+	repo   func() (string, string)
+}
+
+// result is one run of a tool: its phase times and the repository's bytes on
+// disk over its stored bytes after the incremental backup, 0 when unknown.
+type result struct {
+	t    times
+	disk float64
 }
 
 type arkSnap struct {
@@ -73,13 +88,19 @@ func runBench(
 	w io.Writer,
 	dir string,
 	sp spec,
-	small bool,
+	need uint64,
 	seed int64,
-	arkBin, resticBin string,
+	arkBin, refBin, resticBin, sftpDir string,
 ) error {
 	arkPath, err := exec.LookPath(arkBin)
 	if err != nil {
 		return fmt.Errorf("ark binary %s not found, build it with task build: %w", arkBin, err)
+	}
+	refPath := ""
+	if refBin != "" {
+		if refPath, err = exec.LookPath(refBin); err != nil {
+			return fmt.Errorf("reference ark binary %s not found: %w", refBin, err)
+		}
 	}
 	resticPath, err := exec.LookPath(resticBin)
 	if err != nil {
@@ -97,17 +118,34 @@ func runBench(
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
-	need := uint64(minFree)
-	if small {
-		need = minFreeSmall
+	if err := checkFree(dir, need); err != nil {
+		return err
 	}
-	free, err := freeBytes(dir)
-	if err != nil {
-		return fmt.Errorf("run: %w", err)
+	noVolumes := errors.New("they run with -files")
+	if sp == filesSpec {
+		noVolumes = dockerReady(ctx, dir, need)
 	}
-	if free < need {
-		return fmt.Errorf("run: %s has %.1f GiB free, the benchmark needs %.0f GiB",
-			dir, float64(free)/(1<<30), float64(need)/(1<<30))
+	if ctx.Err() != nil {
+		return fmt.Errorf("run: %w", ctx.Err())
+	}
+	if noVolumes != nil && refPath != "" {
+		return fmt.Errorf("run: -ark-ref needs the docker volume rows: %w", noVolumes)
+	}
+	var sftp []tool
+	if uri := os.Getenv("ARK_SFTP_TEST_URI"); uri != "" {
+		a, r, err := sftpTools(uri, arkPath, resticPath, sftpDir)
+		if err != nil {
+			return err
+		}
+		sftp = append(sftp, a)
+		if r != nil {
+			sftp = append(sftp, *r)
+		}
+	}
+	if sftpDir != "" {
+		if err := checkFree(sftpDir, need); err != nil {
+			return err
+		}
 	}
 
 	b := &bench{
@@ -140,85 +178,291 @@ func runBench(
 		}
 	}()
 
-	header(ctx, w, arkPath, resticPath)
-	n := 0
-	localRepo := func(name string) func() string {
-		return func() string { n++; return filepath.Join(dir, fmt.Sprintf("repo-%s-%d", name, n)) }
-	}
-	arkLocal := tool{name: "ark", bin: arkPath, ark: true, local: true}
-	arkLocal.repo = localRepo("ark")
-	resticLocal := tool{name: "restic", bin: resticPath, local: true}
-	resticLocal.repo = localRepo("restic")
-
-	var arkRuns, resticRuns []times
-	for round := 1; ; round++ {
-		// Alternating the order keeps drift and the previous run's cleanup
-		// from always landing on the same tool.
-		order := []tool{arkLocal, resticLocal}
-		if round%2 == 0 {
-			slices.Reverse(order)
-		}
-		for _, t := range order {
-			r, err := b.once(ctx, w, t, round)
-			if err != nil {
-				return err
-			}
-			if t.ark {
-				arkRuns = append(arkRuns, r)
-			} else {
-				resticRuns = append(resticRuns, r)
-			}
-		}
-		if round >= 3 && stable(arkRuns, resticRuns) || round == 5 {
-			break
-		}
-	}
-	_, _ = fmt.Fprintf(w, "\nlocal, median of %d runs\n", len(arkRuns))
-	if !stable(arkRuns, resticRuns) {
-		_, _ = fmt.Fprintf(w, "warning: spread ark %.0f%%, restic %.0f%% is above %.0f%%, the verdict is not stable\n",
-			spread(arkRuns)*100, spread(resticRuns)*100, maxSpread*100)
-	}
-	table(w, median(arkRuns), median(resticRuns), true)
-
-	if uri := os.Getenv("ARK_SFTP_TEST_URI"); uri != "" {
-		if err := b.sftpRow(ctx, w, uri, arkPath, resticPath); err != nil {
+	if len(sftp) > 0 && sftpDir != "" {
+		if err := b.probeMirror(ctx, sftp[0]); err != nil {
 			return err
 		}
+	}
+
+	header(ctx, w, arkPath, refPath, resticPath)
+	n := 0
+	localRepo := func(name string) func() (string, string) {
+		return func() (string, string) {
+			n++
+			p := filepath.Join(dir, fmt.Sprintf("repo-%s-%d", name, n))
+			return p, p
+		}
+	}
+	arkLocal := tool{name: "ark", bin: arkPath, ark: true, repo: localRepo("ark")}
+	resticLocal := tool{name: "restic", bin: resticPath, repo: localRepo("restic")}
+
+	tools := []tool{arkLocal, resticLocal}
+	runs, err := b.rounds(ctx, w, tools, 5)
+	if err != nil {
+		return err
+	}
+	summary(w, "local", tools, runs, budget)
+
+	if len(sftp) > 0 {
+		if err := b.sftpRow(ctx, w, sftp, sftpDir != ""); err != nil {
+			return err
+		}
+	}
+	if noVolumes != nil {
+		_, _ = fmt.Fprintf(w, "\ndocker volume rows skipped: %v\n", noVolumes)
+	} else if err := b.volumeRows(ctx, w, arkLocal, refPath, sftp, sftpDir != ""); err != nil {
+		return err
 	}
 	ok = true
 	return nil
 }
 
-// sftpRow times one ark and, when the URI names an identity, one restic run
-// against the sftp server and prints them without a verdict.
-func (b *bench) sftpRow(ctx context.Context, w io.Writer, uri, arkPath, resticPath string) error {
-	arkSFTP, resticSFTP, err := sftpTools(uri, arkPath, resticPath)
-	if err != nil {
-		return err
-	}
-	at, err := b.once(ctx, w, arkSFTP, 1)
-	if err != nil {
-		return err
-	}
-	var rt times
-	if resticSFTP != nil {
-		if rt, err = b.once(ctx, w, *resticSFTP, 1); err != nil {
-			return err
+// rounds runs every tool once per round until the spread is stable from round
+// 3 on, or round last is done, and returns the results per tool. Alternating
+// the order keeps drift and the previous run's cleanup from always landing on
+// the same tool.
+func (b *bench) rounds(ctx context.Context, w io.Writer, tools []tool, last int) ([][]result, error) {
+	runs := make([][]result, len(tools))
+	for round := 1; ; round++ {
+		for k := range tools {
+			i := k
+			if round%2 == 0 {
+				i = len(tools) - 1 - k
+			}
+			r, err := b.once(ctx, w, tools[i], round)
+			if err != nil {
+				return nil, err
+			}
+			runs[i] = append(runs[i], r)
+		}
+		if round >= 3 && stable(phaseTimes(runs)...) || round >= last {
+			return runs, nil
 		}
 	}
-	_, _ = fmt.Fprintln(w, "\nsftp, informational, one run, remote repositories are left on the server")
-	if resticSFTP == nil {
+}
+
+// sftpPlan is the title, last round and judge of an sftp row: sftpRounds
+// rounds when mirrored, so each run's repository is removed again, and a
+// single round without a verdict otherwise, so only one repository per tool
+// is left on the server.
+func sftpPlan(title string, judge float64, mirrored bool) (string, int, float64) {
+	if mirrored {
+		return title, sftpRounds, judge
+	}
+	return title + ", remote repositories are left on the server, pass -sftp-dir for 3 rounds", 1, 0
+}
+
+// sftpRow times the sftp tools against sftpBudget with the rounds of sftpPlan.
+func (b *bench) sftpRow(ctx context.Context, w io.Writer, tools []tool, mirrored bool) error {
+	title, last, judge := sftpPlan("sftp", sftpBudget, mirrored)
+	runs, err := b.rounds(ctx, w, tools, last)
+	if err != nil {
+		return err
+	}
+	summary(w, title, tools, runs, judge)
+	if len(tools) == 1 {
 		_, _ = fmt.Fprintln(w, "restic skipped: ARK_SFTP_TEST_URI has no identity")
 	}
-	table(w, at, rt, false)
 	return nil
+}
+
+// volumeRows times ark docker backup and restore of a volume bound to the
+// dataset against the reference ark binary, when there is one, within
+// refBudget: on a local repository and, when sftp is set, over sftp with the
+// rounds of sftpPlan. The caller checks dockerReady first.
+func (b *bench) volumeRows(
+	ctx context.Context,
+	w io.Writer,
+	local tool,
+	refBin string,
+	sftp []tool,
+	mirrored bool,
+) error {
+	pair := func(t tool) []tool {
+		t.volume = true
+		ts := []tool{t}
+		if refBin != "" {
+			r := t
+			r.name, r.bin = t.name+"-ref", refBin
+			ts = append(ts, r)
+		}
+		return ts
+	}
+	type row struct {
+		title string
+		tools []tool
+		last  int
+		judge float64
+	}
+	rows := []row{{"docker volume, local", pair(local), 5, refBudget}}
+	if len(sftp) > 0 {
+		r := row{tools: pair(sftp[0])}
+		r.title, r.last, r.judge = sftpPlan("docker volume, sftp", refBudget, mirrored)
+		rows = append(rows, r)
+	}
+	for _, r := range rows {
+		runs, err := b.rounds(ctx, w, r.tools, r.last)
+		if err != nil {
+			return err
+		}
+		summary(w, r.title, r.tools, runs, r.judge)
+	}
+	if refBin == "" {
+		_, _ = fmt.Fprintln(w, "no reference column: pass -ark-ref with the ark binary to compare against")
+	}
+	return nil
+}
+
+// docker runs the docker CLI and returns its trimmed output, which the error
+// carries instead. A docker run gets a name, and a cancel removes that
+// container: killing the CLI alone leaves it running.
+func docker(ctx context.Context, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	if args[0] == "run" {
+		name := fmt.Sprintf("ark-bench-%d", time.Now().UnixNano())
+		cmd.Args = slices.Insert(cmd.Args, 2, "--name", name)
+		cmd.Cancel = func() error {
+			_ = exec.Command("docker", "rm", "-f", name).Run()
+			return cmd.Process.Kill()
+		}
+	}
+	out, err := cmd.CombinedOutput()
+	out = bytes.TrimSpace(out)
+	if err != nil {
+		return "", fmt.Errorf("docker %s: %w: %s", args[0], err, out)
+	}
+	return string(out), nil
+}
+
+// dockerReady reports why the docker volume rows cannot run, nil when the
+// daemon sees dir as the caller owns it and its data root has need bytes
+// free. Bind mounts of the bench directory need a daemon on this host that
+// maps the caller's ids unchanged: not remote, rootless or userns-remapped.
+func dockerReady(ctx context.Context, dir string, need uint64) error {
+	owner, err := docker(ctx, "run", "--rm", "--mount", "type=bind,src="+dir+",dst=/p,readonly",
+		helperImage, "stat", "-c", "%u:%g", "/p")
+	if err != nil {
+		return err
+	}
+	if want := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()); owner != want {
+		return fmt.Errorf("the daemon sees %s owned by %s, not %s: remote, rootless or userns-remapped",
+			dir, owner, want)
+	}
+	root, err := docker(ctx, "info", "--format", "{{.DockerRootDir}}")
+	if err != nil {
+		return err
+	}
+	return checkFree(root, need)
+}
+
+// copyVolume copies vol into the empty directory dir as the caller, so an
+// interrupted copy leaves nothing the caller cannot remove.
+func copyVolume(ctx context.Context, vol, dir string) error {
+	_, err := docker(ctx, "run", "--rm", "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
+		"-v", vol+":/data:ro", "-v", dir+":/out", helperImage, "cp", "-a", "/data/.", "/out")
+	return err
+}
+
+// probeMirror inits an ark repository over sftp and checks that it lands
+// below the -sftp-dir directory, readable and removable, before any round
+// runs.
+func (b *bench) probeMirror(ctx context.Context, t tool) error {
+	repo, disk := t.repo()
+	if _, _, err := b.exec(ctx, t, "sftp-dir-probe-init", false, "--repo", repo, "init"); err != nil {
+		return err
+	}
+	if _, err := diskRatio(disk); err != nil {
+		return fmt.Errorf("run: -sftp-dir does not mirror the sftp URI's path, %s is left on the server: %w", repo, err)
+	}
+	if err := os.RemoveAll(disk); err != nil {
+		return fmt.Errorf("run: -sftp-dir: %w", err)
+	}
+	return nil
+}
+
+// summary prints the medians of tools[0] against tools[1], when present, with
+// a verdict against judge when it is set and a warning when the spread is
+// above maxSpread. A single tool gets no comparison and no verdict.
+func summary(w io.Writer, title string, tools []tool, runs [][]result, judge float64) {
+	ts := phaseTimes(runs)
+	var restic times
+	var resticDisk float64
+	other := ""
+	if len(runs) > 1 {
+		restic, resticDisk, other = median(ts[1]), medianDisk(runs[1]), tools[1].name
+	} else {
+		judge = 0
+	}
+	_, _ = fmt.Fprintf(w, "\n%s, median of %d runs\n", title, len(ts[0]))
+	if !stable(ts...) {
+		parts := make([]string, len(tools))
+		for i, t := range tools {
+			parts[i] = fmt.Sprintf("%s %.0f%%", t.name, spread(ts[i])*100)
+		}
+		what := "the verdict is not stable"
+		if judge == 0 {
+			what = "the medians are rough"
+		}
+		_, _ = fmt.Fprintf(w, "warning: spread %s is above %.0f%%, %s\n",
+			strings.Join(parts, ", "), maxSpread*100, what)
+	}
+	table(w, [2]string{tools[0].name, other}, median(ts[0]), restic, medianDisk(runs[0]), resticDisk, judge)
+}
+
+func phaseTimes(runs [][]result) [][]times {
+	ts := make([][]times, len(runs))
+	for i, rs := range runs {
+		for _, r := range rs {
+			ts[i] = append(ts[i], r.t)
+		}
+	}
+	return ts
+}
+
+func medianDisk(rs []result) float64 {
+	d := make([]float64, len(rs))
+	for i, r := range rs {
+		d[i] = r.disk
+	}
+	slices.Sort(d)
+	return d[len(d)/2]
+}
+
+// diskRatio is the space dir takes on disk, directories included, over the
+// bytes its regular files hold.
+func diskRatio(dir string) (float64, error) {
+	var alloc, stored int64
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		fi, err := d.Info()
+		if err != nil {
+			return err
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			return fmt.Errorf("%s: no block count", p)
+		}
+		alloc += st.Blocks * 512
+		if fi.Mode().IsRegular() {
+			stored += fi.Size()
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("disk usage of %s: %w", dir, err)
+	}
+	if stored == 0 {
+		return 0, fmt.Errorf("disk usage of %s: no stored bytes", dir)
+	}
+	return float64(alloc) / float64(stored), nil
 }
 
 // once regenerates the dataset, then times initial backup, incremental backup
 // after mutate, and restore of the latest snapshot, and checks the restore
 // against the source tree.
-func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (times, error) {
-	var res times
+func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (res result, err error) {
 	if err := os.RemoveAll(b.data); err != nil {
 		return res, fmt.Errorf("run: %w", err)
 	}
@@ -226,12 +470,33 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (times
 		return res, fmt.Errorf("run: %w", err)
 	}
 	syscall.Sync()
-	repo := t.repo()
-	if t.local {
-		defer os.RemoveAll(repo)
+	repo, disk := t.repo()
+	if disk != "" {
+		defer func() {
+			if e := os.RemoveAll(disk); e != nil && err == nil {
+				err = fmt.Errorf("run: removing repository: %w", e)
+			}
+		}()
 	}
 	defer os.RemoveAll(b.cache)
-	tag := fmt.Sprintf("%s-%d", t.name, round)
+	label := t.name
+	vol := ""
+	if t.volume {
+		// The volume binds the dataset directory, so mutate changes it in
+		// place and no copy runs between the backups.
+		vol = fmt.Sprintf("ark-bench-%d", time.Now().UnixNano())
+		label = "docker-" + label
+		defer func() {
+			if _, e := docker(context.WithoutCancel(ctx), "volume", "rm", "-f", vol); e != nil {
+				_, _ = fmt.Fprintf(w, "warning: volume %s is left behind: %v\n", vol, e)
+			}
+		}()
+		if _, err := docker(ctx, "volume", "create", "--opt", "type=none", "--opt", "o=bind",
+			"--opt", "device="+b.data, vol); err != nil {
+			return res, fmt.Errorf("run: %w", err)
+		}
+	}
+	tag := fmt.Sprintf("%s-%d", label, round)
 
 	global := func(a ...string) []string {
 		if t.ark {
@@ -245,25 +510,35 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (times
 	var snaps [2]arkSnap
 	for i := range 2 {
 		if i == 1 {
-			if err := mutate(ctx, b.data, b.seed); err != nil {
+			if err := mutate(ctx, b.data, b.seed, b.sp.logSizes); err != nil {
 				return res, fmt.Errorf("run: %w", err)
 			}
 			syscall.Sync()
 		}
 		args := global("backup", b.data)
-		if t.ark {
+		switch {
+		case vol != "":
+			args = global("--json", "docker", "backup", vol)
+		case t.ark:
 			args = global("--json", "backup", b.data)
 		}
 		d, out, err := b.exec(ctx, t, fmt.Sprintf("%s-%s", tag, phases[i]), t.ark, args...)
 		if err != nil {
 			return res, err
 		}
-		res[i] = d
+		res.t[i] = d
 		if t.ark {
 			if err := json.Unmarshal(out, &snaps[i]); err != nil {
 				return res, fmt.Errorf("run: parsing ark backup output: %w", err)
 			}
 		}
+	}
+	if disk != "" {
+		r, err := diskRatio(disk)
+		if err != nil {
+			return res, fmt.Errorf("run: %w", err)
+		}
+		res.disk = r
 	}
 
 	if err := os.RemoveAll(b.restore); err != nil {
@@ -272,7 +547,14 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (times
 	defer os.RemoveAll(b.restore)
 	args := global("restore", "latest", "--target", b.restore)
 	root := filepath.Join(b.restore, b.data)
-	if t.ark {
+	switch {
+	case vol != "":
+		if _, err := docker(ctx, "volume", "rm", vol); err != nil {
+			return res, fmt.Errorf("run: %w", err)
+		}
+		args = global("docker", "restore", "--yes", snaps[1].ID)
+		root = b.restore
+	case t.ark:
 		args = global("restore", snaps[1].ID, b.restore)
 		root = b.restore
 	}
@@ -280,7 +562,15 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (times
 	if err != nil {
 		return res, err
 	}
-	res[2] = d
+	res.t[2] = d
+	if vol != "" {
+		if err := os.Mkdir(b.restore, 0o750); err != nil {
+			return res, fmt.Errorf("run: %w", err)
+		}
+		if err := copyVolume(ctx, vol, b.restore); err != nil {
+			return res, fmt.Errorf("run: %w", err)
+		}
+	}
 
 	want, _, _, err := hashTree(ctx, b.data)
 	if err != nil {
@@ -294,8 +584,11 @@ func (b *bench) once(ctx context.Context, w io.Writer, t tool, round int) (times
 		return res, fmt.Errorf("run: %s restore differs from the source tree: %s, want %s", tag, got, want)
 	}
 
-	_, _ = fmt.Fprintf(w, "%-12s run %d: initial %s, incremental %s, restore %s",
-		t.name, round, secs(res[0]), secs(res[1]), secs(res[2]))
+	_, _ = fmt.Fprintf(w, "%-19s run %d: initial %s, incremental %s, restore %s",
+		label, round, secs(res.t[0]), secs(res.t[1]), secs(res.t[2]))
+	if res.disk > 0 {
+		_, _ = fmt.Fprintf(w, ", disk/stored %.2f", res.disk)
+	}
 	if t.ark {
 		_, _ = fmt.Fprintf(w, "; chunks new/reused %d/%d, %d/%d",
 			snaps[0].Stats.ChunksNew, snaps[0].Stats.ChunksReused,
@@ -339,19 +632,26 @@ func (b *bench) exec(
 
 // sftpTools derives ark and restic tools from an sftp URI. restic reaches the
 // server through ssh built from the URI's port, identity and known_hosts; it
-// is nil when the URI has no identity.
-func sftpTools(uri, arkBin, resticBin string) (tool, *tool, error) {
+// is nil when the URI has no identity. mirror, when set, is the local
+// directory the URI's path is served from.
+func sftpTools(uri, arkBin, resticBin, mirror string) (tool, *tool, error) {
 	u, err := url.Parse(uri)
 	if err != nil || u.Scheme != "sftp" || u.Host == "" {
 		return tool{}, nil, fmt.Errorf("run: ARK_SFTP_TEST_URI %q is not an sftp:// URI", uri)
 	}
-	fresh := func(prefix string) string {
-		return path.Join("/", u.Path, fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()))
+	fresh := func(prefix string) (string, string) {
+		name := fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+		disk := ""
+		if mirror != "" {
+			disk = filepath.Join(mirror, name)
+		}
+		return path.Join("/", u.Path, name), disk
 	}
-	a := tool{name: "ark-sftp", bin: arkBin, ark: true, repo: func() string {
+	a := tool{name: "ark-sftp", bin: arkBin, ark: true, repo: func() (string, string) {
 		r := *u
-		r.Path = fresh("bench-ark")
-		return r.String()
+		p, disk := fresh("bench-ark")
+		r.Path = p
+		return r.String(), disk
 	}}
 	cmd := sftpCommand(u)
 	if cmd == "" {
@@ -363,12 +663,13 @@ func sftpTools(uri, arkBin, resticBin string) (tool, *tool, error) {
 		name: "restic-sftp",
 		bin:  resticBin,
 		opts: []string{"-o", "sftp.command=" + cmd},
-		repo: func() string {
-			ru := url.URL{Scheme: "sftp", Host: u.Host, Path: "/" + fresh("bench-restic")}
+		repo: func() (string, string) {
+			p, disk := fresh("bench-restic")
+			ru := url.URL{Scheme: "sftp", Host: u.Host, Path: "/" + p}
 			if user := u.User.Username(); user != "" {
 				ru.User = url.User(user)
 			}
-			return ru.String()
+			return ru.String(), disk
 		},
 	}
 	return a, r, nil
@@ -417,8 +718,13 @@ func shellQuote(a string) string {
 	return `"` + a + `"`
 }
 
-func stable(arkRuns, resticRuns []times) bool {
-	return spread(arkRuns) <= maxSpread && spread(resticRuns) <= maxSpread
+func stable(runs ...[]times) bool {
+	for _, r := range runs {
+		if spread(r) > maxSpread {
+			return false
+		}
+	}
+	return true
 }
 
 func spread(runs []times) float64 {
@@ -449,46 +755,65 @@ func median(runs []times) times {
 	return m
 }
 
-// verdict is the ratio column and, when judged, PASS or FAIL against budget.
-func verdict(ark, restic time.Duration, judged bool) (string, string) {
+// verdict is the ratio column and, when judge is set, PASS or FAIL against it.
+func verdict(ark, restic time.Duration, judge float64) (string, string) {
 	if restic == 0 {
 		return "-", ""
 	}
 	r := float64(ark) / float64(restic)
-	if !judged {
+	if judge == 0 {
 		return fmt.Sprintf("%.2f", r), ""
 	}
-	if r <= budget {
+	if r <= judge {
 		return fmt.Sprintf("%.2f", r), "PASS"
 	}
 	return fmt.Sprintf("%.2f", r), "FAIL"
 }
 
-func table(w io.Writer, ark, restic times, judged bool) {
+// table prints ark against restic per phase, or ark alone when names[1] is
+// empty.
+func table(w io.Writer, names [2]string, ark, restic times, arkDisk, resticDisk float64, judge float64) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	head := "phase\tark\trestic\tratio"
-	if judged {
-		head += fmt.Sprintf("\tbudget %.1fx", budget)
+	if names[1] == "" {
+		_, _ = fmt.Fprintln(tw, "phase\t"+names[0])
+		for p, name := range phases {
+			_, _ = fmt.Fprintf(tw, "%s\t%s\n", name, secs(ark[p]))
+		}
+		_, _ = fmt.Fprintf(tw, "disk/stored\t%s\n", ratio(arkDisk))
+		_ = tw.Flush()
+		return
+	}
+	head := "phase\t" + names[0] + "\t" + names[1] + "\tratio"
+	if judge != 0 {
+		head += fmt.Sprintf("\tbudget %.1fx", judge)
 	}
 	_, _ = fmt.Fprintln(tw, head)
 	for p, name := range phases {
-		ratio, v := verdict(ark[p], restic[p], judged)
+		ratio, v := verdict(ark[p], restic[p], judge)
 		rs := "-"
 		if restic[p] > 0 {
 			rs = secs(restic[p])
 		}
 		line := fmt.Sprintf("%s\t%s\t%s\t%s", name, secs(ark[p]), rs, ratio)
-		if judged {
+		if judge != 0 {
 			line += "\t" + v
 		}
 		_, _ = fmt.Fprintln(tw, line)
 	}
+	_, _ = fmt.Fprintf(tw, "disk/stored\t%s\t%s\t-\n", ratio(arkDisk), ratio(resticDisk))
 	_ = tw.Flush()
+}
+
+func ratio(r float64) string {
+	if r == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%.2f", r)
 }
 
 func secs(d time.Duration) string { return fmt.Sprintf("%.1fs", d.Seconds()) }
 
-func header(ctx context.Context, w io.Writer, arkBin, resticBin string) {
+func header(ctx context.Context, w io.Writer, arkBin, refBin, resticBin string) {
 	first := func(name string, args ...string) string {
 		out, err := exec.CommandContext(ctx, name, args...).Output()
 		if err != nil {
@@ -509,6 +834,9 @@ func header(ctx context.Context, w io.Writer, arkBin, resticBin string) {
 	)
 	// ark's version line carries the commit it was built from.
 	_, _ = fmt.Fprintf(w, "ark: %s\n", first(arkBin, "version"))
+	if refBin != "" {
+		_, _ = fmt.Fprintf(w, "ark-ref: %s\n", first(refBin, "version"))
+	}
 	_, _ = fmt.Fprintf(w, "restic: %s\n", first(resticBin, "version"))
 }
 
@@ -528,6 +856,18 @@ func memTotal() string {
 		}
 	}
 	return "unknown"
+}
+
+func checkFree(dir string, need uint64) error {
+	free, err := freeBytes(dir)
+	if err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+	if free < need {
+		return fmt.Errorf("run: %s has %.1f GiB free, the benchmark needs %.0f GiB",
+			dir, float64(free)/(1<<30), float64(need)/(1<<30))
+	}
+	return nil
 }
 
 func freeBytes(dir string) (uint64, error) {

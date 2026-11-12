@@ -15,7 +15,7 @@ import (
 	"github.com/alexjoedt/ark/arkmem"
 )
 
-// readBackend records every object read through Get.
+// readBackend records every object read through Get or GetRange.
 type readBackend struct {
 	ark.Backend
 	mu    sync.Mutex
@@ -27,6 +27,13 @@ func (b *readBackend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, err
 	b.reads = append(b.reads, h)
 	b.mu.Unlock()
 	return b.Backend.Get(ctx, h)
+}
+
+func (b *readBackend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
+	b.mu.Lock()
+	b.reads = append(b.reads, h)
+	b.mu.Unlock()
+	return b.Backend.GetRange(ctx, h, offset, length)
 }
 
 // keyFiles returns the name and body of every key file in b.
