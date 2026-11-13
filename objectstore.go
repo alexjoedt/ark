@@ -275,11 +275,10 @@ func keyedName(idKey, data []byte) string {
 // The object is durable and present for others only once the session of s
 // has listed its pack in an index object.
 func (s *objectStore) putNamed(ctx context.Context, name string, data []byte) (int, error) {
-	_, _, present, err := s.index.lookup(ctx, name)
+	blob, present, err := s.present(ctx, name)
 	if err != nil || present {
 		return 0, err
 	}
-	blob, _ := parseName(name) // lookup rejected a name that is none
 	if !s.held.claim(blob) {
 		return 0, nil
 	}
@@ -289,6 +288,20 @@ func (s *objectStore) putNamed(ctx context.Context, name string, data []byte) (i
 		return 0, err
 	}
 	return len(obj), nil
+}
+
+// present reports whether a stored pack holds the blob named name or this run
+// stores it, and returns the blob's name as bytes. A name that is none is an
+// error. Only a writing run, which holds its blobs, asks.
+func (s *objectStore) present(ctx context.Context, name string) (blob [sha256.Size]byte, ok bool, err error) {
+	blob, ok = parseName(name)
+	if !ok {
+		return blob, false, fmt.Errorf("ark: invalid %s name %q", s.space.blobs, name)
+	}
+	if _, _, ok, err = s.index.find(ctx, blob); err != nil || ok {
+		return blob, ok, err
+	}
+	return blob, s.held.holds(blob), nil
 }
 
 // Get returns the raw content of the object stored under name. An object no

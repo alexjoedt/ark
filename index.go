@@ -416,6 +416,24 @@ func (x *packIndex) sawLoss() bool {
 	return t != nil && (t.gone != nil || len(t.unreadable) > 0)
 }
 
+// relist lists the packs of the loaded table again, so that its lookups pass
+// over the records of a pack lost since the load. It issues one List and runs
+// no lost hook.
+func (x *packIndex) relist(ctx context.Context) error {
+	if err := take(ctx, x.loading); err != nil {
+		return err
+	}
+	defer func() { <-x.loading }()
+	t := *x.table.Load()
+	gone, err := x.markGone(ctx, &t)
+	if err != nil {
+		return err
+	}
+	t.gone = gone
+	x.table.Store(&t)
+	return nil
+}
+
 // readAll lists the index namespace and reads every object into one sorted
 // table.
 func (x *packIndex) readAll(ctx context.Context) (*indexTable, error) {

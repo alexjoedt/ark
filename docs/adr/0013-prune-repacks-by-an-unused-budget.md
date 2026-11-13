@@ -53,7 +53,8 @@ as live in it only when no stored pack holds the blob.
 
 `PruneResult` gains `PacksDeleted`, `BytesRepacked` and `BytesUnused`. `BytesFreed` is the size of
 the deleted packs less the bytes copied, `BlobsRemoved` the index entries that went less the blobs
-copied. A dry run computes all of them from the same plan and writes nothing.
+copied. A dry run computes all of them from the same plan and deletes nothing; the one object it may
+write is the lost-pack marker of 0015, when its load of the data index finds a lost pack.
 
 - Not a threshold per pack, because the cost that matters is the unused share of the whole
   repository: a per-pack rule either rewrites many packs for little gain or leaves a repository of

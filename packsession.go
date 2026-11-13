@@ -36,16 +36,11 @@ func (h *heldBlobs) claim(name [sha256.Size]byte) bool {
 	return true
 }
 
-// holds reports whether the blob named name was claimed. A name that is
-// none is not.
-func (h *heldBlobs) holds(name string) bool {
-	blob, ok := parseName(name)
-	if !ok {
-		return false
-	}
+// holds reports whether name was claimed.
+func (h *heldBlobs) holds(name [sha256.Size]byte) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	_, ok = h.names[blob]
+	_, ok := h.names[name]
 	return ok
 }
 

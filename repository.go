@@ -487,7 +487,9 @@ func WithPruneDryRun() PruneOption { return func(c *pruneConfig) { c.dryRun = tr
 //
 // It deletes nothing when a snapshot references an object no index lists:
 // the error names RebuildIndex, which restores the index from the packs.
-// Pass WithPruneDryRun to report what would be removed without making changes.
+// Pass WithPruneDryRun to report what would be removed without deleting
+// anything. A dry run whose load of the data index finds a lost pack still
+// stores the lost-pack marker, the one object it may write.
 func (r *Repository) Prune(ctx context.Context, opts ...PruneOption) (*PruneResult, error) {
 	cfg := &pruneConfig{}
 	for _, o := range opts {

@@ -19,9 +19,11 @@ not open, stores a marker object, `lostpacks/<name>`, before any lookup passes o
 (`index.go`, `lostpacks.go`). The chunks of an object that does not open sit in stored packs but no
 index lists them, which a reused reference survives no better than a lost pack. The name is the
 keyed hash of the namespace name, the content is empty and sealed like every single object; only its
-presence counts. The marker is made durable with a Sync, so a backup after a power loss still finds
-it; a load that finds it stored already does not put it again but syncs, because the writer that put
-it may have died before its own Sync. Backup and import fail when they cannot store it: the backups
+presence counts. The writer that stores the marker makes it durable with a Sync before it goes on,
+so a backup after a power loss still finds it. A load that finds it stored already neither puts nor
+syncs it: a read never issues a backend-wide Sync for a marker another writer stored, and never logs
+a failure for a marker that is there. A writer that died between its Put and its Sync may leave a
+marker that a power loss takes; the next load that finds the loss stores it again. Backup and import fail when they cannot store it: the backups
 after them would take unread what is lost. Every other operation logs the failure and goes on: a
 read must restore from a repository that takes no write, and Check, prune and the index rebuild
 diagnose or repair the loss the marker is about, so a full disk or a backend that refuses the
@@ -35,18 +37,19 @@ or a request that fails: the backup loads the data index and leaves out of the p
 file of which a chunk resolves to no stored pack, so it reads them again and stores what is gone.
 
 The marker check runs before the backup's own load of the data index, which a changed file
-triggers. Once the walk has passed on a file with data to read, it waits for that load before it
-takes another file unread, and when the load found the loss it looks up the chunks of each such
-file and reads the file when one resolves to no stored pack (`backup.go`, `runBackup`). A chunk
-this backup stores again counts as stored, although no index lists it before the backup's next
-checkpoint. Files the walk took unread before that load may reference what is lost and can no
-longer be read: a stream source walks once. Before it stores any tree the backup looks up their
-chunks, in memory since the index is loaded, and fails when one resolves to no stored pack and was
-not stored again (`checkReused`). A backup that loaded no data index asks for the marker a second
-time there, since another operation may have stored it after the first request, and loads the
-data index when it is there. The load stored the marker, so the next backup reads those files
-again. A backup whose load found no loss checks nothing, and one that found the marker at its
-first request looked up the parent's files already and looks up none of them twice.
+triggers. The walk does not wait for that load: it goes on taking unchanged files unread while the
+load runs. Once the load has finished and found the loss, the walk looks up the chunks of each file
+it would take unread and reads the file when one resolves to no stored pack (`backup.go`,
+`runBackup`). A chunk this backup stores again counts as stored, although no index lists it before
+the backup's next checkpoint (`objectStore.present`, which the store path asks too). Files the walk
+took unread and unchecked may reference what is lost and can no longer be read: a stream source
+walks once. Before it stores any tree the backup looks up their chunks and fails when one resolves
+to no stored pack and was not stored again (`checkReused`). Unless its own load found the loss, it
+asks for the marker a second time there, since another operation may have stored it after the first
+request or after the backup's load, and when it is there loads the data index, or lists the data
+packs again when it loaded the index before, so the lookups pass over a pack lost since. The marker
+is stored then, so the next backup reads those files again. A backup that found the marker at its
+first request looked up the parent's files already and took none of them unchecked.
 
 Only prune removes the marker, under the exclusive lock and after its index is durable. Prune
 stops before any delete while a snapshot references a chunk no index lists, and it removes the
@@ -81,6 +84,11 @@ backup until the next prune.
 - Not re-reading the files a backup took unread once its own load finds the loss, because a source
   may walk once; failing that one backup is the smallest change that commits no unchecked
   reference.
+- Not letting the walk wait for the backup's own load of the data index, because the stat-only walk
+  of the rest of a large tree overlaps with that load; a file taken unread before the load finished
+  is looked up before the commit, at the price of failing that backup when the load finds the loss.
+- Not asking for the marker more than twice, because every request costs the fast path a round
+  trip and none closes the window after the last one.
 
 ## Consequences
 
@@ -95,14 +103,17 @@ index object that does not open fails and commits nothing:
 `TestBackupThatFindsTheLossCommitsNoUnreadFileOfIt`. It reads a file the walk reaches after that
 load, and a chunk it stores again counts for a file it took unread before:
 `TestBackupThatFindsTheLossReadsWhatItCan`. A marker another operation stores after the backup asked
-for it fails a backup that loaded no data index: `TestBackupAsksForTheMarkerAgainBeforeItCommits`.
+for it fails a backup that loaded no data index: `TestBackupAsksForTheMarkerAgainBeforeItCommits`,
+and one whose own load saw every pack stored, which lists the packs again:
+`TestBackupChecksWhatItTookOnceTheMarkerComesAfterItsLoad`.
 An index object that does not open stores the marker:
 `TestIndexObjectThatDoesNotOpenStoresTheMarker`. The delete falls inside the exclusive lock:
-`TestMarkerGoesWhileTheExclusiveLockIsHeld`. A stored marker is not put again but synced:
-`TestMarkerIsDurableOnceStored`.
+`TestMarkerGoesWhileTheExclusiveLockIsHeld`. The writer that puts the marker syncs it, and a stored
+marker is neither put again nor synced: `TestMarkerIsDurableOnceStored`.
 
 An unchanged backup costs two requests more, an `Exists` before the walk and one before its trees,
-and still reads no data index:
+and still reads no data index; a backup that took any file unread and unchecked and whose own load
+found no loss pays the second `Exists` too:
 `TestUnchangedBackupReadsNoDataIndex`. A prune that may remove the marker asks for it once and
 deletes it only when it is there, so a prune with nothing to do writes nothing.
 
@@ -111,7 +122,9 @@ only take files unchanged keeps writing snapshots that miss the lost chunks unti
 Restore, a Verify, an export, a backup with a changed file (which then fails once) or a prune loads
 the data index and stores the marker. The first test above pins that a backup right after the loss
 still takes the file unread. A marker stored after a backup's second request is not seen by that
-backup: the window is its tree build and the end of its write session.
+backup: the window is its tree build and the end of its write session. Nor is a pack lost after
+the backup's last look at the packs, its own load that found a loss or the listing after its
+second request.
 
 The format version stays 3: a build that predates the marker never reads its namespace and ignores
 it. The namespace is a new `HandleType`, `LostPackFile`, which a backend maps by its name like the

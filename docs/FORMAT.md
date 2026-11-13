@@ -104,19 +104,20 @@ A load of the data index that finds a listed pack gone, or a data index object t
 stores the marker `lostpacks/<name>`, where the name is the keyed hash of the string `lostpacks`, so
 it differs between repositories. It is sealed like any single object over empty content; only its
 presence counts, and a marker that does not open counts as present. A marker that is stored already
-is not put again, only synced. Backup and import fail when they cannot store it; restore, export,
+is neither put again nor synced: the writer that put it synced it. Backup and import fail when they cannot store it; restore, export,
 verify, check, prune and an index rebuild log the failure and go on. A prune dry run stores it too
 and writes nothing else.
 
 A backup that would take files unchanged from their parent asks for the marker with one request.
 Without it the backup reads no data index, as before. With it the backup loads the data index and
 reads again every file of which a chunk is in no stored pack. A failed request counts as a marker.
-Once the backup's own load of the data index has found the loss, it reads again every file the walk
-reaches after that load with a chunk in no stored pack. A backup that took files unread before that
-load fails before it stores a snapshot when one of those files has a chunk in no stored pack that
-the backup did not store again; the next backup reads them. A backup that loaded no data index asks
-for the marker a second time before it stores its trees, and loads the data index when it is
-there.
+The walk does not wait for the backup's own load of the data index. Once that load has finished and
+found the loss, the backup reads again every file the walk reaches after it with a chunk in no
+stored pack. A backup that took files unread and unchecked fails before it stores a snapshot when
+one of those files has a chunk in no stored pack that the backup did not store again; the next
+backup reads them. Unless its own load found the loss, such a backup asks for the marker a second
+time before it stores its trees, and when it is there loads the data index, or lists the data packs
+again when it loaded the index before, and then looks those files up.
 
 Only prune removes the marker, under the exclusive lock and after the new index is durable, once
 every chunk a snapshot references is listed in a stored pack. An index rebuild never removes it: a

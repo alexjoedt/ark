@@ -12,11 +12,11 @@ import (
 //
 // Any operation whose load of the data index finds a lost data pack or an
 // index object that does not open stores the marker, a prune dry run too: the
-// marker only ever makes a backup read more. It is removed only by a prune, under the exclusive lock, once every
-// chunk a snapshot references is listed in a stored pack. Nothing else
-// deletes it, so storing it under a shared lock is safe. A marker that is
-// there for no reason costs a load of the data index per backup, nothing
-// more.
+// marker only ever makes a backup read more. It is removed only by a prune,
+// under the exclusive lock, once every chunk a snapshot references is listed
+// in a stored pack. Nothing else deletes it, so storing it under a shared lock
+// is safe. A marker that is there for no reason costs a load of the data index
+// per backup, nothing more.
 
 // lostPacksMarker returns the handle of the marker: one object, named by the
 // keyed hash of its namespace name like a content-named object.
@@ -24,17 +24,18 @@ func (r *Repository) lostPacksMarker() Handle {
 	return Handle{Type: LostPackFile, Name: keyedName(r.key.IDKey[:], []byte(LostPackFile.String()))}
 }
 
-// markLostPacks stores the marker and makes it durable: a backup after a
-// power loss must still find it. A marker that is stored already is not put
-// again, since only a prune deletes it and not while this caller holds its
-// lock, but it is synced: the writer that put it may have died before its
-// Sync.
+// markLostPacks stores the marker and makes it durable before the caller goes
+// on: a backup after a power loss must still find it. A marker that is stored
+// already is left as it is, with no Put and no Sync, since only a prune
+// deletes it and not while this caller holds its lock; the writer that put it
+// synced it before it relied on it.
 func (r *Repository) markLostPacks(ctx context.Context) error {
 	h := r.lostPacksMarker()
-	if ok, err := r.backend.Exists(ctx, h); err != nil || !ok {
-		if err := r.putSealed(ctx, h, nil); err != nil {
-			return err
-		}
+	if ok, err := r.backend.Exists(ctx, h); err == nil && ok {
+		return nil
+	}
+	if err := r.putSealed(ctx, h, nil); err != nil {
+		return err
 	}
 	if err := r.backend.Sync(ctx); err != nil {
 		return fmt.Errorf("ark: failed to sync %s object %s: %w", h.Type, h.Name, err)

@@ -59,12 +59,9 @@ func (r *Repository) runBackup(
 	w := newChunkWriter(ctx, session.chunks, r.concurrency)
 	var scannedEntries []fileEntry
 	// reused numbers the entries that kept their parent's chunks unread and
-	// unchecked: taken before any lookup could tell that one of them is lost.
+	// unchecked: taken before a finished load of the data index could tell
+	// that one of them is lost. checkReused looks them up before the commit.
 	var reused []int
-	// reads is set once the walk passed on a file with data to be read, whose
-	// chunks need the data index: the walk waits for that load instead of
-	// taking unchecked what it could still read.
-	var reads bool
 	var stats SnapshotStats
 
 	// Progress calls never overlap, but the readers finish files concurrently.
@@ -85,8 +82,9 @@ func (r *Repository) runBackup(
 
 	var readers *fileReaders
 	var pending []pendingFile
-	// chunkErr is the first file that failed to chunk, on either path.
-	var chunkErr error
+	// chunkErr is the first file that failed to chunk, on either path;
+	// indexErr a lookup of the parent's chunks that failed in the walk.
+	var chunkErr, indexErr error
 	if cs, ok := src.(ConcurrentSource); ok && cs.ConcurrentOpen() {
 		readers = newFileReaders(ctx, cancel, w, r.chunker, r.concurrency, fileDone)
 	}
@@ -116,17 +114,14 @@ func (r *Repository) runBackup(
 			prev, take := parent[normEntryPath(entry.Path)]
 			take = take && unchanged(entry, prev.FileInfo)
 			unchecked := take && !checked
-			if unchecked && reads {
-				if _, err := session.chunks.index.load(ctx); err != nil {
-					return err
-				}
-			}
-			// Once this backup's own load found a loss, a file is looked up
-			// before it is taken, and read when a chunk of it is gone.
+			// Once this backup's own load has found a loss, a file is looked
+			// up before it is taken, and read when a chunk of it is gone. The
+			// walk never waits for that load.
 			if unchecked && session.chunks.index.sawLoss() {
 				lost, err := unstoredChunk(ctx, session.chunks, prev.Chunks)
 				if err != nil {
-					return err
+					indexErr = fmt.Errorf("failed to look up the chunks of %s: %w", entry.Path, err)
+					return indexErr
 				}
 				take, unchecked = !lost, false
 			}
@@ -160,7 +155,6 @@ func (r *Repository) runBackup(
 				fe.Chunks = chunks
 				fileDone(entry.Path, fe.Chunks)
 			}
-			reads = reads || !take && entry.Size > 0
 
 		case FileTypeUnsupported:
 			// Devices, fifos, sockets: the v1 format does not model them.
@@ -178,7 +172,7 @@ func (r *Repository) runBackup(
 	})
 	// A file that failed first stopped the walk and is the cause; a walk that
 	// failed on its own stops the readers.
-	fileFailed := chunkErr != nil || readers != nil && readers.failure() != nil
+	fileFailed := chunkErr != nil || indexErr != nil || readers != nil && readers.failure() != nil
 	if err != nil {
 		cancel()
 	}
@@ -188,6 +182,9 @@ func (r *Repository) runBackup(
 	werr := w.wait()
 	if err != nil && !fileFailed {
 		return nil, fmt.Errorf("backup: walk failed: %w", err)
+	}
+	if indexErr != nil {
+		return nil, fmt.Errorf("backup: %w", indexErr)
 	}
 	if chunkErr != nil {
 		return nil, fmt.Errorf("backup: %w", chunkErr)
@@ -253,25 +250,29 @@ func (r *Repository) runBackup(
 // checkReused fails the backup when a file it took unread and unchecked from
 // the parent references a chunk that no stored pack holds and that it did not
 // store again. Such a file was taken before the backup knew of the loss, and
-// it can no longer be read. The data index tells when this backup loaded it;
-// otherwise the marker is asked for again, since another operation may have
-// stored it after parentFiles asked, and the index is loaded when it is
-// there. The load stored the marker, so the next backup reads such a file.
+// it can no longer be read. Unless this backup's own load found a loss, the
+// marker is asked for again, since another operation may have stored it after
+// parentFiles asked or after this backup's load, and when it is there the
+// index is loaded, or a loaded one lists the packs again, before the files
+// are looked up. The marker is stored then, so the next backup reads them.
 func (r *Repository) checkReused(ctx context.Context, session *packSession, entries []fileEntry, reused []int) error {
 	if len(reused) == 0 {
 		return nil
 	}
 	idx := session.chunks.index
-	if !idx.loaded() {
+	if !idx.sawLoss() {
 		if !r.lostPacksMarked(ctx) {
 			return nil
 		}
-		if _, err := idx.load(ctx); err != nil {
+		var err error
+		if idx.loaded() {
+			err = idx.relist(ctx)
+		} else {
+			_, err = idx.load(ctx)
+		}
+		if err != nil {
 			return err
 		}
-	}
-	if !idx.sawLoss() {
-		return nil
 	}
 	n := 0
 	for _, i := range reused {
@@ -294,11 +295,11 @@ func (r *Repository) checkReused(ctx context.Context, session *packSession, entr
 // not stored again by this run.
 func unstoredChunk(ctx context.Context, s *objectStore, chunks []chunkRef) (bool, error) {
 	for _, c := range chunks {
-		_, _, stored, err := s.index.lookup(ctx, c.ID)
+		_, present, err := s.present(ctx, c.ID)
 		if err != nil {
 			return false, err
 		}
-		if !stored && !s.held.holds(c.ID) {
+		if !present {
 			return true, nil
 		}
 	}

@@ -368,7 +368,9 @@ func TestBackupThatFindsTheLossCommitsNoUnreadFileOfIt(t *testing.T) {
 // found the loss, a file the walk reaches after it is looked up and read when
 // a chunk of it is lost, and a lost chunk the backup stores again counts as
 // stored for a file it took unread before the load. Neither fails the backup,
-// and its snapshot restores.
+// and its snapshot restores. The walk does not wait for the load, so in the
+// first case the source pauses after the first file until the backup has
+// stored a pack, which it does only after its load.
 func TestBackupThatFindsTheLossReadsWhatItCan(t *testing.T) {
 	ctx := context.Background()
 	const lost = "content of a file that does not change"
@@ -378,11 +380,12 @@ func TestBackupThatFindsTheLossReadsWhatItCan(t *testing.T) {
 		changed, content string
 		unchanged        string
 		opens            int
+		afterLoad        bool
 	}{
 		"file after the load": {
 			files:   map[string]string{"a": changes, "b": lost},
 			changed: "a", content: "second content of a file that changes",
-			unchanged: "b", opens: 2,
+			unchanged: "b", opens: 2, afterLoad: true,
 		},
 		"chunk stored again": {
 			files:   map[string]string{"f": lost, "g": changes},
@@ -403,6 +406,23 @@ func TestBackupThatFindsTheLossReadsWhatItCan(t *testing.T) {
 			mustBackup(t, repo, src)
 			deletePackOf(t, b, repo, ark.BlobFile, ark.ObjectName(repo, []byte(lost)))
 
+			if c.afterLoad {
+				ark.SetPackLimits(repo, 1, 0)
+				packs := len(objectNames(t, b, ark.DataPackFile))
+				src.walking, src.resume = make(chan struct{}), make(chan struct{})
+				go func() {
+					defer close(src.resume)
+					<-src.walking
+					for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+						n := 0
+						_ = b.List(ctx, ark.DataPackFile, func(ark.BlobInfo) error { n++; return nil })
+						if n > packs {
+							return
+						}
+						time.Sleep(time.Millisecond)
+					}
+				}()
+			}
 			src.files[c.changed] = statFile{content: c.content, mtime: mtime.Add(time.Hour)}
 			snap := mustBackup(t, repo, src)
 			if src.opens[c.unchanged] != c.opens {
@@ -469,6 +489,77 @@ func TestBackupAsksForTheMarkerAgainBeforeItCommits(t *testing.T) {
 	}
 	if b.afterAsk != nil {
 		t.Fatal("the backup never asked for the marker")
+	}
+	if got := objectNames(t, b, ark.SnapshotFile); !slices.Equal(got, snaps) {
+		t.Fatalf("snapshots %v after the failed backup, want %v", got, snaps)
+	}
+	snap := mustBackup(t, repo, src)
+	if src.opens["f"] != 2 {
+		t.Fatalf("the file was opened %d times, want twice", src.opens["f"])
+	}
+	sink := &recordingSink{}
+	if _, err := repo.Restore(ctx, snap.ID, sink); err != nil || sink.written["f"] != content {
+		t.Errorf("Restore = %q, %v; want the content", sink.written["f"], err)
+	}
+}
+
+// listHookBackend runs afterList once, right after a List of the data pack
+// namespace has been answered.
+type listHookBackend struct {
+	*opCountingBackend
+	afterList func()
+}
+
+func (b *listHookBackend) List(ctx context.Context, t ark.HandleType, fn func(ark.BlobInfo) error) error {
+	err := b.opCountingBackend.List(ctx, t, fn)
+	if f := b.afterList; t == ark.DataPackFile && f != nil {
+		b.afterList = nil
+		f()
+	}
+	return err
+}
+
+// TestBackupChecksWhatItTookOnceTheMarkerComesAfterItsLoad: the backup's own
+// load of the data index finds every pack stored. Then the pack of a file it
+// takes unread is lost and another operation stores the marker. The backup
+// asks for the marker before it stores a tree, lists the packs again and fails
+// rather than commit the file with a lost chunk. The next backup reads it.
+func TestBackupChecksWhatItTookOnceTheMarkerComesAfterItsLoad(t *testing.T) {
+	ctx := context.Background()
+	const content = "content of a file that does not change"
+	b := &listHookBackend{opCountingBackend: newOpCountingBackend()}
+	repo := openRepo(t, b)
+	mtime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	src := newStatSource("app", map[string]statFile{
+		"a": {content: "first content of a file that changes", mtime: mtime},
+		"f": {content: content, mtime: mtime},
+	})
+	first := mustBackup(t, repo, src)
+	other, err := ark.Open(ctx, b, testPassword)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	pack, _, _, err := ark.BlobPlace(ctx, other, ark.BlobFile, ark.ObjectName(repo, []byte(content)))
+	if err != nil {
+		t.Fatalf("place of the chunk: %v", err)
+	}
+	b.afterList = func() {
+		if err := b.Delete(ctx, pack); err != nil {
+			t.Errorf("delete pack: %v", err)
+		}
+		if _, err := other.Verify(ctx, first.ID); err != nil {
+			t.Errorf("Verify: %v", err)
+		}
+	}
+	snaps := objectNames(t, b, ark.SnapshotFile)
+
+	src.files["a"] = statFile{content: "second content of a file that changes", mtime: mtime.Add(time.Hour)}
+	_, err = repo.Backup(ctx, src)
+	if err == nil || !strings.Contains(err.Error(), "next backup reads them again") {
+		t.Fatalf("Backup = %v, want it to fail on the file it took unread", err)
+	}
+	if b.afterList != nil {
+		t.Fatal("the backup never loaded the data index")
 	}
 	if got := objectNames(t, b, ark.SnapshotFile); !slices.Equal(got, snaps) {
 		t.Fatalf("snapshots %v after the failed backup, want %v", got, snaps)
@@ -610,8 +701,8 @@ func TestMarkerIsDurableOnceStored(t *testing.T) {
 	if want := []string{"put lostpacks", "sync"}; !slices.Equal(ops, want) {
 		t.Errorf("Verify of a snapshot with a lost pack wrote %q, want %q", ops, want)
 	}
-	// The writer that put the marker may have died before its Sync, so a
-	// load that finds it stored syncs again and puts nothing.
+	// A load that finds the marker stored already writes nothing and does not
+	// sync: the writer that put it synced it.
 	if _, err := repo.Verify(ctx, snap.ID); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -624,8 +715,8 @@ func TestMarkerIsDurableOnceStored(t *testing.T) {
 			ops = append(ops, e.op+" "+e.h.Type.String())
 		}
 	}
-	if want := []string{"sync"}; !slices.Equal(ops, want) {
-		t.Errorf("Verify with the marker stored already wrote %q, want %q", ops, want)
+	if len(ops) != 0 {
+		t.Errorf("Verify with the marker stored already wrote %q, want nothing", ops)
 	}
 }
 
