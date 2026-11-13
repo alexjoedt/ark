@@ -78,9 +78,6 @@ func (r *Repository) runGC(ctx context.Context, dryRun bool, progress ProgressFu
 	// A snapshot whose tree cannot be read stops the prune: an incomplete
 	// live set would delete its objects.
 	chunks, trees := r.stores()
-	if dryRun {
-		chunks.index.lost = nil
-	}
 	liveTrees := make(map[string]struct{})
 	liveChunks := make(map[string]struct{})
 	for _, m := range manifests {

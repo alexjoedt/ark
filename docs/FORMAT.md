@@ -101,18 +101,22 @@ goes when prune deletes or rewrites the pack that holds it, see below.
 ## Lost-pack marker
 
 A load of the data index that finds a listed pack gone, or a data index object that does not open,
-stores the marker `lostpacks/<name>`, where
-the name is the keyed hash of the string `lostpacks`, so it differs between repositories. It is
-sealed like any single object over empty content; only its presence counts, and a marker that does
-not open counts as present. A marker that is stored already is not written again. Backup and
-import fail when they cannot store it; restore, export, verify, check, prune and an index rebuild
-log the failure and go on. A prune dry run does not store it.
+stores the marker `lostpacks/<name>`, where the name is the keyed hash of the string `lostpacks`, so
+it differs between repositories. It is sealed like any single object over empty content; only its
+presence counts, and a marker that does not open counts as present. A marker that is stored already
+is not put again, only synced. Backup and import fail when they cannot store it; restore, export,
+verify, check, prune and an index rebuild log the failure and go on. A prune dry run stores it too
+and writes nothing else.
 
 A backup that would take files unchanged from their parent asks for the marker with one request.
 Without it the backup reads no data index, as before. With it the backup loads the data index and
 reads again every file of which a chunk is in no stored pack. A failed request counts as a marker.
-A backup whose own load of the data index finds the loss after it took files unread fails before it
-stores a snapshot when one of those files has a chunk in no stored pack; the next backup reads them.
+Once the backup's own load of the data index has found the loss, it reads again every file the walk
+reaches after that load with a chunk in no stored pack. A backup that took files unread before that
+load fails before it stores a snapshot when one of those files has a chunk in no stored pack that
+the backup did not store again; the next backup reads them. A backup that loaded no data index asks
+for the marker a second time before it stores its trees, and loads the data index when it is
+there.
 
 Only prune removes the marker, under the exclusive lock and after the new index is durable, once
 every chunk a snapshot references is listed in a stored pack. An index rebuild never removes it: a

@@ -85,12 +85,15 @@ writer, every accepted risk included.
   seen the lost data pack or a data index object that does not open, a marker makes every later
   backup read again a file it would take unchanged from its parent with a chunk no stored pack
   holds, and only a prune that finds every referenced chunk in a stored pack removes it. A backup
-  whose own load finds the loss fails rather than commit such a file unread. Until a load has seen
-  it, such a file keeps the parent's references to the lost chunks:
+  whose own load finds the loss reads such a file the walk reaches after that load and fails
+  rather than commit one it took unread before it; one that loaded no data index asks for the
+  marker again before it commits. Until a load has seen it, such a file keeps the parent's
+  references to the lost chunks:
   `TestScenarioCheckCoversEverySnapshot`, `TestCheckReportsAPackThatDisagreesWithTheIndex`,
   `TestBackupStoresAgainWhatALostPackHeld`,
   `TestUnchangedFileIsReadAgainOnceALoadFoundALostPack`, `TestOnlyPruneDropsTheMarker`,
-  `TestBackupThatFindsTheLossCommitsNoUnreadFileOfIt`.
+  `TestBackupThatFindsTheLossCommitsNoUnreadFileOfIt`, `TestBackupThatFindsTheLossReadsWhatItCan`,
+  `TestBackupAsksForTheMarkerAgainBeforeItCommits`.
 - A lock under the same mutations is treated as absent, Check lists it under warnings, and only a
   forced unlock deletes it: `TestTamperedObjectsAreRejected`,
   `TestTamperedLockIsIgnoredUntilForced`.

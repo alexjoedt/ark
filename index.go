@@ -405,6 +405,9 @@ func (x *packIndex) load(ctx context.Context) (*indexTable, error) {
 	return t, nil
 }
 
+// loaded reports whether the table is loaded. It issues no request.
+func (x *packIndex) loaded() bool { return x.table.Load() != nil }
+
 // sawLoss reports whether the table is loaded and its load found a listed
 // pack that is not stored or an index object that does not open. It issues no
 // request.
@@ -451,9 +454,8 @@ func (x *packIndex) readAll(ctx context.Context) (*indexTable, error) {
 // index objects were read, never before: an index object is stored once its
 // packs are durable, so a pack missing from a listing taken later is gone,
 // while one taken earlier would miss the packs of an index object another
-// writer stored in between. A listing that fails
-// marks nothing and fails the load: a record is passed over only for a pack
-// that a complete listing lacks.
+// writer stored in between. A listing that fails marks nothing and fails the
+// load: a record is passed over only for a pack that a complete listing lacks.
 func (x *packIndex) markGone(ctx context.Context, t *indexTable) ([]bool, error) {
 	if len(t.packs) == 0 {
 		return nil, nil

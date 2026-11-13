@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -184,9 +185,9 @@ func TestUnchangedFileIsReadAgainOnceALoadFoundALostPack(t *testing.T) {
 			b.take()
 			mustBackup(t, repo, src)
 			got := b.take()
-			if src.opens["f"] != 2 || got["exists lostpacks"] != 1 || got["list dataindex"] != 0 {
+			if src.opens["f"] != 2 || got["exists lostpacks"] != 2 || got["list dataindex"] != 0 {
 				t.Errorf("backup after the marker went: file opened %d times, requests %v; want twice, "+
-					"one marker request and no data index", src.opens["f"], got)
+					"two marker requests and no data index", src.opens["f"], got)
 			}
 		})
 	}
@@ -194,8 +195,9 @@ func TestUnchangedFileIsReadAgainOnceALoadFoundALostPack(t *testing.T) {
 
 // TestOnlyAWritingRunNeedsTheMarker: on a repository that refuses the
 // marker, a read, a check and a repair still run and log the failed write,
-// while a backup, which writes, fails. A prune dry run writes nothing, so it
-// does not even try.
+// while a backup, which writes, fails. A prune dry run that finds the loss
+// stores the marker, which only makes backups read more, and writes nothing
+// else.
 func TestOnlyAWritingRunNeedsTheMarker(t *testing.T) {
 	ctx := context.Background()
 	b := newOpCountingBackend()
@@ -216,8 +218,18 @@ func TestOnlyAWritingRunNeedsTheMarker(t *testing.T) {
 	if _, err := repo.Prune(ctx, ark.WithPruneDryRun()); err != nil {
 		t.Fatalf("Prune dry run: %v", err)
 	}
-	if got := b.take(); got["exists lostpacks"] != 0 || got["put lostpacks"] != 0 {
-		t.Errorf("prune dry run asked for or wrote the marker: %v", got)
+	writes := b.take()
+	maps.DeleteFunc(writes, func(k string, _ int) bool {
+		return !strings.HasPrefix(k, "put ") && !strings.HasPrefix(k, "delete ")
+	})
+	if want := map[string]int{"put lostpacks": 1}; !maps.Equal(writes, want) {
+		t.Errorf("prune dry run wrote %v, want only the marker %v", writes, want)
+	}
+	// What follows needs a repository without the marker.
+	for _, name := range objectNames(t, b, ark.LostPackFile) {
+		if err := b.Delete(ctx, ark.Handle{Type: ark.LostPackFile, Name: name}); err != nil {
+			t.Fatalf("delete marker: %v", err)
+		}
 	}
 
 	refused := errors.New("read-only")
@@ -352,6 +364,125 @@ func TestBackupThatFindsTheLossCommitsNoUnreadFileOfIt(t *testing.T) {
 	}
 }
 
+// TestBackupThatFindsTheLossReadsWhatItCan: once the backup's own load has
+// found the loss, a file the walk reaches after it is looked up and read when
+// a chunk of it is lost, and a lost chunk the backup stores again counts as
+// stored for a file it took unread before the load. Neither fails the backup,
+// and its snapshot restores.
+func TestBackupThatFindsTheLossReadsWhatItCan(t *testing.T) {
+	ctx := context.Background()
+	const lost = "content of a file that does not change"
+	const changes = "first content of a file that changes"
+	cases := map[string]struct {
+		files            map[string]string
+		changed, content string
+		unchanged        string
+		opens            int
+	}{
+		"file after the load": {
+			files:   map[string]string{"a": changes, "b": lost},
+			changed: "a", content: "second content of a file that changes",
+			unchanged: "b", opens: 2,
+		},
+		"chunk stored again": {
+			files:   map[string]string{"f": lost, "g": changes},
+			changed: "g", content: lost,
+			unchanged: "f", opens: 1,
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			b := newOpCountingBackend()
+			repo := openRepo(t, b)
+			mtime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+			files := map[string]statFile{}
+			for p, content := range c.files {
+				files[p] = statFile{content: content, mtime: mtime}
+			}
+			src := newStatSource("app", files)
+			mustBackup(t, repo, src)
+			deletePackOf(t, b, repo, ark.BlobFile, ark.ObjectName(repo, []byte(lost)))
+
+			src.files[c.changed] = statFile{content: c.content, mtime: mtime.Add(time.Hour)}
+			snap := mustBackup(t, repo, src)
+			if src.opens[c.unchanged] != c.opens {
+				t.Errorf("the unchanged file was opened %d times, want %d", src.opens[c.unchanged], c.opens)
+			}
+			sink := &recordingSink{}
+			if _, err := repo.Restore(ctx, snap.ID, sink); err != nil {
+				t.Fatalf("Restore: %v", err)
+			}
+			for p, f := range src.files {
+				if sink.written[p] != f.content {
+					t.Errorf("restored %s = %q, want %q", p, sink.written[p], f.content)
+				}
+			}
+		})
+	}
+}
+
+// markerRaceBackend runs afterAsk once, right after the first request for the
+// lost-pack marker has been answered.
+type markerRaceBackend struct {
+	*opCountingBackend
+	afterAsk func()
+}
+
+func (b *markerRaceBackend) Exists(ctx context.Context, h ark.Handle) (bool, error) {
+	ok, err := b.opCountingBackend.Exists(ctx, h)
+	if f := b.afterAsk; h.Type == ark.LostPackFile && f != nil {
+		b.afterAsk = nil
+		f()
+	}
+	return ok, err
+}
+
+// TestBackupAsksForTheMarkerAgainBeforeItCommits: a backup that takes every
+// file unread loads no data index. Another operation stores the marker after
+// the backup asked for it; the backup asks again before it stores a tree,
+// loads the data index, and fails rather than commit the file it took unread
+// with a lost chunk. The next backup reads the file.
+func TestBackupAsksForTheMarkerAgainBeforeItCommits(t *testing.T) {
+	ctx := context.Background()
+	const content = "content of a file that does not change"
+	b := &markerRaceBackend{opCountingBackend: newOpCountingBackend()}
+	repo := openRepo(t, b)
+	src := newStatSource("app", map[string]statFile{
+		"f": {content: content, mtime: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)},
+	})
+	first := mustBackup(t, repo, src)
+	deletePackOf(t, b, repo, ark.BlobFile, ark.ObjectName(repo, []byte(content)))
+	other, err := ark.Open(ctx, b, testPassword)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	b.afterAsk = func() {
+		if _, err := other.Verify(ctx, first.ID); err != nil {
+			t.Errorf("Verify: %v", err)
+		}
+	}
+	snaps := objectNames(t, b, ark.SnapshotFile)
+
+	_, err = repo.Backup(ctx, src)
+	if err == nil || !strings.Contains(err.Error(), "next backup reads them again") {
+		t.Fatalf("Backup = %v, want it to fail on the file it took unread", err)
+	}
+	if b.afterAsk != nil {
+		t.Fatal("the backup never asked for the marker")
+	}
+	if got := objectNames(t, b, ark.SnapshotFile); !slices.Equal(got, snaps) {
+		t.Fatalf("snapshots %v after the failed backup, want %v", got, snaps)
+	}
+	snap := mustBackup(t, repo, src)
+	if src.opens["f"] != 2 {
+		t.Fatalf("the file was opened %d times, want twice", src.opens["f"])
+	}
+	sink := &recordingSink{}
+	if _, err := repo.Restore(ctx, snap.ID, sink); err != nil || sink.written["f"] != content {
+		t.Errorf("Restore = %q, %v; want the content", sink.written["f"], err)
+	}
+}
+
 // garbleDataIndex replaces every data index object with bytes that do not
 // open.
 func garbleDataIndex(t *testing.T, b ark.Backend, _ *ark.Repository) {
@@ -479,13 +610,22 @@ func TestMarkerIsDurableOnceStored(t *testing.T) {
 	if want := []string{"put lostpacks", "sync"}; !slices.Equal(ops, want) {
 		t.Errorf("Verify of a snapshot with a lost pack wrote %q, want %q", ops, want)
 	}
+	// The writer that put the marker may have died before its Sync, so a
+	// load that finds it stored syncs again and puts nothing.
 	if _, err := repo.Verify(ctx, snap.ID); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
+	ops = nil
 	for _, e := range b.takeEvents() {
-		if e.op == "sync" || e.h.Type != ark.LockFile {
-			t.Errorf("Verify with the marker stored already wrote %s %s, want nothing", e.op, e.h.Type)
+		switch {
+		case e.op == "sync":
+			ops = append(ops, e.op)
+		case e.h.Type != ark.LockFile:
+			ops = append(ops, e.op+" "+e.h.Type.String())
 		}
+	}
+	if want := []string{"sync"}; !slices.Equal(ops, want) {
+		t.Errorf("Verify with the marker stored already wrote %q, want %q", ops, want)
 	}
 }
 

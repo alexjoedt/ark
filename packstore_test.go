@@ -164,8 +164,9 @@ func TestUnchangedBackupReadsNoDataIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second backup: %v", err)
 	}
-	if exists := ib.Stats().Exists.Calls - before.Exists.Calls; exists != 1 {
-		t.Errorf("unchanged backup issued %d Exists, want 1 for the lost-pack marker", exists)
+	if exists := ib.Stats().Exists.Calls - before.Exists.Calls; exists != 2 {
+		t.Errorf("unchanged backup issued %d Exists, want 2 for the lost-pack marker, before the walk and "+
+			"before the trees", exists)
 	}
 	if snap.Stats.FilesUnchanged != len(files) || len(src.opens) != 0 {
 		t.Fatalf("second backup took %d of %d files unread, opened %v",
@@ -179,8 +180,8 @@ func TestUnchangedBackupReadsNoDataIndex(t *testing.T) {
 			t.Errorf("unchanged backup issued %d %q, want none: %v", got[op], op, got)
 		}
 	}
-	if got["exists lostpacks"] != 1 {
-		t.Errorf("unchanged backup asked for the lost-pack marker %d times, want once: %v",
+	if got["exists lostpacks"] != 2 {
+		t.Errorf("unchanged backup asked for the lost-pack marker %d times, want twice: %v",
 			got["exists lostpacks"], got)
 	}
 	if got["list treeindex"] != 1 || got["get treeindex"] != 1 {

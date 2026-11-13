@@ -11,8 +11,8 @@ import (
 // it would not notice that one of those chunks is gone (see ADR 0015).
 //
 // Any operation whose load of the data index finds a lost data pack or an
-// index object that does not open stores the marker; a prune dry run does
-// not. It is removed only by a prune, under the exclusive lock, once every
+// index object that does not open stores the marker, a prune dry run too: the
+// marker only ever makes a backup read more. It is removed only by a prune, under the exclusive lock, once every
 // chunk a snapshot references is listed in a stored pack. Nothing else
 // deletes it, so storing it under a shared lock is safe. A marker that is
 // there for no reason costs a load of the data index per backup, nothing
@@ -25,15 +25,16 @@ func (r *Repository) lostPacksMarker() Handle {
 }
 
 // markLostPacks stores the marker and makes it durable: a backup after a
-// power loss must still find it. A marker that is stored already is left as
-// it is: only a prune deletes it, and not while this caller holds its lock.
+// power loss must still find it. A marker that is stored already is not put
+// again, since only a prune deletes it and not while this caller holds its
+// lock, but it is synced: the writer that put it may have died before its
+// Sync.
 func (r *Repository) markLostPacks(ctx context.Context) error {
 	h := r.lostPacksMarker()
-	if ok, err := r.backend.Exists(ctx, h); err == nil && ok {
-		return nil
-	}
-	if err := r.putSealed(ctx, h, nil); err != nil {
-		return err
+	if ok, err := r.backend.Exists(ctx, h); err != nil || !ok {
+		if err := r.putSealed(ctx, h, nil); err != nil {
+			return err
+		}
 	}
 	if err := r.backend.Sync(ctx); err != nil {
 		return fmt.Errorf("ark: failed to sync %s object %s: %w", h.Type, h.Name, err)
@@ -57,9 +58,8 @@ func (r *Repository) lostPacksMarked(ctx context.Context) bool {
 
 // dropLostPacks removes the marker. The caller, a prune, holds the exclusive
 // lock and has made durable an index that lists every referenced chunk in a
-// stored pack. A
-// marker that stays only costs reads, so a failed delete is logged. Asking
-// first keeps a prune that has nothing to do from writing.
+// stored pack. A marker that stays only costs reads, so a failed delete is
+// logged. Asking first keeps a prune that has nothing to do from writing.
 func (r *Repository) dropLostPacks(ctx context.Context) {
 	if !r.lostPacksMarked(ctx) {
 		return

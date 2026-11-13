@@ -31,7 +31,7 @@ func (r *Repository) runBackup(
 		}
 	}
 
-	parent, err := r.parentFiles(ctx, session, parentID, meta.Name)
+	parent, checked, err := r.parentFiles(ctx, session, parentID, meta.Name)
 	if err != nil {
 		logger.WarnContext(ctx, "failed to load the parent snapshot, reading every file",
 			"parent", parentID, "error", err)
@@ -58,8 +58,13 @@ func (r *Repository) runBackup(
 	var cr *chunker.Chunker
 	w := newChunkWriter(ctx, session.chunks, r.concurrency)
 	var scannedEntries []fileEntry
-	// reused numbers the entries that kept their parent's chunks unread.
+	// reused numbers the entries that kept their parent's chunks unread and
+	// unchecked: taken before any lookup could tell that one of them is lost.
 	var reused []int
+	// reads is set once the walk passed on a file with data to be read, whose
+	// chunks need the data index: the walk waits for that load instead of
+	// taking unchecked what it could still read.
+	var reads bool
 	var stats SnapshotStats
 
 	// Progress calls never overlap, but the readers finish files concurrently.
@@ -108,12 +113,31 @@ func (r *Repository) runBackup(
 			fileDone("", nil)
 
 		case FileTypeRegular:
-			switch prev, ok := parent[normEntryPath(entry.Path)]; {
-			case ok && unchanged(entry, prev.FileInfo):
+			prev, take := parent[normEntryPath(entry.Path)]
+			take = take && unchanged(entry, prev.FileInfo)
+			unchecked := take && !checked
+			if unchecked && reads {
+				if _, err := session.chunks.index.load(ctx); err != nil {
+					return err
+				}
+			}
+			// Once this backup's own load found a loss, a file is looked up
+			// before it is taken, and read when a chunk of it is gone.
+			if unchecked && session.chunks.index.sawLoss() {
+				lost, err := unstoredChunk(ctx, session.chunks, prev.Chunks)
+				if err != nil {
+					return err
+				}
+				take, unchecked = !lost, false
+			}
+			switch {
+			case take:
 				// The chunks are in the repository already, so they are
 				// reused, exactly as a re-read would have found them.
 				fe.Chunks = prev.Chunks
-				reused = append(reused, len(scannedEntries))
+				if unchecked {
+					reused = append(reused, len(scannedEntries))
+				}
 				stats.FilesUnchanged++
 				fileDone(entry.Path, fe.Chunks)
 			case readers != nil:
@@ -136,6 +160,7 @@ func (r *Repository) runBackup(
 				fe.Chunks = chunks
 				fileDone(entry.Path, fe.Chunks)
 			}
+			reads = reads || !take && entry.Size > 0
 
 		case FileTypeUnsupported:
 			// Devices, fifos, sockets: the v1 format does not model them.
@@ -173,7 +198,7 @@ func (r *Repository) runBackup(
 	for _, p := range pending {
 		scannedEntries[p.index].Chunks = *p.refs
 	}
-	if err := checkReused(ctx, session, scannedEntries, reused); err != nil {
+	if err := r.checkReused(ctx, session, scannedEntries, reused); err != nil {
 		return nil, fmt.Errorf("backup: %w", err)
 	}
 	for i := range scannedEntries {
@@ -225,26 +250,37 @@ func (r *Repository) runBackup(
 	return m, nil
 }
 
-// checkReused fails the backup when its own load of the data index found a
-// loss that a file it took unread from the parent shares: the marker check in
-// parentFiles ran before that load, and the file can no longer be read. The
-// load stored the marker, so the next backup reads such a file again. A
-// backup whose data index is not loaded or found no loss checks nothing.
-func checkReused(ctx context.Context, session *packSession, entries []fileEntry, reused []int) error {
-	if !session.chunks.index.sawLoss() {
+// checkReused fails the backup when a file it took unread and unchecked from
+// the parent references a chunk that no stored pack holds and that it did not
+// store again. Such a file was taken before the backup knew of the loss, and
+// it can no longer be read. The data index tells when this backup loaded it;
+// otherwise the marker is asked for again, since another operation may have
+// stored it after parentFiles asked, and the index is loaded when it is
+// there. The load stored the marker, so the next backup reads such a file.
+func (r *Repository) checkReused(ctx context.Context, session *packSession, entries []fileEntry, reused []int) error {
+	if len(reused) == 0 {
+		return nil
+	}
+	idx := session.chunks.index
+	if !idx.loaded() {
+		if !r.lostPacksMarked(ctx) {
+			return nil
+		}
+		if _, err := idx.load(ctx); err != nil {
+			return err
+		}
+	}
+	if !idx.sawLoss() {
 		return nil
 	}
 	n := 0
 	for _, i := range reused {
-		for _, c := range entries[i].Chunks {
-			_, _, stored, err := session.chunks.index.lookup(ctx, c.ID)
-			if err != nil {
-				return err
-			}
-			if !stored {
-				n++
-				break
-			}
+		lost, err := unstoredChunk(ctx, session.chunks, entries[i].Chunks)
+		if err != nil {
+			return err
+		}
+		if lost {
+			n++
 		}
 	}
 	if n > 0 {
@@ -254,31 +290,46 @@ func checkReused(ctx context.Context, session *packSession, entries []fileEntry,
 	return nil
 }
 
+// unstoredChunk reports whether a chunk of chunks is in no stored pack and
+// not stored again by this run.
+func unstoredChunk(ctx context.Context, s *objectStore, chunks []chunkRef) (bool, error) {
+	for _, c := range chunks {
+		_, _, stored, err := s.index.lookup(ctx, c.ID)
+		if err != nil {
+			return false, err
+		}
+		if !stored && !s.held.holds(c.ID) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // parentFiles loads the regular files of snapshot id that a backup of source
 // may take unread, keyed by path. An empty id has no parent and returns no
 // files. A parent of another source is refused: with only Size and ModTime to
 // compare, its files could match another volume's by accident. While the
 // lost-pack marker is stored, a file with a chunk that no stored pack holds is
-// left out, so the backup reads it again.
+// left out, so the backup reads it again; checked reports that this was done.
 func (r *Repository) parentFiles(
 	ctx context.Context, session *packSession, id, source string,
-) (map[string]fileEntry, error) {
+) (files map[string]fileEntry, checked bool, err error) {
 	if id == "" {
-		return map[string]fileEntry{}, nil
+		return map[string]fileEntry{}, false, nil
 	}
 	m, err := r.loadManifest(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if m.SourceName != source {
-		return nil, fmt.Errorf("parent %s belongs to source %q", id, m.SourceName)
+		return nil, false, fmt.Errorf("parent %s belongs to source %q", id, m.SourceName)
 	}
 	// A rewrite in the same timestamp tick as the parent's read leaves the
 	// stat unchanged, so a file whose mtime is not clearly older than the
 	// parent's start is read again. Two seconds cover 1 s ticks (tar headers,
 	// ext3, NFS) and 2 s ticks (FAT).
 	racy := m.CreatedAt.Add(-2 * time.Second)
-	files := make(map[string]fileEntry)
+	files = make(map[string]fileEntry)
 	// Nothing reads a tree node after this walk: its whole packs go with it
 	// and do not stay in the store for the length of the run.
 	walk := *session.trees
@@ -290,26 +341,23 @@ func (r *Repository) parentFiles(
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	// The tree nodes were looked up, a reused file's chunks are not: only the
 	// marker says whether one of them may be gone.
 	if len(files) == 0 || !r.lostPacksMarked(ctx) {
-		return files, nil
+		return files, false, nil
 	}
 	for path, e := range files {
-		for _, c := range e.Chunks {
-			_, _, stored, err := session.chunks.index.lookup(ctx, c.ID)
-			if err != nil {
-				return nil, err
-			}
-			if !stored {
-				delete(files, path)
-				break
-			}
+		lost, err := unstoredChunk(ctx, session.chunks, e.Chunks)
+		if err != nil {
+			return nil, false, err
+		}
+		if lost {
+			delete(files, path)
 		}
 	}
-	return files, nil
+	return files, true, nil
 }
 
 // unchanged reports whether cur can take prev's chunks without being read.
