@@ -31,7 +31,7 @@ func (r *Repository) runBackup(
 		}
 	}
 
-	parent, err := r.parentFiles(ctx, session.trees, parentID, meta.Name)
+	parent, err := r.parentFiles(ctx, session, parentID, meta.Name)
 	if err != nil {
 		logger.WarnContext(ctx, "failed to load the parent snapshot, reading every file",
 			"parent", parentID, "error", err)
@@ -222,9 +222,11 @@ func (r *Repository) runBackup(
 // parentFiles loads the regular files of snapshot id that a backup of source
 // may take unread, keyed by path. An empty id has no parent and returns no
 // files. A parent of another source is refused: with only Size and ModTime to
-// compare, its files could match another volume's by accident.
+// compare, its files could match another volume's by accident. While the
+// lost-pack marker is stored, a file with a chunk that no stored pack holds is
+// left out, so the backup reads it again.
 func (r *Repository) parentFiles(
-	ctx context.Context, trees *objectStore, id, source string,
+	ctx context.Context, session *packSession, id, source string,
 ) (map[string]fileEntry, error) {
 	if id == "" {
 		return map[string]fileEntry{}, nil
@@ -244,7 +246,7 @@ func (r *Repository) parentFiles(
 	files := make(map[string]fileEntry)
 	// Nothing reads a tree node after this walk: its whole packs go with it
 	// and do not stay in the store for the length of the run.
-	walk := *trees
+	walk := *session.trees
 	walk.packs = newPackCache()
 	err = walkTree(ctx, &walk, m.RootTree, func(e fileEntry) error {
 		if e.Type == FileTypeRegular && e.ModTime.Before(racy) {
@@ -254,6 +256,23 @@ func (r *Repository) parentFiles(
 	})
 	if err != nil {
 		return nil, err
+	}
+	// The tree nodes were looked up, a reused file's chunks are not: only the
+	// marker says whether one of them may be gone.
+	if len(files) == 0 || !r.lostPacksMarked(ctx) {
+		return files, nil
+	}
+	for path, e := range files {
+		for _, c := range e.Chunks {
+			_, _, stored, err := session.chunks.index.lookup(ctx, c.ID)
+			if err != nil {
+				return nil, err
+			}
+			if !stored {
+				delete(files, path)
+				break
+			}
+		}
 	}
 	return files, nil
 }

@@ -202,11 +202,16 @@ func TestChunksAndTreesAreSealedUnderKeyedNames(t *testing.T) {
 // TestSameFilesInTwoRepositoriesShareNoNames is the point of the keyed names:
 // nobody holding one repository's names can test whether a known file sits
 // in another.
-// The config is the one fixed name, the same in every repository.
+// The config is the one fixed name, the same in every repository. Each
+// repository holds a lost-pack marker too, stored by hand.
 func TestSameFilesInTwoRepositoriesShareNoNames(t *testing.T) {
 	one, two := arkmem.New(), arkmem.New()
-	backupFixture(t, one)
-	backupFixture(t, two)
+	for _, b := range []ark.Backend{one, two} {
+		repo, _ := backupFixture(t, b)
+		if err := ark.PutObject(context.Background(), repo, ark.LostPackMarker(repo), nil); err != nil {
+			t.Fatalf("put marker: %v", err)
+		}
+	}
 
 	for _, typ := range allHandleTypes {
 		if typ == ark.ConfigFile {

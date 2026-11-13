@@ -1,6 +1,6 @@
 # 0014: Index records of packs that are not stored are passed over
 
-Status: accepted
+Status: partly superseded by 0015
 Date: 2026-11-12
 
 ## Context
@@ -81,10 +81,9 @@ again too, since their lookups end at the new copies. Replayed index objects of 
 longer make a later backup store nothing: `TestReplayedIndexObjectIsPassedOver`. A blob in two
 packs restores from the stored one: `TestRestoreReadsTheStoredCopyOfAChunkInTwoPacks`.
 
-The repair reaches only what a backup reads. A file that a backup takes as unchanged from its
-parent keeps the parent's chunk references without a lookup (see 0003 and 0011), so its snapshot
-misses the chunks of a lost pack as the parent does, until the snapshots Check names are forgotten
-and a backup reads the file again: `TestUnchangedFileKeepsTheChunksOfItsParentAfterALostPack`.
+The repair reached only what a backup reads: a file that a backup takes as unchanged from its
+parent keeps the parent's chunk references without a lookup (see 0003 and 0011). 0015 closes that
+gap with a marker once an index load has seen the loss.
 
 Every index load costs one more request, a listing of the pack namespace, and none when the index
 lists no pack; an unchanged backup still reads no data index and so lists no data packs:

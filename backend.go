@@ -39,6 +39,10 @@ const (
 	// TreeIndexFile is an index object locating tree nodes in tree packs,
 	// named by the keyed hash of its content.
 	TreeIndexFile
+	// LostPackFile is the marker an index load stores when the index lists a
+	// data pack that is not stored. One object, named by the keyed hash of
+	// its namespace name; it holds nothing, its presence is the message.
+	LostPackFile
 )
 
 // UnknownNamespace is the namespace name String returns for a handle type this
@@ -69,6 +73,8 @@ func (t HandleType) String() string {
 		return "dataindex"
 	case TreeIndexFile:
 		return "treeindex"
+	case LostPackFile:
+		return "lostpacks"
 	default:
 		return UnknownNamespace
 	}

@@ -75,6 +75,11 @@ func (b *opCountingBackend) List(ctx context.Context, t ark.HandleType, fn func(
 	return b.Backend.List(ctx, t, fn)
 }
 
+func (b *opCountingBackend) Exists(ctx context.Context, h ark.Handle) (bool, error) {
+	b.count("exists", h.Type)
+	return b.Backend.Exists(ctx, h)
+}
+
 func (b *opCountingBackend) Delete(ctx context.Context, h ark.Handle) error {
 	b.count("delete", h.Type)
 	return b.Backend.Delete(ctx, h)
@@ -126,13 +131,15 @@ func TestBackupOfSmallFilesWritesAFewObjects(t *testing.T) {
 }
 
 // TestUnchangedBackupReadsNoDataIndex pins what an incremental backup with no
-// changed file costs: the tree index, loaded once, and the parent's tree
-// pack, fetched whole and once for all of its nodes. It stores no chunk, so
-// nothing asks the data index and no data pack is read.
+// changed file costs: the tree index, loaded once, the parent's tree pack,
+// fetched whole and once for all of its nodes, and one request for the
+// lost-pack marker. It stores no chunk, so nothing asks the data index and no
+// data pack is read.
 func TestUnchangedBackupReadsNoDataIndex(t *testing.T) {
 	ctx := context.Background()
 	b := newOpCountingBackend()
-	repo := openRepo(t, b)
+	ib := ark.Instrument(b)
+	repo := openRepo(t, ib)
 
 	t0 := time.Date(2026, 1, 2, 3, 4, 5, 600, time.UTC)
 	files := map[string]statFile{}
@@ -151,10 +158,14 @@ func TestUnchangedBackupReadsNoDataIndex(t *testing.T) {
 	}
 
 	b.take()
+	before := ib.Stats()
 	src := newStatSource("app", maps.Clone(files))
 	snap, err := repo.Backup(ctx, src)
 	if err != nil {
 		t.Fatalf("second backup: %v", err)
+	}
+	if exists := ib.Stats().Exists.Calls - before.Exists.Calls; exists != 1 {
+		t.Errorf("unchanged backup issued %d Exists, want 1 for the lost-pack marker", exists)
 	}
 	if snap.Stats.FilesUnchanged != len(files) || len(src.opens) != 0 {
 		t.Fatalf("second backup took %d of %d files unread, opened %v",
@@ -167,6 +178,10 @@ func TestUnchangedBackupReadsNoDataIndex(t *testing.T) {
 		if got[op] != 0 {
 			t.Errorf("unchanged backup issued %d %q, want none: %v", got[op], op, got)
 		}
+	}
+	if got["exists lostpacks"] != 1 {
+		t.Errorf("unchanged backup asked for the lost-pack marker %d times, want once: %v",
+			got["exists lostpacks"], got)
 	}
 	if got["list treeindex"] != 1 || got["get treeindex"] != 1 {
 		t.Errorf("unchanged backup loaded the tree index with %d List and %d Get, want 1 and 1: %v",

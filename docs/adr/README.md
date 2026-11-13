@@ -28,4 +28,5 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0011 | [Pack index format and loading](0011-pack-index-format-and-loading.md) | partly superseded by 0014 | 2026-11-11 |
 | 0012 | [Crash and concurrent-writer model for packs](0012-crash-and-writer-model-for-packs.md) | partly superseded by 0014 | 2026-11-11 |
 | 0013 | [Prune repacks by a repository-wide unused budget](0013-prune-repacks-by-an-unused-budget.md) | accepted | 2026-11-11 |
-| 0014 | [Index records of packs that are not stored are passed over](0014-index-records-of-packs-that-are-not-stored.md) | accepted | 2026-11-12 |
+| 0014 | [Index records of packs that are not stored are passed over](0014-index-records-of-packs-that-are-not-stored.md) | partly superseded by 0015 | 2026-11-12 |
+| 0015 | [A marker makes unchanged backups see a lost data pack](0015-lost-pack-marker-for-unchanged-backups.md) | accepted | 2026-11-13 |

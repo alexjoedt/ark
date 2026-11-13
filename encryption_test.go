@@ -63,6 +63,7 @@ var allHandleTypes = []ark.HandleType{
 	ark.TreePackFile,
 	ark.DataIndexFile,
 	ark.TreeIndexFile,
+	ark.LostPackFile,
 }
 
 // scanForMarker fails when an object name, Stat field or body in b contains

@@ -58,7 +58,7 @@ func (r *Repository) runRestore(
 	if opts.cacheSet {
 		limit = opts.cacheLimit
 	}
-	chunks, trees := r.stores()
+	chunks, trees := r.readStores()
 	fetcher := r.newChunkFetcher(ctx, chunks, newChunkCache(limit))
 	defer fetcher.close()
 	fetcher.onRead = func(read int) {

@@ -304,6 +304,10 @@ type packIndex struct {
 	// written lists the packs of the index objects stored after the table
 	// was loaded, which is never listed again.
 	written atomic.Pointer[indexTable]
+	// lost, when set, runs when a load finds a pack the table lists that is
+	// not stored, before the load passes over its records. Its error fails
+	// the load.
+	lost func(context.Context) error
 }
 
 // newPackIndex returns the index of the blobs s packs. It issues no request.
@@ -435,7 +439,8 @@ func (x *packIndex) readAll(ctx context.Context) (*indexTable, error) {
 // listing taken later is gone, while one taken earlier would miss the packs
 // of an index object another writer stored in between. A listing that fails
 // marks nothing and fails the load: a record is passed over only for a pack
-// that a complete listing lacks.
+// that a complete listing lacks. A pack it marks runs x.lost first, so the
+// lost-pack marker is stored before any lookup passes over a record.
 func (x *packIndex) markGone(ctx context.Context, t *indexTable) error {
 	if len(t.packs) == 0 {
 		return nil
@@ -452,11 +457,17 @@ func (x *packIndex) markGone(ctx context.Context, t *indexTable) error {
 	if err != nil {
 		return fmt.Errorf("ark: failed to list %s objects: %w", x.space.packs, err)
 	}
-	if n > 0 {
-		x.logger.WarnContext(ctx, "the index lists packs that are not stored, what only they hold counts as missing",
-			"namespace", x.space.packs.String(), "packs", n)
-		t.gone = gone
+	if n == 0 {
+		return nil
 	}
+	x.logger.WarnContext(ctx, "the index lists packs that are not stored, what only they hold counts as missing",
+		"namespace", x.space.packs.String(), "packs", n)
+	if x.lost != nil {
+		if err := x.lost(ctx); err != nil {
+			return err
+		}
+	}
+	t.gone = gone
 	return nil
 }
 

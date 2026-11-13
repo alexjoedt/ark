@@ -2,7 +2,7 @@
 
 This describes what ark stores in a repository, format version 3. The byte layout is the contract
 of the version: a build reads and writes exactly this. The reasons behind the layout are in
-[docs/adr](adr/README.md) (0010 to 0013); what each object reveals to someone who can read the
+[docs/adr](adr/README.md) (0010 to 0015); what each object reveals to someone who can read the
 storage is in [SECURITY.md](SECURITY.md).
 
 ## Version
@@ -23,10 +23,11 @@ dataindex/   index objects: which pack holds which chunk
 treeindex/   index objects: the same for directory nodes
 snapshots/   one sealed manifest per snapshot, named by a random id
 locks/       sealed shared and exclusive locks
+lostpacks/   at most one sealed marker: an index load found a data pack the index lists gone
 ```
 
-`config`, the key files, snapshot manifests and locks stay single objects, one per file. Chunks
-and directory nodes are never stored alone: they live in packs, and the index finds them.
+`config`, the key files, snapshot manifests, locks and the marker stay single objects, one per
+file. Chunks and directory nodes are never stored alone: they live in packs, and the index finds them.
 
 The directory and SFTP backends shard `datapacks/` and `treepacks/` one level deep by the first two
 characters of the name, so a pack is `datapacks/3f/3f9a...`. That is at most 256 directories per
@@ -97,6 +98,24 @@ writers may store the same new blob, so a blob can be listed for two packs; a re
 in the stored pack with the smaller name. Prune does not remove such a second copy on its own: it
 goes when prune deletes or rewrites the pack that holds it, see below.
 
+## Lost-pack marker
+
+A load of the data index that finds a listed pack gone stores the marker `lostpacks/<name>`, where
+the name is the keyed hash of the string `lostpacks`, so it differs between repositories. It is
+sealed like any single object over empty content; only its presence counts, and a marker that does
+not open counts as present. Backup, import, check, prune and an index rebuild fail when they
+cannot store it, restore, export and verify log the failure and go on.
+
+A backup that would take files unchanged from their parent asks for the marker with one request.
+Without it the backup reads no data index, as before. With it the backup loads the data index and
+reads again every file of which a chunk is in no stored pack. A failed request counts as a marker.
+
+Prune and the index rebuild remove the marker, under the exclusive lock and after the new index is
+durable. Prune removes it once the index it leaves lists no pack that is gone; a rebuild only when
+it dropped no listed pack that is gone, since a snapshot may still reference a chunk only that pack
+held, which then no index lists, and prune runs only once no snapshot does. A build that predates
+the marker ignores it.
+
 ## Order of writes
 
 A backup and an import write packs, then synchronise, then the index objects that list them, then
@@ -141,8 +160,7 @@ that the pack is named by the hash of its bytes, writes a new index from the tab
 old index objects. A pack whose table does not open, or whose name is not the hash of its bytes, is
 named in the result and takes nothing from it; the new index keeps what the old one listed for that
 pack, except for blobs that a pack which opens holds as well. A rebuild needs the repository to
-itself, like prune, and it downloads every pack. It is a library function; there is no `ark`
-command for it yet.
+itself, like prune, and it downloads every pack. `ark repair index` runs it.
 
 ## Everything else
 

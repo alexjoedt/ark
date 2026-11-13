@@ -14,6 +14,7 @@ func TestHandleTypeString(t *testing.T) {
 		TreePackFile:    "treepacks",
 		DataIndexFile:   "dataindex",
 		TreeIndexFile:   "treeindex",
+		LostPackFile:    "lostpacks",
 		HandleType(0):   "unknown",
 		HandleType(200): "unknown",
 	}

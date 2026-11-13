@@ -572,7 +572,7 @@ func (r *Repository) Verify(ctx context.Context, id string) (*VerifyResult, erro
 	if err != nil {
 		return nil, err
 	}
-	chunks, trees := r.stores()
+	chunks, trees := r.readStores()
 	result, err := r.runVerify(ctx, id, chunks, trees, nil, progress)
 	if err != nil {
 		return result, err
@@ -685,7 +685,7 @@ func (r *Repository) Walk(ctx context.Context, id string, fn func(FileInfo) erro
 	if m.RootTree == "" {
 		return nil
 	}
-	_, trees := r.stores()
+	_, trees := r.readStores()
 	return walkTree(ctx, trees, m.RootTree, func(e fileEntry) error { return fn(e.FileInfo) })
 }
 
