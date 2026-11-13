@@ -82,12 +82,15 @@ writer, every accepted risk included.
 - A pack that is gone while the index lists it is an error of Check whether or not a snapshot
   references it, as is a pack whose own table disagrees with the index. A backup passes over what
   the index lists in a pack that is gone and stores again what it reads. Once an index load has
-  seen the lost data pack, a marker makes every later backup read again a file it would take
-  unchanged from its parent with a chunk only that pack held; until a load has seen it, such a
-  file keeps the parent's references to the lost chunks:
+  seen the lost data pack or a data index object that does not open, a marker makes every later
+  backup read again a file it would take unchanged from its parent with a chunk no stored pack
+  holds, and only a prune that finds every referenced chunk in a stored pack removes it. A backup
+  whose own load finds the loss fails rather than commit such a file unread. Until a load has seen
+  it, such a file keeps the parent's references to the lost chunks:
   `TestScenarioCheckCoversEverySnapshot`, `TestCheckReportsAPackThatDisagreesWithTheIndex`,
   `TestBackupStoresAgainWhatALostPackHeld`,
-  `TestUnchangedFileIsReadAgainOnceALoadFoundALostPack`.
+  `TestUnchangedFileIsReadAgainOnceALoadFoundALostPack`, `TestOnlyPruneDropsTheMarker`,
+  `TestBackupThatFindsTheLossCommitsNoUnreadFileOfIt`.
 - A lock under the same mutations is treated as absent, Check lists it under warnings, and only a
   forced unlock deletes it: `TestTamperedObjectsAreRejected`,
   `TestTamperedLockIsIgnoredUntilForced`.
@@ -139,7 +142,8 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
   index sizes the number of chunks and trees. A sealed chunk is its zstd frame plus 41 bytes and a
   pack is its sealed chunks plus a sealed table, so the stored bytes show, while the boundaries
   between the blobs of a pack do not, they sit in the sealed table. A stored lost-pack marker shows
-  that an index load found a data pack missing: `TestListingRevealsCountsAndSizes`.
+  that an index load found a data pack missing or a data index object that does not open:
+  `TestListingRevealsCountsAndSizes`.
 - The number of packs shows the size of what a backup added: a pack closes once its blobs reach
   16 MiB, so the number of full packs and the size of the run's last, short one give it:
   `TestPackWriterClosesPacksAtTheTargetSize`.

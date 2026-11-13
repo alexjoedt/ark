@@ -191,22 +191,15 @@ type objectStore struct {
 
 // stores returns the chunk and the tree store of one operation. They issue no
 // request before their first use. A load of the chunk index that finds a lost
-// data pack stores the lost-pack marker and fails when it cannot.
+// data pack or an index object that does not open stores the lost-pack marker;
+// a marker it fails to store is logged and the operation goes on, so a read,
+// a check or a repair still runs on a repository that takes no write.
 func (r *Repository) stores() (chunks, trees *objectStore) {
 	open := func(blobs HandleType) *objectStore {
 		space := newPackSpace(r.codec, r.key, blobs)
 		return &objectStore{backend: r.backend, space: space, index: newPackIndex(r.backend, space, r.logger)}
 	}
 	chunks, trees = open(BlobFile), open(TreeFile)
-	chunks.index.lost = r.markLostPacks
-	trees.packs = newPackCache()
-	return chunks, trees
-}
-
-// readStores returns the stores of an operation that only reads: a marker it
-// fails to store is logged, and the read goes on.
-func (r *Repository) readStores() (chunks, trees *objectStore) {
-	chunks, trees = r.stores()
 	chunks.index.lost = func(ctx context.Context) error {
 		if err := r.markLostPacks(ctx); err != nil {
 			r.logger.WarnContext(ctx, "failed to store the lost-pack marker, a backup that takes files "+
@@ -215,6 +208,7 @@ func (r *Repository) readStores() (chunks, trees *objectStore) {
 		}
 		return nil
 	}
+	trees.packs = newPackCache()
 	return chunks, trees
 }
 

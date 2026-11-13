@@ -305,8 +305,8 @@ type packIndex struct {
 	// was loaded, which is never listed again.
 	written atomic.Pointer[indexTable]
 	// lost, when set, runs when a load finds a pack the table lists that is
-	// not stored, before the load passes over its records. Its error fails
-	// the load.
+	// not stored or an index object that does not open, before any lookup
+	// passes over what they held. Its error fails the load.
 	lost func(context.Context) error
 }
 
@@ -391,13 +391,26 @@ func (x *packIndex) load(ctx context.Context) (*indexTable, error) {
 			return nil, err
 		}
 	}
-	if err := x.markGone(ctx, t); err != nil {
+	gone, err := x.markGone(ctx, t)
+	if err == nil && x.lost != nil && (gone != nil || len(t.unreadable) > 0) {
+		err = x.lost(ctx)
+	}
+	if err != nil {
 		x.pending = t
 		return nil, err
 	}
+	t.gone = gone
 	x.pending = nil
 	x.table.Store(t)
 	return t, nil
+}
+
+// sawLoss reports whether the table is loaded and its load found a listed
+// pack that is not stored or an index object that does not open. It issues no
+// request.
+func (x *packIndex) sawLoss() bool {
+	t := x.table.Load()
+	return t != nil && (t.gone != nil || len(t.unreadable) > 0)
 }
 
 // readAll lists the index namespace and reads every object into one sorted
@@ -433,17 +446,17 @@ func (x *packIndex) readAll(ctx context.Context) (*indexTable, error) {
 	return t, nil
 }
 
-// markGone lists the pack namespace once and marks the packs of t that the
-// listing lacks. It runs after the index objects were read, never before: an
-// index object is stored once its packs are durable, so a pack missing from a
-// listing taken later is gone, while one taken earlier would miss the packs
-// of an index object another writer stored in between. A listing that fails
+// markGone lists the pack namespace once and returns which packs of t the
+// listing lacks, by pack number, nil when it lacks none. It runs after the
+// index objects were read, never before: an index object is stored once its
+// packs are durable, so a pack missing from a listing taken later is gone,
+// while one taken earlier would miss the packs of an index object another
+// writer stored in between. A listing that fails
 // marks nothing and fails the load: a record is passed over only for a pack
-// that a complete listing lacks. A pack it marks runs x.lost first, so the
-// lost-pack marker is stored before any lookup passes over a record.
-func (x *packIndex) markGone(ctx context.Context, t *indexTable) error {
+// that a complete listing lacks.
+func (x *packIndex) markGone(ctx context.Context, t *indexTable) ([]bool, error) {
 	if len(t.packs) == 0 {
-		return nil
+		return nil, nil
 	}
 	gone := slices.Repeat([]bool{true}, len(t.packs))
 	n := len(gone)
@@ -455,20 +468,14 @@ func (x *packIndex) markGone(ctx context.Context, t *indexTable) error {
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("ark: failed to list %s objects: %w", x.space.packs, err)
+		return nil, fmt.Errorf("ark: failed to list %s objects: %w", x.space.packs, err)
 	}
 	if n == 0 {
-		return nil
+		return nil, nil
 	}
 	x.logger.WarnContext(ctx, "the index lists packs that are not stored, what only they hold counts as missing",
 		"namespace", x.space.packs.String(), "packs", n)
-	if x.lost != nil {
-		if err := x.lost(ctx); err != nil {
-			return err
-		}
-	}
-	t.gone = gone
-	return nil
+	return gone, nil
 }
 
 // names lists the objects of namespace typ, sorted.

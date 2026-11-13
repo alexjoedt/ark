@@ -58,6 +58,8 @@ func (r *Repository) runBackup(
 	var cr *chunker.Chunker
 	w := newChunkWriter(ctx, session.chunks, r.concurrency)
 	var scannedEntries []fileEntry
+	// reused numbers the entries that kept their parent's chunks unread.
+	var reused []int
 	var stats SnapshotStats
 
 	// Progress calls never overlap, but the readers finish files concurrently.
@@ -111,6 +113,7 @@ func (r *Repository) runBackup(
 				// The chunks are in the repository already, so they are
 				// reused, exactly as a re-read would have found them.
 				fe.Chunks = prev.Chunks
+				reused = append(reused, len(scannedEntries))
 				stats.FilesUnchanged++
 				fileDone(entry.Path, fe.Chunks)
 			case readers != nil:
@@ -170,6 +173,9 @@ func (r *Repository) runBackup(
 	for _, p := range pending {
 		scannedEntries[p.index].Chunks = *p.refs
 	}
+	if err := checkReused(ctx, session, scannedEntries, reused); err != nil {
+		return nil, fmt.Errorf("backup: %w", err)
+	}
 	for i := range scannedEntries {
 		fe := &scannedEntries[i]
 		if fe.Type != FileTypeRegular {
@@ -217,6 +223,35 @@ func (r *Repository) runBackup(
 	)
 
 	return m, nil
+}
+
+// checkReused fails the backup when its own load of the data index found a
+// loss that a file it took unread from the parent shares: the marker check in
+// parentFiles ran before that load, and the file can no longer be read. The
+// load stored the marker, so the next backup reads such a file again. A
+// backup whose data index is not loaded or found no loss checks nothing.
+func checkReused(ctx context.Context, session *packSession, entries []fileEntry, reused []int) error {
+	if !session.chunks.index.sawLoss() {
+		return nil
+	}
+	n := 0
+	for _, i := range reused {
+		for _, c := range entries[i].Chunks {
+			_, _, stored, err := session.chunks.index.lookup(ctx, c.ID)
+			if err != nil {
+				return err
+			}
+			if !stored {
+				n++
+				break
+			}
+		}
+	}
+	if n > 0 {
+		return fmt.Errorf("%d files taken unchanged from the parent snapshot reference chunks that no stored "+
+			"pack holds; the lost-pack marker is stored, so the next backup reads them again", n)
+	}
+	return nil
 }
 
 // parentFiles loads the regular files of snapshot id that a backup of source

@@ -477,7 +477,13 @@ func TestPruneAbortsWhenTheIndexHidesALiveBlob(t *testing.T) {
 					t.Fatalf("Prune = %v, want ErrNotFound advising an index rebuild", err)
 				}
 			}
+			// The skipped index object hides what it listed from a backup's
+			// lookups too: the prune stores the lost-pack marker and nothing else.
 			got := b.take()
+			if want := map[ark.HandleType]int{ark.DataIndexFile: 1}[typ]; got["put lostpacks"] != want {
+				t.Errorf("the aborted prune stored the lost-pack marker %d times, want %d", got["put lostpacks"], want)
+			}
+			delete(got, "put lostpacks")
 			for op, n := range got {
 				if strings.HasPrefix(op, "delete ") || strings.HasPrefix(op, "put ") {
 					t.Errorf("the aborted prune issued %d %q", n, op)

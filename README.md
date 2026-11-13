@@ -286,7 +286,7 @@ file.
 ├── treeindex/  the same for directory nodes
 ├── snapshots/  one encrypted manifest per snapshot, named by a random id
 ├── locks/      encrypted shared and exclusive locks, stale after 30 minutes without a refresh
-└── lostpacks/  a marker while the index lists a data pack that is gone, absent otherwise
+└── lostpacks/  a marker once an index load found a data pack gone, until a prune; absent otherwise
 ```
 
 A pack is named by the SHA-256 of its bytes, so `sha256sum` on the storage host checks packs

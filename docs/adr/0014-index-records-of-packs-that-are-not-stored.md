@@ -83,7 +83,7 @@ packs restores from the stored one: `TestRestoreReadsTheStoredCopyOfAChunkInTwoP
 
 The repair reached only what a backup reads: a file that a backup takes as unchanged from its
 parent keeps the parent's chunk references without a lookup (see 0003 and 0011). 0015 closes that
-gap with a marker once an index load has seen the loss.
+gap with a marker once an index load has seen the loss, which only a prune removes.
 
 Every index load costs one more request, a listing of the pack namespace, and none when the index
 lists no pack; an unchanged backup still reads no data index and so lists no data packs:

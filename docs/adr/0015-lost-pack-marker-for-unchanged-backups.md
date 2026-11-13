@@ -14,29 +14,44 @@ would close the gap at the cost 0011 rejected for the healthy case.
 
 ## Decision
 
-An index load of the data index that finds a listed pack gone stores a marker object,
-`lostpacks/<name>`, before it passes over the records (`index.go`, `lostpacks.go`). The name is the
+An index load of the data index that finds a listed pack gone, or skips an index object that does
+not open, stores a marker object, `lostpacks/<name>`, before any lookup passes over what they held
+(`index.go`, `lostpacks.go`). The chunks of an object that does not open sit in stored packs but no
+index lists them, which a reused reference survives no better than a lost pack. The name is the
 keyed hash of the namespace name, the content is empty and sealed like every single object; only
 its presence counts. The marker is made durable with a Sync, so a backup after a power loss still
-finds it. Backup, import, Check, prune and the index rebuild fail when they cannot store it, since
-they write anyway. Restore, export and Verify log the failure and go on, so a read never fails for
-it.
+finds it; a load that finds it stored already writes nothing. Backup and import fail when they
+cannot store it: the backups after them would take unread what is lost. Every other operation logs
+the failure and goes on: a read must restore from a repository that takes no write, and Check,
+prune and the index rebuild diagnose or repair the loss the marker is about, so a full disk or a
+backend that refuses the namespace must not stop them. A prune dry run writes nothing, the marker
+included.
 
 A backup whose parent offers files it could take unread asks for the marker with one `Exists`
 (`backup.go`, `parentFiles`). No marker: nothing changes, the backup reads no data index. A marker,
 or a request that fails: the backup loads the data index and leaves out of the parent's files every
 file of which a chunk resolves to no stored pack, so it reads them again and stores what is gone.
 
-Only the exclusive lock removes the marker, and only once the index is durable. Prune removes it
-when the index it leaves lists no pack that is gone; while it keeps the records of a lost pack that
-holds the only copy of a referenced chunk (0014), the marker stays. The index rebuild lists stored
-packs only, but a lost pack whose records it drops may have held a chunk a snapshot references,
-which then no index lists: it removes the marker only when it dropped no lost pack. Prune deletes
-nothing while a snapshot references a chunk no index lists, so it removes such a marker only once
-none does.
+The marker check runs before the backup's own load of the data index. When that load, triggered by
+a changed file, finds the loss itself, files taken unread before it may reference what is lost and
+can no longer be read: a stream source walks once. Before it stores any tree the backup looks up
+the chunks of every file it took unread, in memory since the index is loaded, and fails when one
+resolves to no stored pack (`backup.go`, `checkReused`). The load stored the marker, so the next
+backup reads those files again. A backup whose load found no loss, or that loaded no data index,
+checks nothing.
+
+Only prune removes the marker, under the exclusive lock and after its index is durable. Prune
+stops before any delete while a snapshot references a chunk no index lists, and it removes the
+marker only when no referenced chunk is listed in a lost pack alone; so when it removes it, every
+chunk a snapshot references is listed in a stored pack. While it keeps the records of a lost pack
+that holds the only copy of a referenced chunk (0014), the marker stays. The index rebuild never
+removes it: it lists stored packs only, so the records of a lost pack and of an index object that
+did not open are gone after it, while a snapshot may still reference such a chunk, and a second
+rebuild cannot tell that from a healthy index. A marker left after a rebuild costs a data index
+load per backup until the next prune.
 
 A marker stored by a reader is never lost to a clear. Readers and backups store it under a shared
-lock, prune and the rebuild delete it under the exclusive lock before they release it, and the two
+lock, prune deletes it under the exclusive lock before it releases it, and the two
 classes never overlap: nothing deletes the marker under a shared lock, so storing it there is safe.
 The marker can only make a backup read more: one that is missing because no load saw the loss yet
 is the case before this decision, one that is present for no reason costs a data index load per
@@ -52,16 +67,27 @@ backup until the next prune.
 - Not removing the marker in a backup or Check that finds no lost pack, because that would race a
   reader under the same shared lock class that just stored it.
 - Not reading the marker's content, because a marker that does not open must still count.
+- Not letting the index rebuild remove the marker when it dropped no lost pack, because a rebuild
+  after another rebuild sees no lost pack although snapshots still reference what the first one
+  dropped.
+- Not re-reading the files a backup took unread once its own load finds the loss, because a source
+  may walk once; failing that one backup is the smallest change that commits no unchecked
+  reference.
 
 ## Consequences
 
 A backup after a load that saw a lost pack reads again the unchanged files that lost a chunk, and
 its snapshot restores: `TestUnchangedFileIsReadAgainOnceALoadFoundALostPack`, which also pins that
 the marker stays through a prune that keeps the lost pack and goes with the prune that drops it.
-A read that cannot store the marker still restores, Check fails:
-`TestReadersStoreTheMarkerBestEffort`. A rebuild keeps the marker while it drops a lost pack:
-`TestRebuildKeepsTheMarkerWhileItDropsALostPack`. The delete falls inside the exclusive lock:
-`TestMarkerGoesWhileTheExclusiveLockIsHeld`.
+Restore, Verify, Check, prune and the rebuild run on a repository that refuses the marker and log
+the failed write, a backup fails, a dry run asks for nothing: `TestOnlyAWritingRunNeedsTheMarker`.
+Two rebuilds keep the marker and the backup after them reads the file again:
+`TestOnlyPruneDropsTheMarker`. The backup whose own load finds a lost pack or an index object that
+does not open fails and commits nothing: `TestBackupThatFindsTheLossCommitsNoUnreadFileOfIt`. An
+index object that does not open stores the marker:
+`TestIndexObjectThatDoesNotOpenStoresTheMarker`. The delete falls inside the exclusive lock:
+`TestMarkerGoesWhileTheExclusiveLockIsHeld`. A stored marker is not written again:
+`TestMarkerIsDurableOnceStored`.
 
 An unchanged backup costs one request more and still reads no data index:
 `TestUnchangedBackupReadsNoDataIndex`. A prune that may remove the marker asks for it once and
@@ -69,8 +95,8 @@ deletes it only when it is there, so a prune with nothing to do writes nothing.
 
 The limit stays: a pack loss that no index load has seen yet is not detected. A run of backups that
 only take files unchanged keeps writing snapshots that miss the lost chunks until a Check, a
-Restore, a Verify, an export, a backup with a changed file or a prune loads the data index and
-stores the marker. The first test above pins that a backup right after the loss still takes the
+Restore, a Verify, an export, a backup with a changed file (which then fails once) or a prune loads
+the data index and stores the marker. The first test above pins that a backup right after the loss still takes the
 file unread.
 
 The format version stays 3: a build that predates the marker never reads its namespace and ignores

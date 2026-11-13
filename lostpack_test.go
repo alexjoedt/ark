@@ -1,10 +1,12 @@
 package ark_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -190,19 +192,34 @@ func TestUnchangedFileIsReadAgainOnceALoadFoundALostPack(t *testing.T) {
 	}
 }
 
-// TestReadersStoreTheMarkerBestEffort: a read of a repository whose marker
-// cannot be stored still restores, while Check, which writes, fails.
-func TestReadersStoreTheMarkerBestEffort(t *testing.T) {
+// TestOnlyAWritingRunNeedsTheMarker: on a repository that refuses the
+// marker, a read, a check and a repair still run and log the failed write,
+// while a backup, which writes, fails. A prune dry run writes nothing, so it
+// does not even try.
+func TestOnlyAWritingRunNeedsTheMarker(t *testing.T) {
 	ctx := context.Background()
 	b := newOpCountingBackend()
-	repo := openRepo(t, b)
 	src := smallFiles("app", 6)
-	snap := mustBackup(t, repo, src)
+	snap := mustBackup(t, openRepo(t, b), src)
+	var logged bytes.Buffer
+	repo, err := ark.Open(ctx, b, testPassword, ark.WithLogger(slog.New(slog.NewTextHandler(&logged, nil))))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
 	withoutDataIndex(t, b, func() { mustBackup(t, repo, src) })
 	lost := slices.Min(objectNames(t, b, ark.DataPackFile))
 	if err := b.Delete(ctx, ark.Handle{Type: ark.DataPackFile, Name: lost}); err != nil {
 		t.Fatalf("delete pack: %v", err)
 	}
+
+	b.take()
+	if _, err := repo.Prune(ctx, ark.WithPruneDryRun()); err != nil {
+		t.Fatalf("Prune dry run: %v", err)
+	}
+	if got := b.take(); got["exists lostpacks"] != 0 || got["put lostpacks"] != 0 {
+		t.Errorf("prune dry run asked for or wrote the marker: %v", got)
+	}
+
 	refused := errors.New("read-only")
 	b.onPut = func(h ark.Handle) error {
 		if h.Type == ark.LostPackFile {
@@ -210,30 +227,43 @@ func TestReadersStoreTheMarkerBestEffort(t *testing.T) {
 		}
 		return nil
 	}
-
 	assertRestores(t, repo, snap, src)
 	if res, err := repo.Verify(ctx, snap.ID); err != nil || !res.OK {
 		t.Errorf("Verify = %+v, %v; want OK", res, err)
 	}
-	if _, err := repo.Check(ctx); !errors.Is(err, refused) {
-		t.Errorf("Check = %v, want the failed marker write", err)
+	if res := mustCheck(t, repo); len(res.Errors)+len(res.Warnings) == 0 {
+		t.Errorf("Check = %+v, want the lost pack reported", res)
+	}
+	if _, err := repo.Backup(ctx, src); !errors.Is(err, refused) {
+		t.Errorf("Backup = %v, want the failed marker write", err)
+	}
+	if _, err := repo.Prune(ctx); err != nil {
+		t.Errorf("Prune: %v", err)
+	}
+	// The prune dropped the lost pack, whose chunks had stored copies: the
+	// rebuild gets a loss of its own.
+	lost = slices.Min(objectNames(t, b, ark.DataPackFile))
+	if err := b.Delete(ctx, ark.Handle{Type: ark.DataPackFile, Name: lost}); err != nil {
+		t.Fatalf("delete pack: %v", err)
+	}
+	if _, err := repo.RebuildIndex(ctx); err != nil {
+		t.Errorf("RebuildIndex: %v", err)
 	}
 	if n := len(objectNames(t, b, ark.LostPackFile)); n != 0 {
 		t.Fatalf("%d markers, want none", n)
 	}
-	b.onPut = nil
-	assertRestores(t, repo, snap, src)
-	if n := len(objectNames(t, b, ark.LostPackFile)); n != 1 {
-		t.Errorf("%d markers after a restore that could store it, want 1", n)
+	if n := strings.Count(logged.String(), "failed to store the lost-pack marker"); n < 5 {
+		t.Errorf("the failed marker write was logged %d times, want once each by restore, verify, check, "+
+			"prune and rebuild:\n%s", n, logged.String())
 	}
 }
 
-// TestRebuildKeepsTheMarkerWhileItDropsALostPack: an index rebuild lists
-// stored packs only. When it drops the records of a lost data pack, a snapshot
-// may still reference a chunk no index lists now, so the marker stays and the
-// next backup reads the file again; a prune drops it once the chunk is stored
-// again. A rebuild that drops no lost pack removes a marker that is left over.
-func TestRebuildKeepsTheMarkerWhileItDropsALostPack(t *testing.T) {
+// TestOnlyPruneDropsTheMarker: an index rebuild lists stored packs only. The
+// records of a lost data pack it drops may be all that a snapshot's chunk was
+// listed by, and a second rebuild no longer sees them, so no rebuild drops
+// the marker and the next backup reads the file again. A prune drops it once
+// every chunk a snapshot references is in a stored pack.
+func TestOnlyPruneDropsTheMarker(t *testing.T) {
 	ctx := context.Background()
 	b := newOpCountingBackend()
 	repo := openRepo(t, b)
@@ -244,18 +274,24 @@ func TestRebuildKeepsTheMarkerWhileItDropsALostPack(t *testing.T) {
 	mustBackup(t, repo, src)
 	deletePackOf(t, b, repo, ark.BlobFile, ark.ObjectName(repo, []byte(content)))
 
-	if _, err := repo.RebuildIndex(ctx); err != nil {
-		t.Fatalf("RebuildIndex: %v", err)
+	for range 2 {
+		if _, err := repo.RebuildIndex(ctx); err != nil {
+			t.Fatalf("RebuildIndex: %v", err)
+		}
 	}
 	if n := len(objectNames(t, b, ark.LostPackFile)); n != 1 {
-		t.Fatalf("%d markers after a rebuild that dropped a lost pack, want 1", n)
+		t.Fatalf("%d markers after two rebuilds that dropped a lost pack, want 1", n)
 	}
 	if _, err := repo.Prune(ctx); err == nil {
 		t.Fatal("Prune ran while a snapshot references a chunk no index lists")
 	}
-	mustBackup(t, repo, src)
+	snap := mustBackup(t, repo, src)
 	if src.opens["f"] != 2 {
 		t.Fatalf("the file was opened %d times, want twice", src.opens["f"])
+	}
+	sink := &recordingSink{}
+	if _, err := repo.Restore(ctx, snap.ID, sink); err != nil || sink.written["f"] != content {
+		t.Errorf("Restore = %q, %v; want the content", sink.written["f"], err)
 	}
 	if _, err := repo.Prune(ctx); err != nil {
 		t.Fatalf("Prune: %v", err)
@@ -263,15 +299,101 @@ func TestRebuildKeepsTheMarkerWhileItDropsALostPack(t *testing.T) {
 	if n := len(objectNames(t, b, ark.LostPackFile)); n != 0 {
 		t.Fatalf("%d markers after the prune, want none", n)
 	}
+}
 
-	if err := ark.PutObject(ctx, repo, ark.LostPackMarker(repo), nil); err != nil {
-		t.Fatalf("put marker: %v", err)
+// TestBackupThatFindsTheLossCommitsNoUnreadFileOfIt: no load has seen the
+// loss, a lost pack or an index object that does not open, so the backup
+// takes the unchanged file unread; its changed file makes it load the data
+// index, which finds the loss. The backup fails rather than commit a snapshot
+// whose unread file references a chunk no lookup resolves, and the next
+// backup reads the file again.
+func TestBackupThatFindsTheLossCommitsNoUnreadFileOfIt(t *testing.T) {
+	ctx := context.Background()
+	const content = "content of a file that does not change"
+	losses := map[string]func(t *testing.T, b ark.Backend, repo *ark.Repository){
+		"pack": func(t *testing.T, b ark.Backend, repo *ark.Repository) {
+			deletePackOf(t, b, repo, ark.BlobFile, ark.ObjectName(repo, []byte(content)))
+		},
+		"index object": garbleDataIndex,
 	}
-	if _, err := repo.RebuildIndex(ctx); err != nil {
-		t.Fatalf("RebuildIndex: %v", err)
+	for name, lose := range losses {
+		t.Run(name, func(t *testing.T) {
+			b := newOpCountingBackend()
+			repo := openRepo(t, b)
+			mtime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+			src := newStatSource("app", map[string]statFile{
+				"f": {content: content, mtime: mtime},
+				"g": {content: "first content of a file that changes", mtime: mtime},
+			})
+			mustBackup(t, repo, src)
+			lose(t, b, repo)
+			snaps := objectNames(t, b, ark.SnapshotFile)
+
+			src.files["g"] = statFile{content: "second content of a file that changes", mtime: mtime.Add(time.Hour)}
+			_, err := repo.Backup(ctx, src)
+			if err == nil || !strings.Contains(err.Error(), "next backup reads them again") {
+				t.Fatalf("Backup = %v, want it to fail on the file it took unread", err)
+			}
+			if got := objectNames(t, b, ark.SnapshotFile); !slices.Equal(got, snaps) {
+				t.Fatalf("snapshots %v after the failed backup, want %v", got, snaps)
+			}
+			if n := len(objectNames(t, b, ark.LostPackFile)); n != 1 {
+				t.Fatalf("%d markers after the backup that found the loss, want 1", n)
+			}
+			snap := mustBackup(t, repo, src)
+			if src.opens["f"] != 2 {
+				t.Fatalf("the file was opened %d times, want twice", src.opens["f"])
+			}
+			sink := &recordingSink{}
+			if _, err := repo.Restore(ctx, snap.ID, sink); err != nil || sink.written["f"] != content {
+				t.Errorf("Restore = %q, %v; want the content", sink.written["f"], err)
+			}
+		})
 	}
-	if n := len(objectNames(t, b, ark.LostPackFile)); n != 0 {
-		t.Errorf("%d markers after a rebuild of an index without a lost pack, want none", n)
+}
+
+// garbleDataIndex replaces every data index object with bytes that do not
+// open.
+func garbleDataIndex(t *testing.T, b ark.Backend, _ *ark.Repository) {
+	t.Helper()
+	ctx := context.Background()
+	for _, name := range objectNames(t, b, ark.DataIndexFile) {
+		h := ark.Handle{Type: ark.DataIndexFile, Name: name}
+		if err := b.Delete(ctx, h); err != nil {
+			t.Fatalf("delete index object: %v", err)
+		}
+		if err := b.Put(ctx, h, strings.NewReader("not an index object")); err != nil {
+			t.Fatalf("put index object: %v", err)
+		}
+	}
+}
+
+// TestIndexObjectThatDoesNotOpenStoresTheMarker: the chunks of a data index
+// object that does not open are stored but listed nowhere. A load that skips
+// the object stores the marker, so the next backup reads a file with such a
+// chunk again instead of keeping a reference no lookup resolves.
+func TestIndexObjectThatDoesNotOpenStoresTheMarker(t *testing.T) {
+	ctx := context.Background()
+	b := newOpCountingBackend()
+	repo := openRepo(t, b)
+	const content = "content of a file that does not change"
+	src := newStatSource("app", map[string]statFile{
+		"f": {content: content, mtime: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)},
+	})
+	mustBackup(t, repo, src)
+	garbleDataIndex(t, b, repo)
+
+	mustCheck(t, repo)
+	if n := len(objectNames(t, b, ark.LostPackFile)); n != 1 {
+		t.Fatalf("%d markers after a check that skipped an index object, want 1", n)
+	}
+	snap := mustBackup(t, repo, src)
+	if src.opens["f"] != 2 {
+		t.Fatalf("the file was opened %d times, want twice", src.opens["f"])
+	}
+	sink := &recordingSink{}
+	if _, err := repo.Restore(ctx, snap.ID, sink); err != nil || sink.written["f"] != content {
+		t.Errorf("Restore = %q, %v; want the content", sink.written["f"], err)
 	}
 }
 
@@ -298,54 +420,35 @@ func TestPruneStopsOnATreeOfALostPack(t *testing.T) {
 }
 
 // TestMarkerGoesWhileTheExclusiveLockIsHeld pins the order that keeps a
-// reader's marker: a prune or a rebuild deletes it after it acquired the
-// exclusive lock and before it releases it. A reader stores the marker under a
-// shared lock, which cannot overlap that window, so the delete never removes a
-// marker for a loss the new index still lists.
+// reader's marker: a prune deletes it after it acquired the exclusive lock
+// and before it releases it. A reader stores the marker under a shared lock,
+// which cannot overlap that window, so the delete never removes a marker for
+// a loss the new index still lists.
 func TestMarkerGoesWhileTheExclusiveLockIsHeld(t *testing.T) {
 	ctx := context.Background()
-	for _, op := range []string{"prune", "rebuild"} {
-		t.Run(op, func(t *testing.T) {
-			b := newOpCountingBackend()
-			mustBackup(t, openRepo(t, b), smallFiles("app", 3))
-			var events []string
-			repo, err := ark.Open(ctx, b, testPassword, ark.WithLockEvent(func(ev ark.LockEvent) {
-				if ev.Exclusive && (ev.Kind == ark.LockAcquired || ev.Kind == ark.LockReleased) {
-					events = append(events, fmt.Sprintf("%s %d", ev.Kind, len(objectNames(t, b, ark.LostPackFile))))
-				}
-			}))
-			if err != nil {
-				t.Fatalf("Open: %v", err)
-			}
-			src := smallFiles("app", 3)
-			lost := slices.Min(objectNames(t, b, ark.DataPackFile))
-			if err := b.Delete(ctx, ark.Handle{Type: ark.DataPackFile, Name: lost}); err != nil {
-				t.Fatalf("delete pack: %v", err)
-			}
-			mustCheck(t, repo)
-			mustBackup(t, repo, src)
+	b := newOpCountingBackend()
+	mustBackup(t, openRepo(t, b), smallFiles("app", 3))
+	var events []string
+	repo, err := ark.Open(ctx, b, testPassword, ark.WithLockEvent(func(ev ark.LockEvent) {
+		if ev.Exclusive && (ev.Kind == ark.LockAcquired || ev.Kind == ark.LockReleased) {
+			events = append(events, fmt.Sprintf("%s %d", ev.Kind, len(objectNames(t, b, ark.LostPackFile))))
+		}
+	}))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	lost := slices.Min(objectNames(t, b, ark.DataPackFile))
+	if err := b.Delete(ctx, ark.Handle{Type: ark.DataPackFile, Name: lost}); err != nil {
+		t.Fatalf("delete pack: %v", err)
+	}
+	mustCheck(t, repo)
+	mustBackup(t, repo, smallFiles("app", 3))
 
-			if op == "prune" {
-				_, err = repo.Prune(ctx)
-			} else {
-				// A rebuild that drops a lost pack keeps the marker: this one
-				// finds a marker left over once the prune dropped the pack.
-				if _, err := repo.Prune(ctx); err != nil {
-					t.Fatalf("Prune: %v", err)
-				}
-				if err := ark.PutObject(ctx, repo, ark.LostPackMarker(repo), nil); err != nil {
-					t.Fatalf("put marker: %v", err)
-				}
-				events = nil
-				_, err = repo.RebuildIndex(ctx)
-			}
-			if err != nil {
-				t.Fatalf("%s: %v", op, err)
-			}
-			if want := []string{"acquired 1", "released 0"}; !slices.Equal(events, want) {
-				t.Errorf("markers at the exclusive lock events = %q, want %q", events, want)
-			}
-		})
+	if _, err := repo.Prune(ctx); err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	if want := []string{"acquired 1", "released 0"}; !slices.Equal(events, want) {
+		t.Errorf("markers at the exclusive lock events = %q, want %q", events, want)
 	}
 }
 
@@ -375,6 +478,14 @@ func TestMarkerIsDurableOnceStored(t *testing.T) {
 	}
 	if want := []string{"put lostpacks", "sync"}; !slices.Equal(ops, want) {
 		t.Errorf("Verify of a snapshot with a lost pack wrote %q, want %q", ops, want)
+	}
+	if _, err := repo.Verify(ctx, snap.ID); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	for _, e := range b.takeEvents() {
+		if e.op == "sync" || e.h.Type != ark.LockFile {
+			t.Errorf("Verify with the marker stored already wrote %s %s, want nothing", e.op, e.h.Type)
+		}
 	}
 }
 

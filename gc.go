@@ -78,6 +78,9 @@ func (r *Repository) runGC(ctx context.Context, dryRun bool, progress ProgressFu
 	// A snapshot whose tree cannot be read stops the prune: an incomplete
 	// live set would delete its objects.
 	chunks, trees := r.stores()
+	if dryRun {
+		chunks.index.lost = nil
+	}
 	liveTrees := make(map[string]struct{})
 	liveChunks := make(map[string]struct{})
 	for _, m := range manifests {
@@ -135,9 +138,11 @@ func (r *Repository) runGC(ctx context.Context, dryRun bool, progress ProgressFu
 		if err := r.backend.Sync(ctx); err != nil {
 			return nil, fmt.Errorf("gc: failed to sync deletions: %w", err)
 		}
-		// Under the exclusive lock no reader can have found a loss since the
-		// load, and the index is durable: the marker may go once it lists no
-		// lost data pack.
+		// Only a prune drops the marker: it stopped above unless every chunk
+		// a snapshot references is listed, and keepsLost says none is listed
+		// only in a lost pack, so every one is in a stored pack of the durable
+		// index it leaves. Under the exclusive lock no reader can have found a
+		// loss since the load.
 		if !plans[0].keepsLost() {
 			r.dropLostPacks(ctx)
 		}
@@ -520,13 +525,11 @@ func (r *Repository) runRebuildIndex(ctx context.Context) (*RebuildIndexResult, 
 	result := &RebuildIndexResult{}
 	var sets []indexSet
 	chunks, trees := r.stores()
-	dropsLost := false
 	for _, s := range []*objectStore{chunks, trees} {
 		old, err := s.index.load(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("rebuild index: %w", err)
 		}
-		dropsLost = dropsLost || s == chunks && old.gone != nil
 		packs, unreadable, err := s.index.scanPacks(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("rebuild index: %w", err)
@@ -556,13 +559,10 @@ func (r *Repository) runRebuildIndex(ctx context.Context) (*RebuildIndexResult, 
 	if err := r.replaceIndexes(ctx, sets); err != nil {
 		return nil, fmt.Errorf("rebuild index: %w", err)
 	}
-	// The new index lists stored packs only, and it is durable. When it drops
-	// the records of a lost data pack, a snapshot may still reference a chunk
-	// only that pack held, which no index lists now: the marker stays for a
-	// prune to drop, which runs only once no snapshot references such a chunk.
-	if !dropsLost {
-		r.dropLostPacks(ctx)
-	}
+	// The marker stays: a snapshot may reference a chunk of a lost pack or of
+	// an index object that did not open, which no index lists now, and an
+	// earlier rebuild may have dropped such records already. A prune drops it
+	// once no snapshot references such a chunk.
 	r.logger.InfoContext(ctx, "index rebuilt",
 		"packs", result.PacksIndexed,
 		"blobs", result.BlobsIndexed,

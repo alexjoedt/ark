@@ -23,7 +23,7 @@ dataindex/   index objects: which pack holds which chunk
 treeindex/   index objects: the same for directory nodes
 snapshots/   one sealed manifest per snapshot, named by a random id
 locks/       sealed shared and exclusive locks
-lostpacks/   at most one sealed marker: an index load found a data pack the index lists gone
+lostpacks/   at most one sealed marker: an index load found a listed data pack gone or a data index object that does not open
 ```
 
 `config`, the key files, snapshot manifests, locks and the marker stay single objects, one per
@@ -100,21 +100,24 @@ goes when prune deletes or rewrites the pack that holds it, see below.
 
 ## Lost-pack marker
 
-A load of the data index that finds a listed pack gone stores the marker `lostpacks/<name>`, where
+A load of the data index that finds a listed pack gone, or a data index object that does not open,
+stores the marker `lostpacks/<name>`, where
 the name is the keyed hash of the string `lostpacks`, so it differs between repositories. It is
 sealed like any single object over empty content; only its presence counts, and a marker that does
-not open counts as present. Backup, import, check, prune and an index rebuild fail when they
-cannot store it, restore, export and verify log the failure and go on.
+not open counts as present. A marker that is stored already is not written again. Backup and
+import fail when they cannot store it; restore, export, verify, check, prune and an index rebuild
+log the failure and go on. A prune dry run does not store it.
 
 A backup that would take files unchanged from their parent asks for the marker with one request.
 Without it the backup reads no data index, as before. With it the backup loads the data index and
 reads again every file of which a chunk is in no stored pack. A failed request counts as a marker.
+A backup whose own load of the data index finds the loss after it took files unread fails before it
+stores a snapshot when one of those files has a chunk in no stored pack; the next backup reads them.
 
-Prune and the index rebuild remove the marker, under the exclusive lock and after the new index is
-durable. Prune removes it once the index it leaves lists no pack that is gone; a rebuild only when
-it dropped no listed pack that is gone, since a snapshot may still reference a chunk only that pack
-held, which then no index lists, and prune runs only once no snapshot does. A build that predates
-the marker ignores it.
+Only prune removes the marker, under the exclusive lock and after the new index is durable, once
+every chunk a snapshot references is listed in a stored pack. An index rebuild never removes it: a
+snapshot may still reference a chunk whose records it dropped. A build that predates the marker
+ignores it.
 
 ## Order of writes
 

@@ -77,6 +77,9 @@ func (r *Repository) writeSession() *packSession {
 		checkpointBlobs: cmp.Or(r.checkpointBlobs, indexMaxRecords),
 	}
 	p.chunks, p.trees = r.stores()
+	// A backup or import fails when it cannot store the marker: the backups
+	// after it would take files unread that reference what is lost.
+	p.chunks.index.lost = r.markLostPacks
 	uploads := newPackUploads()
 	for i, s := range []*objectStore{p.chunks, p.trees} {
 		s.held = &heldBlobs{names: make(map[[sha256.Size]byte]struct{})}

@@ -73,7 +73,7 @@ func (r *Repository) runExport(ctx context.Context, snapshotID string, w io.Writ
 
 	// Same streaming path as restore: the chunks of the upcoming files are
 	// fetched while the current one is written to the archive.
-	chunks, trees := r.readStores()
+	chunks, trees := r.stores()
 	fetcher := r.newChunkFetcher(ctx, chunks, newChunkCache(defaultRestoreCache))
 	defer fetcher.close()
 
