@@ -61,7 +61,6 @@ func TestCommandSurface(t *testing.T) {
 		"docker restore": {"path", "no-stop", "stop-timeout", "dry-run", "yes"},
 		"key":            {},
 		"key passwd":     {"new-password-file", "new-insecure-no-password"},
-		"serve":          {},
 		"version":        {},
 	}
 

@@ -1,75 +1,13 @@
 package main
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/urfave/cli/v3"
-
-	"github.com/alexjoedt/ark/cmd/ark/internal/config"
 )
-
-func TestServeDefaultsToLoopback(t *testing.T) {
-	t.Setenv(config.EnvHTTPAddr, "")
-	if config.DefaultHTTPAddr != "127.0.0.1:8080" {
-		t.Errorf("DefaultHTTPAddr = %q, want 127.0.0.1:8080", config.DefaultHTTPAddr)
-	}
-	if _, err := os.Stat(config.DaemonConfigPath()); err == nil {
-		t.Skip("a daemon.json on this machine overrides the default")
-	}
-	cfg, err := config.LoadServe(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.HTTPAddr != config.DefaultHTTPAddr {
-		t.Errorf("LoadServe HTTPAddr = %q, want the default", cfg.HTTPAddr)
-	}
-	if w := serveWarnings(cfg); len(w) != 0 {
-		t.Errorf("default config warns: %v", w)
-	}
-}
-
-func TestServeWarnsOnANonLoopbackAddress(t *testing.T) {
-	for addr, warns := range map[string]bool{
-		"127.0.0.1:8080": false,
-		"[::1]:8080":     false,
-		"localhost:8080": true,
-		":8080":          true,
-		"0.0.0.0:8080":   true,
-		"[::]:8080":      true,
-		"192.168.1.5:80": true,
-		"example.com:80": true,
-		"garbage":        true,
-	} {
-		cfg := &config.ServeConfig{HTTPAddr: addr, CSRFEnabled: true}
-		w := serveWarnings(cfg)
-		if warns != (len(w) == 1) || (warns && !strings.Contains(w[0], "TLS reverse proxy")) {
-			t.Errorf("addr %q: warnings %q, want warning %v", addr, w, warns)
-		}
-	}
-}
-
-func TestServeWarnsWhenCSRFIsOff(t *testing.T) {
-	cfg := &config.ServeConfig{HTTPAddr: config.DefaultHTTPAddr, CSRFEnabled: true}
-	cmd := &cli.Command{
-		Name:  "serve",
-		Flags: serveCommand().Flags,
-		Action: func(_ context.Context, cmd *cli.Command) error {
-			applyServeFlags(cfg, cmd)
-			return nil
-		},
-	}
-	if err := cmd.Run(t.Context(), []string{"serve", "--no-csrf"}); err != nil {
-		t.Fatal(err)
-	}
-	w := serveWarnings(cfg)
-	if len(w) != 1 || !strings.Contains(w[0], "--no-csrf") || !strings.Contains(w[0], "csrfEnabled") {
-		t.Errorf("warnings with --no-csrf = %q, want one naming the flag and the setting", w)
-	}
-}
 
 // TestNoPasswordFlag pins the passphrase inputs: --password-file, the
 // environment and the prompt. A --password flag would show in the process

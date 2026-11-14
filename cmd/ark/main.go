@@ -163,7 +163,6 @@ func newApp() *cli.Command {
 			unlockCommand(),
 			dockerCommand(),
 			keyCommand(),
-			serveCommand(),
 			versionCommand(),
 		},
 	}
@@ -246,13 +245,8 @@ func jsonRequested(args []string) bool {
 //
 //nolint:unparam // callers may pass options
 func openRepo(ctx context.Context, cmd *cli.Command, repoOpts ...ark.Option) (*ark.Repository, error) {
-	return openRepoAt(ctx, cmd, cmd.Root().String("repo"), append(hookOptions(cmd), repoOpts...)...)
-}
-
-// openRepoAt opens the repository at uri with the global password, lock and
-// concurrency settings.
-func openRepoAt(ctx context.Context, cmd *cli.Command, uri string, repoOpts ...ark.Option) (*ark.Repository, error) {
 	root := cmd.Root()
+	uri := root.String("repo")
 	if uri == "" {
 		return nil, exitcode.Usagef("no repository given, set --repo or ARK_REPOSITORY")
 	}
@@ -269,6 +263,7 @@ func openRepoAt(ctx context.Context, cmd *cli.Command, uri string, repoOpts ...a
 		ark.WithLockWait(root.Duration("lock-wait")),
 		ark.WithConcurrency(root.Int("concurrency")),
 	}
+	opts = append(opts, hookOptions(cmd)...)
 	repo, err := ark.Open(ctx, b, pw, append(opts, repoOpts...)...)
 	if err != nil {
 		_ = b.Close()

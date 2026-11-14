@@ -85,31 +85,6 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: sh cmd/ark/test/exitcodes.sh
 
-      # The binary still serves the web UI. The UI is rebuilt from source first so the
-      # embedded build matches the tree, not the last committed one.
-      - name: Set up Node
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-          cache: npm
-          cache-dependency-path: cmd/ark/web/package-lock.json
-
-      - name: Build the UI
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          set -eu
-          npm ci --prefix cmd/ark/web
-          npm run build --prefix cmd/ark/web
-          static=cmd/ark/internal/ui/server/static
-          rm -rf "$static"/*
-          cp -r cmd/ark/web/dist/. "$static"/
-          echo ".gitkeep" > "$static/.gitkeep"
-
-      - name: Serve smoke test
-        if: matrix.os == 'ubuntu-latest'
-        run: sh cmd/ark/test/serve-smoke.sh
-
       - name: Verify modules
         run: go mod verify
 

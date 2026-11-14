@@ -1,3 +1,5 @@
+// Package config loads the --env-file the CLI reads before it resolves its
+// flags. The CLI has no config file; flags and environment are resolved by main.
 package config
 
 import (

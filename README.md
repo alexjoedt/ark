@@ -19,7 +19,7 @@ an API export. Content is split with FastCDC, stored once, compressed with zstd 
   `chunker`.
 - `github.com/alexjoedt/ark/arkdocker` adds Docker volumes, in its own module so the Docker SDK stays
   out of the core.
-- `github.com/alexjoedt/ark/cmd/ark` is the `ark` binary, a restic-style CLI with an optional web UI.
+- `github.com/alexjoedt/ark/cmd/ark` is the `ark` binary, a restic-style CLI.
 
 ## Library
 
@@ -247,32 +247,7 @@ number.
 - Every 1.x release reads the v1 on-disk format. Minors may add optional fields.
 - CLI flags keep their meaning. `--json` output only gains fields.
 - `ark export` writes plain tar, and `ark import` reads it.
-- Not covered: dependency versions (including the Docker SDK), the web UI, and `ark serve`.
-
-## Web UI
-
-`ark serve` starts a web UI on `127.0.0.1:8080` with scheduled backups and live logs. It is not
-covered by the compatibility promise.
-
-The server speaks plain HTTP and has no TLS flags. It listens on loopback by default and warns at
-start when `--addr`, `ARK_HTTP_ADDR` or `httpAddr` binds anything but a loopback IP (`localhost`
-counts as a name, not loopback), and when CSRF is off (`--no-csrf` or `csrfEnabled: false`).
-Use any other address only behind a TLS reverse proxy.
-
-```bash
-ARK_ADMIN_PASSWORD=... ARK_PASSWORD_FILE=/etc/ark/password ark serve --repo /srv/ark
-```
-
-`ark serve` has no terminal to prompt on, so the repository password comes from a file or the
-environment, `ARK_PASSWORD` or `ARK_PASSWORD_FILE`, and the repository is created once with
-`ark init` before `ark serve` starts.
-
-The SQLite database next to it is a cache for the UI. The repository stays the source of truth.
-
-`scripts/install.sh` installs `ark serve` as a systemd service with its settings in
-`/etc/ark/daemon.json`, where `httpAddr` is `127.0.0.1:8080` on a fresh install.
-The admin password only ever comes from `ARK_ADMIN_PASSWORD`, never from a
-file.
+- Not covered: dependency versions, including the Docker SDK.
 
 ## Repository layout
 

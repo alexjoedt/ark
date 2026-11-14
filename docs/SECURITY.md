@@ -20,7 +20,7 @@ In scope are three attackers, alone or together:
 - A passive reader of the backend: reads every object, listing, name and size, as often as they like.
 - An active writer on the backend: modifies, truncates, swaps, moves, deletes and puts back old
   objects, and copies objects in from another repository, also one opened with the same passphrase.
-- A network attacker between the client and an sftp server, or between a browser and `ark serve`.
+- A network attacker between the client and an sftp server.
 
 The guarantees hold for a repository created with a passphrase. Data sent over sftp is already
 sealed, so a network attacker on that path gains no more than an attacker on the backend: with the
@@ -120,10 +120,6 @@ writer, every accepted risk included.
   `--password-file` or `ARK_PASSWORD_FILE`, and the prompt: `TestNoPasswordFlag`.
 - The passphrase never appears in the library's or the CLI's logs, debug level included, during
   Init, Open, a failed Open and ChangePassword: `TestPassphraseNeverInTheLogs`.
-- `ark serve` speaks plain HTTP and binds `127.0.0.1:8080` by default; it warns at start when it
-  binds anything but a loopback IP and when CSRF protection is off. Any other address belongs behind
-  a TLS reverse proxy: `TestServeDefaultsToLoopback`, `TestServeWarnsOnANonLoopbackAddress`,
-  `TestServeWarnsWhenCSRFIsOff`.
 
 ## Accepted risks
 
@@ -169,7 +165,6 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
   missing, nothing prevents it.
 - Repositories created with `WithoutPassword` or `--insecure-no-password`: the master key is stored
   unprotected, so anyone who reads the backend can read and forge them.
-- TLS for `ark serve`: terminate it in a reverse proxy.
 - Metadata the storage host keeps on its own, such as modification times: they show when each pack
   and index object was written, and with it when backups ran and how long they took.
 

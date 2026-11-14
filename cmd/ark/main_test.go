@@ -104,6 +104,7 @@ func TestRunExitCodes(t *testing.T) {
 	}{
 		{"no repo", []string{"snapshots"}, 2, "usage", nil},
 		{"unknown flag", []string{"--bogus", "snapshots"}, 2, "usage", nil},
+		{"serve is gone", []string{"serve"}, 2, "usage", nil},
 		{"unknown subcommand flag", []string{"-r", repo, "snapshots", "--bogus"}, 2, "usage", nil},
 		{"verbose and quiet", []string{"-v", "-q", "-r", repo, "snapshots"}, 2, "usage", nil},
 		{"missing argument", []string{"-r", repo, "inspect"}, 2, "usage", nil},
