@@ -13,8 +13,6 @@ vars:
     -X github.com/alexjoedt/ark/cmd/ark/internal/version.CommitHash={{.COMMIT_HASH}}
   # Spans all workspace modules, ./... stops at the root module.
   PKGS: github.com/alexjoedt/ark/...
-  WEB: cmd/ark/web
-  STATIC: cmd/ark/internal/ui/server/static
 
 tasks:
   tidy:
@@ -62,9 +60,8 @@ tasks:
       - go run ./scripts/bench run -dir "{{.DIR}}" {{.CLI_ARGS}}
 
   build:
-    desc: Build the web UI, then bin/ark
+    desc: Build bin/ark
     cmds:
-      - task: build-ui
       - go mod verify
       - go build -ldflags "{{.LDFLAGS}}" -o bin/ark ./cmd/ark
 
@@ -74,33 +71,6 @@ tasks:
       - task: build
       - mkdir -p $HOME/.local/bin
       - cp ./bin/ark $HOME/.local/bin/ark
-
-  npm-install:
-    desc: Install frontend dependencies (skipped when package-lock.json is unchanged)
-    sources:
-      - '{{.WEB}}/package-lock.json'
-    generates:
-      - '{{.WEB}}/node_modules/.package-lock.json'
-    cmds:
-      - npm ci --prefix {{.WEB}}
-
-  build-ui:
-    desc: Build the React frontend and copy output into the Go embed directory (skipped when sources are unchanged)
-    deps: [npm-install]
-    sources:
-      - '{{.WEB}}/src/**/*'
-      - '{{.WEB}}/public/**/*'
-      - '{{.WEB}}/index.html'
-      - '{{.WEB}}/vite.config.ts'
-      - '{{.WEB}}/tsconfig*.json'
-      - '{{.WEB}}/components.json'
-    generates:
-      - '{{.STATIC}}/index.html'
-    cmds:
-      - npm run build --prefix {{.WEB}}
-      - rm -rf ./{{.STATIC}}/*
-      - cp -r {{.WEB}}/dist/. ./{{.STATIC}}/
-      - echo ".gitkeep" > ./{{.STATIC}}/.gitkeep
 
   release-snapshot:
     desc: Build the release archives with goreleaser, nothing is published
@@ -118,6 +88,6 @@ tasks:
         GORELEASER_CURRENT_TAG="v${tag#cmd/ark/v}" goreleaser release --clean --skip=validate
 
   clean:
-    desc: Remove bin/, the committed web UI build stays
+    desc: Remove bin/
     cmds:
       - rm -rf bin

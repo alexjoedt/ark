@@ -58,8 +58,8 @@ Majors from 2 on are refused, since the module paths carry no `/vN` suffix.
 
 ### Publishing
 
-goreleaser runs inside `cmd/ark` (`cmd/ark/.goreleaser.yaml`). It builds the web UI, the binaries
-with `CGO_ENABLED=0` for linux and darwin, and the archives.
+goreleaser runs inside `cmd/ark` (`cmd/ark/.goreleaser.yaml`). It builds the binaries with
+`CGO_ENABLED=0` for linux and darwin and the archives.
 
 goreleaser OSS cannot strip the `cmd/ark/` prefix from a tag. The release therefore runs under the
 root tag of the same version (`GORELEASER_CURRENT_TAG=vX.Y.Z`) with `--skip=validate`, because that
