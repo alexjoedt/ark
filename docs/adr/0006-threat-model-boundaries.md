@@ -20,7 +20,7 @@ plaintext and unauthenticated.
 ## Decision
 
 The attacker is a passive reader of the backend, an active writer on the backend and a network
-attacker between the client and an sftp server or between a browser and `ark serve`. A compromised
+attacker between the client and an sftp server or between a browser and `ark serve` (the browser part is superseded by 0016). A compromised
 client holding the passphrase and side channels on the client host (memory, swap, timing) are out
 of scope; `docs/SECURITY.md` lists them.
 
@@ -50,8 +50,8 @@ The passphrase never appears in a log (debug included), in a URI or in argv. It 
 to processes of the same user, and zeroing memory or disabling core dumps is not promised. A
 repository can also be created without any passphrase (`WithoutPassword`, `--insecure-no-password`):
 the format and the integrity checks are the same, but anyone with backend access can read it, and
-the explicit flag on every call is the only guard. `ark serve` binds loopback by
-default and warns on a non-loopback address; TLS is a reverse proxy's job.
+the explicit flag on every call is the only guard. `ark serve` (removed by 0016) binds
+loopback by default and warns on a non-loopback address; TLS is a reverse proxy's job.
 
 - Not a client-side anchor like borg's, because it needs state per client and per repository that a
   second machine or a lost config directory silently resets, and it protects only the client that
