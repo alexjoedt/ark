@@ -281,14 +281,16 @@ func (r *Repository) resolveID(ctx context.Context, id string) (string, error) {
 	if id == "" {
 		return "", fmt.Errorf("%w: empty snapshot id", ErrNotFound)
 	}
+	// Every id ark writes is lower case; a pasted upper-case one still resolves.
 	// An exact hit costs one Stat; only a prefix needs the full listing.
-	if _, err := r.backend.Stat(ctx, Handle{Type: SnapshotFile, Name: id}); err == nil {
-		return id, nil
+	lower := strings.ToLower(id)
+	if _, err := r.backend.Stat(ctx, Handle{Type: SnapshotFile, Name: lower}); err == nil {
+		return lower, nil
 	}
 
 	var matches []string
 	err := r.backend.List(ctx, SnapshotFile, func(info BlobInfo) error {
-		if strings.HasPrefix(info.Name, id) {
+		if len(info.Name) >= len(id) && strings.EqualFold(info.Name[:len(id)], id) {
 			matches = append(matches, info.Name)
 		}
 		return nil
@@ -545,6 +547,8 @@ func (r *Repository) Export(ctx context.Context, id string, w io.Writer) error {
 }
 
 // Import reads a portable tar.gz archive from reader and re-indexes it.
+// It fails when the snapshot the archive names is already in the
+// repository, so an import never replaces a snapshot.
 func (r *Repository) Import(ctx context.Context, reader io.Reader) (*Snapshot, error) {
 	ctx, lock, err := r.acquire(ctx, false)
 	if err != nil {

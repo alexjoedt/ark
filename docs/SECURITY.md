@@ -41,7 +41,8 @@ writer, every accepted risk included.
 - Chunk, tree and index names are the hex HMAC-SHA256 of their plaintext under the repository's ID
   key, the lost-pack marker's that of its namespace name, manifests and locks are sealed under
   chosen names: snapshot IDs are 128 random bits in 32 lowercase hex characters (a repository
-  written earlier keeps its 26 character Crockford base32 IDs, which still resolve), lock names a
+  written earlier keeps its 26 character Crockford base32 IDs, which still resolve; an import of
+  one names the copy by the first 128 bits of the SHA-256 of that ID), lock names a
   millisecond timestamp plus 80 random bits:
   `TestChunksAndTreesAreSealedUnderKeyedNames`, `TestSnapshotIDsCarryNoTimestamp`,
   `TestBase32SnapshotIDsStillWork`.

@@ -433,9 +433,10 @@ func TestExportImportRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
+	target := initRepo(t)
 	old := os.Stdin
 	os.Stdin = f
-	code, out = runCapture(t, "--json", "-r", repo, "import", "-")
+	code, out = runCapture(t, "--json", "-r", target, "import", "-")
 	os.Stdin = old
 	if code != 0 {
 		t.Fatalf("import exit %d: %s", code, out)
@@ -452,6 +453,9 @@ func TestExportImportRoundTrip(t *testing.T) {
 	}
 	if imported.ID != snap.ID || imported.SourceName != src || imported.Stats.TotalFiles != 1 {
 		t.Fatalf("got %+v", imported)
+	}
+	if code, out := runCapture(t, "-r", target, "import", stdin); code == 0 {
+		t.Fatalf("a second import of the snapshot succeeded: %q", out)
 	}
 
 	// export to a file keeps stdout for --json

@@ -413,9 +413,10 @@ func TestBase32SnapshotIDsStillWork(t *testing.T) {
 	if err != nil || len(all) != 2 {
 		t.Fatalf("Snapshots = %d, %v, want 2", len(all), err)
 	}
-	for _, ref := range []string{oldID, oldID[:8], hexSnap.ID, hexSnap.ID[:8]} {
+	upper := strings.ToUpper(hexSnap.ID)
+	for _, ref := range []string{oldID, oldID[:8], hexSnap.ID, hexSnap.ID[:8], upper, upper[:8]} {
 		got, err := repo.Snapshot(ctx, ref)
-		if err != nil || (got.ID != oldID && got.ID != hexSnap.ID) || !strings.HasPrefix(got.ID, ref) {
+		if err != nil || (got.ID != oldID && got.ID != hexSnap.ID) || !strings.HasPrefix(got.ID, strings.ToLower(ref)) {
 			t.Errorf("Snapshot(%q) = %v, %v", ref, got, err)
 		}
 	}
@@ -428,12 +429,27 @@ func TestBase32SnapshotIDsStillWork(t *testing.T) {
 	if err := repo.Export(ctx, oldID, &archive); err != nil {
 		t.Fatalf("Export: %v", err)
 	}
-	imported, err := openRepo(t, arkmem.New()).Import(ctx, &archive)
+	target := openRepo(t, arkmem.New())
+	imported, err := target.Import(ctx, bytes.NewReader(archive.Bytes()))
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 	if len(imported.ID) != 32 || strings.ToLower(imported.ID) != imported.ID {
 		t.Errorf("imported ID %q is not 32 lowercase hex characters", imported.ID)
+	}
+	if _, err := target.Import(ctx, bytes.NewReader(archive.Bytes())); err == nil {
+		t.Error("a second import of the same base32 archive succeeded")
+	}
+	if all, err := target.Snapshots(ctx, ark.SnapshotFilter{}); err != nil || len(all) != 1 {
+		t.Errorf("after two imports Snapshots = %d, %v, want 1", len(all), err)
+	}
+
+	archive.Reset()
+	if err := repo.Export(ctx, hexSnap.ID, &archive); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if _, err := repo.Import(ctx, &archive); err == nil {
+		t.Error("importing a hex snapshot into the repository that holds it replaced it")
 	}
 }
 
