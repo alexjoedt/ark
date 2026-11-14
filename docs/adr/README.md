@@ -20,7 +20,7 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0003 | [Unchanged-file detection](0003-unchanged-file-detection.md) | accepted | 2026-11-07 |
 | 0004 | [v0 line and release tagging](0004-v0-line-and-release-tagging.md) | accepted | 2026-11-07 |
 | 0005 | [Sync barrier instead of per-object fsync](0005-sync-barrier-instead-of-per-object-fsync.md) | partly superseded by 0012 | 2026-11-08 |
-| 0006 | [Threat model boundaries](0006-threat-model-boundaries.md) | accepted | 2026-11-08 |
+| 0006 | [Threat model boundaries](0006-threat-model-boundaries.md) | partly superseded by 0016 | 2026-11-08 |
 | 0007 | [Embedding hooks on Open](0007-embedding-hooks-on-open.md) | accepted | 2026-11-08 |
 | 0008 | [Path matcher package](0008-path-matcher-package.md) | accepted | 2026-11-11 |
 | 0009 | [Exclude patterns on the snapshot](0009-exclude-patterns-on-the-snapshot.md) | accepted | 2026-11-11 |
@@ -30,3 +30,4 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0013 | [Prune repacks by a repository-wide unused budget](0013-prune-repacks-by-an-unused-budget.md) | accepted | 2026-11-11 |
 | 0014 | [Index records of packs that are not stored are passed over](0014-index-records-of-packs-that-are-not-stored.md) | partly superseded by 0015 | 2026-11-12 |
 | 0015 | [A marker makes unchanged backups see a lost data pack](0015-lost-pack-marker-for-unchanged-backups.md) | accepted | 2026-11-13 |
+| 0016 | [Drop the web UI](0016-drop-the-web-ui.md) | accepted | 2026-11-14 |

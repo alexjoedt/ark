@@ -1,6 +1,6 @@
 # 0006: Threat model boundaries
 
-Status: accepted
+Status: partly superseded by 0016
 Date: 2026-11-08
 
 ## Context
@@ -75,3 +75,6 @@ in `encryption_test.go` for the IDs, `TestListingRevealsCountsAndSizes` for the 
 `cmd/ark/transport_test.go` (CLI) for the passphrase. A user who needs protection against rollback or
 a leaked master key has no answer yet: append-only mode and key rotation stay open items. A cluster
 service that wants rollback detection must keep its own record of the snapshot set.
+
+The parts on `ark serve` (the browser attacker, the loopback binding) are superseded by 0016, which
+removes the command.
