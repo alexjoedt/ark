@@ -81,12 +81,12 @@
   }
 }
 --- stderr
-=== --json restore <id2> <dest> (exit 0)
+=== --json restore <id1> <dest> (exit 0)
 --- stdout
 {
   "bytes_restored": 10,
   "files_restored": 2,
-  "snapshot_id": "<id2>"
+  "snapshot_id": "<id1>"
 }
 --- stderr
 === --json forget --keep-last 1 --yes (exit 0)

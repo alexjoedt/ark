@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -54,13 +56,15 @@ func (n *normalizer) apply(s string) string {
 		}
 		lines[i] = m[1] + `"` + v + `"` + m[4]
 	}
-	s = strings.Join(lines, "\n")
-	for id, name := range n.ids {
-		s = strings.ReplaceAll(s, id, name)
+	// Longest first, so a temp dir that is a prefix of another never wins.
+	repl := maps.Clone(n.literal)
+	maps.Copy(repl, n.ids)
+	keys := slices.SortedFunc(maps.Keys(repl), func(a, b string) int { return len(b) - len(a) })
+	pairs := make([]string, 0, 2*len(keys))
+	for _, k := range keys {
+		pairs = append(pairs, k, repl[k])
 	}
-	for lit, name := range n.literal {
-		s = strings.ReplaceAll(s, lit, name)
-	}
+	s = strings.NewReplacer(pairs...).Replace(strings.Join(lines, "\n"))
 	return clockTime.ReplaceAllString(s, "<time>")
 }
 
@@ -117,9 +121,9 @@ func goldenRun(t *testing.T, mode string) string {
 		)
 	}
 	step("backup", "--host", "h", src)
+	first := lastID
 	step("backup", "--host", "h", src)
 	step("check")
-	first := lastID
 	step("verify", lastID)
 	step("verify", "nonexistent")
 	step("restore", first, dest)

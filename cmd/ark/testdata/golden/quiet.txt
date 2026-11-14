@@ -18,7 +18,7 @@ snapshot <id2> ok, 2 chunks
 --- stdout
 --- stderr
 ark: verify nonexistent: ark: snapshot not found: nonexistent
-=== --quiet restore <id2> <dest> (exit 0)
+=== --quiet restore <id1> <dest> (exit 0)
 --- stdout
 --- stderr
 === --quiet forget --keep-last 1 --yes (exit 0)
