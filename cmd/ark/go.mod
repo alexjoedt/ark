@@ -6,7 +6,7 @@ require (
 	github.com/alexedwards/scs/v2 v2.9.0
 	github.com/alexjoedt/ark v1.0.0
 	github.com/alexjoedt/ark/arkdocker v1.0.0
-	github.com/alexjoedt/log v1.1.0
+	github.com/alexjoedt/log v1.6.0
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/gorilla/websocket v1.5.3
