@@ -167,7 +167,14 @@ func (s *fileSource) Meta() ark.SourceMeta {
 // fn returns: each opens its file by path, so a backup reads files in parallel.
 func (s *fileSource) ConcurrentOpen() bool { return true }
 
-var _ ark.ConcurrentSource = (*fileSource)(nil)
+// Rewalk reports that Walk may run twice at once: each walk keeps its own
+// state and reads the directory tree again.
+func (s *fileSource) Rewalk() bool { return true }
+
+var (
+	_ ark.ConcurrentSource = (*fileSource)(nil)
+	_ ark.RewalkSource     = (*fileSource)(nil)
+)
 
 // Walk visits every entry under the source root that no exclude pattern
 // matches; an excluded directory is not read. Regular files, directories,

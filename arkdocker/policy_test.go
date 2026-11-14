@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alexjoedt/ark"
 	"github.com/moby/moby/api/types/container"
 )
 
@@ -114,5 +115,11 @@ func TestRunningContainersKeepsOnlyRunning(t *testing.T) {
 	got := runningContainers(ctrs)
 	if len(got) != 1 || got[0].Name != "a" {
 		t.Errorf("got %v, want only a", got)
+	}
+}
+
+func TestVolumeSourceCannotBeWalkedTwice(t *testing.T) {
+	if _, ok := NewVolumeSource(&Client{}, "v").(ark.RewalkSource); ok {
+		t.Error("the volume source implements ark.RewalkSource; its tar stream cannot be walked twice")
 	}
 }

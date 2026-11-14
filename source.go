@@ -118,6 +118,17 @@ type ConcurrentSource interface {
 	ConcurrentOpen() bool
 }
 
+// RewalkSource is a Source that can be walked a second time while a first
+// Walk runs. Rewalk returning true promises that a concurrent Walk whose open
+// functions are never called succeeds, yields the entries of the first one
+// and returns soon after its ctx is cancelled. A backup with WithBackupScan
+// counts files and bytes with such a walk; Rewalk returning false opts a
+// wrapper out.
+type RewalkSource interface {
+	Source
+	Rewalk() bool
+}
+
 // Sink receives file entries during a restore.
 //
 // Lifecycle:
