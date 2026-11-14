@@ -11,8 +11,8 @@ require (
 	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
-	github.com/moby/moby/api v1.56.1
-	github.com/moby/moby/client v0.6.2
+	github.com/moby/moby/api v1.57.0
+	github.com/moby/moby/client v0.6.3
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/urfave/cli/v3 v3.14.0
 	golang.org/x/crypto v0.59.0
