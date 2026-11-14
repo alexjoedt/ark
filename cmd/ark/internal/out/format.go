@@ -39,8 +39,10 @@ func Time(t time.Time) string {
 	return t.Local().Format("2006-01-02 15:04")
 }
 
-// ShortID cuts a snapshot ID to the 8 characters the tables show; every
-// command taking an ID accepts that prefix.
+// ShortID cuts a snapshot ID to the 8 characters the tables show. Every
+// command taking an ID resolves that prefix; one that two snapshots share
+// fails with the ambiguous-ID error, as two legacy base32 IDs taken within
+// about a second of each other do.
 func ShortID(id string) string {
 	if len(id) > 8 {
 		return id[:8]

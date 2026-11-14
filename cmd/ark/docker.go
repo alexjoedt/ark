@@ -108,7 +108,7 @@ func dockerVolumesCommand() *cli.Command {
 			for _, v := range vols {
 				when := "-"
 				if t, ok := last[v.Name]; ok {
-					when = out.Time(t)
+					when = out.TimeLong(t)
 				}
 				rows = append(rows, []string{v.Name, v.Driver, v.Mountpoint, when})
 			}

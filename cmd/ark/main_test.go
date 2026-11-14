@@ -1121,8 +1121,12 @@ func TestSnapshotsTableShowsShortIDsAndSeconds(t *testing.T) {
 	}
 
 	code, out = runCapture(t, "-r", repo, "snapshots")
-	row := strings.Fields(strings.SplitN(out, "\n", 3)[1])
-	if code != 0 || len(row) < 3 || row[0] != snap.ID[:8] {
+	lines := strings.SplitN(out, "\n", 3)
+	if code != 0 || len(lines) < 2 {
+		t.Fatalf("snapshots: exit %d, %q", code, out)
+	}
+	row := strings.Fields(lines[1])
+	if len(row) < 3 || row[0] != snap.ID[:8] {
 		t.Fatalf("table row %q, want ID column %s", row, snap.ID[:8])
 	}
 	if !regexp.MustCompile(`^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$`).MatchString(row[1] + " " + row[2]) {
