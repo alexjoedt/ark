@@ -30,7 +30,8 @@ type openConfig struct {
 // Option configures a Repository at Open time.
 type Option func(*openConfig)
 
-// WithLogger sets the logger for the repository.
+// WithLogger sets the logger for the repository. Without it the repository
+// logs nothing.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *openConfig) { c.logger = l }
 }
@@ -130,7 +131,7 @@ func Open(ctx context.Context, b Backend, pw Passphrase, opts ...Option) (*Repos
 		return nil, err
 	}
 	cfg := &openConfig{
-		logger:      slog.Default(),
+		logger:      slog.New(slog.DiscardHandler),
 		concurrency: runtime.NumCPU() * 2,
 	}
 	for _, o := range opts {

@@ -32,7 +32,7 @@ func NewClient(dockerHost string) (*Client, error) {
 	}
 	return &Client{
 		cli:         cli,
-		logger:      slog.Default(),
+		logger:      slog.New(slog.DiscardHandler),
 		host:        dockerHost,
 		helperImage: DefaultHelperImage,
 	}, nil

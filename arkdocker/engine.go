@@ -76,7 +76,7 @@ func WithHelperImage(ref string) Option {
 	return func(e *Engine) { e.config.HelperImage = ref }
 }
 
-// WithLogger sets the logger for the engine and its client. Default is [slog.Default]().
+// WithLogger sets the logger for the engine and its client. Without it the engine logs nothing.
 func WithLogger(l *slog.Logger) Option {
 	return func(e *Engine) { e.logger = l }
 }
@@ -86,7 +86,7 @@ func New(repo *ark.Repository, opts ...Option) (*Engine, error) {
 	e := &Engine{
 		repo:    repo,
 		config:  Config{StopTimeout: 30 * time.Second, HelperImage: DefaultHelperImage},
-		logger:  slog.Default(),
+		logger:  slog.New(slog.DiscardHandler),
 		volumes: make(map[string]*sync.Mutex),
 	}
 	for _, o := range opts {
