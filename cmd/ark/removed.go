@@ -26,6 +26,7 @@ var removedFlags = map[string][]struct{ name, bool, replacement string }{
 // removedCommands maps dropped commands to their replacement.
 var removedCommands = map[string]string{
 	"volumes": "ark docker volumes",
+	"serve":   "cron or systemd timers calling ark backup",
 }
 
 // addRemoved attaches the hidden flags and commands to the tree.

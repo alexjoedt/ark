@@ -161,6 +161,12 @@ The threat model, the accepted risks and how to report a vulnerability: [docs/SE
 go install github.com/alexjoedt/ark/cmd/ark@latest
 ```
 
+Upgrading from a build that had `ark serve`: the web UI, its scheduler and its installer are gone,
+and a unit still running `ark serve` fails on every start. Run `systemctl disable --now ark`, remove
+`/etc/systemd/system/ark.service`, `/etc/ark/daemon.json` and `/var/lib/ark`, then schedule backups
+with cron or a systemd timer calling `ark backup`. The jobs live only in the SQLite file under
+`/var/lib/ark`; note them down before deleting it. Repositories are unaffected.
+
 Every command needs a repository through `--repo` or `ARK_REPOSITORY`. There is no default path.
 The password comes from, in this order:
 
