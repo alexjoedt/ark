@@ -24,7 +24,5 @@ dist/
 data/
 
 __debug_*
-cmd/ark/web/node_modules/
 .task/
 /test/
-node_modules/

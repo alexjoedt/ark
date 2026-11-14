@@ -276,7 +276,7 @@ Four modules in one workspace: the root, `arkdocker/`, `cmd/ark/` and the untagg
 task test    # go test across the workspace, then go mod verify
 task vet
 task lint    # golangci-lint in each tagged module
-task build   # builds the web UI, then bin/ark
+task build   # builds bin/ark
 task tidy    # tidies every module and syncs the workspace
 ```
 
