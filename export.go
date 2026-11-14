@@ -266,8 +266,9 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader, session *p
 	if m == nil {
 		return nil, fmt.Errorf("import: archive contains no %s", exportMetadataName)
 	}
-	if m.ID == "" {
-		// A v1.1.0 archive may name only its volume.
+	if !isHexSnapshotID(m.ID) {
+		// A v1.1.0 archive may name only its volume, and a snapshot written
+		// before hex IDs came in as base32: the copy gets a new name.
 		m.ID = newSnapshotID()
 	}
 

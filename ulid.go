@@ -2,16 +2,31 @@ package ark
 
 import (
 	"crypto/rand"
+	"encoding/hex"
 	"strings"
 	"time"
 )
 
-// newSnapshotID returns 128 random bits as 26 Crockford base32 characters.
+// newSnapshotID returns 128 random bits as 32 lowercase hex characters.
 // A snapshot name carries no time: the backend listing must not date them.
+// Snapshots written before the hex form keep their 26 character base32 names.
 func newSnapshotID() string {
 	b := make([]byte, 16)
 	rand.Read(b)
-	return encodeBase32(b)
+	return hex.EncodeToString(b)
+}
+
+// isHexSnapshotID reports whether id has the shape newSnapshotID returns.
+func isHexSnapshotID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	for _, c := range []byte(id) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // generateID creates a sortable, unique lock name.

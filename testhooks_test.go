@@ -3,6 +3,7 @@ package ark
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -152,4 +153,18 @@ func IndexedPacks(ctx context.Context, r *Repository, h Handle) ([]string, int, 
 // source fills several packs and several index objects.
 func SetPackLimits(r *Repository, packBytes, checkpointBlobs int) {
 	r.packTarget, r.checkpointBlobs = packBytes, checkpointBlobs
+}
+
+// WriteBase32Snapshot stores a copy of snapshot id under a 26 character
+// Crockford base32 name, the form snapshots had before hex IDs, and returns
+// that name.
+func WriteBase32Snapshot(ctx context.Context, r *Repository, id string) (string, error) {
+	m, err := r.loadManifest(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	b := make([]byte, 16)
+	_, _ = cryptorand.Read(b)
+	m.ID = encodeBase32(b)
+	return m.ID, r.saveManifest(ctx, m)
 }

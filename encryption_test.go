@@ -29,6 +29,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -349,9 +350,24 @@ func idPrefixTime(t *testing.T, id string) time.Time {
 	return time.UnixMilli(ms)
 }
 
-// TestSnapshotIDsCarryNoTimestamp: a snapshot ID is random, so the listing
-// does not date a snapshot; prefixes still resolve and the parent is still the
-// newest snapshot of the source.
+// hexIDPrefixTime reads the first 6 bytes of a hex snapshot ID as
+// milliseconds since the epoch, the layout of a timestamped ID.
+func hexIDPrefixTime(t *testing.T, id string) time.Time {
+	t.Helper()
+	b, err := hex.DecodeString(id)
+	if err != nil || len(b) != 16 {
+		t.Fatalf("id %q is not 32 hex characters", id)
+	}
+	var ms int64
+	for _, c := range b[:6] {
+		ms = ms<<8 | int64(c)
+	}
+	return time.UnixMilli(ms)
+}
+
+// TestSnapshotIDsCarryNoTimestamp: a snapshot ID is 128 random bits as 32
+// lowercase hex characters, so the listing does not date a snapshot; prefixes
+// still resolve and the parent is still the newest snapshot of the source.
 func TestSnapshotIDsCarryNoTimestamp(t *testing.T) {
 	ctx := context.Background()
 	repo := openRepo(t, arkmem.New())
@@ -361,7 +377,10 @@ func TestSnapshotIDsCarryNoTimestamp(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Backup: %v", err)
 		}
-		if d := idPrefixTime(t, snap.ID).Sub(snap.CreatedAt).Abs(); d < 24*time.Hour {
+		if len(snap.ID) != 32 || strings.ToLower(snap.ID) != snap.ID {
+			t.Errorf("snapshot ID %q is not 32 lowercase hex characters", snap.ID)
+		}
+		if d := hexIDPrefixTime(t, snap.ID).Sub(snap.CreatedAt).Abs(); d < 24*time.Hour {
 			t.Errorf("snapshot %s decodes to %s off its CreatedAt, want no timestamp in it", snap.ID, d)
 		}
 		if snap.ParentID != prev {
@@ -372,6 +391,49 @@ func TestSnapshotIDsCarryNoTimestamp(t *testing.T) {
 			t.Errorf("Snapshot(%q) = %v, %v, want %s", snap.ID[:8], got, err, snap.ID)
 		}
 		prev = snap.ID
+	}
+}
+
+// TestBase32SnapshotIDsStillWork: a repository written before hex IDs keeps
+// its 26 character names; they list, resolve by full ID and by prefix next to
+// hex ones, and an export imports as a copy under a hex ID.
+func TestBase32SnapshotIDsStillWork(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+	hexSnap, err := repo.Backup(ctx, stubSource{name: "app", content: "payload"})
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	oldID, err := ark.WriteBase32Snapshot(ctx, repo, hexSnap.ID)
+	if err != nil || len(oldID) != 26 {
+		t.Fatalf("WriteBase32Snapshot = %q, %v", oldID, err)
+	}
+
+	all, err := repo.Snapshots(ctx, ark.SnapshotFilter{})
+	if err != nil || len(all) != 2 {
+		t.Fatalf("Snapshots = %d, %v, want 2", len(all), err)
+	}
+	for _, ref := range []string{oldID, oldID[:8], hexSnap.ID, hexSnap.ID[:8]} {
+		got, err := repo.Snapshot(ctx, ref)
+		if err != nil || (got.ID != oldID && got.ID != hexSnap.ID) || !strings.HasPrefix(got.ID, ref) {
+			t.Errorf("Snapshot(%q) = %v, %v", ref, got, err)
+		}
+	}
+	sink := &recordingSink{}
+	if _, err := repo.Restore(ctx, oldID[:8], sink); err != nil || sink.written["data.txt"] != "payload" {
+		t.Errorf("Restore by base32 prefix: %v, %q", err, sink.written["data.txt"])
+	}
+
+	var archive bytes.Buffer
+	if err := repo.Export(ctx, oldID, &archive); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	imported, err := openRepo(t, arkmem.New()).Import(ctx, &archive)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if len(imported.ID) != 32 || strings.ToLower(imported.ID) != imported.ID {
+		t.Errorf("imported ID %q is not 32 lowercase hex characters", imported.ID)
 	}
 }
 
