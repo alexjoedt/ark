@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -1095,6 +1096,65 @@ func TestRepairIndex(t *testing.T) {
 		if code, out := runCapture(t, append([]string{"--json", "-r", repo}, args...)...); code != 2 ||
 			!strings.Contains(out, `"usage"`) {
 			t.Errorf("ark %v: exit %d, %s, want a usage error", args, code, out)
+		}
+	}
+}
+
+// TestSnapshotsTableShowsShortIDsAndSeconds: the table cuts the ID to 8
+// characters and shows seconds; restore and inspect accept that prefix, an
+// ambiguous one fails, and --json keeps the full ID.
+func TestSnapshotsTableShowsShortIDsAndSeconds(t *testing.T) {
+	repo := initRepo(t)
+	t.Setenv("ARK_REPOSITORY", "")
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out := runCapture(t, "--json", "-r", repo, "backup", src)
+	var snap struct{ ID string }
+	if err := json.Unmarshal([]byte(out), &snap); err != nil || code != 0 {
+		t.Fatalf("backup: exit %d, %q", code, out)
+	}
+
+	code, out = runCapture(t, "-r", repo, "snapshots")
+	row := strings.Fields(strings.SplitN(out, "\n", 3)[1])
+	if code != 0 || len(row) < 3 || row[0] != snap.ID[:8] {
+		t.Fatalf("table row %q, want ID column %s", row, snap.ID[:8])
+	}
+	if !regexp.MustCompile(`^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$`).MatchString(row[1] + " " + row[2]) {
+		t.Fatalf("TIME column %q %q has no seconds", row[1], row[2])
+	}
+	code, out = runCapture(t, "--json", "-r", repo, "snapshots")
+	if code != 0 || !strings.Contains(out, snap.ID) {
+		t.Fatalf("--json lost the full ID: exit %d, %q", code, out)
+	}
+
+	short := snap.ID[:8]
+	dest := filepath.Join(t.TempDir(), "out")
+	if code, out := runCapture(t, "-r", repo, "restore", short, dest); code != 0 {
+		t.Fatalf("restore %s: exit %d, %q", short, code, out)
+	}
+	if code, out := runCapture(t, "-r", repo, "inspect", short); code != 0 || !strings.Contains(out, snap.ID) {
+		t.Fatalf("inspect %s: exit %d, %q", short, code, out)
+	}
+
+	// a second name with the same 8 characters makes the prefix ambiguous
+	b, err := arklocal.New(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	twin := ark.Handle{Type: ark.SnapshotFile, Name: short + strings.Repeat("0", len(snap.ID)-8)}
+	if err := b.Put(context.Background(), twin, strings.NewReader("x")); err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range []string{"restore", "inspect"} {
+		args := []string{"-r", repo, cmd, short}
+		if cmd == "restore" {
+			args = append(args, filepath.Join(t.TempDir(), "again"))
+		}
+		code, out := runCapture(t, append([]string{"--json"}, args...)...)
+		if code != 4 || !strings.Contains(out, "ambiguous") {
+			t.Errorf("%s of an ambiguous prefix: exit %d, %q", cmd, code, out)
 		}
 	}
 }

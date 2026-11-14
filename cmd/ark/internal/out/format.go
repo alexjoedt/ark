@@ -39,6 +39,15 @@ func Time(t time.Time) string {
 	return t.Local().Format("2006-01-02 15:04")
 }
 
+// ShortID cuts a snapshot ID to the 8 characters the tables show; every
+// command taking an ID accepts that prefix.
+func ShortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
 // TimeLong renders t in local time with seconds, the inspect form.
 func TimeLong(t time.Time) string {
 	return t.Local().Format("2006-01-02 15:04:05")

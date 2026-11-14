@@ -54,7 +54,7 @@ func snapshotsCommand() *cli.Command {
 			rows := make([][]string, 0, len(snaps))
 			for _, s := range snaps {
 				rows = append(rows, []string{
-					s.ID, out.Time(s.CreatedAt), s.SourceName, string(s.SourceType), s.Host,
+					out.ShortID(s.ID), out.TimeLong(s.CreatedAt), s.SourceName, string(s.SourceType), s.Host,
 					out.Bytes(s.Stats.TotalSize), strings.Join(s.Tags, ","),
 				})
 			}
