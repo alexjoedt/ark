@@ -1,0 +1,33 @@
+=== --quiet backup --host h <src> (exit 0)
+--- stdout
+<id1>
+--- stderr
+=== --quiet backup --host h <src> (exit 0)
+--- stdout
+<id2>
+--- stderr
+=== --quiet check (exit 0)
+--- stdout
+2 snapshots ok
+--- stderr
+=== --quiet verify <id2> (exit 0)
+--- stdout
+snapshot <id2> ok, 2 chunks
+--- stderr
+=== --quiet verify nonexistent (exit 4)
+--- stdout
+--- stderr
+ark: verify nonexistent: ark: snapshot not found: nonexistent
+=== --quiet restore <id2> <dest> (exit 0)
+--- stdout
+--- stderr
+=== --quiet forget --keep-last 1 --yes (exit 0)
+--- stdout
+removed <id1> <time> (<src>)
+removed 1 snapshots, kept 1
+--- stderr
+=== --quiet prune --yes (exit 0)
+--- stdout
+removed 0 blobs in 0 packs, 0 B
+repacked 0 B, 0 B unused
+--- stderr

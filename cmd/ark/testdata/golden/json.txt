@@ -1,0 +1,162 @@
+=== --json backup --host h <src> (exit 0)
+--- stdout
+{
+  "id": "<id1>",
+  "created_at": "<created_at>",
+  "source_name": "<src>",
+  "source_type": "file",
+  "host": "h",
+  "tags": [],
+  "comment": "",
+  "excludes": [],
+  "parent_id": "",
+  "stats": {
+    "total_files": 2,
+    "total_dirs": 1,
+    "skipped": 0,
+    "total_size": 10,
+    "stored_size": 118,
+    "new_chunks_raw_size": 10,
+    "chunks_total": 2,
+    "chunks_new": 2,
+    "chunks_reused": 0,
+    "deduplication_ratio": 0,
+    "compression_ratio": -10.8,
+    "duration": "<duration>"
+  }
+}
+--- stderr
+=== --json backup --host h <src> (exit 0)
+--- stdout
+{
+  "id": "<id2>",
+  "created_at": "<created_at>",
+  "source_name": "<src>",
+  "source_type": "file",
+  "host": "h",
+  "tags": [],
+  "comment": "",
+  "excludes": [],
+  "parent_id": "<id1>",
+  "stats": {
+    "total_files": 2,
+    "total_dirs": 1,
+    "skipped": 0,
+    "total_size": 10,
+    "stored_size": 0,
+    "new_chunks_raw_size": 0,
+    "chunks_total": 2,
+    "chunks_new": 0,
+    "chunks_reused": 2,
+    "deduplication_ratio": 1,
+    "compression_ratio": 0,
+    "duration": "<duration>"
+  }
+}
+--- stderr
+=== --json check (exit 0)
+--- stdout
+{
+  "errors": [],
+  "snapshots_checked": 2,
+  "warnings": []
+}
+--- stderr
+=== --json verify <id2> (exit 0)
+--- stdout
+{
+  "snapshot_id": "<id2>",
+  "chunks_checked": 2,
+  "missing_chunks": [],
+  "corrupt_chunks": [],
+  "ok": true
+}
+--- stderr
+=== --json verify nonexistent (exit 4)
+--- stdout
+{
+  "error": {
+    "code": "not_found",
+    "message": "verify nonexistent: ark: snapshot not found: nonexistent"
+  }
+}
+--- stderr
+=== --json restore <id2> <dest> (exit 0)
+--- stdout
+{
+  "bytes_restored": 10,
+  "files_restored": 2,
+  "snapshot_id": "<id2>"
+}
+--- stderr
+=== --json forget --keep-last 1 --yes (exit 0)
+--- stdout
+{
+  "dry_run": false,
+  "keep": [
+    {
+      "id": "<id2>",
+      "created_at": "<created_at>",
+      "source_name": "<src>",
+      "source_type": "file",
+      "host": "h",
+      "tags": [],
+      "comment": "",
+      "excludes": [],
+      "parent_id": "<id1>",
+      "stats": {
+        "total_files": 2,
+        "total_dirs": 1,
+        "skipped": 0,
+        "total_size": 10,
+        "stored_size": 0,
+        "new_chunks_raw_size": 0,
+        "chunks_total": 2,
+        "chunks_new": 0,
+        "chunks_reused": 2,
+        "deduplication_ratio": 1,
+        "compression_ratio": 0,
+        "duration": "<duration>"
+      }
+    }
+  ],
+  "remove": [
+    {
+      "id": "<id1>",
+      "created_at": "<created_at>",
+      "source_name": "<src>",
+      "source_type": "file",
+      "host": "h",
+      "tags": [],
+      "comment": "",
+      "excludes": [],
+      "parent_id": "",
+      "stats": {
+        "total_files": 2,
+        "total_dirs": 1,
+        "skipped": 0,
+        "total_size": 10,
+        "stored_size": 118,
+        "new_chunks_raw_size": 10,
+        "chunks_total": 2,
+        "chunks_new": 2,
+        "chunks_reused": 0,
+        "deduplication_ratio": 0,
+        "compression_ratio": -10.8,
+        "duration": "<duration>"
+      }
+    }
+  ]
+}
+--- stderr
+=== --json prune --yes (exit 0)
+--- stdout
+{
+  "blobs_removed": 0,
+  "bytes_freed": 0,
+  "bytes_repacked": 0,
+  "bytes_unused": 0,
+  "dry_run": false,
+  "packs_deleted": 0
+}
+--- stderr
