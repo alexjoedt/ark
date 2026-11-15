@@ -28,8 +28,10 @@ type Printer struct {
 	stdout io.Writer
 	stderr io.Writer
 	stdin  io.Reader
-	tty    bool // stderr is a terminal: spinner and prompts are allowed
+	tty    bool // stderr and stdin are terminals: prompts are allowed
+	live   bool // stderr and stdout are terminals: the live display is allowed
 	ttyOut bool // stdout is a terminal: results carry a label
+	width  func() int
 }
 
 // New builds a Printer on the process streams.
@@ -37,6 +39,14 @@ func New(mode Mode) *Printer {
 	p := NewWriter(mode, os.Stdout, os.Stderr, os.Stdin)
 	p.tty = term.IsTerminal(int(os.Stderr.Fd())) && term.IsTerminal(int(os.Stdin.Fd()))
 	p.ttyOut = term.IsTerminal(int(os.Stdout.Fd()))
+	p.live = p.ttyOut && term.IsTerminal(int(os.Stderr.Fd()))
+	p.width = func() int {
+		w, _, err := term.GetSize(int(os.Stderr.Fd()))
+		if err != nil || w <= 0 {
+			return 80
+		}
+		return w
+	}
 	return p
 }
 
@@ -46,8 +56,21 @@ func NewWriter(mode Mode, stdout, stderr io.Writer, stdin io.Reader) *Printer {
 	return &Printer{mode: mode, stdout: stdout, stderr: stderr, stdin: stdin}
 }
 
-// SetTTY overrides terminal detection.
-func (p *Printer) SetTTY(tty bool) { p.tty = tty }
+// SetTTY overrides terminal detection for prompts and the live display.
+func (p *Printer) SetTTY(tty bool) { p.tty, p.live = tty, tty }
+
+// Live reports whether operations render the live display: stderr and
+// stdout are terminals and no --json, --verbose or --quiet is set.
+func (p *Printer) Live() bool {
+	return p.live && !p.mode.JSON && !p.mode.Verbose && !p.mode.Quiet
+}
+
+func (p *Printer) termWidth() int {
+	if p.width == nil {
+		return 80
+	}
+	return p.width()
+}
 
 // Mode returns the flags the Printer was built with.
 func (p *Printer) Mode() Mode { return p.mode }

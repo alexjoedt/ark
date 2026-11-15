@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
@@ -156,19 +158,196 @@ func TestProgressVerbosePrintsPaths(t *testing.T) {
 	}
 }
 
-func TestProgressSpinnerOnTerminal(t *testing.T) {
+func TestProgressBlockOnTerminal(t *testing.T) {
 	p, _, se := newTest(Mode{}, "")
 	p.SetTTY(true)
 	pr := p.Progress("restore")
-	pr.Func()(ark.ProgressEvent{Phase: ark.PhaseWrite, FilesDone: 1, FilesTotal: 2})
+	pr.Func()(ark.ProgressEvent{Operation: ark.OperationRestore, Phase: ark.PhaseWrite, FilesDone: 1, FilesTotal: 2})
 	time.Sleep(250 * time.Millisecond)
 	pr.Done(R("snapshot", "x"))
 	s := se.String()
-	if !strings.Contains(s, "\r\033[K") || !strings.Contains(s, "restore: write 1/2 files") {
-		t.Fatalf("no spinner frame in %q", s)
+	if !strings.Contains(s, "\r\033[2A\033[J") || !strings.Contains(s, "  1 / 2 files   50%") {
+		t.Fatalf("no redrawn block in %q", s)
 	}
-	if !strings.Contains(s, "\r\033[Krestore  done in ") {
-		t.Fatalf("line not cleared before the summary: %q", s)
+	if !strings.HasSuffix(s, "\r\033[2A\033[Jrestore  done in "+s[strings.LastIndex(s, "done in ")+8:]) {
+		t.Fatalf("block not erased before the summary: %q", s)
+	}
+}
+
+func TestProgressBlockLines(t *testing.T) {
+	p, _, _ := newTest(Mode{}, "")
+	p.SetTTY(true)
+	pr := p.Progress("backup /srv/app")
+	f := pr.Func()
+	f(ark.ProgressEvent{Operation: ark.OperationBackup, Phase: ark.PhaseScan})
+	if got := pr.lines("⠹", 40, 0); len(got) != 2 || got[1] != "  ▸ scan   · store   · finalize" {
+		t.Fatalf("scan lines %q", got)
+	}
+	f(
+		ark.ProgressEvent{
+			Operation:   ark.OperationBackup,
+			Phase:       ark.PhaseStore,
+			CurrentPath: "a",
+			FilesDone:   1,
+			BytesDone:   10,
+		},
+	)
+	f(ark.ProgressEvent{Operation: ark.OperationBackup, Phase: ark.PhaseScan, FilesDone: 900})
+	f(ark.ProgressEvent{
+		Operation:   ark.OperationBackup,
+		Phase:       ark.PhaseStore,
+		CurrentPath: "srv/app/data/2026/11/exports/large-file.bin",
+		FilesDone:   12345,
+		FilesTotal:  40000,
+		BytesDone:   3328599655,
+		BytesTotal:  10737418240,
+	})
+	want := []string{
+		"⠹ backup /srv/app" + strings.Repeat(" ", 56) + "1m12s",
+		"  ▸ scan   ▸ store   · finalize",
+		"  12 345 / 40 000 files   3.1 / 10.0 GiB   31%   ETA 2m40s",
+		"  srv/app/data/2026/11/exports/large-file.bin",
+	}
+	if got := pr.lines("⠹", 80, 72*time.Second); !slices.Equal(got, want) {
+		t.Fatalf("store lines\n%q\nwant\n%q", got, want)
+	}
+	f(
+		ark.ProgressEvent{
+			Operation:  ark.OperationBackup,
+			Phase:      ark.PhaseScan,
+			FilesDone:  40000,
+			FilesTotal: 40000,
+			BytesTotal: 10737418240,
+		},
+	)
+	got := pr.lines("⠹", 30, 2*time.Second)
+	want = []string{
+		"⠹ backup /srv/app         2s",
+		"  ✓ scan   ▸ st…  · finalize",
+		"  12 345 / …/ 10.0 GiB   31%",
+		"  srv/app/da…/large-file.bin",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("narrow lines\n%q\nwant\n%q", got, want)
+	}
+	pr.Wait("waiting for lock held by h:1 (exclusive)")
+	if got := pr.lines("⠹", 80, 0); got[2] != "  waiting for lock held by h:1 (exclusive)" {
+		t.Fatalf("waiting lines %q", got)
+	}
+	pr.Resume()
+	if got := pr.lines("⠹", 80, 0); !strings.HasPrefix(got[2], "  12 345 / 40 000 files") {
+		t.Fatalf("resumed lines %q", got)
+	}
+	pr.Fail()
+	pr = p.Progress("backup x")
+	f = pr.Func()
+	f(
+		ark.ProgressEvent{
+			Operation:  ark.OperationBackup,
+			Phase:      ark.PhaseScan,
+			FilesDone:  3,
+			FilesTotal: 3,
+			BytesTotal: 9,
+			BytesDone:  9,
+		},
+	)
+	if got := pr.lines("⠹", 80, 0)[1:]; !slices.Equal(
+		got,
+		[]string{"  ✓ scan   · store   · finalize", "  3 files   9 B"},
+	) {
+		t.Fatalf("finished scan lines %q", got)
+	}
+	pr.Fail()
+}
+
+func TestProgressPhasesOverlapAndSkip(t *testing.T) {
+	p, _, _ := newTest(Mode{}, "")
+	pr := p.Progress("restore x")
+	f := pr.Func()
+	for _, ph := range []ark.Phase{ark.PhaseLoad, ark.PhaseFetch, ark.PhaseWrite, ark.PhaseFetch} {
+		f(ark.ProgressEvent{Operation: ark.OperationRestore, Phase: ph})
+	}
+	if got := pr.lines("⠹", 80, 0)[1]; got != "  ✓ load   ▸ fetch   ▸ write   · finalize" {
+		t.Fatalf("restore phases %q", got)
+	}
+	pr = p.Progress("prune")
+	f = pr.Func()
+	f(ark.ProgressEvent{Operation: ark.OperationPrune, Phase: ark.PhaseLoad})
+	f(ark.ProgressEvent{Operation: ark.OperationPrune, Phase: ark.PhaseSweep, ChunksDone: 1, ChunksTotal: 4})
+	if got := pr.lines("⠹", 80, 4*time.Second)[1:]; !slices.Equal(got, []string{
+		"  ✓ load   ✓ store   ▸ sweep   · finalize",
+		"  1 / 4 chunks   25%   ETA 12s",
+	}) {
+		t.Fatalf("prune lines %q", got)
+	}
+	pr = p.Progress("check")
+	f = pr.Func()
+	f(
+		ark.ProgressEvent{
+			Operation:   ark.OperationCheck,
+			Phase:       ark.PhaseFetch,
+			CurrentPath: "01A",
+			ChunksDone:  3,
+			ChunksTotal: 3,
+		},
+	)
+	f(
+		ark.ProgressEvent{
+			Operation:   ark.OperationCheck,
+			Phase:       ark.PhaseFetch,
+			CurrentPath: "01A",
+			FilesDone:   1,
+			FilesTotal:  4,
+		},
+	)
+	if got := pr.lines("⠹", 80, 4*time.Second)[2]; got != "  1 / 4 snapshots   3 / 3 chunks   25%   ETA 12s" {
+		t.Fatalf("check counts %q", got)
+	}
+}
+
+func TestCut(t *testing.T) {
+	cases := []struct {
+		in   string
+		n    int
+		want string
+	}{
+		{"short", 10, "short"},
+		{"srv/app/data/2026/11/exports/large-file.bin", 30, "srv/app/data/2…/large-file.bin"},
+		{"a/verylongbasename.txt", 10, "…ename.txt"},
+		{"äöüäöüäöüäöü", 5, "äö…öü"},
+	}
+	for _, c := range cases {
+		got := cut(c.in, c.n)
+		if got != c.want || utf8.RuneCountInString(got) > c.n {
+			t.Errorf("cut(%q, %d) = %q, want %q", c.in, c.n, got, c.want)
+		}
+	}
+}
+
+func TestProgressNoControlSequencesOffTerminal(t *testing.T) {
+	events := []ark.ProgressEvent{
+		{Operation: ark.OperationBackup, Phase: ark.PhaseScan},
+		{Operation: ark.OperationBackup, Phase: ark.PhaseStore, CurrentPath: "a", FilesDone: 1},
+		{Operation: ark.OperationBackup, Phase: ark.PhaseStore, CurrentPath: "b", FilesDone: 2},
+		{Operation: ark.OperationBackup, Phase: ark.PhaseFinalize, FilesDone: 2},
+	}
+	for mode, want := range map[Mode]string{
+		{}:              "scan\nstore 2 files\n",
+		{Verbose: true}: "scan\nstore a\nstore b\nfinalize 2 files\n",
+	} {
+		p, so, se := newTest(mode, "")
+		if mode.Verbose {
+			p.SetTTY(true)
+		}
+		pr := p.Progress("backup")
+		for _, ev := range events {
+			pr.Func()(ev)
+		}
+		time.Sleep(150 * time.Millisecond)
+		pr.Fail()
+		if se.String() != want || so.Len() != 0 {
+			t.Errorf("mode %+v: stderr %q stdout %q, want stderr %q", mode, se.String(), so.String(), want)
+		}
 	}
 }
 
@@ -213,19 +392,6 @@ func TestProgressWait(t *testing.T) {
 	p.Progress("prune").Wait("waiting for lock held by h:1 (exclusive)")
 	if se.String() != "waiting for lock held by h:1 (exclusive)\n" {
 		t.Fatalf("stderr %q", se.String())
-	}
-
-	p, _, _ = newTest(Mode{}, "")
-	p.SetTTY(true)
-	pr := p.Progress("prune")
-	defer pr.Fail()
-	pr.Wait("waiting for lock held by h:1 (exclusive)")
-	if got := pr.current(); got != "waiting for lock held by h:1 (exclusive)" {
-		t.Fatalf("waiting line %q", got)
-	}
-	pr.Resume()
-	if got := pr.current(); got != "prune" {
-		t.Fatalf("resumed line %q", got)
 	}
 }
 

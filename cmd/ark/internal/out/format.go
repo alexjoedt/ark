@@ -10,16 +10,33 @@ import (
 
 // Bytes formats n in binary units with one decimal, bytes below 1 KiB as is.
 func Bytes(n int64) string {
+	div, unit := byteUnit(n)
+	if div == 1 {
+		return fmt.Sprintf("%d B", n)
+	}
+	return fmt.Sprintf("%.1f %s", float64(n)/float64(div), unit)
+}
+
+// BytesOf formats done and total in the unit of total, as in "3.1 / 10.0 GiB".
+func BytesOf(done, total int64) string {
+	div, unit := byteUnit(total)
+	if div == 1 {
+		return fmt.Sprintf("%d / %d B", done, total)
+	}
+	return fmt.Sprintf("%.1f / %.1f %s", float64(done)/float64(div), float64(total)/float64(div), unit)
+}
+
+func byteUnit(n int64) (int64, string) {
 	const unit = 1024
 	if n < unit {
-		return fmt.Sprintf("%d B", n)
+		return 1, "B"
 	}
 	div, exp := int64(unit), 0
 	for m := n / unit; m >= unit; m /= unit {
 		div *= unit
 		exp++
 	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+	return div, string("KMGTPE"[exp]) + "iB"
 }
 
 // Duration rounds d to a readable precision: milliseconds under a second,

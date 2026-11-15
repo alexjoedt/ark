@@ -75,13 +75,18 @@ func backupCommand() *cli.Command {
 			defer repo.Close()
 
 			p := printer(cmd)
-			pr := startProgress(p, "backup "+src.Meta().Name)
-			snap, err := repo.Backup(ctx, src,
+			bopts := []ark.BackupOption{
 				ark.WithTags(cmd.StringSlice("tag")...),
 				ark.WithComment(cmd.String("comment")),
 				ark.WithHost(cmd.String("host")),
 				ark.WithParent(cmd.String("parent")),
-			)
+			}
+			// The counting scan only feeds the live display's totals and ETA.
+			if p.Live() {
+				bopts = append(bopts, ark.WithBackupScan())
+			}
+			pr := startProgress(p, "backup "+src.Meta().Name)
+			snap, err := repo.Backup(ctx, src, bopts...)
 			if err != nil {
 				pr.Fail()
 				return fmt.Errorf("backup %s: %w", dir, err)
