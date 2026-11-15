@@ -83,6 +83,9 @@ func parse(s string) (string, *url.URL, error) {
 		return "", nil, fmt.Errorf("arkuri: empty repository location, %s", supportedForms())
 	}
 	if !hasScheme(s) {
+		if err := schemeWithoutSlashes(s); err != nil {
+			return "", nil, err
+		}
 		return SchemeLocal, nil, nil
 	}
 
@@ -105,6 +108,22 @@ func parse(s string) (string, *url.URL, error) {
 
 // hasScheme reports whether s is a URI rather than a path.
 func hasScheme(s string) bool { return strings.Contains(s, "://") }
+
+// schemeWithoutSlashes rejects a known scheme written without "//", such as
+// the scp form sftp:host:/path, which would otherwise become a local
+// directory named after the whole string.
+func schemeWithoutSlashes(s string) error {
+	if rest, ok := strings.CutPrefix(s, SchemeSFTP+":"); ok {
+		if host, path, ok := strings.Cut(rest, ":"); ok && host != "" {
+			return fmt.Errorf("arkuri: not a URI, write sftp://%s/%s", host, strings.TrimPrefix(path, "/"))
+		}
+		return fmt.Errorf("arkuri: not a URI, %s", supportedForms())
+	}
+	if strings.HasPrefix(s, SchemeLocal+":") {
+		return fmt.Errorf("arkuri: not a URI, %s", supportedForms())
+	}
+	return nil
+}
 
 // localPath returns the directory a local location points at. Without a URI,
 // the whole string is the path.

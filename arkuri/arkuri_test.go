@@ -114,6 +114,10 @@ func TestOpenRejects(t *testing.T) {
 		{"sftp without path", "sftp://host", "needs a repository path"},
 		{"sftp without host", "sftp:///srv/ark", "needs a host"},
 		{"bad insecure value", "sftp://host/srv/ark?insecure=maybe", "want 1 or 0"},
+		{"scp form", "sftp:box:/home/ark-test", "write sftp://box/home/ark-test"},
+		{"scp form with user", "sftp:ark@box:srv/ark", "write sftp://ark@box/srv/ark"},
+		{"sftp without slashes", "sftp:/srv/ark", "not a URI"},
+		{"local without slashes", "local:/srv/ark", "not a URI"},
 	}
 
 	for _, tc := range tests {
