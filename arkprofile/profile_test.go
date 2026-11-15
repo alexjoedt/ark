@@ -351,3 +351,27 @@ func TestPassphrase(t *testing.T) {
 		t.Errorf("no source: %v, want ErrNoPassword", err)
 	}
 }
+
+func TestPackageDocExampleIsValid(t *testing.T) {
+	data, err := os.ReadFile("profile.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, _, _ := strings.Cut(string(data), "\npackage ")
+	var b strings.Builder
+	for l := range strings.Lines(doc) {
+		if s, ok := strings.CutPrefix(l, "//\t"); ok {
+			b.WriteString(s)
+		}
+	}
+	p := arkprofile.Profile{Name: "docs"}
+	if err := arkprofile.Decode(strings.NewReader(b.String()), &p, "/etc/ark"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if p.Forget.RunAfter == "" || p.Backup.RunAfterFail == "" {
+		t.Fatalf("example lost keys: %+v", p)
+	}
+}

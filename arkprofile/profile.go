@@ -4,19 +4,44 @@
 // profile; an embedder such as a scheduler builds a Profile in code or embeds
 // it in its own configuration struct and decodes that with [Decode].
 //
-// The keys of a profile file are the names of the CLI flags:
+// The keys of a profile file are the names of the CLI flags. A file with
+// every key, all of them optional:
 //
-//	repo: sftp://backup@nas/srv/ark
-//	password-file: ~/.config/ark/docs.pw
+//	repo: sftp://backup@nas/srv/ark  # a path, local:// or sftp:// location
+//	password-file: ~/.config/ark/docs.pw  # or password-env: VAR, or insecure-no-password: true
+//	lock-wait: 30s                   # retry a held lock this long
+//	concurrency: 4                   # backend operations at once
 //	backup:
-//	  path: ~/Documents
-//	  tag: [docs]
-//	  exclude: ["*.tmp"]
+//	  path: ~/Documents              # the directory to back up
+//	  tag: [docs, daily]
+//	  exclude: ["*.tmp", .cache]
+//	  exclude-file: [docs.exclude]   # patterns one per line, relative to this file
+//	  exclude-cloud-files: true      # leave out files that exist only in the cloud
+//	  host: laptop                   # host recorded in the snapshot
+//	  comment: nightly
+//	  name: documents                # snapshot name, default: the profile's name
+//	  run-before: mount /mnt/docs    # hooks, each run through sh -c
+//	  run-after: echo stored
+//	  run-after-fail: 'echo "backup failed: $ARK_ERROR"'
+//	  run-finally: umount /mnt/docs
 //	forget:
+//	  keep-last: 3
+//	  keep-hourly: 24
 //	  keep-daily: 7
-//	  prune: true
+//	  keep-weekly: 4
+//	  keep-monthly: 12
+//	  keep-yearly: 2
+//	  keep-within: 30d               # a duration such as 72h or 30d
+//	  prune: true                    # prune after the forget
+//	  run-after: echo forgotten      # the same four hooks as backup
 //
+// $VAR and ${VAR} expand in every value but the hooks, ~ is the home
+// directory and relative paths are taken relative to the profile's directory.
 // A profile never holds a password, only where to find one.
+//
+// [Profile.Open], [Profile.Source], [Profile.BackupOptions],
+// [Profile.ForgetPolicy] and [Profile.Filter] translate a profile onto the
+// ark API; running backup, forget and prune stays with the caller.
 package arkprofile
 
 import (
