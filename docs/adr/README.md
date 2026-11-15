@@ -34,3 +34,4 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0017 | [A counting scan beside the store](0017-counting-scan-beside-the-store.md) | accepted | 2026-11-14 |
 | 0018 | [Profile files and the arkprofile package](0018-profile-files-and-the-arkprofile-package.md) | accepted | 2026-11-15 |
 | 0019 | [Find and the arkfind package](0019-find-and-the-arkfind-package.md) | accepted | 2026-11-15 |
+| 0020 | [Read session with an io/fs view per snapshot](0020-read-session-with-an-io-fs-view.md) | accepted | 2026-11-15 |

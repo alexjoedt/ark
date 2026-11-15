@@ -109,7 +109,9 @@ func (rd *Reader) Snapshots(ctx context.Context, filter SnapshotFilter) ([]*Snap
 // FS returns the file system of one snapshot. id is a full snapshot id or a
 // unique prefix; an unknown one wraps ErrNotFound. The file system stays
 // usable until the Reader is closed, also when the snapshot is forgotten in
-// the meantime.
+// the meantime. The session loads each index once, at its first read, so a
+// snapshot stored after that may hold trees and chunks it does not find; a
+// new Reader reads it.
 func (rd *Reader) FS(id string) (*SnapshotFS, error) {
 	if err := rd.enter(); err != nil {
 		return nil, fmt.Errorf("ark: reader: %w", err)
