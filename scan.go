@@ -5,7 +5,6 @@ import (
 	"io"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -14,11 +13,8 @@ const scanTick = 100 * time.Millisecond
 
 // backupScan counts the files and bytes of a second walk of the source beside
 // the store. Its events go out under the backup's progress mutex, which also
-// guards done and the final totals.
+// guards done and the totals.
 type backupScan struct {
-	files atomic.Int64
-	bytes atomic.Int64
-
 	mu         *sync.Mutex
 	done       bool
 	filesTotal int
@@ -32,61 +28,56 @@ type backupScan struct {
 // second concurrent Walk; otherwise it returns nil. mu serialises progress
 // calls with the store's.
 func startScan(ctx context.Context, src Source, opts backupOptions, mu *sync.Mutex, logger *slog.Logger) *backupScan {
-	rs, ok := src.(RewalkSource)
-	if !opts.scan || !ok || !rs.Rewalk() {
+	if !opts.scan {
+		return nil
+	}
+	// A wrapper that does not forward Rewalk silently costs the totals.
+	if rs, ok := src.(RewalkSource); !ok || !rs.Rewalk() {
+		logger.DebugContext(ctx, "counting scan skipped", "rewalk", ok)
 		return nil
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	s := &backupScan{mu: mu, cancel: cancel}
-	errc := make(chan error, 1)
-	s.wg.Add(1)
-	go func() {
-		errc <- src.Walk(ctx, func(entry FileInfo, _ func() (io.ReadCloser, error)) error {
+	s.wg.Go(func() {
+		var files int
+		var bytes int64
+		last := time.Now()
+		err := src.Walk(ctx, func(entry FileInfo, _ func() (io.ReadCloser, error)) error {
 			switch entry.Type {
 			case FileTypeRegular:
-				s.files.Add(1)
-				s.bytes.Add(entry.Size)
+				files++
+				bytes += entry.Size
 			case FileTypeHardlink:
-				s.files.Add(1)
+				files++
 			case FileTypeDirectory, FileTypeSymlink, FileTypeUnsupported:
 				// no files: a backup counts none of them in FileCount
 			}
+			if time.Since(last) >= scanTick {
+				last = time.Now()
+				s.emit(opts.progress, files, bytes, false)
+			}
 			return nil
 		})
-	}()
-	go func() {
-		defer s.wg.Done()
-		t := time.NewTicker(scanTick)
-		defer t.Stop()
-		for {
-			select {
-			case <-t.C:
-				if ctx.Err() == nil {
-					s.emit(opts.progress, false)
-				}
-			case err := <-errc:
-				if err != nil {
-					logger.DebugContext(ctx, "scan dropped", "error", err)
-					return
-				}
-				s.emit(opts.progress, true)
-				return
-			}
+		if err != nil {
+			logger.DebugContext(ctx, "counting scan dropped", "error", err)
+			return
 		}
-	}()
+		s.emit(opts.progress, files, bytes, true)
+	})
 	return s
 }
 
-// emit sends one PhaseScan event with the count so far; final marks the
-// count as the source's totals.
-func (s *backupScan) emit(progress ProgressFunc, final bool) {
+// emit sends one PhaseScan event with the count so far in FilesDone and
+// BytesDone; final also sets it as the totals.
+func (s *backupScan) emit(progress ProgressFunc, files int, bytes int64, final bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	files, bytes := int(s.files.Load()), s.bytes.Load()
+	e := ProgressEvent{Phase: PhaseScan, FilesDone: files, BytesDone: bytes}
 	if final {
 		s.done, s.filesTotal, s.bytesTotal = true, files, bytes
+		e.FilesTotal, e.BytesTotal = files, bytes
 	}
-	progress(ProgressEvent{Phase: PhaseScan, FilesTotal: files, BytesTotal: bytes})
+	progress(e)
 }
 
 // totals returns the final count, zero until the scan finished. The caller

@@ -87,12 +87,12 @@ func (s *scanSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 	return err
 }
 
-// eventLog records the events of one backup without a lock: overlapping
-// calls trip the inFlight check and, under -race, the race detector. counted
-// is closed on the first scan event with a count, which for a scan that
-// takes microseconds is the final one.
+// eventLog records the events of one backup and when each came, without a
+// lock: overlapping calls trip the inFlight check and, under -race, the race
+// detector. counted is closed on the scan event with the totals.
 type eventLog struct {
 	events   []ark.ProgressEvent
+	at       []time.Time
 	inFlight atomic.Int32
 	overlap  atomic.Bool
 	counted  chan struct{}
@@ -112,11 +112,12 @@ func (l *eventLog) observe(e ark.ProgressEvent) {
 		close(l.counted)
 	}
 	l.events = append(l.events, e)
+	l.at = append(l.at, time.Now())
 }
 
 func (l *eventLog) backup(t *testing.T, repo *ark.Repository, src ark.Source, opts ...ark.BackupOption) *ark.Snapshot {
 	t.Helper()
-	l.events = nil
+	l.events, l.at = nil, nil
 	snap, err := repo.Backup(context.Background(), src, append(opts, ark.WithBackupProgress(l.observe))...)
 	if err != nil {
 		t.Fatalf("Backup: %v", err)
@@ -151,14 +152,16 @@ func (l *eventLog) storeTotals(t *testing.T, files int, bytes int64) {
 
 func TestBackupScanWalksOnlyWhenAsked(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		rewalk bool
-		scan   bool
-		walks  int32
+		name     string
+		rewalk   bool
+		scan     bool
+		progress bool
+		walks    int32
 	}{
-		{"rewalk source with scan", true, true, 2},
-		{"rewalk source without scan", true, false, 1},
-		{"source that opts out", false, true, 1},
+		{"rewalk source with scan", true, true, true, 2},
+		{"rewalk source without scan", true, false, true, 1},
+		{"source that opts out", false, true, true, 1},
+		{"scan without a progress handler", true, true, false, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := openConcRepo(t, 2)
@@ -167,6 +170,9 @@ func TestBackupScanWalksOnlyWhenAsked(t *testing.T) {
 			var opts []ark.BackupOption
 			if tc.scan {
 				opts = append(opts, ark.WithBackupScan())
+			}
+			if tc.progress {
+				opts = append(opts, ark.WithBackupProgress(func(ark.ProgressEvent) {}))
 			}
 			if _, err := repo.Backup(context.Background(), src, opts...); err != nil {
 				t.Fatalf("Backup: %v", err)
@@ -230,21 +236,41 @@ func TestBackupScanEventsInterleaveWithoutOverlap(t *testing.T) {
 	log := newEventLog()
 	snap := log.backup(t, repo, src, ark.WithBackupScan())
 
+	// The scan event with totals marks the scan done; the running ones
+	// before it carry the count in the done fields and no totals.
 	running, done := 0, false
 	var last ark.ProgressEvent
-	for _, e := range log.events {
-		if e.Phase == ark.PhaseScan {
-			if e.FilesTotal < last.FilesTotal || e.BytesTotal < last.BytesTotal {
+	var lastAt time.Time
+	for i, e := range log.events {
+		switch e.Phase {
+		case ark.PhaseFinalize, ark.PhaseLoad, ark.PhaseFetch, ark.PhaseWrite, ark.PhaseSweep:
+		case ark.PhaseScan:
+			if e.FilesDone == 0 {
+				continue
+			}
+			if e.FilesDone < last.FilesDone || e.BytesDone < last.BytesDone {
 				t.Errorf("scan count went back from %d/%d to %d/%d",
-					last.FilesTotal, last.BytesTotal, e.FilesTotal, e.BytesTotal)
+					last.FilesDone, last.BytesDone, e.FilesDone, e.BytesDone)
 			}
-			if e.FilesTotal > 0 {
-				last = e
-				running++
+			if e.FilesTotal != 0 {
+				done = true
+				if e.FilesTotal != snap.Stats.FileCount || e.BytesTotal != snap.Stats.TotalSize {
+					t.Errorf("scan totals %d/%d, snapshot %d/%d",
+						e.FilesTotal, e.BytesTotal, snap.Stats.FileCount, snap.Stats.TotalSize)
+				}
+				continue
 			}
-			done = e.FilesTotal == snap.Stats.FileCount && e.BytesTotal == snap.Stats.TotalSize
-		}
-		if e.Phase == ark.PhaseStore {
+			if done {
+				t.Error("running scan event after the totals")
+			}
+			// The throttle measures from the walk, the log from the call, so
+			// a mutex wait may shorten one gap by a little, not by half.
+			if running > 0 && log.at[i].Sub(lastAt) < 50*time.Millisecond {
+				t.Errorf("running scan events %v apart, want them throttled", log.at[i].Sub(lastAt))
+			}
+			last, lastAt = e, log.at[i]
+			running++
+		case ark.PhaseStore:
 			if done && (e.FilesTotal != snap.Stats.FileCount || e.BytesTotal != snap.Stats.TotalSize) {
 				t.Errorf("store event after the scan carries %d/%d", e.FilesTotal, e.BytesTotal)
 			}
@@ -253,13 +279,10 @@ func TestBackupScanEventsInterleaveWithoutOverlap(t *testing.T) {
 			}
 		}
 	}
+	// 100 entries at no less than 3 ms each keep the scan walking for at
+	// least 300 ms, which holds two ticks.
 	if running < 2 {
-		t.Errorf("%d scan events with a count, want running events beside the final one", running)
-	}
-	// 100 entries at 3 ms take about 300 ms, so a tick every 100 ms sends a
-	// handful of events, not one per entry.
-	if running > 10 {
-		t.Errorf("%d scan events with a count, want them throttled", running)
+		t.Errorf("%d running scan events, want at least 2", running)
 	}
 }
 

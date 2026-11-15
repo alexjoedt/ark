@@ -227,6 +227,8 @@ func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOptio
 	for _, opt := range opts {
 		opt(o)
 	}
+	// Nobody would see the totals, so the second walk is not paid for.
+	o.scan = o.scan && (o.progress != nil || r.progress != nil)
 	o.progress = r.observer(OperationBackup, o.progress)
 
 	ctx, lock, err := r.acquire(ctx, false)

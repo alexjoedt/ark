@@ -31,4 +31,4 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0014 | [Index records of packs that are not stored are passed over](0014-index-records-of-packs-that-are-not-stored.md) | partly superseded by 0015 | 2026-11-12 |
 | 0015 | [A marker makes unchanged backups see a lost data pack](0015-lost-pack-marker-for-unchanged-backups.md) | accepted | 2026-11-13 |
 | 0016 | [Drop the web UI](0016-drop-the-web-ui.md) | accepted | 2026-11-14 |
-| 0017 | [A counting scan beside the store](0017-counting-scan-beside-the-store.md) | accepted | 2026-11-14 |
+| 0017 | [A counting scan beside the store](0017-counting-scan-beside-the-store.md) | proposed | 2026-11-14 |
