@@ -193,6 +193,14 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader, session *p
 			if m, err = parseArchiveMetadata(data); err != nil {
 				return nil, err
 			}
+			m.ID = importedSnapshotID(m.ID)
+			exists, err := r.backend.Exists(ctx, Handle{Type: SnapshotFile, Name: m.ID})
+			if err != nil {
+				return nil, fmt.Errorf("import: failed to check snapshot %s: %w", m.ID, err)
+			}
+			if exists {
+				return nil, fmt.Errorf("import: snapshot %s already exists in this repository", m.ID)
+			}
 
 		case strings.HasPrefix(header.Name, exportDataPrefix):
 			path := strings.TrimPrefix(header.Name, exportDataPrefix)
@@ -266,11 +274,6 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader, session *p
 	if m == nil {
 		return nil, fmt.Errorf("import: archive contains no %s", exportMetadataName)
 	}
-	if m.ID == "" {
-		// A v1.1.0 archive may name only its volume.
-		m.ID = newSnapshotID()
-	}
-
 	if err := w.wait(); err != nil {
 		return nil, fmt.Errorf("import: failed to store chunks: %w", err)
 	}

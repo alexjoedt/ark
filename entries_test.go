@@ -225,12 +225,13 @@ func TestExportKeepsHardlinksAndXattrs(t *testing.T) {
 	if err := repo.Export(ctx, snap.ID, &archive); err != nil {
 		t.Fatalf("Export: %v", err)
 	}
-	imported, err := repo.Import(ctx, &archive)
+	target := openRepo(t, arkmem.New())
+	imported, err := target.Import(ctx, &archive)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 
-	entries := entriesOf(t, repo, imported.ID)
+	entries := entriesOf(t, target, imported.ID)
 	link, ok := entries["z-link.txt"]
 	if !ok {
 		t.Fatalf("imported snapshot has no z-link.txt, got %v", entries)

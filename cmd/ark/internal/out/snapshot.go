@@ -1,7 +1,6 @@
 package out
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -56,10 +55,11 @@ func Snapshots(list []*ark.Snapshot) []Snapshot {
 	return res
 }
 
-// BackupSummary is the line after a backup: files, source size, the data new
-// after deduplication, what it took on the backend compressed, and the time.
-func BackupSummary(label string, st ark.SnapshotStats, d time.Duration) string {
-	files := Count(st.FileCount) + " files"
+// BackupRows are the summary rows of a backup: the snapshot, its files, the
+// source size, and the data new after deduplication with what it took stored.
+func BackupRows(snap *ark.Snapshot) []Row {
+	st := snap.Stats
+	files := Count(st.FileCount)
 	var notes []string
 	if st.FilesUnchanged > 0 {
 		notes = append(notes, Count(st.FilesUnchanged)+" unchanged")
@@ -68,9 +68,12 @@ func BackupSummary(label string, st ark.SnapshotStats, d time.Duration) string {
 		notes = append(notes, Count(st.Skipped)+" skipped")
 	}
 	if len(notes) > 0 {
-		files += " (" + strings.Join(notes, ", ") + ")"
+		files += "  (" + strings.Join(notes, ", ") + ")"
 	}
-	return fmt.Sprintf("%s: %s, %s, %s new, %s stored, %s",
-		label, files, Bytes(st.TotalSize), Bytes(st.NewChunksRawSize),
-		Bytes(st.StoredSize), Duration(d))
+	return []Row{
+		R("snapshot", "%s", ShortID(snap.ID)),
+		R("files", "%s", files),
+		R("size", "%s", Bytes(st.TotalSize)),
+		R("new", "%s, stored as %s", Bytes(st.NewChunksRawSize), Bytes(st.StoredSize)),
+	}
 }

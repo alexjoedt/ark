@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -77,6 +78,7 @@ func RunSourceSinkTests(
 	t.Run("Xattrs", func(t *testing.T) { testXattrs(t, newSource, write) })
 	t.Run("WalkWithoutOpen", func(t *testing.T) { testWalkWithoutOpen(t, newSource, write) })
 	t.Run("ConcurrentOpen", func(t *testing.T) { testConcurrentOpen(t, newSource, write) })
+	t.Run("Rewalk", func(t *testing.T) { testRewalk(t, newSource, write) })
 	t.Run("IncompatibleSourceType", func(t *testing.T) { testIncompatibleSourceType(t, newSink) })
 }
 
@@ -435,6 +437,75 @@ func testConcurrentOpen(
 		})
 	}
 	wg.Wait()
+}
+
+// testRewalk checks an ark.RewalkSource: Rewalk yields the entries of Walk in
+// the same order, with the same type and regular-file size, and reads neither
+// xattrs nor symlink targets.
+func testRewalk(
+	t *testing.T,
+	newSource func(t *testing.T, location string) ark.Source,
+	write writeFunc,
+) {
+	entries := []Entry{
+		{Path: "dir", Type: ark.FileTypeDirectory, Mode: modeDir},
+		{Path: "dir/a.txt", Type: ark.FileTypeRegular, Mode: modeFile, Content: strings.Repeat("a", 3000)},
+		{Path: "dir/link.txt", Type: ark.FileTypeHardlink, Mode: modeFile, LinkDest: "dir/a.txt"},
+		{Path: "labelled.txt", Type: ark.FileTypeRegular, Mode: modeFile, Content: "x",
+			Xattrs: map[string][]byte{"user.ark": []byte("value")}},
+		{Path: "sym", Type: ark.FileTypeSymlink, Mode: modeSymlink, LinkDest: "labelled.txt"},
+	}
+	src := newSource(t, write(t, entries))
+	rs, ok := src.(ark.RewalkSource)
+	if !ok {
+		t.Skip("source does not rewalk")
+	}
+
+	type seen struct {
+		path string
+		typ  ark.FileType
+		size int64
+	}
+	key := func(e ark.FileInfo) seen {
+		k := seen{e.Path, e.Type, 0}
+		if e.Type == ark.FileTypeRegular {
+			k.size = e.Size
+		}
+		return k
+	}
+	ctx := context.Background()
+
+	var walked []seen
+	xattrs := false
+	err := src.Walk(ctx, func(e ark.FileInfo, _ func() (io.ReadCloser, error)) error {
+		xattrs = xattrs || len(e.Xattrs) > 0
+		walked = append(walked, key(e))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Source.Walk: %v", err)
+	}
+	if !xattrs {
+		t.Log("this medium carries no extended attributes; Rewalk is not checked for reading them")
+	}
+
+	var rewalked []seen
+	err = rs.Rewalk(ctx, func(e ark.FileInfo) error {
+		if len(e.Xattrs) > 0 {
+			t.Errorf("Rewalk read the xattrs of %s", e.Path)
+		}
+		if e.Type == ark.FileTypeSymlink && e.LinkDest != "" {
+			t.Errorf("Rewalk read the target of the symlink %s", e.Path)
+		}
+		rewalked = append(rewalked, key(e))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Rewalk: %v", err)
+	}
+	if !slices.Equal(rewalked, walked) {
+		t.Errorf("Rewalk yielded %v, Walk %v", rewalked, walked)
+	}
 }
 
 func testIncompatibleSourceType(t *testing.T, newSink func(t *testing.T) (ark.Sink, string)) {

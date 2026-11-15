@@ -2,16 +2,41 @@ package ark
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"time"
 )
 
-// newSnapshotID returns 128 random bits as 26 Crockford base32 characters.
+// newSnapshotID returns 128 random bits as 32 lowercase hex characters.
 // A snapshot name carries no time: the backend listing must not date them.
+// Snapshots written before the hex form keep their 26 character base32 names.
 func newSnapshotID() string {
 	b := make([]byte, 16)
 	rand.Read(b)
-	return encodeBase32(b)
+	return hex.EncodeToString(b)
+}
+
+// isHexSnapshotID reports whether id has the shape newSnapshotID returns.
+func isHexSnapshotID(id string) bool {
+	_, err := hex.DecodeString(id)
+	return err == nil && len(id) == 32 && strings.ToLower(id) == id
+}
+
+// importedSnapshotID names the copy an import makes of a snapshot whose
+// archive carries id. A hex id is kept. Any other form maps to a hex id
+// derived from it, so importing one archive twice yields one name, and the
+// time a legacy base32 name encodes does not show through; an archive without
+// an id gets a random one.
+func importedSnapshotID(id string) string {
+	if isHexSnapshotID(id) {
+		return id
+	}
+	if id == "" {
+		return newSnapshotID()
+	}
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:16])
 }
 
 // generateID creates a sortable, unique lock name.

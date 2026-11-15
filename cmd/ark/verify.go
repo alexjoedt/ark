@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
+	"github.com/alexjoedt/ark/cmd/ark/internal/out"
 	"github.com/urfave/cli/v3"
 )
 
@@ -42,7 +43,10 @@ func verifyCommand() *cli.Command {
 				pr.Fail()
 				return fmt.Errorf("verify %s: %w", cmd.Args().First(), err)
 			}
-			pr.Donef("verified %d chunks of %s", res.ChunksChecked, res.SnapshotID)
+			pr.Done(out.R("snapshot", "%s", out.ShortID(res.SnapshotID)),
+				out.R("chunks", "%d", res.ChunksChecked),
+				out.R("missing", "%d", len(res.MissingChunks)),
+				out.R("corrupt", "%d", len(res.CorruptChunks)))
 
 			if p.Mode().JSON {
 				if err := p.JSON(verifyJSON{

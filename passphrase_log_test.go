@@ -50,3 +50,25 @@ func TestPassphraseNeverInTheLogs(t *testing.T) {
 		}
 	}
 }
+
+// TestNoLoggerLogsNothing: a repository opened without WithLogger does not
+// fall back to the default logger on backup or restore.
+func TestNoLoggerLogsNothing(t *testing.T) {
+	ctx := t.Context()
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	repo := openRepo(t, arkmem.New())
+	snap, err := repo.Backup(ctx, stubSource{name: "app", content: "one"})
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	if _, err := repo.Restore(ctx, snap.ID, discardSink{}); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if logs.Len() > 0 {
+		t.Errorf("default logger received:\n%s", logs.String())
+	}
+}

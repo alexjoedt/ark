@@ -10,16 +10,33 @@ import (
 
 // Bytes formats n in binary units with one decimal, bytes below 1 KiB as is.
 func Bytes(n int64) string {
+	div, unit := byteUnit(n)
+	if div == 1 {
+		return fmt.Sprintf("%d B", n)
+	}
+	return fmt.Sprintf("%.1f %s", float64(n)/float64(div), unit)
+}
+
+// BytesOf formats done and total in the unit of total, as in "3.1 / 10.0 GiB".
+func BytesOf(done, total int64) string {
+	div, unit := byteUnit(total)
+	if div == 1 {
+		return fmt.Sprintf("%d / %d B", done, total)
+	}
+	return fmt.Sprintf("%.1f / %.1f %s", float64(done)/float64(div), float64(total)/float64(div), unit)
+}
+
+func byteUnit(n int64) (int64, string) {
 	const unit = 1024
 	if n < unit {
-		return fmt.Sprintf("%d B", n)
+		return 1, "B"
 	}
 	div, exp := int64(unit), 0
 	for m := n / unit; m >= unit; m /= unit {
 		div *= unit
 		exp++
 	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+	return div, string("KMGTPE"[exp]) + "iB"
 }
 
 // Duration rounds d to a readable precision: milliseconds under a second,
@@ -37,6 +54,17 @@ func Duration(d time.Duration) string {
 // Time renders t in local time, minute precision, the table form.
 func Time(t time.Time) string {
 	return t.Local().Format("2006-01-02 15:04")
+}
+
+// ShortID cuts a snapshot ID to the 8 characters the tables show. Every
+// command taking an ID resolves that prefix; one that two snapshots share
+// fails with the ambiguous-ID error, as two legacy base32 IDs taken within
+// about a second of each other do.
+func ShortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 // TimeLong renders t in local time with seconds, the inspect form.

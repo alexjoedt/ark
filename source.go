@@ -118,6 +118,21 @@ type ConcurrentSource interface {
 	ConcurrentOpen() bool
 }
 
+// RewalkSource is a Source that can be walked a second time, cheaply, while a
+// first Walk runs. Rewalk visits the entries Walk would yield, in the same
+// order and under the same excludes, but reads only names and stat metadata:
+// it opens no file and reads no xattrs, ACLs or symlink targets. Each entry
+// carries at least Path, Type and, for a regular file, Size; a second name of
+// an inode Walk yields as FileTypeHardlink comes as FileTypeHardlink too. It
+// is safe to call concurrently with Walk and returns soon after its ctx is
+// cancelled. A backup with WithBackupScan counts files and bytes with it. A
+// wrapper over a source without Rewalk returns [errors.ErrUnsupported] from it,
+// which skips the scan.
+type RewalkSource interface {
+	Source
+	Rewalk(ctx context.Context, fn func(entry FileInfo) error) error
+}
+
 // Sink receives file entries during a restore.
 //
 // Lifecycle:

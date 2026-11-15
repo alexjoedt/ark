@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
+	"github.com/alexjoedt/ark/cmd/ark/internal/out"
 	"github.com/urfave/cli/v3"
 )
 
@@ -31,7 +32,9 @@ func checkCommand() *cli.Command {
 				pr.Fail()
 				return fmt.Errorf("check: %w", err)
 			}
-			pr.Donef("checked %d snapshots", res.SnapshotsChecked)
+			pr.Done(out.R("snapshots", "%d", res.SnapshotsChecked),
+				out.R("errors", "%d", len(res.Errors)),
+				out.R("warnings", "%d", len(res.Warnings)))
 
 			if p.Mode().JSON {
 				if err := p.JSON(map[string]any{

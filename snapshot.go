@@ -81,6 +81,7 @@ type backupOptions struct {
 	host     string
 	parent   string
 	progress ProgressFunc
+	scan     bool
 }
 
 // BackupOption is a functional option for Backup.
@@ -113,6 +114,20 @@ func WithParent(id string) BackupOption {
 // call never interleave with another operation's. fn must not block.
 func WithBackupProgress(fn ProgressFunc) BackupOption {
 	return func(o *backupOptions) { o.progress = fn }
+}
+
+// WithBackupScan counts the files and bytes of the source in a second walk
+// beside the store, so progress events carry FilesTotal and BytesTotal: the
+// running count goes in FilesDone and BytesDone of PhaseScan events while the
+// scan runs, the final count in the totals of the last PhaseScan event and of
+// every PhaseStore event after it. It applies to a RewalkSource and does
+// nothing for any other source or when the backup has no progress handler,
+// per call or on the repository. The count follows the source's excludes and
+// includes unchanged files, as do the FilesDone and BytesDone of PhaseStore
+// events. A scan that fails is dropped, one still running when the files are
+// stored is cancelled; neither changes the backup, so totals are best effort.
+func WithBackupScan() BackupOption {
+	return func(o *backupOptions) { o.scan = true }
 }
 
 // restoreOptions collects the RestoreOption values of one Restore call.

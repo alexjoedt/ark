@@ -8,7 +8,11 @@ package ark
 // their first event before any I/O. Every operation emits exactly one
 // PhaseFinalize event, last and only on success.
 //
-//   - backup: PhaseScan, PhaseStore, PhaseFinalize
+//   - backup: PhaseScan, PhaseStore, PhaseFinalize; with WithBackupScan, more
+//     PhaseScan events with the running count in FilesDone and BytesDone
+//     interleave with PhaseStore events while the scan runs; the last one
+//     also sets FilesTotal and BytesTotal, which every later PhaseStore event
+//     carries. A total is zero until it is final
 //   - restore: PhaseLoad, PhaseFetch and PhaseWrite interleaved, PhaseFinalize
 //     with the totals and the files, bytes and chunks restored
 //   - forget: PhaseLoad, PhaseFinalize with FilesDone = manifests removed

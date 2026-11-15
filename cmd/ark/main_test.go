@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -432,9 +434,10 @@ func TestExportImportRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
+	target := initRepo(t)
 	old := os.Stdin
 	os.Stdin = f
-	code, out = runCapture(t, "--json", "-r", repo, "import", "-")
+	code, out = runCapture(t, "--json", "-r", target, "import", "-")
 	os.Stdin = old
 	if code != 0 {
 		t.Fatalf("import exit %d: %s", code, out)
@@ -451,6 +454,9 @@ func TestExportImportRoundTrip(t *testing.T) {
 	}
 	if imported.ID != snap.ID || imported.SourceName != src || imported.Stats.TotalFiles != 1 {
 		t.Fatalf("got %+v", imported)
+	}
+	if code, out := runCapture(t, "-r", target, "import", stdin); code == 0 {
+		t.Fatalf("a second import of the snapshot succeeded: %q", out)
 	}
 
 	// export to a file keeps stdout for --json
@@ -1034,6 +1040,29 @@ func TestNamedSourceKeepsConcurrentOpen(t *testing.T) {
 	}
 }
 
+func TestNamedSourceKeepsRewalk(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("abc"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src, err := arkfs.NewSource(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	err = namedSource{Source: src, name: "x"}.Rewalk(context.Background(), func(e ark.FileInfo) error {
+		paths = append(paths, e.Path)
+		return nil
+	})
+	if err != nil || len(paths) != 1 || paths[0] != "a.txt" {
+		t.Errorf("Rewalk through namedSource = %v, %v; want [a.txt], nil", paths, err)
+	}
+	stream := namedSource{Source: ark.NewStreamSource("s", strings.NewReader("")), name: "x"}
+	if err := stream.Rewalk(context.Background(), nil); !errors.Is(err, errors.ErrUnsupported) {
+		t.Errorf("Rewalk over a stream source = %v, want errors.ErrUnsupported", err)
+	}
+}
+
 func TestRepairIndex(t *testing.T) {
 	repo := initRepo(t)
 	t.Setenv("ARK_REPOSITORY", "")
@@ -1095,6 +1124,69 @@ func TestRepairIndex(t *testing.T) {
 		if code, out := runCapture(t, append([]string{"--json", "-r", repo}, args...)...); code != 2 ||
 			!strings.Contains(out, `"usage"`) {
 			t.Errorf("ark %v: exit %d, %s, want a usage error", args, code, out)
+		}
+	}
+}
+
+// TestSnapshotsTableShowsShortIDsAndSeconds: the table cuts the ID to 8
+// characters and shows seconds; restore and inspect accept that prefix, an
+// ambiguous one fails, and --json keeps the full ID.
+func TestSnapshotsTableShowsShortIDsAndSeconds(t *testing.T) {
+	repo := initRepo(t)
+	t.Setenv("ARK_REPOSITORY", "")
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out := runCapture(t, "--json", "-r", repo, "backup", src)
+	var snap struct{ ID string }
+	if err := json.Unmarshal([]byte(out), &snap); err != nil || code != 0 {
+		t.Fatalf("backup: exit %d, %q", code, out)
+	}
+
+	code, out = runCapture(t, "-r", repo, "snapshots")
+	lines := strings.SplitN(out, "\n", 3)
+	if code != 0 || len(lines) < 2 {
+		t.Fatalf("snapshots: exit %d, %q", code, out)
+	}
+	row := strings.Fields(lines[1])
+	if len(row) < 3 || row[0] != snap.ID[:8] {
+		t.Fatalf("table row %q, want ID column %s", row, snap.ID[:8])
+	}
+	if !regexp.MustCompile(`^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$`).MatchString(row[1] + " " + row[2]) {
+		t.Fatalf("TIME column %q %q has no seconds", row[1], row[2])
+	}
+	code, out = runCapture(t, "--json", "-r", repo, "snapshots")
+	if code != 0 || !strings.Contains(out, snap.ID) {
+		t.Fatalf("--json lost the full ID: exit %d, %q", code, out)
+	}
+
+	short := snap.ID[:8]
+	dest := filepath.Join(t.TempDir(), "out")
+	if code, out := runCapture(t, "-r", repo, "restore", short, dest); code != 0 {
+		t.Fatalf("restore %s: exit %d, %q", short, code, out)
+	}
+	if code, out := runCapture(t, "-r", repo, "inspect", short); code != 0 || !strings.Contains(out, snap.ID) {
+		t.Fatalf("inspect %s: exit %d, %q", short, code, out)
+	}
+
+	// a second name with the same 8 characters makes the prefix ambiguous
+	b, err := arklocal.New(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	twin := ark.Handle{Type: ark.SnapshotFile, Name: short + strings.Repeat("0", len(snap.ID)-8)}
+	if err := b.Put(context.Background(), twin, strings.NewReader("x")); err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range []string{"restore", "inspect"} {
+		args := []string{"-r", repo, cmd, short}
+		if cmd == "restore" {
+			args = append(args, filepath.Join(t.TempDir(), "again"))
+		}
+		code, out := runCapture(t, append([]string{"--json"}, args...)...)
+		if code != 4 || !strings.Contains(out, "ambiguous") {
+			t.Errorf("%s of an ambiguous prefix: exit %d, %q", cmd, code, out)
 		}
 	}
 }

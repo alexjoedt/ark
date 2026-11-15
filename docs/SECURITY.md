@@ -40,9 +40,12 @@ writer, every accepted risk included.
   of packs and index objects is in [FORMAT.md](FORMAT.md).
 - Chunk, tree and index names are the hex HMAC-SHA256 of their plaintext under the repository's ID
   key, the lost-pack marker's that of its namespace name, manifests and locks are sealed under
-  chosen names: snapshot IDs are 128 random bits in 26 Crockford base32 characters, lock names a
+  chosen names: snapshot IDs are 128 random bits in 32 lowercase hex characters (a repository
+  written earlier keeps its 26 character Crockford base32 IDs, which still resolve; an import of
+  one names the copy by the first 128 bits of the SHA-256 of that ID), lock names a
   millisecond timestamp plus 80 random bits:
-  `TestChunksAndTreesAreSealedUnderKeyedNames`, `TestSnapshotIDsCarryNoTimestamp`.
+  `TestChunksAndTreesAreSealedUnderKeyedNames`, `TestSnapshotIDsCarryNoTimestamp`,
+  `TestBase32SnapshotIDsStillWork`.
 - The master key holds the data key, the ID key, the chunker seed (which keys the chunk boundaries),
   the repository ID and `config_hash`, the SHA-256 of the config bytes Init stored.
 - A key file seals the master key under a wrap key derived with argon2id from the passphrase and a

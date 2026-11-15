@@ -69,6 +69,7 @@ func (r *Repository) runBackup(
 	var progressMu sync.Mutex
 	var filesDone int
 	var bytesDone int64
+	var scan *backupScan
 	fileDone := func(path string, refs []chunkRef) {
 		progressMu.Lock()
 		defer progressMu.Unlock()
@@ -77,7 +78,11 @@ func (r *Repository) runBackup(
 			return
 		}
 		bytesDone += refsSize(refs)
-		opts.progress(ProgressEvent{Phase: PhaseStore, CurrentPath: path, FilesDone: filesDone, BytesDone: bytesDone})
+		filesTotal, bytesTotal := scan.totals()
+		opts.progress(ProgressEvent{
+			Phase: PhaseStore, CurrentPath: path,
+			FilesDone: filesDone, BytesDone: bytesDone, FilesTotal: filesTotal, BytesTotal: bytesTotal,
+		})
 	}
 
 	var readers *fileReaders
@@ -93,6 +98,10 @@ func (r *Repository) runBackup(
 	logger.DebugContext(ctx, "reading files", "parallel", readers != nil)
 
 	opts.progress(ProgressEvent{Phase: PhaseScan})
+	// The scan only feeds progress events: the store neither waits for it
+	// nor reads its result, and stops it once every file is stored.
+	scan = startScan(ctx, src, opts, &progressMu, logger)
+	defer scan.stop()
 
 	err = src.Walk(ctx, func(entry FileInfo, open func() (io.ReadCloser, error)) error {
 		fe := fileEntry{FileInfo: entry}
@@ -180,6 +189,7 @@ func (r *Repository) runBackup(
 		chunkErr = readers.wait()
 	}
 	werr := w.wait()
+	scan.stop()
 	if err != nil && !fileFailed {
 		return nil, fmt.Errorf("backup: walk failed: %w", err)
 	}

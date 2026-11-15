@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	ark "github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkdocker"
@@ -73,8 +72,7 @@ func restoreCommand() *cli.Command {
 			if err != nil {
 				return fmt.Errorf("restore %s: %w", snap.ID, err)
 			}
-			pr := startProgress(p, "restore "+snap.ID)
-			start := time.Now()
+			pr := startProgress(p, "restore "+out.ShortID(snap.ID))
 			res, err := repo.Restore(ctx, snap.ID, sink,
 				ark.WithRestorePaths(paths...),
 				ark.WithRestoreCache(cache),
@@ -83,9 +81,9 @@ func restoreCommand() *cli.Command {
 				pr.Fail()
 				return fmt.Errorf("restore %s: %w", snap.ID, err)
 			}
-			pr.Donef("restored %s into %s: %s files, %s, %s",
-				snap.ID, dest, out.Count(res.FilesRestored), out.Bytes(res.BytesRestored),
-				out.Duration(time.Since(start)))
+			pr.Done(out.R("files", "%s", out.Count(res.FilesRestored)),
+				out.R("size", "%s", out.Bytes(res.BytesRestored)),
+				out.R("into", "%s", dest))
 
 			if p.Mode().JSON {
 				return p.JSON(map[string]any{

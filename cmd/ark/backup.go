@@ -8,7 +8,6 @@ import (
 	"path"
 	"slices"
 	"strings"
-	"time"
 
 	ark "github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkfs"
@@ -76,19 +75,23 @@ func backupCommand() *cli.Command {
 			defer repo.Close()
 
 			p := printer(cmd)
-			pr := startProgress(p, "backup "+src.Meta().Name)
-			start := time.Now()
-			snap, err := repo.Backup(ctx, src,
+			bopts := []ark.BackupOption{
 				ark.WithTags(cmd.StringSlice("tag")...),
 				ark.WithComment(cmd.String("comment")),
 				ark.WithHost(cmd.String("host")),
 				ark.WithParent(cmd.String("parent")),
-			)
+			}
+			// The counting scan only feeds the live display's totals and ETA.
+			if p.Live() {
+				bopts = append(bopts, ark.WithBackupScan())
+			}
+			pr := startProgress(p, "backup "+src.Meta().Name)
+			snap, err := repo.Backup(ctx, src, bopts...)
 			if err != nil {
 				pr.Fail()
 				return fmt.Errorf("backup %s: %w", dir, err)
 			}
-			pr.Donef("%s", out.BackupSummary("backed up "+src.Meta().Name, snap.Stats, time.Since(start)))
+			pr.Done(out.BackupRows(snap)...)
 
 			if p.Mode().JSON {
 				return p.JSON(out.NewSnapshot(snap))
@@ -116,6 +119,16 @@ func (s namedSource) Meta() ark.SourceMeta {
 func (s namedSource) ConcurrentOpen() bool {
 	cs, ok := s.Source.(ark.ConcurrentSource)
 	return ok && cs.ConcurrentOpen()
+}
+
+// Rewalk forwards the wrapped source's counting walk, so a named backup keeps
+// its scan totals.
+func (s namedSource) Rewalk(ctx context.Context, fn func(ark.FileInfo) error) error {
+	rs, ok := s.Source.(ark.RewalkSource)
+	if !ok {
+		return errors.ErrUnsupported
+	}
+	return rs.Rewalk(ctx, fn)
 }
 
 // listFlag is a repeatable string flag whose values are never split on

@@ -30,7 +30,8 @@ type openConfig struct {
 // Option configures a Repository at Open time.
 type Option func(*openConfig)
 
-// WithLogger sets the logger for the repository.
+// WithLogger sets the logger for the repository. Without it the repository
+// logs nothing.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *openConfig) { c.logger = l }
 }
@@ -130,7 +131,7 @@ func Open(ctx context.Context, b Backend, pw Passphrase, opts ...Option) (*Repos
 		return nil, err
 	}
 	cfg := &openConfig{
-		logger:      slog.Default(),
+		logger:      slog.New(slog.DiscardHandler),
 		concurrency: runtime.NumCPU() * 2,
 	}
 	for _, o := range opts {
@@ -226,6 +227,8 @@ func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOptio
 	for _, opt := range opts {
 		opt(o)
 	}
+	// Nobody would see the totals, so the second walk is not paid for.
+	o.scan = o.scan && (o.progress != nil || r.progress != nil)
 	o.progress = r.observer(OperationBackup, o.progress)
 
 	ctx, lock, err := r.acquire(ctx, false)
@@ -280,14 +283,16 @@ func (r *Repository) resolveID(ctx context.Context, id string) (string, error) {
 	if id == "" {
 		return "", fmt.Errorf("%w: empty snapshot id", ErrNotFound)
 	}
+	// Every id ark writes is lower case; a pasted upper-case one still resolves.
 	// An exact hit costs one Stat; only a prefix needs the full listing.
-	if _, err := r.backend.Stat(ctx, Handle{Type: SnapshotFile, Name: id}); err == nil {
-		return id, nil
+	lower := strings.ToLower(id)
+	if _, err := r.backend.Stat(ctx, Handle{Type: SnapshotFile, Name: lower}); err == nil {
+		return lower, nil
 	}
 
 	var matches []string
 	err := r.backend.List(ctx, SnapshotFile, func(info BlobInfo) error {
-		if strings.HasPrefix(info.Name, id) {
+		if len(info.Name) >= len(id) && strings.EqualFold(info.Name[:len(id)], id) {
 			matches = append(matches, info.Name)
 		}
 		return nil
@@ -544,6 +549,8 @@ func (r *Repository) Export(ctx context.Context, id string, w io.Writer) error {
 }
 
 // Import reads a portable tar.gz archive from reader and re-indexes it.
+// It fails when the snapshot the archive names is already in the
+// repository, so an import never replaces a snapshot.
 func (r *Repository) Import(ctx context.Context, reader io.Reader) (*Snapshot, error) {
 	ctx, lock, err := r.acquire(ctx, false)
 	if err != nil {

@@ -108,7 +108,7 @@ func dockerVolumesCommand() *cli.Command {
 			for _, v := range vols {
 				when := "-"
 				if t, ok := last[v.Name]; ok {
-					when = out.Time(t)
+					when = out.TimeLong(t)
 				}
 				rows = append(rows, []string{v.Name, v.Driver, v.Mountpoint, when})
 			}
@@ -154,7 +154,6 @@ func dockerBackupCommand() *cli.Command {
 
 			p := printer(cmd)
 			pr := startProgress(p, "backup volume "+volume)
-			start := time.Now()
 			snap, err := e.BackupVolume(ctx, volume,
 				ark.WithTags(cmd.StringSlice("tag")...),
 				ark.WithComment(cmd.String("comment")),
@@ -163,7 +162,7 @@ func dockerBackupCommand() *cli.Command {
 				pr.Fail()
 				return fmt.Errorf("docker backup %s: %w", volume, err)
 			}
-			pr.Donef("%s", out.BackupSummary("backed up volume "+volume, snap.Stats, time.Since(start)))
+			pr.Done(out.BackupRows(snap)...)
 
 			if p.Mode().JSON {
 				return p.JSON(out.NewSnapshot(snap))
@@ -251,8 +250,7 @@ func dockerRestoreCommand() *cli.Command {
 			if err := p.Confirm(describeRestore(snap.ID, volume, plan)); err != nil {
 				return err
 			}
-			pr := startProgress(p, "restore "+snap.ID+" into volume "+volume)
-			start := time.Now()
+			pr := startProgress(p, "restore "+out.ShortID(snap.ID)+" into volume "+volume)
 			res, err := e.RestoreVolume(ctx, snap.ID, volume,
 				ark.WithRestorePaths(paths...),
 			)
@@ -260,9 +258,8 @@ func dockerRestoreCommand() *cli.Command {
 				pr.Fail()
 				return fmt.Errorf("docker restore %s: %w", snap.ID, err)
 			}
-			pr.Donef("restored %s into volume %s: %s files, %s, %s",
-				snap.ID, volume, out.Count(res.FilesRestored), out.Bytes(res.BytesRestored),
-				out.Duration(time.Since(start)))
+			pr.Done(out.R("files", "%s", out.Count(res.FilesRestored)),
+				out.R("size", "%s", out.Bytes(res.BytesRestored)))
 
 			if p.Mode().JSON {
 				return p.JSON(map[string]any{

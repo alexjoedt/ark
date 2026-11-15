@@ -51,7 +51,7 @@ func exportCommand() *cli.Command {
 			n.w = w
 
 			p := printer(cmd)
-			pr := startProgress(p, "export "+snap.ID)
+			pr := startProgress(p, "export "+out.ShortID(snap.ID))
 			if err := repo.Export(ctx, snap.ID, &n); err != nil {
 				pr.Fail()
 				if file != "" {
@@ -59,7 +59,7 @@ func exportCommand() *cli.Command {
 				}
 				return fmt.Errorf("export %s: %w", snap.ID, err)
 			}
-			pr.Donef("exported %s, %s", snap.ID, out.Bytes(n.n))
+			pr.Done(out.R("size", "%s", out.Bytes(n.n)))
 
 			// stdout carries the archive, nothing else may land there
 			if file != "" && p.Mode().JSON {
