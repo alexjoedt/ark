@@ -35,8 +35,9 @@
 //	  prune: true                    # prune after the forget
 //	  run-after: echo forgotten      # the same four hooks as backup
 //
-// $VAR and ${VAR} expand in every value but the hooks, ~ is the home
-// directory and relative paths are taken relative to the profile's directory.
+// $VAR and ${VAR} expand in every value but the hooks. In repo (unless it is a
+// URI), password-file, backup.path and backup.exclude-file, ~ is the home
+// directory and a relative path is taken relative to the profile's directory.
 // A profile never holds a password, only where to find one.
 //
 // [Profile.Open], [Profile.Source], [Profile.BackupOptions],
@@ -75,7 +76,7 @@ type Profile struct {
 	// defaults the snapshot name and the name filter of forget.
 	Name string `yaml:"-"`
 
-	Repo               string        `yaml:"repo"`
+	Repo               string        `yaml:"repo"                 ark:"location"`
 	PasswordFile       string        `yaml:"password-file"        ark:"path"`
 	PasswordEnv        string        `yaml:"password-env"`
 	InsecureNoPassword bool          `yaml:"insecure-no-password"`

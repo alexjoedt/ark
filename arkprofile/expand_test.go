@@ -123,10 +123,22 @@ func TestDecodeExpandsAndResolves(t *testing.T) {
 			dir + "/a.txt /home/me/b.txt /data/c",
 		},
 		{
-			"repo untouched",
+			"repo URI untouched",
 			"repo: sftp://nas/rel/path\n",
 			func(p *arkprofile.Profile) any { return p.Repo },
 			"sftp://nas/rel/path",
+		},
+		{
+			"repo path resolves",
+			"repo: ../ark-repo\n",
+			func(p *arkprofile.Profile) any { return p.Repo },
+			"/etc/ark/ark-repo",
+		},
+		{
+			"repo tilde",
+			"repo: ~/backups/ark\n",
+			func(p *arkprofile.Profile) any { return p.Repo },
+			"/home/me/backups/ark",
 		},
 		{
 			"exclude pattern untouched",

@@ -272,10 +272,13 @@ func TestBackupDirectory(t *testing.T) {
 		t.Fatalf("got %+v", first)
 	}
 
-	// the parent is resolved by source name, --name changes that name
-	second := backup(src)
+	// the parent is resolved by source name and host, --name changes that name
+	second := backup("--host", "web1", src)
 	if second.ParentID != first.ID {
 		t.Fatalf("parent %q, want %q", second.ParentID, first.ID)
+	}
+	if web2 := backup("--host", "web2", src); web2.ParentID != "" {
+		t.Fatalf("host web2 took parent %q from web1", web2.ParentID)
 	}
 	named := backup("--name", "app", src)
 	if named.SourceName != "app" || named.ParentID != "" {

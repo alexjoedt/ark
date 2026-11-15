@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/alexjoedt/ark"
@@ -27,9 +28,19 @@ func (p *Profile) snapshotName() string {
 	return abs
 }
 
+// host is the host the profile's snapshots record: backup.host, else the
+// machine's hostname as the CLI's --host defaults to it.
+func (p *Profile) host() string {
+	if p.Backup.Host != "" {
+		return p.Backup.Host
+	}
+	h, _ := os.Hostname()
+	return h
+}
+
 // Source returns the arkfs source of backup.path with the profile's excludes,
 // exclude files and cloud-file option, named backup.name, else the profile's
-// name.
+// name, else the absolute backup.path.
 func (p *Profile) Source() (ark.Source, error) {
 	b := p.Backup
 	if b.Path == "" {
@@ -48,17 +59,18 @@ func (p *Profile) Source() (ark.Source, error) {
 	return arkfs.NewSource(b.Path, opts...)
 }
 
-// BackupOptions returns the tags, host and comment of the backup section. An
-// empty host is left out, so the snapshot records none unless the caller adds
-// [ark.WithHost] after these options.
+// BackupOptions returns the tags, host and comment of the backup section. The
+// host defaults to the machine's hostname, so machines sharing a repository
+// and a profile name keep apart: each one's parent and forget see only its
+// own snapshots.
 func (p *Profile) BackupOptions() []ark.BackupOption {
 	b := p.Backup
 	var opts []ark.BackupOption
 	if len(b.Tags) > 0 {
 		opts = append(opts, ark.WithTags(b.Tags...))
 	}
-	if b.Host != "" {
-		opts = append(opts, ark.WithHost(b.Host))
+	if h := p.host(); h != "" {
+		opts = append(opts, ark.WithHost(h))
 	}
 	if b.Comment != "" {
 		opts = append(opts, ark.WithComment(b.Comment))
@@ -89,11 +101,16 @@ func (p *Profile) ForgetPolicy() (ark.ForgetPolicy, error) {
 	return policy, nil
 }
 
-// Filter selects the snapshots [Profile.Source] names, so a forget through it
-// leaves the snapshots of other sources alone. A profile without a name and
-// without backup.path gives the zero filter, which selects every snapshot.
-func (p *Profile) Filter() ark.SnapshotFilter {
-	return ark.SnapshotFilter{Name: p.snapshotName()}
+// Filter selects the snapshots [Profile.Source] names from the host
+// [Profile.BackupOptions] records, so a forget through it leaves other sources
+// and other machines alone. It fails on a profile without a name and without
+// backup.path, which names no snapshots, rather than select every one.
+func (p *Profile) Filter() (ark.SnapshotFilter, error) {
+	name := p.snapshotName()
+	if name == "" {
+		return ark.SnapshotFilter{}, invalidf("no snapshot name: set the profile's name, backup.name or backup.path")
+	}
+	return ark.SnapshotFilter{Name: name, Host: p.host()}, nil
 }
 
 // Open opens the repository at repo through [arkuri.Open] with pw, applying

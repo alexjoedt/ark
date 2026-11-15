@@ -97,7 +97,11 @@ func run(ctx context.Context, p *arkprofile.Profile) error {
 	if err != nil {
 		return err
 	}
-	res, err := repo.Forget(ctx, policy, p.Filter())
+	filter, err := p.Filter()
+	if err != nil {
+		return err
+	}
+	res, err := repo.Forget(ctx, policy, filter)
 	if err != nil {
 		return err
 	}

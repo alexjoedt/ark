@@ -34,10 +34,10 @@ import (
 // expands when it runs them; a variable that is not set fails with
 // "line 4: backup.path: BACKUP_ROOT not set". The fields tagged `ark:"path"`
 // (password-file, backup.path, backup.exclude-file) then resolve: a leading
-// ~ is the home directory (~user fails) and a relative path is taken relative to dir, the
-// profile's directory, so the profile means the same from any working
-// directory. An empty dir leaves relative paths alone. repo is not a path
-// here; the repository URI opener owns it.
+// ~ is the home directory (~user fails) and a relative path is taken relative
+// to dir, the profile's directory, so the profile means the same from any
+// working directory. An empty dir leaves relative paths alone. repo, tagged
+// `ark:"location"`, resolves the same way unless it is a URI (holds "://").
 func Decode(r io.Reader, v any, dir string) error {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() || rv.Elem().Kind() != reflect.Struct {
@@ -119,7 +119,7 @@ func decodeStruct(n *yaml.Node, v reflect.Value, path, dir string) error {
 				}
 				return fieldErrorf(val.Line, p, "%s", strings.TrimPrefix(err.Error(), "yaml: "))
 			}
-			if f.path {
+			if f.path || f.location && !strings.Contains(f.v.String(), "://") {
 				if err := resolvePaths(f.v, dir); err != nil {
 					return fieldErrorf(val.Line, p, "%v", err)
 				}
@@ -205,10 +205,11 @@ func joinPath(path, key string) string {
 }
 
 // field is a struct field a yaml key decodes into; raw skips variable
-// expansion (`ark:"raw"`), path resolves the value as a path (`ark:"path"`).
+// expansion (`ark:"raw"`), path resolves the value as a path (`ark:"path"`),
+// location as a path unless it is a URI (`ark:"location"`).
 type field struct {
-	v         reflect.Value
-	raw, path bool
+	v                   reflect.Value
+	raw, path, location bool
 }
 
 // collectFields maps the yaml keys of v's fields to the fields, with the
@@ -242,9 +243,10 @@ func collectFields(v reflect.Value, out map[string]field) error {
 			return fmt.Errorf("decode a profile: key %q is used by two fields, the second in %s", name, t)
 		}
 		out[name] = field{
-			v:    v.Field(i),
-			raw:  hasOption(sf.Tag.Get("ark"), "raw"),
-			path: hasOption(sf.Tag.Get("ark"), "path"),
+			v:        v.Field(i),
+			raw:      hasOption(sf.Tag.Get("ark"), "raw"),
+			path:     hasOption(sf.Tag.Get("ark"), "path"),
+			location: hasOption(sf.Tag.Get("ark"), "location"),
 		}
 	}
 	return nil
