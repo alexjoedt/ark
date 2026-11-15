@@ -8,10 +8,9 @@ import (
 	"io"
 	"io/fs"
 	"path"
-	"slices"
 	"sort"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -97,12 +96,16 @@ func (rd *Reader) enter() error {
 func (rd *Reader) leave() { rd.mu.RUnlock() }
 
 // Snapshots returns the snapshots matching filter, newest first, as
-// Repository.Snapshots does, under the session's lock.
+// Repository.Snapshots does, under the session's lock. Canceling ctx or the
+// session's context, or closing the Reader, ends the call.
 func (rd *Reader) Snapshots(ctx context.Context, filter SnapshotFilter) ([]*Snapshot, error) {
 	if err := rd.enter(); err != nil {
 		return nil, fmt.Errorf("ark: reader: %w", err)
 	}
 	defer rd.leave()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer context.AfterFunc(rd.ctx, cancel)()
 	return rd.repo.Snapshots(ctx, filter)
 }
 
@@ -169,7 +172,7 @@ func (s *SnapshotFS) Open(name string) (fs.File, error) {
 	case FileTypeRegular, FileTypeHardlink, FileTypeUnsupported:
 	}
 	c := &content{rd: s.rd, chunks: e.chunks}
-	return &file{SectionReader: io.NewSectionReader(c, 0, e.size), e: e}, nil
+	return &file{sr: io.NewSectionReader(c, 0, e.size), e: e}, nil
 }
 
 // Stat returns the FileInfo of the named entry. It fails on a symlink, as
@@ -252,28 +255,7 @@ func (s *SnapshotFS) find(name string) (*fsEntry, error) {
 
 // entryAt walks the tree to the stored entry at name.
 func (s *SnapshotFS) entryAt(name string) (treeEntry, error) {
-	hash := s.root
-	for {
-		elem, rest, more := strings.Cut(name, "/")
-		node, err := s.node(hash)
-		if err != nil {
-			return treeEntry{}, err
-		}
-		i, found := slices.BinarySearchFunc(node.Entries, elem, func(e treeEntry, n string) int {
-			return strings.Compare(e.Name, n)
-		})
-		if !found {
-			return treeEntry{}, fs.ErrNotExist
-		}
-		e := node.Entries[i]
-		if !more {
-			return e, nil
-		}
-		if e.Type != FileTypeDirectory {
-			return treeEntry{}, fs.ErrNotExist
-		}
-		hash, name = e.TreeHash, rest
-	}
+	return lookupTreeEntry(s.node, s.root, name)
 }
 
 // complete makes the entry at name out of its stored entry, taking a
@@ -298,7 +280,9 @@ func (s *SnapshotFS) complete(name string, te treeEntry) (*fsEntry, error) {
 	return e, nil
 }
 
-// list returns the entries of the directory e.
+// list returns the entries of the directory e. A hardlink's target is
+// resolved only by its entry's Info, so a listing does not walk to every
+// target and a broken link fails alone.
 func (s *SnapshotFS) list(e *fsEntry) ([]fs.DirEntry, error) {
 	if e.te.Type != FileTypeDirectory {
 		return nil, errors.New("not a directory")
@@ -312,6 +296,10 @@ func (s *SnapshotFS) list(e *fsEntry) ([]fs.DirEntry, error) {
 		name := child.Name
 		if e.path != "." {
 			name = e.path + "/" + name
+		}
+		if child.Type == FileTypeHardlink {
+			out = append(out, &linkEntry{fsys: s, e: &fsEntry{path: name, te: child}})
+			continue
 		}
 		ce, err := s.complete(name, child)
 		if err != nil {
@@ -327,15 +315,9 @@ func (s *SnapshotFS) node(hash string) (*treeNode, error) {
 	if hash == "" {
 		return &treeNode{}, nil
 	}
-	if n, ok := s.rd.nodes.get(hash); ok {
-		return n, nil
-	}
-	n, err := loadTreeNode(s.rd.ctx, s.rd.trees, hash)
-	if err != nil {
-		return nil, err
-	}
-	s.rd.nodes.put(hash, n)
-	return n, nil
+	return s.rd.nodes.load(hash, func() (*treeNode, error) {
+		return loadTreeNode(s.rd.ctx, s.rd.trees, hash)
+	})
 }
 
 // fsEntry is one entry of a SnapshotFS, as [fs.FileInfo] and [fs.DirEntry].
@@ -374,23 +356,62 @@ func (e *fsEntry) Sys() any {
 
 func (e *fsEntry) Info() (fs.FileInfo, error) { return e, nil }
 
+// linkEntry is a hardlink in a directory listing, its target not yet
+// resolved.
+type linkEntry struct {
+	fsys *SnapshotFS
+	e    *fsEntry // the stored entry
+}
+
+func (l *linkEntry) Name() string      { return l.e.Name() }
+func (l *linkEntry) IsDir() bool       { return false }
+func (l *linkEntry) Type() fs.FileMode { return l.e.Type() }
+
+// Info resolves the link's target, failing as Stat does on a broken link.
+func (l *linkEntry) Info() (fs.FileInfo, error) {
+	if err := l.fsys.rd.enter(); err != nil {
+		return nil, &fs.PathError{Op: "stat", Path: l.e.path, Err: err}
+	}
+	defer l.fsys.rd.leave()
+	e, err := l.fsys.complete(l.e.path, l.e.te)
+	if err != nil {
+		return nil, &fs.PathError{Op: "stat", Path: l.e.path, Err: err}
+	}
+	return e, nil
+}
+
 // dirFile is an open directory of a SnapshotFS.
 type dirFile struct {
-	fsys *SnapshotFS
-	e    *fsEntry
-	list []fs.DirEntry
-	read bool
+	fsys   *SnapshotFS
+	e      *fsEntry
+	list   []fs.DirEntry
+	read   bool
+	closed bool
 }
 
 func (d *dirFile) Stat() (fs.FileInfo, error) { return d.e, nil }
-func (d *dirFile) Close() error               { return nil }
+
+func (d *dirFile) Close() error {
+	if d.closed {
+		return &fs.PathError{Op: "close", Path: d.e.path, Err: fs.ErrClosed}
+	}
+	d.closed = true
+	return nil
+}
 
 func (d *dirFile) Read([]byte) (int, error) {
-	return 0, &fs.PathError{Op: "read", Path: d.e.path, Err: fs.ErrInvalid}
+	err := fs.ErrInvalid
+	if d.closed {
+		err = fs.ErrClosed
+	}
+	return 0, &fs.PathError{Op: "read", Path: d.e.path, Err: err}
 }
 
 // ReadDir returns the next n entries, all that are left for n <= 0.
 func (d *dirFile) ReadDir(n int) ([]fs.DirEntry, error) {
+	if d.closed {
+		return nil, &fs.PathError{Op: "readdir", Path: d.e.path, Err: fs.ErrClosed}
+	}
 	if !d.read {
 		if err := d.fsys.rd.enter(); err != nil {
 			return nil, &fs.PathError{Op: "readdir", Path: d.e.path, Err: err}
@@ -418,12 +439,44 @@ func (d *dirFile) ReadDir(n int) ([]fs.DirEntry, error) {
 
 // file is an open regular file or hardlink of a SnapshotFS.
 type file struct {
-	*io.SectionReader
-	e *fsEntry
+	sr     *io.SectionReader
+	e      *fsEntry
+	closed atomic.Bool
 }
 
 func (f *file) Stat() (fs.FileInfo, error) { return f.e, nil }
-func (f *file) Close() error               { return nil }
+
+func (f *file) Close() error {
+	if f.closed.Swap(true) {
+		return f.errClosed("close")
+	}
+	return nil
+}
+
+func (f *file) Read(p []byte) (int, error) {
+	if f.closed.Load() {
+		return 0, f.errClosed("read")
+	}
+	return f.sr.Read(p)
+}
+
+func (f *file) ReadAt(p []byte, off int64) (int, error) {
+	if f.closed.Load() {
+		return 0, f.errClosed("read")
+	}
+	return f.sr.ReadAt(p, off)
+}
+
+func (f *file) Seek(offset int64, whence int) (int64, error) {
+	if f.closed.Load() {
+		return 0, f.errClosed("seek")
+	}
+	return f.sr.Seek(offset, whence)
+}
+
+func (f *file) errClosed(op string) error {
+	return &fs.PathError{Op: op, Path: f.e.path, Err: fs.ErrClosed}
+}
 
 // content is the bytes of one file, read by chunk through the Reader's
 // fetcher.
@@ -440,6 +493,9 @@ func (c *content) ReadAt(p []byte, off int64) (int, error) {
 		return 0, fmt.Errorf("ark: reader: %w", err)
 	}
 	defer c.rd.leave()
+	if len(p) == 0 {
+		return 0, nil
+	}
 	end := off + int64(len(p))
 	first := sort.Search(len(c.chunks), func(i int) bool { return c.chunks[i].Offset+c.chunks[i].Length > off })
 	last := first
@@ -454,16 +510,19 @@ func (c *content) ReadAt(p []byte, off int64) (int, error) {
 	for i, fl := range flights {
 		ref := c.chunks[first+i]
 		<-fl.done
-		err := fl.err
+		var err error
 		at := off + int64(n) - ref.Offset
-		if err == nil && (at < 0 || at >= ref.Length || int64(len(fl.data)) != ref.Length) {
+		switch {
+		case fl.err != nil:
+			err = fmt.Errorf("ark: failed to fetch chunk: %w", fl.err)
+		case at < 0 || at >= ref.Length || int64(len(fl.data)) != ref.Length:
 			err = fmt.Errorf("%w: chunk %s does not continue the file at %d", ErrCorruptTree, ref.ID, off+int64(n))
 		}
 		if err != nil {
 			for _, rest := range flights[i+1:] {
 				c.rd.fetcher.drop(rest)
 			}
-			return n, fmt.Errorf("ark: failed to fetch chunk: %w", err)
+			return n, err
 		}
 		n += copy(p[n:], fl.data[at:])
 	}
@@ -476,11 +535,19 @@ func (c *content) ReadAt(p []byte, off int64) (int, error) {
 // nodeCache is an LRU of parsed tree nodes keyed by tree hash, bounded by the
 // entries the nodes hold. A node larger than the bound is held alone.
 type nodeCache struct {
-	mu    sync.Mutex
-	limit int
-	size  int
-	order *list.List // front is most recently used, values are *cachedNode
-	items map[string]*list.Element
+	mu      sync.Mutex
+	limit   int
+	size    int
+	order   *list.List // front is most recently used, values are *cachedNode
+	items   map[string]*list.Element
+	loading map[string]*nodeLoad
+}
+
+// nodeLoad is one load of a node, shared by every caller missing it.
+type nodeLoad struct {
+	done chan struct{}
+	node *treeNode
+	err  error
 }
 
 type cachedNode struct {
@@ -489,12 +556,44 @@ type cachedNode struct {
 }
 
 func newNodeCache(limit int) *nodeCache {
-	return &nodeCache{limit: limit, order: list.New(), items: make(map[string]*list.Element)}
+	return &nodeCache{
+		limit:   limit,
+		order:   list.New(),
+		items:   make(map[string]*list.Element),
+		loading: make(map[string]*nodeLoad),
+	}
 }
 
-func (c *nodeCache) get(hash string) (*treeNode, bool) {
+// load returns the node hash from the cache, or from fn, which runs once for
+// all the callers that miss the same hash at the same time.
+func (c *nodeCache) load(hash string, fn func() (*treeNode, error)) (*treeNode, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	if n, ok := c.get(hash); ok {
+		c.mu.Unlock()
+		return n, nil
+	}
+	if l, ok := c.loading[hash]; ok {
+		c.mu.Unlock()
+		<-l.done
+		return l.node, l.err
+	}
+	l := &nodeLoad{done: make(chan struct{})}
+	c.loading[hash] = l
+	c.mu.Unlock()
+
+	l.node, l.err = fn()
+	c.mu.Lock()
+	delete(c.loading, hash)
+	if l.err == nil {
+		c.put(hash, l.node)
+	}
+	c.mu.Unlock()
+	close(l.done)
+	return l.node, l.err
+}
+
+// get and put run under c.mu.
+func (c *nodeCache) get(hash string) (*treeNode, bool) {
 	el, ok := c.items[hash]
 	if !ok {
 		return nil, false
@@ -508,8 +607,6 @@ func (c *nodeCache) get(hash string) (*treeNode, bool) {
 }
 
 func (c *nodeCache) put(hash string, n *treeNode) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if _, ok := c.items[hash]; ok {
 		return
 	}

@@ -307,3 +307,84 @@ func TestReaderHoldsOneLockAndLeavesNothingBehind(t *testing.T) {
 		t.Errorf("FS after Close = %v, want fs.ErrClosed", err)
 	}
 }
+
+// brokenLinkSource yields a regular file and a hardlink to a missing path.
+type brokenLinkSource struct{}
+
+func (brokenLinkSource) Meta() ark.SourceMeta {
+	return ark.SourceMeta{Name: "broken", Type: ark.SourceTypeFile}
+}
+
+func (brokenLinkSource) Walk(_ context.Context, fn ark.WalkFunc) error {
+	ok := ark.FileInfo{Path: "ok.txt", Size: 2, Mode: 0o644, Type: ark.FileTypeRegular}
+	if err := fn(ok, openReader(strings.NewReader("ok"))); err != nil {
+		return err
+	}
+	bad := ark.FileInfo{Path: "bad", Mode: 0o644, Type: ark.FileTypeHardlink, LinkDest: "missing"}
+	return fn(bad, nil)
+}
+
+func TestReaderBrokenHardlinkFailsAlone(t *testing.T) {
+	repo := openRepo(t, arkmem.New())
+	snap, err := repo.Backup(context.Background(), brokenLinkSource{})
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	rd, err := repo.OpenReader(context.Background())
+	if err != nil {
+		t.Fatalf("OpenReader: %v", err)
+	}
+	t.Cleanup(func() { _ = rd.Close() })
+	fsys, err := rd.FS(snap.ID)
+	if err != nil {
+		t.Fatalf("FS: %v", err)
+	}
+	entries, err := fs.ReadDir(fsys, ".")
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("ReadDir = %v, %v, want both entries", entries, err)
+	}
+	if _, err := entries[0].Info(); !errors.Is(err, ark.ErrCorruptTree) {
+		t.Errorf("Info(bad) = %v, want ErrCorruptTree", err)
+	}
+	if _, err := fsys.Open("bad"); !errors.Is(err, ark.ErrCorruptTree) {
+		t.Errorf("Open(bad) = %v, want ErrCorruptTree", err)
+	}
+	if got, err := fs.ReadFile(fsys, "ok.txt"); err != nil || string(got) != "ok" {
+		t.Errorf("ReadFile(ok.txt) = %q, %v", got, err)
+	}
+}
+
+func TestReaderFileFailsAfterClose(t *testing.T) {
+	_, _, fsys, _, _ := openReaderFS(t)
+	f, err := fsys.Open("top.bin")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := f.Read(make([]byte, 1)); !errors.Is(err, fs.ErrClosed) {
+		t.Errorf("Read after Close = %v, want fs.ErrClosed", err)
+	}
+	ra, ok := f.(io.ReaderAt)
+	if !ok {
+		t.Fatal("file is not an io.ReaderAt")
+	}
+	if _, err := ra.ReadAt(make([]byte, 1), 0); !errors.Is(err, fs.ErrClosed) {
+		t.Errorf("ReadAt after Close = %v, want fs.ErrClosed", err)
+	}
+	if err := f.Close(); !errors.Is(err, fs.ErrClosed) {
+		t.Errorf("second Close = %v, want fs.ErrClosed", err)
+	}
+
+	d, err := fsys.Open("a")
+	if err != nil {
+		t.Fatalf("Open(a): %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close(a): %v", err)
+	}
+	if _, err := d.(fs.ReadDirFile).ReadDir(-1); !errors.Is(err, fs.ErrClosed) {
+		t.Errorf("ReadDir after Close = %v, want fs.ErrClosed", err)
+	}
+}

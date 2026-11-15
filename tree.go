@@ -362,12 +362,13 @@ func visitTreeEntry(
 }
 
 // lookupTreeEntry returns the entry at path, a slash path relative to the
-// tree rooted at rootHash.
-func lookupTreeEntry(ctx context.Context, trees *objectStore, rootHash, path string) (treeEntry, error) {
+// tree rooted at rootHash, loading each node with load. A missing entry wraps
+// [os.ErrNotExist].
+func lookupTreeEntry(load func(hash string) (*treeNode, error), rootHash, path string) (treeEntry, error) {
 	hash := rootHash
 	parts := strings.Split(normEntryPath(path), "/")
 	for i, name := range parts {
-		node, err := loadTreeNode(ctx, trees, hash)
+		node, err := load(hash)
 		if err != nil {
 			return treeEntry{}, err
 		}
@@ -386,7 +387,7 @@ func lookupTreeEntry(ctx context.Context, trees *objectStore, rootHash, path str
 		}
 		hash = e.TreeHash
 	}
-	return treeEntry{}, fmt.Errorf("tree: no entry at %s", path)
+	return treeEntry{}, fmt.Errorf("tree: no entry at %s: %w", path, os.ErrNotExist)
 }
 
 func normEntryPath(path string) string {
