@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
+	"github.com/alexjoedt/ark/cmd/ark/internal/out"
 	"github.com/urfave/cli/v3"
 )
 
@@ -36,13 +37,15 @@ func verifyCommand() *cli.Command {
 			defer repo.Close()
 
 			p := printer(cmd)
-			pr := startProgress(p, "verify "+cmd.Args().First())
+			pr := startProgress(p, "verify "+out.ShortID(cmd.Args().First()))
 			res, err := repo.Verify(ctx, cmd.Args().First())
 			if err != nil {
 				pr.Fail()
 				return fmt.Errorf("verify %s: %w", cmd.Args().First(), err)
 			}
-			pr.Donef("verified %d chunks of %s", res.ChunksChecked, res.SnapshotID)
+			pr.Done(out.R("snapshot", "%s", out.ShortID(res.SnapshotID)),
+				out.R("chunks", "%d", res.ChunksChecked),
+				out.R("corrupt", "%d", len(res.CorruptChunks)+len(res.MissingChunks)))
 
 			if p.Mode().JSON {
 				if err := p.JSON(verifyJSON{

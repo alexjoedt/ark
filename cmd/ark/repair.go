@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
+	"github.com/alexjoedt/ark/cmd/ark/internal/out"
 	"github.com/urfave/cli/v3"
 )
 
@@ -48,7 +49,9 @@ func repairIndexCommand() *cli.Command {
 				pr.Fail()
 				return fmt.Errorf("repair index: %w", err)
 			}
-			pr.Donef("rebuilt the index")
+			pr.Done(out.R("packs", "%d", res.PacksIndexed),
+				out.R("blobs", "%d", res.BlobsIndexed),
+				out.R("unreadable", "%d", len(res.UnreadablePacks)))
 
 			if p.Mode().JSON {
 				if err := p.JSON(map[string]any{

@@ -48,8 +48,9 @@ func importCommand() *cli.Command {
 				pr.Fail()
 				return fmt.Errorf("import %s: %w", file, err)
 			}
-			pr.Donef("imported %s as %s, %s files, %s", snap.SourceName, snap.ID,
-				out.Count(snap.Stats.FileCount), out.Bytes(snap.Stats.TotalSize))
+			pr.Done(out.R("snapshot", "%s", out.ShortID(snap.ID)),
+				out.R("files", "%s", out.Count(snap.Stats.FileCount)),
+				out.R("size", "%s", out.Bytes(snap.Stats.TotalSize)))
 
 			if p.Mode().JSON {
 				return p.JSON(out.NewSnapshot(snap))

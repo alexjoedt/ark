@@ -48,7 +48,9 @@ func runPrune(ctx context.Context, cmd *cli.Command, repo *ark.Repository, dryRu
 		pr.Fail()
 		return fmt.Errorf("prune: %w", err)
 	}
-	pr.Donef("pruned %d blobs, %s", res.BlobsRemoved, out.Bytes(res.BytesFreed))
+	pr.Done(out.R("packs deleted", "%d", res.PacksDeleted),
+		out.R("repacked", "%s", out.Bytes(res.BytesRepacked)),
+		out.R("freed", "%s", out.Bytes(res.BytesFreed)))
 
 	if p.Mode().JSON {
 		return p.JSON(map[string]any{

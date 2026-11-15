@@ -8,7 +8,6 @@ import (
 	"path"
 	"slices"
 	"strings"
-	"time"
 
 	ark "github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkfs"
@@ -77,7 +76,6 @@ func backupCommand() *cli.Command {
 
 			p := printer(cmd)
 			pr := startProgress(p, "backup "+src.Meta().Name)
-			start := time.Now()
 			snap, err := repo.Backup(ctx, src,
 				ark.WithTags(cmd.StringSlice("tag")...),
 				ark.WithComment(cmd.String("comment")),
@@ -88,7 +86,7 @@ func backupCommand() *cli.Command {
 				pr.Fail()
 				return fmt.Errorf("backup %s: %w", dir, err)
 			}
-			pr.Donef("%s", out.BackupSummary("backed up "+src.Meta().Name, snap.Stats, time.Since(start)))
+			pr.Done(out.BackupRows(snap)...)
 
 			if p.Mode().JSON {
 				return p.JSON(out.NewSnapshot(snap))

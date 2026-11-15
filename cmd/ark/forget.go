@@ -100,7 +100,7 @@ func forgetCommand() *cli.Command {
 				pr.Fail()
 				return fmt.Errorf("forget: %w", err)
 			}
-			pr.Donef("forgot %d snapshots", len(res.Remove))
+			pr.Done(out.R("removed", "%d", len(res.Remove)), out.R("kept", "%d", len(res.Keep)))
 			if err := printForget(cmd, res); err != nil {
 				return err
 			}

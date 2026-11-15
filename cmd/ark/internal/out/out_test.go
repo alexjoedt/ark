@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +40,7 @@ func TestQuietAndJSONSuppressHumanOutput(t *testing.T) {
 		pr := p.Progress("backup")
 		pr.Func()(ark.ProgressEvent{Phase: ark.PhaseScan})
 		pr.Func()(ark.ProgressEvent{Phase: ark.PhaseStore, FilesDone: 3})
-		pr.Donef("done")
+		pr.Done(R("snapshot", "x"))
 		if so.Len() != 0 || se.Len() != 0 {
 			t.Fatalf("%+v wrote stdout %q stderr %q", mode, so.String(), se.String())
 		}
@@ -109,10 +110,35 @@ func TestProgressWithoutTerminal(t *testing.T) {
 	})
 	f(ark.ProgressEvent{Phase: ark.PhaseStore, FilesDone: 5, FilesTotal: 5, BytesDone: 2048, BytesTotal: 2048})
 	f(ark.ProgressEvent{Phase: ark.PhaseFinalize, FilesDone: 5, BytesDone: 2048})
-	pr.Donef("snapshot 01A")
-	want := "scan 5 files 2.0 KiB\nstore 5/5 files 2.0 KiB/2.0 KiB\nsnapshot 01A\n"
-	if se.String() != want {
-		t.Fatalf("stderr %q, want %q", se.String(), want)
+	pr.Done(BackupRows(&ark.Snapshot{ID: "3f9a1c2e5b7d", Stats: ark.SnapshotStats{
+		FileCount: 40000, FilesUnchanged: 39120, Skipped: 3, TotalSize: 10 << 30,
+		NewChunksRawSize: 312 << 20, StoredSize: 201 << 20,
+	}})...)
+	want := "scan 5 files 2.0 KiB\nstore 5/5 files 2.0 KiB/2.0 KiB\n" +
+		"backup /srv  done in <t>\n" +
+		"  snapshot   3f9a1c2e\n" +
+		"  files      40 000  (39 120 unchanged, 3 skipped)\n" +
+		"  size       10.0 GiB\n" +
+		"  new        312.0 MiB, stored as 201.0 MiB\n"
+	got := regexp.MustCompile(`done in \S+`).ReplaceAllString(se.String(), "done in <t>")
+	if got != want {
+		t.Fatalf("stderr %q, want %q", got, want)
+	}
+}
+
+func TestProgressDoneAlignsRows(t *testing.T) {
+	p, _, se := newTest(Mode{}, "")
+	pr := p.Progress("prune")
+	pr.Done(R("packs deleted", "%d", 2), R("freed", "%s", "1.0 KiB"))
+	want := "prune  done in <t>\n  packs deleted   2\n  freed           1.0 KiB\n"
+	got := regexp.MustCompile(`done in \S+`).ReplaceAllString(se.String(), "done in <t>")
+	if got != want {
+		t.Fatalf("stderr %q, want %q", got, want)
+	}
+	p, _, se = newTest(Mode{}, "")
+	p.Progress("prune").Fail()
+	if se.Len() != 0 {
+		t.Fatalf("block after a failure: %q", se.String())
 	}
 }
 
@@ -136,12 +162,12 @@ func TestProgressSpinnerOnTerminal(t *testing.T) {
 	pr := p.Progress("restore")
 	pr.Func()(ark.ProgressEvent{Phase: ark.PhaseWrite, FilesDone: 1, FilesTotal: 2})
 	time.Sleep(250 * time.Millisecond)
-	pr.Donef("restored")
+	pr.Done(R("snapshot", "x"))
 	s := se.String()
 	if !strings.Contains(s, "\r\033[K") || !strings.Contains(s, "restore: write 1/2 files") {
 		t.Fatalf("no spinner frame in %q", s)
 	}
-	if !strings.HasSuffix(s, "\r\033[Krestored\n") {
+	if !strings.Contains(s, "\r\033[Krestore  done in ") {
 		t.Fatalf("line not cleared before the summary: %q", s)
 	}
 }

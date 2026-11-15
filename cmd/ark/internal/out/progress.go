@@ -15,6 +15,7 @@ import (
 type Progress struct {
 	p     *Printer
 	label string
+	start time.Time
 
 	mu    sync.Mutex
 	last  ark.ProgressEvent
@@ -29,10 +30,10 @@ type Progress struct {
 
 var frames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// Progress starts rendering for label ("backup /srv/app"). Call Donef or Fail
+// Progress starts rendering for label ("backup /srv/app"). Call Done or Fail
 // when the operation returns.
 func (p *Printer) Progress(label string) *Progress {
-	pr := &Progress{p: p, label: label}
+	pr := &Progress{p: p, label: label, start: time.Now()}
 	if p.spinnerAllowed() {
 		pr.stop = make(chan struct{})
 		pr.done = make(chan struct{})
@@ -137,11 +138,32 @@ func (pr *Progress) stopSpinner() {
 	pr.stop = nil
 }
 
-// Donef stops rendering, drops later events, and prints the summary line, unless --json or
-// --quiet is set.
-func (pr *Progress) Donef(format string, args ...any) {
+// Done stops rendering, drops later events, and prints the summary block
+// to stderr, unless --json or --quiet is set. The header is the label and the
+// time since Progress started; rows follow, aligned.
+func (pr *Progress) Done(rows ...Row) {
 	pr.stopSpinner()
-	pr.p.Infof(format, args...)
+	if pr.p.mode.Quiet || pr.p.mode.JSON {
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s  done in %s\n", pr.label, Duration(time.Since(pr.start)))
+	w := 0
+	for _, r := range rows {
+		w = max(w, len(r.Key))
+	}
+	for _, r := range rows {
+		fmt.Fprintf(&b, "  %-*s%s\n", w+3, r.Key, r.Value)
+	}
+	fmt.Fprint(pr.p.stderr, b.String())
+}
+
+// Row is one line of the summary block.
+type Row struct{ Key, Value string }
+
+// R builds a Row with a formatted value.
+func R(key, format string, args ...any) Row {
+	return Row{key, fmt.Sprintf(format, args...)}
 }
 
 // Fail stops rendering and clears the line. The error is printed by main.
