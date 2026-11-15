@@ -1197,3 +1197,21 @@ func TestSnapshotsTableShowsShortIDsAndSeconds(t *testing.T) {
 		}
 	}
 }
+
+func TestInitRefusesNonEmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "keep"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out := runCapture(t, "--json", "-r", dir, "init")
+	if code != 1 || !strings.Contains(out, "exists and is not empty") {
+		t.Fatalf("exit %d, out %q", code, out)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("dir changed: %v %v", entries, err)
+	}
+	if code, _ := runCapture(t, "-r", filepath.Join(dir, "new"), "init"); code != 0 {
+		t.Fatalf("init into a missing dir: exit %d", code)
+	}
+}

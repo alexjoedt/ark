@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
+	"os"
 
 	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkuri"
@@ -20,7 +23,8 @@ func initCommand() *cli.Command {
 		UsageText: `ark init [--chunk-min SIZE] [--chunk-avg SIZE] [--chunk-max SIZE]
 
    Writes the repository config and a key file sealed with the password,
-   asked twice at a prompt. Fails if the repository already exists.
+   asked twice at a prompt. Fails if the repository already exists or,
+   for a local path, if the directory exists and is not empty.
    Chunker sizes are stored in the repository and cannot be changed later.`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "chunk-min", Usage: "minimum chunk `SIZE`", Value: "256KiB"},
@@ -42,6 +46,12 @@ func initCommand() *cli.Command {
 			pw, err := readRepoPassword(ctx, cmd, true)
 			if err != nil {
 				return err
+			}
+
+			if dir, ok := arkuri.LocalPath(uri); ok {
+				if err := requireEmptyDir(dir); err != nil {
+					return err
+				}
 			}
 
 			b, err := arkuri.Open(ctx, uri)
@@ -69,6 +79,27 @@ func initCommand() *cli.Command {
 			return nil
 		},
 	}
+}
+
+// requireEmptyDir refuses a local repository path that exists and holds
+// anything, so init never writes into a directory it did not create.
+func requireEmptyDir(dir string) error {
+	f, err := os.Open(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("check repository path %s: %w", dir, err)
+	}
+	defer f.Close()
+	_, err = f.Readdirnames(1)
+	switch {
+	case errors.Is(err, io.EOF):
+		return nil
+	case err != nil:
+		return fmt.Errorf("check repository path %s: %w", dir, err)
+	}
+	return fmt.Errorf("repository path %s exists and is not empty", dir)
 }
 
 // chunkerConfig parses the three --chunk-* flags. Sizes out of order are a

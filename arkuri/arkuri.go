@@ -64,6 +64,17 @@ func Open(ctx context.Context, s string) (ark.Backend, error) {
 	}
 }
 
+// LocalPath returns the directory s names when s is a local repository
+// location, and false for any other scheme or an invalid s.
+func LocalPath(s string) (string, bool) {
+	scheme, u, err := parse(s)
+	if err != nil || scheme != SchemeLocal {
+		return "", false
+	}
+	dir, err := localPath(u, s)
+	return dir, err == nil
+}
+
 // parse splits s into a scheme and, for URI forms, the parsed URL. A string
 // that does not start with a known scheme is a local path and comes back with
 // a nil URL.
