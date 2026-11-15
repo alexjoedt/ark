@@ -1,8 +1,10 @@
 #!/usr/bin/env sh
 # Mounts a local repository with two snapshots and checks the mount against
 # ark restore: every snapshot's tree, mode, size and mtime, a read of a large
-# file at a random offset, and that SIGINT unmounts and leaves no lock behind.
-# Linux only; needs go, fuse3 (fusermount3) and /dev/fuse. Run from anywhere.
+# file at a random offset, the names/, tags/ and hosts/ layout with latest,
+# that SIGINT unmounts and leaves no lock behind, and that a second SIGINT
+# quits a busy mount. Linux only; needs go, fuse3 (fusermount3) and
+# /dev/fuse. Run from anywhere.
 set -eu
 
 root=$(cd "$(dirname "$0")/../../.." && pwd)
@@ -10,11 +12,51 @@ tmp=$(mktemp -d)
 mnt="$tmp/mnt"
 pid=
 cleanup() {
-	if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; fi
+	if [ -n "$pid" ]; then stop TERM || true; fi
+	exec 3<&- || true
 	fusermount3 -u "$mnt" 2>/dev/null || true
-	rm -rf "$tmp"
+	rm -rf "$tmp" || true
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# stop sends signal $1 to ark mount and sets code to its exit code. After 15 s
+# it kills ark and sets code to "timeout" instead. Not for $(...): only this
+# shell can reap ark.
+stop() {
+	kill -"$1" "$pid" 2>/dev/null || true
+	i=0
+	while kill -0 "$pid" 2>/dev/null; do
+		i=$((i + 1))
+		if [ "$i" -gt 150 ]; then
+			kill -KILL "$pid" 2>/dev/null || true
+			wait "$pid" 2>/dev/null || true
+			pid=
+			code=timeout
+			return
+		fi
+		sleep 0.1
+	done
+	code=0
+	wait "$pid" || code=$?
+	pid=
+}
+
+# start runs ark mount in the background and waits until it serves.
+start() {
+	"$ark" -r "$repo" mount "$mnt" &
+	pid=$!
+	i=0
+	until mountpoint -q "$mnt" && [ -d "$mnt/ids" ]; do
+		i=$((i + 1))
+		if [ "$i" -gt 300 ] || ! kill -0 "$pid" 2>/dev/null; then
+			echo "FAIL: mount did not come up" >&2
+			exit 1
+		fi
+		sleep 0.1
+	done
+}
 
 ark="$tmp/ark"
 (cd "$root" && CGO_ENABLED=0 go build -o "$ark" ./cmd/ark)
@@ -36,24 +78,14 @@ chmod 750 "$src/dir/sub"
 touch -d '2026-01-02 03:04:05.123456789' "$src/a.txt" "$src/dir/sub"
 
 "$ark" -r "$repo" init > /dev/null
-"$ark" -q -r "$repo" backup "$src" > /dev/null
+"$ark" -q -r "$repo" backup --name src --tag t "$src" > /dev/null
 
 printf 'changed\n' >> "$src/dir/private"
 rm "$src/dir/sub/empty"
 printf 'new\n' > "$src/new.txt"
-"$ark" -q -r "$repo" backup "$src" > /dev/null
+"$ark" -q -r "$repo" backup --name src --tag t "$src" > /dev/null
 
-"$ark" -r "$repo" mount "$mnt" &
-pid=$!
-i=0
-until mountpoint -q "$mnt" && [ -d "$mnt/ids" ]; do
-	i=$((i + 1))
-	if [ "$i" -gt 300 ] || ! kill -0 "$pid" 2>/dev/null; then
-		echo "FAIL: mount did not come up" >&2
-		exit 1
-	fi
-	sleep 0.1
-done
+start
 
 # meta prints path, type, mode, size (regular files only) and mtime of every
 # entry below $1, sorted by path. The mtime of the root and of symlinks is left
@@ -74,7 +106,10 @@ for id in $(cd "$mnt/ids" && ls); do
 	n=$((n + 1))
 	before=$fail
 	out="$tmp/restore-$id"
-	"$ark" -q -r "$repo" restore "$id" "$out" > /dev/null
+	if ! "$ark" -q -r "$repo" restore "$id" "$out" > /dev/null; then
+		bad "snapshot $id: restore failed"
+		continue
+	fi
 	snap="$mnt/ids/$id"
 	diff -r "$snap" "$out" || bad "snapshot $id: mounted tree differs from the restore"
 	meta "$snap" > "$tmp/meta-mount"
@@ -83,27 +118,53 @@ for id in $(cd "$mnt/ids" && ls); do
 
 	size=$(stat -c %s "$out/dir/big.bin")
 	off=$(($(od -An -N4 -tu4 /dev/urandom) % (size - 1048576)))
-	dd if="$snap/dir/big.bin" of="$tmp/part-mount" bs=65536 skip="$off" count=1048576 \
-		iflag=skip_bytes,count_bytes status=none
-	dd if="$out/dir/big.bin" of="$tmp/part-restore" bs=65536 skip="$off" count=1048576 \
-		iflag=skip_bytes,count_bytes status=none
-	cmp "$tmp/part-mount" "$tmp/part-restore" || bad "snapshot $id: 1 MiB read at offset $off differs"
+	if dd if="$snap/dir/big.bin" of="$tmp/part-mount" bs=65536 skip="$off" count=1048576 \
+		iflag=skip_bytes,count_bytes status=none; then
+		dd if="$out/dir/big.bin" of="$tmp/part-restore" bs=65536 skip="$off" count=1048576 \
+			iflag=skip_bytes,count_bytes status=none
+		cmp "$tmp/part-mount" "$tmp/part-restore" || bad "snapshot $id: 1 MiB read at offset $off differs"
+	else
+		bad "snapshot $id: reading the mount at offset $off failed"
+	fi
 	if [ "$fail" = "$before" ]; then echo "ok: snapshot $id matches its restore, read at offset $off"; fi
 done
 [ "$n" = 2 ] || bad "ids/ lists $n snapshots, want 2"
 
+# The second snapshot is the only one with new.txt.
+before=$fail
+count() { ls -A "$1" 2>/dev/null | wc -l; }
+[ "$(count "$mnt/names/src")" = 3 ] || bad "names/src lists $(count "$mnt/names/src") entries, want 2 times and latest"
+[ -L "$mnt/names/src/latest" ] && [ -f "$mnt/names/src/latest/new.txt" ] ||
+	bad "names/src/latest is not a link to the newer snapshot"
+[ "$(count "$mnt/tags/t")" = 2 ] || bad "tags/t lists $(count "$mnt/tags/t") snapshots, want 2"
+[ "$(count "$mnt/hosts")" = 1 ] && [ "$(count "$mnt/hosts/"*)" = 2 ] ||
+	bad "hosts/ does not list one host with 2 snapshots"
+if [ "$fail" = "$before" ]; then echo "ok: names, tags, hosts and latest"; fi
+
 # A background job of a non-interactive shell starts with SIGINT ignored; the
 # signal.NotifyContext in main re-enables it.
 before=$fail
-kill -INT "$pid"
-set +e
-wait "$pid"
-code=$?
-set -e
-pid=
+stop INT
 [ "$code" = 0 ] || bad "ark mount exited $code after SIGINT, want 0"
 if mountpoint -q "$mnt"; then bad "$mnt is still mounted after SIGINT"; fi
 locks=$(ls -A "$repo/locks")
 [ -z "$locks" ] || bad "locks left after unmount: $locks"
 if [ "$fail" = "$before" ]; then echo "ok: SIGINT unmounts and leaves no lock"; fi
+
+# A busy mount keeps serving after SIGINT; a second SIGINT quits anyway.
+before=$fail
+start
+exec 3< "$mnt/names/src/latest/a.txt"
+kill -INT "$pid"
+sleep 1
+kill -0 "$pid" 2>/dev/null || bad "busy mount exited after the first SIGINT"
+stop INT
+case $code in
+0 | timeout) bad "busy mount after a second SIGINT: exit $code, want an error" ;;
+esac
+exec 3<&-
+fusermount3 -u "$mnt" 2>/dev/null || true
+locks=$(ls -A "$repo/locks")
+[ -z "$locks" ] || bad "locks left after quitting a busy mount: $locks"
+if [ "$fail" = "$before" ]; then echo "ok: a second SIGINT quits a busy mount"; fi
 [ "$fail" = 0 ]

@@ -281,6 +281,47 @@ func TestMountBusyKeepsServing(t *testing.T) {
 	}
 }
 
+func TestMountBusySecondInterruptQuits(t *testing.T) {
+	mountable(t)
+	repo := initRepo(t)
+	t.Setenv("ARK_REPOSITORY", repo)
+	if code, _ := runCapture(t, "backup", "--name", "n", t.TempDir()); code != 0 {
+		t.Fatalf("backup exit %d", code)
+	}
+	mnt := t.TempDir()
+	done := startMount(t, mnt)
+	f, err := os.Open(filepath.Join(mnt, "ids"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = f.Close()
+		for _, cmd := range []string{"fusermount3", "fusermount"} {
+			if exec.Command(cmd, "-u", mnt).Run() == nil {
+				break
+			}
+		}
+	})
+	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		t.Fatalf("exit %d after the first SIGINT while busy, want it to keep serving", code)
+	case <-time.After(time.Second):
+	}
+	if code := interrupt(t, done); code != 1 {
+		t.Errorf("exit after quitting a busy mount = %d, want 1", code)
+	}
+	locks, err := os.ReadDir(filepath.Join(repo, "locks"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locks) != 0 {
+		t.Errorf("locks left after quitting: %v", locks)
+	}
+}
+
 // linkSource holds a file and a hardlink to it stored with other metadata,
 // as a tar stream can.
 type linkSource struct{}

@@ -11,6 +11,8 @@ import (
 	"io/fs"
 	"log/slog"
 	"maps"
+	"os"
+	"os/signal"
 	"path"
 	"path/filepath"
 	"slices"
@@ -103,7 +105,7 @@ func mountCommand() *cli.Command {
 			select {
 			case <-served:
 			case <-ctx.Done():
-				unmount(srv, served, p.Notef, dir)
+				return unmount(srv, served, p.Notef, dir)
 			}
 			return nil
 		},
@@ -112,22 +114,30 @@ func mountCommand() *cli.Command {
 
 // unmount ends the mount after Ctrl-C. A busy mount keeps serving and the
 // unmount is retried until it succeeds or someone else unmounts: exiting
-// would leave a dead mountpoint behind. A second Ctrl-C ends the process.
-func unmount(srv *fuse.Server, served <-chan struct{}, notef func(string, ...any), dir string) {
+// would leave a dead mountpoint behind. A second Ctrl-C or SIGTERM gives up
+// and returns an error. It is caught here rather than left to the runtime:
+// a process started with SIGINT ignored, as a background job of a script is,
+// gets SIG_IGN back once main's NotifyContext stops.
+func unmount(srv *fuse.Server, served <-chan struct{}, notef func(string, ...any), dir string) error {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sig)
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for warned := false; ; warned = true {
 		err := srv.Unmount()
 		if err == nil {
 			<-served
-			return
+			return nil
 		}
 		if !warned {
 			notef("unmount %s: %v: still serving until it is no longer in use, Ctrl-C again to quit anyway", dir, err)
 		}
 		select {
 		case <-served:
-			return
+			return nil
+		case <-sig:
+			return fmt.Errorf("unmount %s: quit while still in use, unmount it by hand", dir)
 		case <-tick.C:
 		}
 	}

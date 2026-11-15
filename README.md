@@ -361,7 +361,7 @@ ls /mnt/ark/ids/                  # one directory per snapshot
 - The mount holds a shared lock for as long as it runs, so `ark prune` and `ark forget --prune`
   cannot take their exclusive lock and exit 3 (after `--lock-wait`, if set) until it is unmounted.
 - Ctrl-C unmounts. While a process still uses the mount it keeps serving and retries every second;
-  a second Ctrl-C quits anyway.
+  a second Ctrl-C or SIGTERM quits anyway, with exit 1, and leaves the mountpoint to unmount by hand.
 - Linux needs FUSE 3: `/dev/fuse` and `fusermount3` (package `fuse3`). macOS needs
   [macFUSE](https://macfuse.github.io/) and is best effort. Windows and 32-bit Linux are not supported.
 

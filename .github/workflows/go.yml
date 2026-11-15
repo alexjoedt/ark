@@ -69,10 +69,13 @@ jobs:
         run: docker pull busybox:stable
 
       # The runner has /dev/fuse; fusermount3 comes from fuse3. Installed
-      # before Test so the FUSE tests of ark mount run instead of skipping.
+      # before Test so the FUSE tests of ark mount run instead of skipping;
+      # the index refresh only runs when the image lacks it.
       - name: Install fuse3
         if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update -q && sudo apt-get install -y -q fuse3
+        run: |
+          command -v fusermount3 > /dev/null ||
+            { sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends fuse3; }
 
       # The kill harness runs in this step too: ARK_KILL_RUNS fixes its count,
       # the ubuntu leg adds the arksftp variant through ARK_SFTP_TEST_URI (about
