@@ -15,6 +15,8 @@ func TestDecodeExpandsAndResolves(t *testing.T) {
 	t.Setenv("DAYS", "7")
 	t.Setenv("HOME", "/home/me")
 	t.Setenv("EMPTY", "")
+	t.Setenv("NULL", "null")
+	t.Setenv("TILDE", "~")
 	const dir = "/etc/ark/profiles"
 
 	tests := []struct {
@@ -65,6 +67,12 @@ func TestDecodeExpandsAndResolves(t *testing.T) {
 			"forget:\n  keep-daily: $DAYS\n",
 			func(p *arkprofile.Profile) any { return p.Forget.KeepDaily },
 			7,
+		},
+		{
+			"null from variable stays a string",
+			"backup:\n  comment: $NULL\n  path: $TILDE\n",
+			func(p *arkprofile.Profile) any { return p.Backup.Comment + " " + p.Backup.Path },
+			"null /home/me",
 		},
 		{
 			"hook stays raw",
@@ -161,6 +169,8 @@ func TestDecodeExpandsFieldsOfAnEmbedder(t *testing.T) {
 
 func TestDecodeRefusesAnUnsetVariable(t *testing.T) {
 	os.Unsetenv("ARK_TEST_UNSET")
+	t.Setenv("FRACTION", "2.0")
+	t.Setenv("WHOLE", "7")
 	tests := map[string]string{
 		"backup:\n  path: $ARK_TEST_UNSET/x\n":                "line 2: backup.path: ARK_TEST_UNSET not set",
 		"backup:\n  tag:\n    - a\n    - ${ARK_TEST_UNSET}\n": "line 4: backup.tag: ARK_TEST_UNSET not set",
@@ -168,6 +178,9 @@ func TestDecodeRefusesAnUnsetVariable(t *testing.T) {
 		"repo: ${OPEN\n":                                      "line 1: repo: unterminated ${",
 		"forget:\n  keep-daily: $ARK_TEST_UNSET\n":            "line 2: forget.keep-daily: ARK_TEST_UNSET not set",
 		"password-file: ~/x\nbackup:\n  comment: $A$B\n":      "line 3: backup.comment: A not set",
+		"forget:\n  keep-daily: $FRACTION\n":                  "line 2: forget.keep-daily: want a whole number",
+		"forget:\n  keep-daily: !!str $WHOLE\n":               "line 2: forget.keep-daily: want a whole number",
+		"backup:\n  path: ~bob/data\n":                        "line 2: backup.path: ~bob/data: only ~ and ~/ name a home directory, give the full path",
 	}
 	for in, want := range tests {
 		var p arkprofile.Profile

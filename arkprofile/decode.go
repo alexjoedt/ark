@@ -34,7 +34,7 @@ import (
 // expands when it runs them; a variable that is not set fails with
 // "line 4: backup.path: BACKUP_ROOT not set". The fields tagged `ark:"path"`
 // (password-file, backup.path, backup.exclude-file) then resolve: a leading
-// ~ is the home directory and a relative path is taken relative to dir, the
+// ~ is the home directory (~user fails) and a relative path is taken relative to dir, the
 // profile's directory, so the profile means the same from any working
 // directory. An empty dir leaves relative paths alone. repo is not a path
 // here; the repository URI opener owns it.
@@ -103,14 +103,15 @@ func decodeStruct(n *yaml.Node, v reflect.Value, path, dir string) error {
 			if err := decodeStruct(val, f.v, p, dir); err != nil {
 				return err
 			}
-		case isInteger(f.v.Type()) && resolve(val).ShortTag() == "!!float":
-			return fieldErrorf(val.Line, p, "want %s", describe(f.v.Type()))
 		default:
 			if !f.raw {
 				var err error
 				if val, err = expandNode(val, p); err != nil {
 					return err
 				}
+			}
+			if isInteger(f.v.Type()) && resolve(val).ShortTag() == "!!float" {
+				return fieldErrorf(val.Line, p, "want %s", describe(f.v.Type()))
 			}
 			if err := val.Decode(f.v.Addr().Interface()); err != nil {
 				if _, ok := errors.AsType[*yaml.TypeError](err); ok {
@@ -311,8 +312,9 @@ func fieldErrorf(line int, path, format string, args ...any) error {
 }
 
 // expandNode returns a copy of n with $VAR, ${VAR} and $$ expanded in its
-// strings, keys left alone. A plain scalar that expands is typed again, so
-// `keep-daily: $DAYS` can become a number.
+// strings, keys left alone. A plain, untagged scalar that expands is typed
+// again, so `keep-daily: $DAYS` can become a number, but never null: a value
+// such as ~ stays a string.
 func expandNode(n *yaml.Node, path string) (*yaml.Node, error) {
 	n = resolve(n)
 	c := *n
@@ -327,8 +329,11 @@ func expandNode(n *yaml.Node, path string) (*yaml.Node, error) {
 		}
 		if out != n.Value {
 			c.Value = out
-			if n.Style&(yaml.DoubleQuotedStyle|yaml.SingleQuotedStyle|yaml.LiteralStyle|yaml.FoldedStyle) == 0 {
+			if n.Style&(yaml.TaggedStyle|yaml.DoubleQuotedStyle|yaml.SingleQuotedStyle|yaml.LiteralStyle|yaml.FoldedStyle) == 0 {
 				c.Tag = ""
+				if c.ShortTag() == "!!null" {
+					c.Tag = "!!str"
+				}
 			}
 		}
 	case yaml.SequenceNode, yaml.MappingNode:
@@ -437,6 +442,9 @@ func resolvePath(p, dir string) (string, error) {
 			return "", fmt.Errorf("resolve ~: %w", err)
 		}
 		return filepath.Join(home, p[1:]), nil
+	}
+	if strings.HasPrefix(p, "~") {
+		return "", fmt.Errorf("%s: only ~ and ~/ name a home directory, give the full path", p)
 	}
 	if p != "" && dir != "" && !filepath.IsAbs(p) {
 		return filepath.Join(dir, p), nil
