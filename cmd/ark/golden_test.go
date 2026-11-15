@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// The golden files pin what --json and --quiet print for the six
+// The golden files pin what --json and --quiet print for the seven
 // repository commands. Values that change per run are replaced by key
 // (snapshot IDs, timestamps, durations, the source name) and by literal
 // (known IDs, temp directories), so field order and wording stay exact.
@@ -19,7 +19,7 @@ import (
 
 var (
 	volatileKey = regexp.MustCompile(`^(\s*"(id|parent_id|created_at|duration|source_name)": )"(.*)"(,?)$`)
-	clockTime   = regexp.MustCompile(`\d{4}-\d\d-\d\d \d\d:\d\d(:\d\d)?`)
+	clockTime   = regexp.MustCompile(`\d{4}-\d\d-\d\d[ T]\d\d:\d\d(:\d\d(\.\d+)?)?(Z|[+-]\d\d:\d\d)?`)
 )
 
 type normalizer struct {
@@ -123,6 +123,8 @@ func goldenRun(t *testing.T, mode string) string {
 	step("backup", "--host", "h", src)
 	first := lastID
 	step("backup", "--host", "h", src)
+	step("find", "b.txt")
+	step("find", "nothing-here")
 	step("check")
 	step("verify", lastID)
 	step("verify", "nonexistent")
