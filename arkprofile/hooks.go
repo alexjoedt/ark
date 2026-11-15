@@ -42,10 +42,12 @@ func (e *HookError) Unwrap() error { return e.Err }
 //
 // The result joins the errors of fn and of the hooks, each hook as a
 // [*HookError]. A failing run-after leaves fn's work done: the error is the
-// hook's alone. Cancelling ctx kills a running hook and its children; hooks
-// have no timeout of their own, and every hook, run-finally included, runs
-// under ctx, so a caller that wants its cleanup to survive a cancel passes
-// [context.WithoutCancel] of its context.
+// hook's alone. Hooks have no timeout of their own. Cancelling ctx kills a
+// running run-before or run-after and its children; run-after-fail and
+// run-finally are the cleanup and run to their end even after a cancel, so a
+// caller that must stop a hanging cleanup exits the process. A child a hook
+// leaves in the background keeps the hook's output only when Output is nil or
+// an [*os.File]; any other writer stops receiving a second after the hook exits.
 func (h Hooks) Run(ctx context.Context, env HookEnv, fn func(context.Context) error) error {
 	var stepErr error
 	if err := h.run(ctx, env, "run-before", h.RunBefore, ""); err != nil {
@@ -54,16 +56,17 @@ func (h Hooks) Run(ctx context.Context, env HookEnv, fn func(context.Context) er
 		stepErr = fn(ctx)
 	}
 
+	cleanup := context.WithoutCancel(ctx)
 	var errs []error
 	if stepErr != nil {
 		errs = append(errs, stepErr)
-		if err := h.run(ctx, env, "run-after-fail", h.RunAfterFail, stepErr.Error()); err != nil {
+		if err := h.run(cleanup, env, "run-after-fail", h.RunAfterFail, stepErr.Error()); err != nil {
 			errs = append(errs, err)
 		}
 	} else if err := h.run(ctx, env, "run-after", h.RunAfter, ""); err != nil {
 		errs = append(errs, err)
 	}
-	if err := h.run(ctx, env, "run-finally", h.RunFinally, ""); err != nil {
+	if err := h.run(cleanup, env, "run-finally", h.RunFinally, ""); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
@@ -81,13 +84,18 @@ func (h Hooks) run(ctx context.Context, env HookEnv, name, script, errText strin
 	}
 	cmd.Stdout, cmd.Stderr = env.Output, env.Output
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	cmd.WaitDelay = time.Second
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			err = fmt.Errorf("%w: %w", ctx.Err(), err)
-		}
-		return &HookError{Name: name, Err: err}
+	killed := false
+	cmd.Cancel = func() error {
+		killed = true
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
-	return nil
+	cmd.WaitDelay = time.Second
+	err := cmd.Run()
+	switch {
+	case err == nil, errors.Is(err, exec.ErrWaitDelay):
+		return nil
+	case killed:
+		err = fmt.Errorf("%w: %w", ctx.Err(), err)
+	}
+	return &HookError{Name: name, Err: err}
 }

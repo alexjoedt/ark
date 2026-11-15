@@ -116,3 +116,29 @@ func TestHooksStopWhenTheContextIsCancelled(t *testing.T) {
 		t.Errorf("took %s to stop", d)
 	}
 }
+
+func TestHooksCleanupRunsAfterACancel(t *testing.T) {
+	var out bytes.Buffer
+	ctx, cancel := context.WithCancel(t.Context())
+	h := arkprofile.Hooks{RunAfterFail: "echo after-fail; exit 1", RunFinally: "echo finally"}
+	err := h.Run(ctx, arkprofile.HookEnv{Output: &out}, func(ctx context.Context) error {
+		cancel()
+		return ctx.Err()
+	})
+	if got, want := out.String(), "after-fail\nfinally\n"; got != want {
+		t.Errorf("output %q, want %q", got, want)
+	}
+	var he *arkprofile.HookError
+	if !errors.As(err, &he) || he.Name != "run-after-fail" || errors.Is(he, context.Canceled) {
+		t.Errorf("error %v", err)
+	}
+}
+
+func TestHooksLeaveABackgroundChild(t *testing.T) {
+	var out bytes.Buffer
+	h := arkprofile.Hooks{RunBefore: "sleep 3 &"}
+	err := h.Run(t.Context(), arkprofile.HookEnv{Output: &out}, func(context.Context) error { return nil })
+	if err != nil {
+		t.Error(err)
+	}
+}
