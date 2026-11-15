@@ -14,7 +14,7 @@ ark is on the v0 line. Until `v1.1.0` is cut
   would misread a repository or a newer build needs a field unconditionally; additive, optional
   fields keep the number. There are no migrations: a repository an older format wrote is re-created.
 - CLI flags and `--json` output may change.
-- Each finished body of work that ships code (a feature, a hardening pass) gets a minor tag; docs-only work gets none.
+- Minor tags are cut by hand when the maintainer decides a release is due; no change requires one.
 
 `v1.0.0` and `v1.0.1` are retracted in all three `go.mod` files: they were published before the API
 and the format had settled. The first stable release will be `v1.1.0`, and from then on the API

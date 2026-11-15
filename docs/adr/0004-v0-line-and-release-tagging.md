@@ -21,8 +21,8 @@ API and the format without a deprecation cycle.
   build would misread a repository or a newer build needs a field unconditionally. Additive,
   optional fields keep the number. There are no migrations before the freeze: a repository an
   older format wrote is re-created.
-- Each finished body of work that ships code (a feature, a hardening pass) gets one minor tag,
-  not every merge. Docs-only work gets none.
+- Minor tags are cut by hand when the maintainer decides a release is due, not per merge or per
+  finished body of work.
 - `v1.1.0` is the first stable release and freezes the API (Go compatibility rules) and the 1.x
   on-disk format. Majors from 2 on are refused, since the module paths carry no `/vN` suffix.
 - Not deleting the bad tags and re-tagging `v1.0.0`, because the proxy keeps serving the first
