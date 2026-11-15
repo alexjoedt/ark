@@ -51,7 +51,7 @@ type Profile struct {
 	Name string `yaml:"-"`
 
 	Repo               string        `yaml:"repo"`
-	PasswordFile       string        `yaml:"password-file"`
+	PasswordFile       string        `yaml:"password-file"        ark:"path"`
 	PasswordEnv        string        `yaml:"password-env"`
 	InsecureNoPassword bool          `yaml:"insecure-no-password"`
 	LockWait           time.Duration `yaml:"lock-wait"`
@@ -63,10 +63,10 @@ type Profile struct {
 
 // Backup holds the flags of a backup.
 type Backup struct {
-	Path              string   `yaml:"path"`
+	Path              string   `yaml:"path"                ark:"path"`
 	Tags              []string `yaml:"tag"`
 	Excludes          []string `yaml:"exclude"`
-	ExcludeFiles      []string `yaml:"exclude-file"`
+	ExcludeFiles      []string `yaml:"exclude-file"        ark:"path"`
 	ExcludeCloudFiles bool     `yaml:"exclude-cloud-files"`
 	Host              string   `yaml:"host"`
 	Comment           string   `yaml:"comment"`
@@ -93,10 +93,10 @@ type Forget struct {
 
 // Hooks are shell commands run around a command, each through sh -c.
 type Hooks struct {
-	RunBefore    string `yaml:"run-before"`
-	RunAfter     string `yaml:"run-after"`
-	RunAfterFail string `yaml:"run-after-fail"`
-	RunFinally   string `yaml:"run-finally"`
+	RunBefore    string `yaml:"run-before"     ark:"raw"`
+	RunAfter     string `yaml:"run-after"      ark:"raw"`
+	RunAfterFail string `yaml:"run-after-fail" ark:"raw"`
+	RunFinally   string `yaml:"run-finally"    ark:"raw"`
 }
 
 var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
@@ -219,7 +219,7 @@ func ReadPasswordFile(path string) (string, error) {
 }
 
 // Load reads the profile file at path. It refuses a file that [CheckFile]
-// refuses, decodes it with [Decode], names the profile after the file's base
+// refuses, decodes it with [Decode] relative to the file's directory, names the profile after the file's base
 // name without its extension and validates it.
 func Load(path string) (*Profile, error) {
 	f, err := os.Open(path)
@@ -235,8 +235,12 @@ func Load(path string) (*Profile, error) {
 	if err := CheckFile(fi); err != nil {
 		return nil, fmt.Errorf("profile %s: %w", path, err)
 	}
+	dir, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("profile %s: %w", path, err)
+	}
 	var p Profile
-	if err := Decode(f, &p); err != nil {
+	if err := Decode(f, &p, dir); err != nil {
 		return nil, fmt.Errorf("profile %s: %w", path, err)
 	}
 	base := filepath.Base(path)

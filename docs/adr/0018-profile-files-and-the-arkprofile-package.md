@@ -35,6 +35,11 @@ someone other than the caller and root, since a profile names commands the hooks
 no override. The CLI keeps the precedence of flag, profile, environment and default, and fills
 the flags of its existing commands from a profile; the library has no orchestration method.
 
+`$VAR`, `${VAR}` and `$$` expand in every value except the hooks, which the shell expands, and a
+variable that is not set is an error. `password-file`, `backup.path` and `backup.exclude-file` resolve
+`~` to the home directory and a relative path against the profile's directory (`Decode` takes it as
+an argument), so cron runs the same profile from any working directory.
+
 - Not one file holding many jobs, because a file per profile needs no name key, and a cron line
   names one profile anyway.
 - Not a `run` command chaining backup, forget and prune, because cron chains the existing commands

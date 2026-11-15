@@ -40,7 +40,7 @@ forget:
 
 func TestDecodeFillsEveryField(t *testing.T) {
 	var p arkprofile.Profile
-	if err := arkprofile.Decode(strings.NewReader(fullProfile), &p); err != nil {
+	if err := arkprofile.Decode(strings.NewReader(fullProfile), &p, ""); err != nil {
 		t.Fatal(err)
 	}
 	want := arkprofile.Profile{
@@ -79,14 +79,14 @@ func TestDecodeIntoAStructEmbeddingAProfile(t *testing.T) {
 		Schedule string `yaml:"schedule"`
 	}
 	in := "repo: /srv/ark\nschedule: daily 03:00\nbackup:\n  path: /data\n"
-	if err := arkprofile.Decode(strings.NewReader(in), &s); err != nil {
+	if err := arkprofile.Decode(strings.NewReader(in), &s, ""); err != nil {
 		t.Fatal(err)
 	}
 	if s.Schedule != "daily 03:00" || s.Repo != "/srv/ark" || s.Backup.Path != "/data" {
 		t.Fatalf("decoded %+v", s)
 	}
 
-	err := arkprofile.Decode(strings.NewReader("schedule: daily\nschedul: x\n"), &s)
+	err := arkprofile.Decode(strings.NewReader("schedule: daily\nschedul: x\n"), &s, "")
 	if err == nil || err.Error() != "line 2: schedul: unknown field" {
 		t.Fatalf("unknown key next to schedule: %v", err)
 	}
@@ -103,7 +103,7 @@ forget:
   run-after: echo done
 `
 	var p arkprofile.Profile
-	if err := arkprofile.Decode(strings.NewReader(in), &p); err != nil {
+	if err := arkprofile.Decode(strings.NewReader(in), &p, ""); err != nil {
 		t.Fatal(err)
 	}
 	want := arkprofile.Hooks{RunBefore: "mount /data", RunAfter: "echo done", RunFinally: "sync"}
@@ -118,7 +118,7 @@ func TestDecodeRefusesAStructThatCannotHoldAProfile(t *testing.T) {
 
 		Repo string `yaml:"repo"`
 	}
-	if err := arkprofile.Decode(strings.NewReader("repo: x\n"), &shared); err == nil ||
+	if err := arkprofile.Decode(strings.NewReader("repo: x\n"), &shared, ""); err == nil ||
 		errors.Is(err, arkprofile.ErrInvalid) {
 		t.Errorf("key shared with the profile: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestDecodeRefusesAStructThatCannotHoldAProfile(t *testing.T) {
 	var pointer struct {
 		*arkprofile.Profile `yaml:",inline"`
 	}
-	if err := arkprofile.Decode(strings.NewReader("repo: x\n"), &pointer); err == nil ||
+	if err := arkprofile.Decode(strings.NewReader("repo: x\n"), &pointer, ""); err == nil ||
 		errors.Is(err, arkprofile.ErrInvalid) {
 		t.Errorf("inline *Profile: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestDecodeRejects(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var p arkprofile.Profile
-			err := arkprofile.Decode(strings.NewReader(tt.in), &p)
+			err := arkprofile.Decode(strings.NewReader(tt.in), &p, "")
 			if err == nil {
 				t.Fatalf("decoded %+v", p)
 			}
