@@ -3,9 +3,11 @@ package out
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/alexjoedt/ark"
@@ -20,26 +22,31 @@ type Progress struct {
 	label string
 	start time.Time
 
+	live  bool // the block is drawn; set once in Printer.Progress
+	once  sync.Once
+	stop  chan struct{}
+	done  chan struct{}
+	drawn []int // columns of each line of the block on screen, owned by spin
+
 	mu     sync.Mutex
 	last   ark.ProgressEvent
-	phase  ark.Phase
-	seen   bool
 	note   string
 	ended  bool
 	order  []ark.Phase
 	marks  map[ark.Phase]phaseSeen
-	seq    int
-	cur    int // index in order of the furthest phase seen, -1 before
+	seq    int           // events seen
+	cur    int           // index in order of the furthest phase seen, -1 before
+	curAt  time.Duration // when the furthest phase started, since start
 	counts ark.ProgressEvent
 	final  bool // the backup scan sent its totals
-
-	drawn int // lines of the block on screen, owned by spin
-	stop  chan struct{}
-	done  chan struct{}
 }
 
-// phaseSeen holds the sequence numbers of a phase's first and last event.
-type phaseSeen struct{ first, last int }
+// phaseSeen holds the sequence numbers of a phase's first and last event and
+// the time of the last one, since Progress started.
+type phaseSeen struct {
+	first, last int
+	at          time.Duration
+}
 
 var frames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
@@ -54,14 +61,18 @@ var phases = map[ark.Operation][]ark.Phase{
 	ark.OperationCheck:   {ark.PhaseLoad, ark.PhaseFetch, ark.PhaseFinalize},
 }
 
-// etaAfter is the elapsed time before an ETA shows; earlier rates swing.
+// etaAfter is the time in a phase before an ETA shows; earlier rates swing.
 const etaAfter = 3 * time.Second
+
+// runFor is how long an earlier phase shows as running after its last event.
+const runFor = 2 * time.Second
 
 // Progress starts rendering for label ("backup /srv/app"). Call Done or Fail
 // when the operation returns.
 func (p *Printer) Progress(label string) *Progress {
 	pr := &Progress{p: p, label: label, start: time.Now(), cur: -1, marks: map[ark.Phase]phaseSeen{}}
 	if p.Live() {
+		pr.live = true
 		pr.stop = make(chan struct{})
 		pr.done = make(chan struct{})
 		go pr.spin()
@@ -80,9 +91,9 @@ func (pr *Progress) handle(ev ark.ProgressEvent) {
 		pr.mu.Unlock()
 		return
 	}
-	prev, prevPhase, seen := pr.last, pr.phase, pr.seen
-	pr.last, pr.phase, pr.seen = ev, ev.Phase, true
-	pr.track(ev)
+	prev, seen := pr.last, pr.seq > 0
+	pr.last = ev
+	pr.track(ev, time.Since(pr.start))
 	pr.mu.Unlock()
 
 	m := pr.p.mode
@@ -91,13 +102,13 @@ func (pr *Progress) handle(ev ark.ProgressEvent) {
 		return
 	case m.Verbose:
 		if ev.CurrentPath != "" {
-			fmt.Fprintf(pr.p.stderr, "%s %s\n", ev.Phase, ev.CurrentPath)
-		} else if !seen || ev.Phase != prevPhase {
+			fmt.Fprintf(pr.p.stderr, "%s %s\n", ev.Phase, printable(ev.CurrentPath))
+		} else if !seen || ev.Phase != prev.Phase {
 			fmt.Fprintln(pr.p.stderr, Line(ev))
 		}
-	case pr.stop == nil:
+	case !pr.live:
 		// no terminal: one line when a phase ends, with its final counts
-		if seen && ev.Phase != prevPhase {
+		if seen && ev.Phase != prev.Phase {
 			fmt.Fprintln(pr.p.stderr, Line(prev))
 		}
 	}
@@ -105,8 +116,9 @@ func (pr *Progress) handle(ev ark.ProgressEvent) {
 
 // track updates the block state; pr.mu is held. The counts follow the
 // furthest phase in the operation's order; an event of an earlier phase that
-// still runs (the backup scan, the restore fetch) only marks it running.
-func (pr *Progress) track(ev ark.ProgressEvent) {
+// still runs (the backup scan, the restore fetch) only marks it running. at
+// is the time of the event since Progress started.
+func (pr *Progress) track(ev ark.ProgressEvent, at time.Duration) {
 	if pr.order == nil {
 		pr.order = phases[ev.Operation]
 	}
@@ -115,7 +127,7 @@ func (pr *Progress) track(ev ark.ProgressEvent) {
 	if !ok {
 		s.first = pr.seq
 	}
-	s.last = pr.seq
+	s.last, s.at = pr.seq, at
 	pr.marks[ev.Phase] = s
 	if ev.Phase == ark.PhaseScan && (ev.FilesTotal > 0 || ev.BytesTotal > 0) {
 		pr.final = true
@@ -126,7 +138,7 @@ func (pr *Progress) track(ev ark.ProgressEvent) {
 	}
 	if i > pr.cur {
 		pr.counts = ark.ProgressEvent{Operation: ev.Operation, Phase: ev.Phase}
-		pr.cur = i
+		pr.cur, pr.curAt = i, at
 	}
 	if ev.Phase == ark.PhaseScan {
 		// The scan's totals are its own count; a percent of them says nothing.
@@ -161,27 +173,40 @@ func (pr *Progress) spin() {
 	for i := 0; ; i++ {
 		select {
 		case <-pr.stop:
-			fmt.Fprint(pr.p.stderr, pr.erase())
+			fmt.Fprint(pr.p.stderr, pr.erase(pr.p.termWidth()))
 			return
 		case <-t.C:
-			lines := pr.lines(frames[i%len(frames)], pr.p.termWidth(), time.Since(pr.start))
-			fmt.Fprint(pr.p.stderr, pr.erase()+strings.Join(lines, "\n"))
-			pr.drawn = len(lines)
+			w := pr.p.termWidth()
+			lines := pr.lines(frames[i%len(frames)], w, time.Since(pr.start))
+			// Autowrap is off while the block is written, so a line the rune
+			// count underestimates (wide runes) is clipped, not wrapped.
+			fmt.Fprint(pr.p.stderr, pr.erase(w)+"\033[?7l"+strings.Join(lines, "\n")+"\033[?7h")
+			pr.drawn = pr.drawn[:0]
+			for _, l := range lines {
+				pr.drawn = append(pr.drawn, min(utf8.RuneCountInString(l), w))
+			}
 		}
 	}
 }
 
 // erase moves the cursor to the first line of the drawn block and clears to
 // the end of the screen. The block's last line ends without a newline, so the
-// cursor sits on it.
-func (pr *Progress) erase() string {
-	switch pr.drawn {
+// cursor sits on it. width is the terminal's width now: a line drawn wider
+// takes more than one row once the terminal is narrowed.
+// ponytail: assumes the terminal rewraps lines on resize (VTE, iTerm2, kitty,
+// tmux); one that clips them (xterm) gets rows above the block cleared.
+func (pr *Progress) erase(width int) string {
+	rows := 0
+	for _, c := range pr.drawn {
+		rows += max(1, (c+width-1)/max(width, 1))
+	}
+	switch rows {
 	case 0:
 		return ""
 	case 1:
 		return "\r\033[J"
 	}
-	return fmt.Sprintf("\r\033[%dA\033[J", pr.drawn-1)
+	return fmt.Sprintf("\r\033[%dA\033[J", rows-1)
 }
 
 // lines renders the block for a terminal width columns wide. Every line keeps
@@ -191,29 +216,29 @@ func (pr *Progress) lines(frame string, width int, elapsed time.Duration) []stri
 	defer pr.mu.Unlock()
 	w := max(width-2, 20)
 	right := Duration(elapsed.Round(time.Second))
-	left := cut(frame+" "+pr.label, w-utf8.RuneCountInString(right)-2)
+	left := cut(frame+" "+printable(pr.label), w-utf8.RuneCountInString(right)-2)
 	pad := w - utf8.RuneCountInString(left) - utf8.RuneCountInString(right)
 	lines := []string{left + strings.Repeat(" ", max(pad, 2)) + right}
 	add := func(s string) {
 		if s != "" {
-			lines = append(lines, "  "+cut(s, w-2))
+			lines = append(lines, "  "+cut(printable(s), w-2))
 		}
 	}
-	add(pr.phaseLine())
+	add(pr.phaseLine(elapsed))
 	if pr.note != "" {
 		add(pr.note)
-	} else if pr.seen {
-		add(countsLine(pr.counts, elapsed))
+	} else if pr.seq > 0 {
+		add(countsLine(pr.counts, max(elapsed-pr.curAt, 0)))
 	}
 	add(pr.counts.CurrentPath)
 	return lines
 }
 
-// phaseLine marks each phase of the operation: ✓ done, ▸ running, · pending.
-// An earlier phase runs as long as it had an event after the furthest phase
-// started, so overlapping phases both show ▸; the backup scan ends with its
-// totals. A phase the operation skipped shows as done.
-func (pr *Progress) phaseLine() string {
+// phaseLine marks each phase of the operation: ✓ done, ▸ running, · no event
+// yet, so a phase the operation skips stays ·. An earlier phase runs while it
+// had an event after the furthest phase started and within runFor of now, so
+// overlapping phases both show ▸; the backup scan ends with its totals.
+func (pr *Progress) phaseLine(now time.Duration) string {
 	if pr.cur < 0 {
 		return ""
 	}
@@ -223,10 +248,10 @@ func (pr *Progress) phaseLine() string {
 		s, ok := pr.marks[ph]
 		mark := "✓"
 		switch {
-		case i > pr.cur:
+		case i > pr.cur, !ok:
 			mark = "·"
 		case ph == ark.PhaseScan && pr.final:
-		case i == pr.cur, ok && s.last > curFirst:
+		case i == pr.cur, s.last > curFirst && now-s.at < runFor:
 			mark = "▸"
 		}
 		parts[i] = mark + " " + string(ph)
@@ -234,34 +259,46 @@ func (pr *Progress) phaseLine() string {
 	return strings.Join(parts, "   ")
 }
 
-// countsLine renders "12 345 / 40 000 files   3.1 / 10.0 GiB   31%   ETA 2m40s".
-// Percent and ETA follow bytes, else chunks, else files, the first with a
-// total; check takes snapshots, as its chunk totals cover one snapshot. The
-// ETA is elapsed*(total-done)/done, shown from etaAfter on.
-func countsLine(ev ark.ProgressEvent, elapsed time.Duration) string {
+// countParts renders the counters ev sets, done/total where a total is set.
+// long is the live block's style ("12 345 / 40 000 files", "3.1 / 10.0 GiB"),
+// else the line style ("12345/40000 files", "3.1 GiB/10.0 GiB").
+func countParts(ev ark.ProgressEvent, long bool) []string {
+	num, sep := strconv.Itoa, "/"
+	bytesOf := func(done, total int64) string { return Bytes(done) + "/" + Bytes(total) }
+	if long {
+		num, sep, bytesOf = Count, " / ", BytesOf
+	}
 	unit := "files"
 	if ev.Operation == ark.OperationCheck || ev.Operation == ark.OperationForget {
 		unit = "snapshots"
 	}
 	var parts []string
-	switch {
-	case ev.FilesTotal > 0:
-		parts = append(parts, Count(ev.FilesDone)+" / "+Count(ev.FilesTotal)+" "+unit)
-	case ev.FilesDone > 0:
-		parts = append(parts, Count(ev.FilesDone)+" "+unit)
+	count := func(done, total int, name string) {
+		switch {
+		case total > 0:
+			parts = append(parts, num(done)+sep+num(total)+" "+name)
+		case done > 0:
+			parts = append(parts, num(done)+" "+name)
+		}
 	}
+	count(ev.FilesDone, ev.FilesTotal, unit)
 	switch {
 	case ev.BytesTotal > 0:
-		parts = append(parts, BytesOf(ev.BytesDone, ev.BytesTotal))
+		parts = append(parts, bytesOf(ev.BytesDone, ev.BytesTotal))
 	case ev.BytesDone > 0:
 		parts = append(parts, Bytes(ev.BytesDone))
 	}
-	switch {
-	case ev.ChunksTotal > 0:
-		parts = append(parts, Count(ev.ChunksDone)+" / "+Count(ev.ChunksTotal)+" chunks")
-	case ev.ChunksDone > 0:
-		parts = append(parts, Count(ev.ChunksDone)+" chunks")
-	}
+	count(ev.ChunksDone, ev.ChunksTotal, "chunks")
+	return parts
+}
+
+// countsLine renders "12 345 / 40 000 files   3.1 / 10.0 GiB   31%   ETA 2m40s".
+// Percent and ETA follow bytes, else chunks, else files, the first with a
+// total; check takes snapshots, as its chunk totals cover one snapshot. The
+// ETA is elapsed*(total-done)/done, elapsed in the current phase, shown from
+// etaAfter on.
+func countsLine(ev ark.ProgressEvent, elapsed time.Duration) string {
+	parts := countParts(ev, true)
 	var done, total int64
 	switch {
 	case ev.Operation == ark.OperationCheck:
@@ -304,15 +341,22 @@ func cut(s string, n int) string {
 }
 
 // Wait replaces the counts line with msg until Resume. Without the live
-// block it prints msg as one line to stderr, unless --quiet is set.
+// block, or once it ended, it prints msg as one line to stderr, unless
+// --quiet is set.
 func (pr *Progress) Wait(msg string) {
-	if pr.stop == nil {
-		pr.p.Notef("%s", msg)
+	pr.mu.Lock()
+	shown := pr.live && !pr.ended
+	if shown {
+		pr.note = msg
+	}
+	pr.mu.Unlock()
+	if shown {
 		return
 	}
-	pr.mu.Lock()
-	pr.note = msg
-	pr.mu.Unlock()
+	if pr.live {
+		<-pr.done // the block is erased first
+	}
+	pr.p.Notef("%s", msg)
 }
 
 // Resume restores the counts line after Wait.
@@ -322,16 +366,18 @@ func (pr *Progress) Resume() {
 	pr.mu.Unlock()
 }
 
+// stopSpinner ends the block once; a concurrent call returns after the
+// block is erased.
 func (pr *Progress) stopSpinner() {
-	pr.mu.Lock()
-	pr.ended = true
-	pr.mu.Unlock()
-	if pr.stop == nil {
-		return
-	}
-	close(pr.stop)
-	<-pr.done
-	pr.stop = nil
+	pr.once.Do(func() {
+		pr.mu.Lock()
+		pr.ended = true
+		pr.mu.Unlock()
+		if pr.live {
+			close(pr.stop)
+			<-pr.done
+		}
+	})
 }
 
 // Done stops rendering, drops later events, and prints the summary block
@@ -367,29 +413,16 @@ func (pr *Progress) Fail() {
 
 // Line renders one event as "<phase> <counts>", phases as identifiers.
 func Line(ev ark.ProgressEvent) string {
-	var b strings.Builder
-	b.WriteString(string(ev.Phase))
-	unit := "files"
-	if ev.Operation == ark.OperationCheck || ev.Operation == ark.OperationForget {
-		unit = "snapshots"
-	}
-	switch {
-	case ev.FilesTotal > 0:
-		fmt.Fprintf(&b, " %d/%d %s", ev.FilesDone, ev.FilesTotal, unit)
-	case ev.FilesDone > 0:
-		fmt.Fprintf(&b, " %d %s", ev.FilesDone, unit)
-	}
-	switch {
-	case ev.BytesTotal > 0:
-		fmt.Fprintf(&b, " %s/%s", Bytes(ev.BytesDone), Bytes(ev.BytesTotal))
-	case ev.BytesDone > 0:
-		fmt.Fprintf(&b, " %s", Bytes(ev.BytesDone))
-	}
-	switch {
-	case ev.ChunksTotal > 0:
-		fmt.Fprintf(&b, " %d/%d chunks", ev.ChunksDone, ev.ChunksTotal)
-	case ev.ChunksDone > 0:
-		fmt.Fprintf(&b, " %d chunks", ev.ChunksDone)
-	}
-	return b.String()
+	return strings.Join(append([]string{string(ev.Phase)}, countParts(ev, false)...), " ")
+}
+
+// printable replaces control characters, which would move the cursor or
+// start an escape sequence, and invalid UTF-8 with a placeholder.
+func printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return '?'
+		}
+		return r
+	}, s)
 }

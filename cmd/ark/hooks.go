@@ -16,10 +16,12 @@ import (
 var activeProgress atomic.Pointer[out.Progress]
 
 // startProgress renders the operation that follows and routes the Open-time
-// hooks to it.
+// hooks to it. A renderer still running from an earlier operation stops.
 func startProgress(p *out.Printer, label string) *out.Progress {
 	pr := p.Progress(label)
-	activeProgress.Store(pr)
+	if old := activeProgress.Swap(pr); old != nil {
+		old.Fail()
+	}
 	return pr
 }
 

@@ -44,13 +44,13 @@ func run(args []string) int {
 			}
 		}
 	}
+	// A command that returned without Done or Fail must not leave the live
+	// block drawing over its results or the error line.
+	if pr := activeProgress.Swap(nil); pr != nil {
+		pr.Fail()
+	}
 	if err == nil {
 		return exitcode.OK
-	}
-	// A command that returned without Fail must not leave the live block
-	// drawing over the error line.
-	if pr := activeProgress.Load(); pr != nil {
-		pr.Fail()
 	}
 
 	code, kind := exitcode.Of(err)

@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -204,7 +205,7 @@ func TestProgressBlockLines(t *testing.T) {
 	})
 	want := []string{
 		"⠹ backup /srv/app" + strings.Repeat(" ", 56) + "1m12s",
-		"  ▸ scan   ▸ store   · finalize",
+		"  ✓ scan   ▸ store   · finalize",
 		"  12 345 / 40 000 files   3.1 / 10.0 GiB   31%   ETA 2m40s",
 		"  srv/app/data/2026/11/exports/large-file.bin",
 	}
@@ -275,7 +276,7 @@ func TestProgressPhasesOverlapAndSkip(t *testing.T) {
 	f(ark.ProgressEvent{Operation: ark.OperationPrune, Phase: ark.PhaseLoad})
 	f(ark.ProgressEvent{Operation: ark.OperationPrune, Phase: ark.PhaseSweep, ChunksDone: 1, ChunksTotal: 4})
 	if got := pr.lines("⠹", 80, 4*time.Second)[1:]; !slices.Equal(got, []string{
-		"  ✓ load   ✓ store   ▸ sweep   · finalize",
+		"  ✓ load   · store   ▸ sweep   · finalize",
 		"  1 / 4 chunks   25%   ETA 12s",
 	}) {
 		t.Fatalf("prune lines %q", got)
@@ -303,6 +304,82 @@ func TestProgressPhasesOverlapAndSkip(t *testing.T) {
 	if got := pr.lines("⠹", 80, 4*time.Second)[2]; got != "  1 / 4 snapshots   3 / 3 chunks   25%   ETA 12s" {
 		t.Fatalf("check counts %q", got)
 	}
+}
+
+func TestProgressPhaseMarksFollowEvents(t *testing.T) {
+	p, _, _ := newTest(Mode{}, "")
+	pr := p.Progress("restore x")
+	ev := func(ph ark.Phase, at time.Duration) {
+		pr.track(ark.ProgressEvent{Operation: ark.OperationRestore, Phase: ph}, at)
+	}
+	ev(ark.PhaseLoad, 0)
+	ev(ark.PhaseWrite, 0)
+	for _, c := range []struct {
+		at   time.Duration
+		ph   ark.Phase
+		now  time.Duration
+		want string
+	}{
+		{0, "", 0, "  ✓ load   · fetch   ▸ write   · finalize"},
+		{time.Second, ark.PhaseFetch, time.Second, "  ✓ load   ▸ fetch   ▸ write   · finalize"},
+		{time.Second, ark.PhaseWrite, 4 * time.Second, "  ✓ load   ✓ fetch   ▸ write   · finalize"},
+	} {
+		if c.ph != "" {
+			ev(c.ph, c.at)
+		}
+		if got := pr.lines("⠹", 80, c.now)[1]; got != c.want {
+			t.Errorf("at %s: %q, want %q", c.now, got, c.want)
+		}
+	}
+}
+
+func TestProgressETAFollowsThePhase(t *testing.T) {
+	p, _, _ := newTest(Mode{}, "")
+	pr := p.Progress("prune")
+	pr.track(ark.ProgressEvent{Operation: ark.OperationPrune, Phase: ark.PhaseLoad}, 2*time.Minute)
+	pr.track(ark.ProgressEvent{
+		Operation: ark.OperationPrune, Phase: ark.PhaseSweep, ChunksDone: 1, ChunksTotal: 10,
+	}, 3*time.Minute)
+	if got := pr.lines("⠹", 80, 3*time.Minute+10*time.Second)[2]; got != "  1 / 10 chunks   10%   ETA 1m30s" {
+		t.Fatalf("counts %q", got)
+	}
+}
+
+func TestProgressBlockEscapesNames(t *testing.T) {
+	p, _, _ := newTest(Mode{}, "")
+	pr := p.Progress("backup \033[2J")
+	pr.Func()(ark.ProgressEvent{
+		Operation: ark.OperationBackup, Phase: ark.PhaseStore, CurrentPath: "a\nb\r\033[1A\x9b",
+	})
+	got := pr.lines("⠹", 80, 0)
+	if !strings.HasPrefix(got[0], "⠹ backup ?[2J ") || got[len(got)-1] != "  a?b??[1A\ufffd" {
+		t.Fatalf("lines %q", got)
+	}
+}
+
+func TestProgressEraseCountsRewrappedRows(t *testing.T) {
+	pr := &Progress{drawn: []int{100, 30}}
+	if got := pr.erase(120); got != "\r\033[1A\033[J" {
+		t.Fatalf("same width: %q", got)
+	}
+	if got := pr.erase(60); got != "\r\033[2A\033[J" {
+		t.Fatalf("narrowed: %q", got)
+	}
+}
+
+func TestProgressWaitWhileStopping(t *testing.T) {
+	p, _, _ := newTest(Mode{}, "")
+	p.SetTTY(true)
+	pr := p.Progress("prune")
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for range 100 {
+			pr.Wait("waiting for lock")
+		}
+	})
+	pr.Fail()
+	pr.Fail()
+	wg.Wait()
 }
 
 func TestCut(t *testing.T) {
