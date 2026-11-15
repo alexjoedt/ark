@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -27,8 +27,9 @@ func profileCommand() *cli.Command {
 
    Prints name, repository and backup path of every profile in
    $XDG_CONFIG_HOME/ark/profiles. A file that does not load is listed with its
-   error; the command fails only when no profile loads.`,
-				Action: func(_ context.Context, cmd *cli.Command) error { return profileList(cmd) },
+   error, a file not named NAME.yaml as ignored; the command fails only when
+   no profile loads.`,
+				Action: profileList,
 			},
 			{
 				Name:      "show",
@@ -53,7 +54,7 @@ type profileEntry struct {
 	Error string `json:"error,omitempty"`
 }
 
-func profileList(cmd *cli.Command) error {
+func profileList(_ context.Context, cmd *cli.Command) error {
 	if cmd.NArg() != 0 {
 		return exitcode.Usagef("ark profile list takes no arguments")
 	}
@@ -61,16 +62,24 @@ func profileList(cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	files, err := filepath.Glob(filepath.Join(dir, "*.yaml"))
-	if err != nil {
+	des, err := os.ReadDir(dir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("list profiles: %w", err)
 	}
-	slices.Sort(files)
 	entries := []profileEntry{}
-	loaded := 0
-	for _, f := range files {
-		name := strings.TrimSuffix(filepath.Base(f), ".yaml")
-		p, err := arkprofile.Load(f)
+	files, loaded := 0, 0
+	for _, de := range des {
+		base := de.Name()
+		name, ok := strings.CutSuffix(base, ".yaml")
+		switch {
+		case de.IsDir() || strings.HasPrefix(base, "."):
+			continue
+		case !ok:
+			entries = append(entries, profileEntry{Name: base, Error: "ignored, -P reads NAME.yaml"})
+			continue
+		}
+		files++
+		p, err := arkprofile.Load(filepath.Join(dir, base))
 		if err != nil {
 			entries = append(entries, profileEntry{Name: name, Error: strings.ReplaceAll(err.Error(), "\n", " ")})
 			continue
@@ -90,8 +99,10 @@ func profileList(cmd *cli.Command) error {
 			rows[i] = []string{e.Name, e.Repo, e.Path, e.Error}
 		}
 		p.Table([]string{"NAME", "REPO", "BACKUP PATH", "ERROR"}, rows)
+	} else {
+		p.Infof("no profiles in %s", dir)
 	}
-	if len(files) > 0 && loaded == 0 {
+	if files > 0 && loaded == 0 {
 		err := errors.New("no profile loads")
 		if p.Mode().JSON {
 			return &exitcode.Error{Code: exitcode.Failure, Kind: exitcode.KindError, Err: err, Silent: true}
@@ -139,58 +150,42 @@ func profileShow(ctx context.Context, cmd *cli.Command) error {
 	return nil
 }
 
-// candidate is one layer a value may come from.
-type candidate struct {
-	source, value string
-	ok            bool
-}
-
-// layered is the first candidate that is set; the last one is the default.
-func layered(key string, cs ...candidate) profileValue {
-	for _, c := range cs {
-		if c.ok {
-			return profileValue{key, c.value, c.source}
-		}
-	}
-	return profileValue{key, "", "default"}
-}
-
-func fromProfile(value string, set bool) candidate { return candidate{"profile", value, set} }
-
 // profileOnly is a value only the profile can set, else its default.
 func profileOnly(key, value, def string) profileValue {
-	return layered(key, fromProfile(value, value != ""), candidate{"default", def, true})
+	if value == "" {
+		return profileValue{key, def, "default"}
+	}
+	return profileValue{key, value, "profile"}
 }
 
 func profileInt(key string, n int) profileValue {
-	return layered(key, fromProfile(strconv.Itoa(n), n != 0), candidate{"default", "0", true})
+	if n == 0 {
+		return profileValue{key, "0", "default"}
+	}
+	return profileValue{key, strconv.Itoa(n), "profile"}
 }
 
 func profileBool(key string, b bool) profileValue {
-	return layered(key, fromProfile("true", b), candidate{"default", "false", true})
+	if !b {
+		return profileValue{key, "false", "default"}
+	}
+	return profileValue{key, "true", "profile"}
 }
 
-// effectiveValues mirrors the precedence of the commands: a flag given to
+// effectiveValues resolves every value as the commands do: a flag given to
 // ark, the profile, the environment, the default. The password only names its
 // source.
 func effectiveValues(root *cli.Command, lp *loadedProfile) []profileValue {
-	env := os.Getenv("ARK_REPOSITORY")
 	host, _ := os.Hostname()
 	b, f := lp.Backup, lp.Forget
+	repo, repoFrom := repoSetting(root, lp)
+	lockWait, lockWaitFrom := lockWaitSetting(root, lp)
+	conc, concFrom := concurrencySetting(root, lp)
 	values := []profileValue{
-		layered("repo",
-			candidate{"cli", root.String("repo"), root.IsSet("repo")},
-			fromProfile(lp.Repo, lp.Repo != ""),
-			candidate{"env", env, env != ""}),
+		{"repo", repo, repoFrom},
 		passwordValue(root, lp.Profile),
-		layered("lock-wait",
-			candidate{"cli", root.Duration("lock-wait").String(), root.IsSet("lock-wait")},
-			fromProfile(lp.LockWait.String(), lp.LockWait > 0),
-			candidate{"default", root.Duration("lock-wait").String(), true}),
-		layered("concurrency",
-			candidate{"cli", strconv.Itoa(root.Int("concurrency")), root.IsSet("concurrency")},
-			fromProfile(strconv.Itoa(lp.Concurrency), lp.Concurrency > 0),
-			candidate{"default", strconv.Itoa(root.Int("concurrency")), true}),
+		{"lock-wait", lockWait.String(), lockWaitFrom},
+		{"concurrency", strconv.Itoa(conc), concFrom},
 		profileOnly("backup.path", b.Path, ""),
 		profileOnly("backup.tag", strings.Join(b.Tags, ", "), ""),
 		profileOnly("backup.exclude", strings.Join(b.Excludes, ", "), ""),
@@ -223,40 +218,19 @@ func hookValues(section string, h arkprofile.Hooks) []profileValue {
 	}
 }
 
-// passwordValue names the source repoPassword.read would use, in its order,
-// and never reads the password or a file.
+// passwordValue names the source repoPassword.read would use and never reads
+// the password or a file. What would fail the command shows as the value.
 func passwordValue(root *cli.Command, p *arkprofile.Profile) profileValue {
-	src := repoPassword
-	var insecure, pw profileValue
-	insecureEnv, _ := strconv.ParseBool(os.Getenv(src.insecureEnv))
+	insecure, from, err := repoPassword.resolve(root, *p)
 	switch {
-	case root.Bool(src.insecureFlag):
-		insecure = profileValue{"password", "none, --" + src.insecureFlag, "cli"}
-	case p.InsecureNoPassword:
-		insecure = profileValue{"password", "none, insecure-no-password", "profile"}
-	case insecureEnv:
-		insecure = profileValue{"password", "none, " + src.insecureEnv, "env"}
+	case err != nil:
+		return profileValue{"password", "error: " + err.Error(), "env"}
+	case insecure.label != "" && from.label != "":
+		return profileValue{"password", insecure.value + " conflicts with " + from.value, insecure.layer}
+	case insecure.label != "":
+		return profileValue{"password", insecure.value, insecure.layer}
+	case from.label != "":
+		return profileValue{"password", from.value, from.layer}
 	}
-	switch envFile, envPw := os.Getenv(src.fileEnv), os.Getenv(src.envVar); {
-	case root.String(src.fileFlag) != "":
-		pw = profileValue{"password", "file " + root.String(src.fileFlag), "cli"}
-	case p.PasswordFile != "":
-		pw = profileValue{"password", "file " + p.PasswordFile, "profile"}
-	case p.PasswordEnv != "":
-		pw = profileValue{"password", "variable " + p.PasswordEnv, "profile"}
-	case envFile != "":
-		pw = profileValue{"password", "file " + envFile, "env"}
-	case envPw != "":
-		pw = profileValue{"password", "variable " + src.envVar, "env"}
-	default:
-		pw = profileValue{"password", "prompt", "default"}
-	}
-	switch {
-	case insecure.Source != "" && pw.Source != "default":
-		insecure.Value += " conflicts with " + pw.Value
-		return insecure
-	case insecure.Source != "":
-		return insecure
-	}
-	return pw
+	return profileValue{"password", "prompt", "default"}
 }

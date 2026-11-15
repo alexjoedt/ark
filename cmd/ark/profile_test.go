@@ -410,6 +410,15 @@ func TestProfileShowSources(t *testing.T) {
 	if code, out := runCapture(t, "profile", "show", "plain"); code != 0 || !strings.Contains(out, "ARK_PASSWORD") {
 		t.Errorf("env password source missing: exit %d %q", code, out)
 	}
+	t.Setenv("ARK_INSECURE_NO_PASSWORD", "yes")
+	code, out := runCapture(t, "profile", "show", "plain")
+	if code != 0 || !strings.Contains(out, "want true or false") {
+		t.Errorf("show with a bad ARK_INSECURE_NO_PASSWORD: exit %d %q, want the error backup gives", code, out)
+	}
+	code, _, logs := runCaptureAll(t, "profile", "show", "Docs")
+	if code != 2 || !strings.Contains(logs, "profile name") || strings.Contains(logs, "--profile") {
+		t.Errorf("show of an invalid name: exit %d %q, want 2 without --profile", code, logs)
+	}
 	if code, _ := runCapture(t, "profile", "show"); code != 2 {
 		t.Errorf("show without a profile: exit %d, want 2", code)
 	}
@@ -448,5 +457,14 @@ func TestProfileList(t *testing.T) {
 	}
 	if code, out := runCapture(t, "profile", "list"); code != 0 || !strings.Contains(out, "/srv/ark") {
 		t.Fatalf("table output: exit %d %q", code, out)
+	}
+	if code, out := runCapture(t, "-P", "bad", "profile", "list"); code != 0 || !strings.Contains(out, "/srv/ark") {
+		t.Fatalf("list with a broken -P: exit %d %q, want the list", code, out)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "old.yml"), []byte("repo: /x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if es := list(0); len(es) != 3 || es[2].Name != "old.yml" || es[2].Error == "" {
+		t.Fatalf("list %+v, want old.yml reported as ignored", es)
 	}
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -40,63 +39,81 @@ var (
 	}
 )
 
-// read resolves the passphrase from the first source that is set: the
-// password file flag, the profile's password-file or password-env, the file
-// variable, the password variable, else a prompt on the terminal. No password
-// from the flag, the profile or the variable conflicts with every password
-// source. confirm prompts twice.
+// passwordOrigin is the setting a password, or no password, comes from.
+type passwordOrigin struct {
+	label string // names it in a conflict: "--password-file", "ARK_PASSWORD"
+	layer string // cli, profile or env
+	value string // what profile show prints: "file F", "variable V", "none, X"
+	file  string // the password file the CLI reads itself, if any
+}
+
+// resolve picks the sources read would use without reading a password: the
+// first setting for no password (flag, profile, variable) and the first
+// password source (file flag, the profile's password-file or password-env,
+// the file variable, the password variable). Either is zero when unset.
+func (s passwordSource) resolve(cmd *cli.Command, pp arkprofile.Profile) (insecure, from passwordOrigin, err error) {
+	switch v := os.Getenv(s.insecureEnv); {
+	case cmd.Bool(s.insecureFlag):
+		insecure = passwordOrigin{label: "--" + s.insecureFlag, layer: "cli"}
+	case pp.InsecureNoPassword:
+		insecure = passwordOrigin{label: "the profile's insecure-no-password", layer: "profile"}
+	case v != "":
+		on, err := strconv.ParseBool(v)
+		if err != nil {
+			return insecure, from, exitcode.Usagef("%s=%q: want true or false", s.insecureEnv, v)
+		}
+		if on {
+			insecure = passwordOrigin{label: s.insecureEnv, layer: "env"}
+		}
+	}
+	if insecure.label != "" {
+		insecure.value = "none, " + insecure.label
+	}
+
+	switch flagFile, envFile := cmd.String(s.fileFlag), os.Getenv(s.fileEnv); {
+	case flagFile != "":
+		from = passwordOrigin{"--" + s.fileFlag, "cli", "file " + flagFile, flagFile}
+	case pp.PasswordFile != "":
+		from = passwordOrigin{"the profile's password-file", "profile", "file " + pp.PasswordFile, ""}
+	case pp.PasswordEnv != "":
+		from = passwordOrigin{"the profile's password-env", "profile", "variable " + pp.PasswordEnv, ""}
+	case envFile != "":
+		from = passwordOrigin{s.fileEnv, "env", "file " + envFile, envFile}
+	case os.Getenv(s.envVar) != "":
+		from = passwordOrigin{s.envVar, "env", "variable " + s.envVar, ""}
+	}
+	return insecure, from, nil
+}
+
+// read resolves the passphrase from the source resolve picks, else a prompt
+// on the terminal. No password from the flag, the profile or the variable
+// conflicts with every password source. confirm prompts twice.
 func (s passwordSource) read(cmd *cli.Command, confirm bool, prof *arkprofile.Profile) (ark.Passphrase, error) {
 	var pp arkprofile.Profile
 	if prof != nil {
 		pp = *prof
 	}
-	var insecure string
-	switch v := os.Getenv(s.insecureEnv); {
-	case cmd.Bool(s.insecureFlag):
-		insecure = "--" + s.insecureFlag
-	case pp.InsecureNoPassword:
-		insecure = "the profile's insecure-no-password"
-	case v != "":
-		on, err := strconv.ParseBool(v)
-		if err != nil {
-			return ark.Passphrase{}, exitcode.Usagef("%s=%q: want true or false", s.insecureEnv, v)
-		}
-		if on {
-			insecure = s.insecureEnv
-		}
+	insecure, from, err := s.resolve(cmd, pp)
+	if err != nil {
+		return ark.Passphrase{}, err
 	}
-
-	flagFile, envFile, env := cmd.String(s.fileFlag), os.Getenv(s.fileEnv), os.Getenv(s.envVar)
-	var from string
-	switch {
-	case flagFile != "":
-		from = "--" + s.fileFlag
-	case pp.PasswordFile != "":
-		from = "the profile's password-file"
-	case pp.PasswordEnv != "":
-		from = "the profile's password-env"
-	case envFile != "":
-		from = s.fileEnv
-	case env != "":
-		from = s.envVar
-	}
-	if insecure != "" && from != "" {
-		return ark.Passphrase{}, exitcode.Usagef("%s conflicts with %s", insecure, from)
+	if insecure.label != "" && from.label != "" {
+		return ark.Passphrase{}, exitcode.Usagef("%s conflicts with %s", insecure.label, from.label)
 	}
 
 	switch {
-	case insecure != "":
+	case insecure.label != "":
 		return ark.WithoutPassword(), nil
-	case flagFile == "" && (pp.PasswordFile != "" || pp.PasswordEnv != ""):
+	case from.layer == "profile":
 		return profilePassphrase(prof)
-	case flagFile != "" || envFile != "":
-		pw, err := readPasswordFile(cmp.Or(flagFile, envFile))
+	case from.file != "":
+		pw, err := readPasswordFile(from.file)
 		if err != nil {
 			return ark.Passphrase{}, err
 		}
 		return ark.WithPassword(pw), nil
-	case env != "":
-		return ark.WithPassword(env), nil
+	case from.label != "":
+		return ark.WithPassword(os.Getenv(s.envVar)), nil
 	}
 
 	fd := int(os.Stdin.Fd())

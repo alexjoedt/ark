@@ -57,7 +57,7 @@ func loadProfile(ctx context.Context, cmd *cli.Command) (context.Context, error)
 // name that is not a valid profile name is a usage error.
 func profilePath(name string) (string, error) {
 	if err := (&arkprofile.Profile{Name: name}).Validate(); err != nil {
-		return "", exitcode.Usagef("--profile: %w", err)
+		return "", exitcode.Usagef("profile %w", err)
 	}
 	dir, err := profileDir()
 	if err != nil {
@@ -93,7 +93,7 @@ func profileDir() (string, error) {
 }
 
 // setProfileLoad runs loadProfile before the own Before of every leaf command
-// except version, which reads no profile.
+// except version and profile list, which read no profile.
 func setProfileLoad(cmd *cli.Command) {
 	if len(cmd.Commands) == 0 && cmd.Name != "version" {
 		own := cmd.Before
@@ -106,6 +106,9 @@ func setProfileLoad(cmd *cli.Command) {
 		}
 	}
 	for _, sub := range cmd.Commands {
+		if cmd.Name == "profile" && sub.Name == "list" {
+			continue
+		}
 		setProfileLoad(sub)
 	}
 }

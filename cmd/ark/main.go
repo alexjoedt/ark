@@ -12,6 +12,7 @@ import (
 	"runtime/pprof"
 	"slices"
 	"syscall"
+	"time"
 
 	ark "github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkprofile"
@@ -262,18 +263,47 @@ func jsonRequested(args []string) bool {
 // repoURI is --repo, else the profile's repo, else ARK_REPOSITORY. There is
 // no default location.
 func repoURI(ctx context.Context, cmd *cli.Command) (string, error) {
-	root := cmd.Root()
-	uri := os.Getenv("ARK_REPOSITORY")
-	switch lp := profileFrom(ctx); {
-	case root.IsSet("repo"):
-		uri = root.String("repo")
-	case lp != nil && lp.Repo != "":
-		uri = lp.Repo
-	}
+	uri, _ := repoSetting(cmd.Root(), profileFrom(ctx))
 	if uri == "" {
 		return "", exitcode.Usagef("no repository given, set --repo, a profile's repo or ARK_REPOSITORY")
 	}
 	return uri, nil
+}
+
+// repoSetting, lockWaitSetting and concurrencySetting resolve a global value
+// and name the layer it comes from: cli, profile, env or default. A profile's
+// zero lock-wait or concurrency is unset.
+func repoSetting(root *cli.Command, lp *loadedProfile) (string, string) {
+	switch {
+	case root.IsSet("repo"):
+		return root.String("repo"), "cli"
+	case lp != nil && lp.Repo != "":
+		return lp.Repo, "profile"
+	}
+	if env := os.Getenv("ARK_REPOSITORY"); env != "" {
+		return env, "env"
+	}
+	return "", "default"
+}
+
+func lockWaitSetting(root *cli.Command, lp *loadedProfile) (time.Duration, string) {
+	switch {
+	case root.IsSet("lock-wait"):
+		return root.Duration("lock-wait"), "cli"
+	case lp != nil && lp.LockWait > 0:
+		return lp.LockWait, "profile"
+	}
+	return root.Duration("lock-wait"), "default"
+}
+
+func concurrencySetting(root *cli.Command, lp *loadedProfile) (int, string) {
+	switch {
+	case root.IsSet("concurrency"):
+		return root.Int("concurrency"), "cli"
+	case lp != nil && lp.Concurrency > 0:
+		return lp.Concurrency, "profile"
+	}
+	return root.Int("concurrency"), "default"
 }
 
 // readRepoPassword resolves the repository password with the profile's
@@ -301,15 +331,10 @@ func openRepo(ctx context.Context, cmd *cli.Command, repoOpts ...ark.Option) (*a
 	if err != nil {
 		return nil, err
 	}
-	eff := arkprofile.Profile{Repo: uri, LockWait: root.Duration("lock-wait"), Concurrency: root.Int("concurrency")}
-	if lp := profileFrom(ctx); lp != nil {
-		if !root.IsSet("lock-wait") && lp.LockWait > 0 {
-			eff.LockWait = lp.LockWait
-		}
-		if !root.IsSet("concurrency") && lp.Concurrency > 0 {
-			eff.Concurrency = lp.Concurrency
-		}
-	}
+	lp := profileFrom(ctx)
+	eff := arkprofile.Profile{Repo: uri}
+	eff.LockWait, _ = lockWaitSetting(root, lp)
+	eff.Concurrency, _ = concurrencySetting(root, lp)
 	opts := append([]ark.Option{ark.WithLogger(slog.Default())}, hookOptions(cmd, eff.LockWait > 0)...)
 	repo, err := eff.Open(ctx, pw, append(opts, repoOpts...)...)
 	if err != nil {
