@@ -32,3 +32,4 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0015 | [A marker makes unchanged backups see a lost data pack](0015-lost-pack-marker-for-unchanged-backups.md) | accepted | 2026-11-13 |
 | 0016 | [Drop the web UI](0016-drop-the-web-ui.md) | accepted | 2026-11-14 |
 | 0017 | [A counting scan beside the store](0017-counting-scan-beside-the-store.md) | accepted | 2026-11-14 |
+| 0018 | [Profile files and the arkprofile package](0018-profile-files-and-the-arkprofile-package.md) | accepted | 2026-11-15 |
