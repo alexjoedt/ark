@@ -21,6 +21,13 @@ type Snapshot struct {
 // Skipped counts entries the source yielded that the v1 format does not model:
 // device nodes, fifos and sockets. FilesUnchanged counts the regular files a
 // backup took from the parent snapshot without reading them.
+//
+// FileCount counts regular files and hardlink entries. TotalSize sums the
+// bytes of the regular files, so the content of a hardlinked file counts once.
+// NewChunksRawSize is the raw size of the distinct data chunks the backup
+// wrote, each counted once however often the snapshot references it, and
+// StoredSize is what they take in packs after compression and encryption.
+// Neither includes the snapshot's tree objects.
 type SnapshotStats struct {
 	FileCount          int           `json:"total_files"`
 	DirCount           int           `json:"total_dirs"`

@@ -217,6 +217,27 @@ ark backup ~ -e node_modules -e '*.tmp' -e /Library --exclude-file ~/.config/ark
   and `/` anchors at the backed-up directory instead of the file system root. A bad pattern exits with
   the usage code 2 before the repository is opened.
 
+`ark backup` ends with a summary of what the snapshot holds and what the run added:
+
+```
+  files      548 974
+  size       9.2 GiB
+  new        6.7 GiB, stored as 3.4 GiB
+```
+
+- `files` counts regular files and every further name of a hardlinked file.
+- `size` is the content of the backed-up tree: the bytes of every regular file, a file under several
+  names counted once. Files taken unchanged from the parent snapshot count too.
+- `new` is the raw size of the distinct data chunks this run wrote to the repository. A chunk counts
+  once however often it occurs, so `new` stays below `size` even on an empty repository when the
+  tree holds the same content in several files. `stored as` is what those chunks take in the
+  repository, compressed and encrypted.
+- Directory and file metadata (the snapshot trees) count in neither `new` nor `stored as`.
+- Differences from restic: restic counts the bytes of a hardlinked file once per name, and its "Added to
+  the repository" includes the tree metadata and pack overhead, so both its numbers come out a little
+  higher. The chunk sizes differ as well (ark: 256 KiB to 4 MiB, restic: 512 KiB to 8 MiB), which shifts
+  the deduplication slightly.
+
 Docker volumes live under `ark docker`. The daemon comes from `--docker-host` or `DOCKER_HOST`.
 
 ```bash
