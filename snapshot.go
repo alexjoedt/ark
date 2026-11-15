@@ -110,8 +110,9 @@ func WithHost(h string) BackupOption {
 }
 
 // WithParent names the parent snapshot explicitly, as a full id or a unique
-// prefix. Without it the parent is the newest snapshot of the same source. A
-// parent of another source is recorded but no file is taken from it unread.
+// prefix. Without it the parent is the newest snapshot of the same source and
+// host ([WithHost], empty by default). A parent of another source is recorded
+// but no file is taken from it unread.
 func WithParent(id string) BackupOption {
 	return func(o *backupOptions) { o.parent = id }
 }

@@ -26,10 +26,9 @@ func startProgress(p *out.Printer, label string) *out.Progress {
 }
 
 // hookOptions are the library hooks every command opens its repository with.
-func hookOptions(cmd *cli.Command) []ark.Option {
+// With no lock wait a rejection is final: the locked error says it all.
+func hookOptions(cmd *cli.Command, waits bool) []ark.Option {
 	p := printer(cmd)
-	// With no lock wait a rejection is final: the locked error says it all.
-	waits := cmd.Root().Duration("lock-wait") > 0
 	return []ark.Option{
 		ark.WithProgress(func(ev ark.ProgressEvent) {
 			if pr := activeProgress.Load(); pr != nil {

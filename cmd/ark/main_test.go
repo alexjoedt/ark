@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,7 +15,6 @@ import (
 
 	ark "github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkdocker"
-	"github.com/alexjoedt/ark/arkfs"
 	"github.com/alexjoedt/ark/arklocal"
 	dockerclient "github.com/moby/moby/client"
 )
@@ -272,10 +270,13 @@ func TestBackupDirectory(t *testing.T) {
 		t.Fatalf("got %+v", first)
 	}
 
-	// the parent is resolved by source name, --name changes that name
-	second := backup(src)
+	// the parent is resolved by source name and host, --name changes that name
+	second := backup("--host", "web1", src)
 	if second.ParentID != first.ID {
 		t.Fatalf("parent %q, want %q", second.ParentID, first.ID)
+	}
+	if web2 := backup("--host", "web2", src); web2.ParentID != "" {
+		t.Fatalf("host web2 took parent %q from web1", web2.ParentID)
 	}
 	named := backup("--name", "app", src)
 	if named.SourceName != "app" || named.ParentID != "" {
@@ -1026,40 +1027,6 @@ func TestCPUProfileEnv(t *testing.T) {
 	t.Setenv("ARK_CPUPROFILE", filepath.Join(t.TempDir(), "missing", "cpu.prof"))
 	if code, _ := runCapture(t, "--version"); code == 0 {
 		t.Fatal("unwritable profile path exited 0")
-	}
-}
-
-func TestNamedSourceKeepsConcurrentOpen(t *testing.T) {
-	src, err := arkfs.NewSource(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	cs, ok := ark.Source(namedSource{Source: src, name: "x"}).(ark.ConcurrentSource)
-	if !ok || !cs.ConcurrentOpen() {
-		t.Error("namedSource over an arkfs source does not report ConcurrentOpen")
-	}
-}
-
-func TestNamedSourceKeepsRewalk(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("abc"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	src, err := arkfs.NewSource(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var paths []string
-	err = namedSource{Source: src, name: "x"}.Rewalk(context.Background(), func(e ark.FileInfo) error {
-		paths = append(paths, e.Path)
-		return nil
-	})
-	if err != nil || len(paths) != 1 || paths[0] != "a.txt" {
-		t.Errorf("Rewalk through namedSource = %v, %v; want [a.txt], nil", paths, err)
-	}
-	stream := namedSource{Source: ark.NewStreamSource("s", strings.NewReader("")), name: "x"}
-	if err := stream.Rewalk(context.Background(), nil); !errors.Is(err, errors.ErrUnsupported) {
-		t.Errorf("Rewalk over a stream source = %v, want errors.ErrUnsupported", err)
 	}
 }
 

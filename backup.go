@@ -25,7 +25,7 @@ func (r *Repository) runBackup(
 	parentID := opts.parent
 	if parentID == "" {
 		var err error
-		parentID, err = r.latestSnapshotID(ctx, meta.Name)
+		parentID, err = r.latestSnapshotID(ctx, meta.Name, opts.host)
 		if err != nil {
 			logger.WarnContext(ctx, "failed to resolve the parent snapshot", "error", err)
 		}

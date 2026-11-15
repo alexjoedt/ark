@@ -84,6 +84,40 @@ func TestBackupParentIsTheNewestSnapshotOfTheSource(t *testing.T) {
 	}
 }
 
+// Two machines backing up one source name into a shared repository must not
+// take each other's files unread: a file can match by path, size and mtime on
+// both and still differ.
+func TestBackupParentNeverCrossesHosts(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+
+	a, err := repo.Backup(ctx, stubSource{name: "docs", content: "one"}, ark.WithHost("a"))
+	if err != nil {
+		t.Fatalf("backup on a: %v", err)
+	}
+	b, err := repo.Backup(ctx, stubSource{name: "docs", content: "two"}, ark.WithHost("b"))
+	if err != nil {
+		t.Fatalf("backup on b: %v", err)
+	}
+	if b.ParentID != "" {
+		t.Errorf("host b took parent %q from host a", b.ParentID)
+	}
+	none, err := repo.Backup(ctx, stubSource{name: "docs", content: "three"})
+	if err != nil {
+		t.Fatalf("backup without a host: %v", err)
+	}
+	if none.ParentID != "" {
+		t.Errorf("backup without a host took parent %q", none.ParentID)
+	}
+	again, err := repo.Backup(ctx, stubSource{name: "docs", content: "four"}, ark.WithHost("a"))
+	if err != nil {
+		t.Fatalf("second backup on a: %v", err)
+	}
+	if again.ParentID != a.ID {
+		t.Errorf("parent is %q, want host a's snapshot %q", again.ParentID, a.ID)
+	}
+}
+
 // TestSourceNamesAreComparedVerbatim guards the removal of normalizeSourceName:
 // it replaced path separators with underscores, so these two names shared one
 // latest pointer.

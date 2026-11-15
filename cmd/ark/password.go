@@ -2,58 +2,118 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"strings"
+	"strconv"
 
 	"github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/arkprofile"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/term"
 )
 
-// passwordSource names the flags and the variable one password is read from.
+// passwordSource names the flags and the variables one password is read from.
 // There is no --password flag, it would show in the process list.
 type passwordSource struct {
 	fileFlag, envVar, insecureFlag, prompt string
+	// fileEnv and insecureEnv are the variables behind the two flags, if any.
+	fileEnv, insecureEnv string
 }
 
 var (
-	repoPassword = passwordSource{"password-file", "ARK_PASSWORD", "insecure-no-password", "repository password"}
-	newPassword  = passwordSource{
-		"new-password-file",
-		"ARK_NEW_PASSWORD",
-		"new-insecure-no-password",
-		"new repository password",
+	repoPassword = passwordSource{
+		fileFlag:     "password-file",
+		envVar:       "ARK_PASSWORD",
+		insecureFlag: "insecure-no-password",
+		prompt:       "repository password",
+		fileEnv:      "ARK_PASSWORD_FILE",
+		insecureEnv:  "ARK_INSECURE_NO_PASSWORD",
+	}
+	newPassword = passwordSource{
+		fileFlag:     "new-password-file",
+		envVar:       "ARK_NEW_PASSWORD",
+		insecureFlag: "new-insecure-no-password",
+		prompt:       "new repository password",
 	}
 )
 
-// read resolves the passphrase from the flags of cmd: the password file, then
-// the environment, then a prompt on the terminal. confirm prompts twice.
-func (s passwordSource) read(cmd *cli.Command, confirm bool) (ark.Passphrase, error) {
-	file := cmd.String(s.fileFlag)
-	env := os.Getenv(s.envVar)
-	if cmd.Bool(s.insecureFlag) {
-		if file != "" || env != "" {
-			return ark.Passphrase{}, exitcode.Usagef(
-				"--%s conflicts with --%s and %s",
-				s.insecureFlag,
-				s.fileFlag,
-				s.envVar,
-			)
+// passwordOrigin is the setting a password, or no password, comes from.
+type passwordOrigin struct {
+	label string // names it in a conflict: "--password-file", "ARK_PASSWORD"
+	layer string // cli, profile or env
+	value string // what profile show prints: "file F", "variable V", "none, X"
+	file  string // the password file the CLI reads itself, if any
+}
+
+// resolve picks the sources read would use without reading a password: the
+// first setting for no password (flag, profile, variable) and the first
+// password source (file flag, the profile's password-file or password-env,
+// the file variable, the password variable). Either is zero when unset.
+func (s passwordSource) resolve(cmd *cli.Command, pp arkprofile.Profile) (insecure, from passwordOrigin, err error) {
+	switch v := os.Getenv(s.insecureEnv); {
+	case cmd.Bool(s.insecureFlag):
+		insecure = passwordOrigin{label: "--" + s.insecureFlag, layer: "cli"}
+	case pp.InsecureNoPassword:
+		insecure = passwordOrigin{label: "the profile's insecure-no-password", layer: "profile"}
+	case v != "":
+		on, err := strconv.ParseBool(v)
+		if err != nil {
+			return insecure, from, exitcode.Usagef("%s=%q: want true or false", s.insecureEnv, v)
 		}
-		return ark.WithoutPassword(), nil
+		if on {
+			insecure = passwordOrigin{label: s.insecureEnv, layer: "env"}
+		}
+	}
+	if insecure.label != "" {
+		insecure.value = "none, " + insecure.label
+	}
+
+	switch flagFile, envFile := cmd.String(s.fileFlag), os.Getenv(s.fileEnv); {
+	case flagFile != "":
+		from = passwordOrigin{"--" + s.fileFlag, "cli", "file " + flagFile, flagFile}
+	case pp.PasswordFile != "":
+		from = passwordOrigin{"the profile's password-file", "profile", "file " + pp.PasswordFile, ""}
+	case pp.PasswordEnv != "":
+		from = passwordOrigin{"the profile's password-env", "profile", "variable " + pp.PasswordEnv, ""}
+	case envFile != "":
+		from = passwordOrigin{s.fileEnv, "env", "file " + envFile, envFile}
+	case os.Getenv(s.envVar) != "":
+		from = passwordOrigin{s.envVar, "env", "variable " + s.envVar, ""}
+	}
+	return insecure, from, nil
+}
+
+// read resolves the passphrase from the source resolve picks, else a prompt
+// on the terminal. No password from the flag, the profile or the variable
+// conflicts with every password source. confirm prompts twice.
+func (s passwordSource) read(cmd *cli.Command, confirm bool, prof *arkprofile.Profile) (ark.Passphrase, error) {
+	var pp arkprofile.Profile
+	if prof != nil {
+		pp = *prof
+	}
+	insecure, from, err := s.resolve(cmd, pp)
+	if err != nil {
+		return ark.Passphrase{}, err
+	}
+	if insecure.label != "" && from.label != "" {
+		return ark.Passphrase{}, exitcode.Usagef("%s conflicts with %s", insecure.label, from.label)
 	}
 
 	switch {
-	case file != "":
-		pw, err := readPasswordFile(file)
+	case insecure.label != "":
+		return ark.WithoutPassword(), nil
+	case from.layer == "profile":
+		return profilePassphrase(prof)
+	case from.file != "":
+		pw, err := readPasswordFile(from.file)
 		if err != nil {
 			return ark.Passphrase{}, err
 		}
 		return ark.WithPassword(pw), nil
-	case env != "":
-		return ark.WithPassword(env), nil
+	case from.label != "":
+		return ark.WithPassword(os.Getenv(s.envVar)), nil
 	}
 
 	fd := int(os.Stdin.Fd())
@@ -82,21 +142,14 @@ func (s passwordSource) read(cmd *cli.Command, confirm bool) (ark.Passphrase, er
 	return ark.WithPassword(pw), nil
 }
 
-// readPasswordFile returns the file's contents without one trailing line
-// ending, so both `echo pw > file` and an editor's save work.
+// readPasswordFile reads the file as a profile's password-file is read; an
+// empty file is a usage error.
 func readPasswordFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read password file: %w", err)
-	}
-	pw := string(data)
-	if s, ok := strings.CutSuffix(pw, "\n"); ok {
-		pw = strings.TrimSuffix(s, "\r")
-	}
-	if pw == "" {
+	pw, err := arkprofile.ReadPasswordFile(path)
+	if errors.Is(err, arkprofile.ErrNoPassword) {
 		return "", exitcode.Usagef("password file %s is empty", path)
 	}
-	return pw, nil
+	return pw, err
 }
 
 func promptPassword(fd int, prompt string) (string, error) {
@@ -140,7 +193,7 @@ func keyCommand() *cli.Command {
 					}
 					defer repo.Close()
 
-					pw, err := newPassword.read(cmd, true)
+					pw, err := newPassword.read(cmd, true, nil)
 					if err != nil {
 						return err
 					}

@@ -48,6 +48,17 @@ type fileSource struct {
 // SourceOption configures NewSource.
 type SourceOption func(*fileSource) error
 
+// WithName sets the source name the snapshot is labelled with, instead of the
+// absolute path of the root. An empty name keeps the path.
+func WithName(name string) SourceOption {
+	return func(s *fileSource) error {
+		if name != "" {
+			s.meta.Name = name
+		}
+		return nil
+	}
+}
+
 // WithExclude leaves out every path that matches one of patterns, and
 // everything below a matched directory. Repeated options append.
 func WithExclude(patterns ...string) SourceOption {
