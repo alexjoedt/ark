@@ -44,6 +44,24 @@ type treeEntry struct {
 	Inode      uint64    `json:"inode,omitempty"`
 }
 
+// fileInfo is the entry as a FileInfo under path.
+func (e treeEntry) fileInfo(path string) FileInfo {
+	return FileInfo{
+		Path:     path,
+		Type:     e.Type,
+		Mode:     e.Mode,
+		UID:      e.UID,
+		GID:      e.GID,
+		ModTime:  e.ModTime,
+		Size:     e.Size,
+		LinkDest: e.LinkDest,
+		Xattrs:   e.Xattrs,
+
+		ChangeTime: e.ChangeTime,
+		Inode:      e.Inode,
+	}
+}
+
 // marshalTreeNode is the canonical JSON of the node holding children, the
 // bytes buildTree stores and the input of the node's name. Sorting here rather
 // than at every call site keeps the canonical form an invariant of the write
@@ -308,20 +326,7 @@ func visitTreeEntry(
 	filter pathFilter,
 	fn func(fileEntry) error,
 ) error {
-	info := FileInfo{
-		Path:     fullPath,
-		Type:     e.Type,
-		Mode:     e.Mode,
-		UID:      e.UID,
-		GID:      e.GID,
-		ModTime:  e.ModTime,
-		Size:     e.Size,
-		LinkDest: e.LinkDest,
-		Xattrs:   e.Xattrs,
-
-		ChangeTime: e.ChangeTime,
-		Inode:      e.Inode,
-	}
+	info := e.fileInfo(fullPath)
 
 	switch e.Type {
 	case FileTypeDirectory:
