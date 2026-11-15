@@ -351,3 +351,102 @@ forget:
 		t.Fatalf("version with a missing profile: exit %d, want 0", code)
 	}
 }
+
+func TestProfileShowSources(t *testing.T) {
+	dir := profileDirFor(t)
+	t.Setenv("ARK_REPOSITORY", "/env/repo")
+	t.Setenv("ARK_INSECURE_NO_PASSWORD", "")
+	t.Setenv("SHOW_SECRET", "hunter2-secret")
+	writeProfile(t, dir, "docs", "password-env: SHOW_SECRET\nlock-wait: 10s\nbackup:\n  path: /data\n  tag: [a, b]\n")
+
+	type result struct {
+		Profile string
+		Values  []struct{ Key, Value, Source string }
+	}
+	show := func(args ...string) map[string][2]string {
+		t.Helper()
+		code, out := runCapture(t, append([]string{"--json"}, args...)...)
+		if code != 0 {
+			t.Fatalf("%v: exit %d: %s", args, code, out)
+		}
+		if strings.Contains(out, "hunter2-secret") {
+			t.Fatalf("the password leaked: %s", out)
+		}
+		var r result
+		if err := json.Unmarshal([]byte(out), &r); err != nil || r.Profile != "docs" {
+			t.Fatalf("not a show result: %q", out)
+		}
+		got := map[string][2]string{}
+		for _, v := range r.Values {
+			got[v.Key] = [2]string{v.Value, v.Source}
+		}
+		return got
+	}
+	want := map[string][2]string{
+		"repo":         {"/env/repo", "env"},
+		"concurrency":  {"3", "cli"},
+		"lock-wait":    {"10s", "profile"},
+		"backup.tag":   {"a, b", "profile"},
+		"backup.path":  {"/data", "profile"},
+		"backup.name":  {"docs", "default"},
+		"password":     {"variable SHOW_SECRET", "profile"},
+		"forget.prune": {"false", "default"},
+	}
+	for _, args := range [][]string{
+		{"profile", "show", "docs", "--concurrency", "3"},
+		{"-P", "docs", "--concurrency", "3", "profile", "show"},
+		{"profile", "show", "-f", filepath.Join(dir, "docs.yaml"), "--concurrency", "3"},
+	} {
+		got := show(args...)
+		for k, w := range want {
+			if got[k] != w {
+				t.Errorf("%v: %s = %v, want %v", args, k, got[k], w)
+			}
+		}
+	}
+	t.Setenv("ARK_PASSWORD", "x")
+	t.Setenv("SHOW_SECRET", "")
+	writeProfile(t, dir, "plain", "repo: /p/repo\n")
+	if code, out := runCapture(t, "profile", "show", "plain"); code != 0 || !strings.Contains(out, "ARK_PASSWORD") {
+		t.Errorf("env password source missing: exit %d %q", code, out)
+	}
+	if code, _ := runCapture(t, "profile", "show"); code != 2 {
+		t.Errorf("show without a profile: exit %d, want 2", code)
+	}
+	if code, _ := runCapture(t, "profile", "show", "missing"); code == 0 {
+		t.Error("show of a missing profile succeeded")
+	}
+}
+
+func TestProfileList(t *testing.T) {
+	dir := profileDirFor(t)
+	type entry struct{ Name, Repo, Path, Error string }
+	list := func(wantCode int) []entry {
+		t.Helper()
+		code, out := runCapture(t, "--json", "profile", "list")
+		if code != wantCode {
+			t.Fatalf("list exit %d, want %d: %s", code, wantCode, out)
+		}
+		var es []entry
+		if err := json.Unmarshal([]byte(out), &es); err != nil {
+			t.Fatalf("not a list: %q", out)
+		}
+		return es
+	}
+	if es := list(0); len(es) != 0 {
+		t.Fatalf("no directory listed %v", es)
+	}
+	writeProfile(t, dir, "bad", "backup:\n  pahts: x\n")
+	if es := list(1); len(es) != 1 || es[0].Error == "" {
+		t.Fatalf("only a broken profile: %+v, want exit 1 and its error", es)
+	}
+	writeProfile(t, dir, "docs", "repo: /srv/ark\nbackup:\n  path: /data\n")
+	es := list(0)
+	if len(es) != 2 || es[0].Name != "bad" || es[0].Error == "" ||
+		es[1] != (entry{Name: "docs", Repo: "/srv/ark", Path: "/data"}) {
+		t.Fatalf("list %+v, want bad with an error and docs", es)
+	}
+	if code, out := runCapture(t, "profile", "list"); code != 0 || !strings.Contains(out, "/srv/ark") {
+		t.Fatalf("table output: exit %d %q", code, out)
+	}
+}

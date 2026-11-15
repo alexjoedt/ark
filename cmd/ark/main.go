@@ -180,6 +180,7 @@ func newApp() *cli.Command {
 			unlockCommand(),
 			dockerCommand(),
 			keyCommand(),
+			profileCommand(),
 			versionCommand(),
 		},
 	}

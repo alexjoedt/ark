@@ -296,6 +296,8 @@ ark backup -P docs              # snapshot named docs, the profile's tags and ex
 ark forget -P docs --yes        # the policy on the docs snapshots of this host, then prune
 ark snapshots -P docs           # only the docs snapshots
 ark backup -P docs -t manual    # a flag beats the profile, a list flag replaces its list
+ark profile list               # every profile with its repo and backup path
+ark profile show docs           # each effective value and its source: cli, profile, env or default
 ```
 
 - A flag given on the command line beats the profile, the profile beats the environment, the

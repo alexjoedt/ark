@@ -37,27 +37,45 @@ func loadProfile(ctx context.Context, cmd *cli.Command) (context.Context, error)
 	switch {
 	case name != "" && file != "":
 		return ctx, exitcode.Usagef("--profile and --profile-file exclude each other")
-	case name != "":
-		if err := (&arkprofile.Profile{Name: name}).Validate(); err != nil {
-			return ctx, exitcode.Usagef("--profile: %w", err)
-		}
-		dir, err := profileDir()
-		if err != nil {
-			return ctx, err
-		}
-		file = filepath.Join(dir, name+".yaml")
-	case file == "":
+	case name == "" && file == "":
 		return ctx, nil
 	}
+	if name != "" {
+		var err error
+		if file, err = profilePath(name); err != nil {
+			return ctx, err
+		}
+	}
+	lp, err := loadProfileFile(file)
+	if err != nil {
+		return ctx, err
+	}
+	return context.WithValue(ctx, profileKey{}, lp), nil
+}
+
+// profilePath is the file of the profile NAME in the profile directory; a
+// name that is not a valid profile name is a usage error.
+func profilePath(name string) (string, error) {
+	if err := (&arkprofile.Profile{Name: name}).Validate(); err != nil {
+		return "", exitcode.Usagef("--profile: %w", err)
+	}
+	dir, err := profileDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, name+".yaml"), nil
+}
+
+func loadProfileFile(file string) (*loadedProfile, error) {
 	p, err := arkprofile.Load(file)
 	if err != nil {
-		return ctx, exitcode.Usagef("%w", err)
+		return nil, exitcode.Usagef("%w", err)
 	}
 	abs, err := filepath.Abs(file)
 	if err != nil {
-		return ctx, fmt.Errorf("profile %s: %w", file, err)
+		return nil, fmt.Errorf("profile %s: %w", file, err)
 	}
-	return context.WithValue(ctx, profileKey{}, &loadedProfile{p, filepath.Dir(abs)}), nil
+	return &loadedProfile{p, filepath.Dir(abs)}, nil
 }
 
 // profileDir is $XDG_CONFIG_HOME/ark/profiles, else ~/.config/ark/profiles,
