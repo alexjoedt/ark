@@ -260,6 +260,25 @@ func TestFindStopsOnCallbackError(t *testing.T) {
 	}
 }
 
+func TestFindReturnsCancellationUnwrapped(t *testing.T) {
+	repo, _ := newRepo(t)
+	src := treeSource{name: "src", entries: []entry{{path: "a.txt", content: "a"}}}
+	backup(t, repo, src)
+	backup(t, repo, src)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	err := arkfind.Find(ctx, repo, ark.SnapshotFilter{}, []string{"a.txt"}, func(arkfind.Match) error {
+		calls++
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) || err.Error() != context.Canceled.Error() || calls != 1 {
+		t.Errorf("err = %v after %d calls, want bare context.Canceled after 1", err, calls)
+	}
+}
+
 func TestFindSkipsSnapshotForgottenDuringSearch(t *testing.T) {
 	repo, _ := newRepo(t)
 	ctx := context.Background()

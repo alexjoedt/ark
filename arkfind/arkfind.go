@@ -31,13 +31,17 @@ type Match struct {
 // Snapshots are searched newest first, the order of Repository.Snapshots. The
 // matches of one snapshot arrive one after another in tree order, parents
 // before children, so a caller groups them by watching Match.Snapshot change.
-// fn runs on the calling goroutine.
+// fn runs on the calling goroutine while Walk holds the repository's shared
+// lock, so fn must not call an operation that takes the exclusive lock, such
+// as Prune, RebuildIndex or ChangePassword: it waits out the lock timeout and
+// fails with [ark.ErrRepoLocked].
 //
 // No patterns, or a pattern arkglob rejects, return an error wrapping
 // [path.ErrBadPattern] before the repository is touched. An error from fn ends
 // the search and is returned unchanged. A snapshot forgotten after the
 // snapshot list was read is skipped; any other error from walking a snapshot
-// ends the search and names the snapshot.
+// ends the search and names the snapshot. A cancelled ctx ends the search with
+// ctx.Err().
 //
 // Cost: one read of every snapshot manifest, then one Walk per selected
 // snapshot, each taking the shared lock and loading the tree index, and
@@ -54,7 +58,7 @@ func Find(
 	}
 	matcher, err := arkglob.New(patterns...)
 	if err != nil {
-		return fmt.Errorf("arkfind: %w", err)
+		return err
 	}
 	snaps, err := repo.Snapshots(ctx, filter)
 	if err != nil {
@@ -71,6 +75,9 @@ func Find(
 		})
 		if fnErr != nil {
 			return fnErr
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
 		}
 		if err == nil || vanished(ctx, repo, snap.ID, err) {
 			continue

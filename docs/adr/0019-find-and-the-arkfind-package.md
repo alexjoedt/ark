@@ -26,16 +26,17 @@ type Match struct {
 }
 ```
 
-An entry matches when `arkglob.Match` accepts its path for any of the patterns, the rule excludes
-use and restic's find uses: a pattern without a `/` matches a base name anywhere, one with a `/`
-matches any run of components, a leading `/` anchors at the snapshot root, and a matched
-directory yields every entry below it. `File` is the entry as Walk yields it, a directory with its
-trailing slash. Snapshots are searched newest first, the order of `Snapshots`, and the matches of
-one snapshot arrive together in tree order, so a caller groups them without buffering. No
-patterns or a bad one wrap `path.ErrBadPattern` before the repository is read. An error from `fn`
-ends the search and is returned as is. A snapshot forgotten between the list and its walk is
-skipped; it is told apart from a missing tree by looking the snapshot up again. Any other walk
-error ends the search and names the snapshot.
+An entry matches when the `arkglob.Matcher` compiled from the patterns accepts its path, the rule
+excludes use and restic's find uses: a pattern without a `/` matches a base name anywhere, one
+with a `/` matches any run of components, a leading `/` anchors at the snapshot root, and a
+matched directory yields every entry below it. `File` is the entry as Walk yields it, a directory
+with its trailing slash. Snapshots are searched newest first, the order of `Snapshots`, and the
+matches of one snapshot arrive together in tree order, so a caller groups them without buffering.
+No patterns or a bad one wrap `path.ErrBadPattern` before the repository is read. An error from
+`fn` ends the search and is returned as is, and a cancelled context ends it with the context's
+error. A snapshot forgotten between the list and its walk is skipped; it is told apart from a
+missing tree by looking the snapshot up again. Any other walk error ends the search and names the
+snapshot.
 
 - Not a `Repository` method, because the root API is frozen and the search needs nothing
   unexported.
@@ -54,5 +55,6 @@ index load and a read of every tree node of the snapshot; no file content is rea
 between two walks, which the skip of a forgotten snapshot absorbs. Tests in
 `arkfind/arkfind_test.go` pin the order and grouping (`TestFindNewestFirstGroupedInTreeOrder`),
 the match rule (`TestFindMatchRule`), the filter (`TestFindFilter`) and the error behaviour
-(`TestFindBadPatternsTouchNoRepository`, `TestFindSkipsSnapshotForgottenDuringSearch`,
+(`TestFindBadPatternsTouchNoRepository`, `TestFindStopsOnCallbackError`,
+`TestFindReturnsCancellationUnwrapped`, `TestFindSkipsSnapshotForgottenDuringSearch`,
 `TestFindNamesSnapshotOnWalkError`).
