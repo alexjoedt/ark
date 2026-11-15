@@ -1,6 +1,6 @@
 # 0017: A counting scan beside the store
 
-Status: proposed
+Status: accepted
 Date: 2026-11-14
 
 ## Context
@@ -18,19 +18,26 @@ no progress should not pay.
 
 ## Decision
 
-An optional interface `RewalkSource` (`Source` plus `Rewalk() bool`) marks a source that can be
-walked a second time while the first Walk runs, with open never called. arkfs implements it and
-returns true; `StreamSource` and the Docker volume source do not. A wrapper that embeds a Source
-hides the method and forwards it, as with `ConcurrentSource`.
+An optional interface `RewalkSource` (`Source` plus `Rewalk(ctx, fn func(FileInfo) error) error`)
+marks a source that can be walked a second time while the first Walk runs, and gives that walk
+its own, cheaper method, as restic's scanner does: Rewalk yields the entries Walk would, in the
+same order and under the same excludes, from names and stat metadata alone. It opens no file and
+reads no xattrs, ACLs or symlink targets; a second name of an inode still comes as a hardlink.
+arkfs implements it; `StreamSource` and the Docker volume source do not. A wrapper that embeds a
+Source hides the method and forwards it, as with `ConcurrentSource`; over a source without it,
+the wrapper's Rewalk returns `errors.ErrUnsupported`, which drops the scan.
 
-The scan is opt-in: `WithBackupScan()` starts a counting Walk beside the store for a
-`RewalkSource` whose `Rewalk` returns true, and does nothing for any other source, without the
-option or when the backup has no progress handler. It is meant for a caller that shows totals,
-such as a live progress display. A skipped or dropped scan is logged at debug level.
+The scan is opt-in: `WithBackupScan()` starts a counting Rewalk beside the store for a
+`RewalkSource`, and does nothing for any other source, without the option or when the backup has
+no progress handler. It is meant for a caller that shows totals, such as a live progress display.
+A skipped or dropped scan is logged at debug level.
 
 - The count is what the snapshot records: regular files and hardlinks count as files, regular file
   sizes as bytes, the source's own excludes apply and unchanged files count. For a source that does
   not change during the run, the totals equal the snapshot's `FileCount` and `TotalSize`.
+- Unchanged files count toward `FilesDone` and `BytesDone` of `PhaseStore` events as stored ones
+  do, so an incremental backup shows progress against the totals and a caller can estimate the
+  time left.
 - While the scan runs, `PhaseScan` events carry its running count in `FilesDone` and `BytesDone`,
   at most one every 100 ms, measured in the walk; the last one also sets `FilesTotal` and
   `BytesTotal`, and every `PhaseStore` event after it carries them too. A total is zero until it is
@@ -38,15 +45,18 @@ such as a live progress display. A skipped or dropped scan is logged at debug le
   events go through the mutex the store's events use, so calls never overlap.
 - The backup never depends on the scan: a scan that fails is dropped, one that is still running
   when every file is stored is cancelled, and the backup waits for it to return before its
-  `PhaseFinalize` event.
-- The cost bar, on the 200k-file benchmark dataset on SSD, median of 3: at most 5% more wall time
-  for an initial backup and 10% for an incremental one than without the scan. A miss reopens the
-  decision instead of shipping the scan. Measured on 2026-11-15 with alternating order and a
-  discarded run after each change of the data, median of 5: initial +5.1% (paired +5.2%, pairs
-  from -17% to +18%), a miss within the noise; incremental +1.1% (paired +0.8%), but no
-  incremental scan finished before the store, so those backups reported no totals. The full arkfs
-  Walk takes 2.3 s on that dataset, a walk with only a stat per entry 1.3 s. The status stays
-  proposed until the decision is taken again.
+  `PhaseFinalize` event. Totals are best effort, as in restic: an incremental backup that stores
+  faster than the scan walks ends without them.
+- The cost bar, on the 200k-file benchmark dataset on SSD: at most 5% more wall time for an
+  initial backup and 10% for an incremental one than without the scan. Measured on 2026-11-15 with alternating order
+  and a discarded run after each change of the data, median of 5 initial and 10 incremental runs
+  each way: initial 58.1 s against 61.7 s (-5.7%, pairs from -13% to +24%, so the cost drowns in
+  the noise), incremental 6.21 s against 6.09 s (+2.1%, paired +3.1%), and every incremental scan
+  finished before the store, so those backups reported totals. The stat-only walk takes 1.6 s on
+  that dataset, the full Walk 2.3 s.
+- Not a second Walk with open never called, the first shape: it read xattrs and symlink targets
+  for nothing, missed the initial bar (+5.1%, median of 5 with alternating order) and never
+  finished before an incremental store.
 - Not a wider Source contract with two concurrent Walks for every source, because a stream source
   would have to buffer or re-open what it reads.
 - Not counting inside arkfs alone, because the core would need an arkfs-only path, and an
@@ -56,6 +66,8 @@ such as a live progress display. A skipped or dropped scan is logged at debug le
 ## Consequences
 
 Totals exist for directory sources only; a Docker volume or stream backup reports progress without
-them. The running count can lag the store on a slow file system, and a source that changes during
-the run yields totals that differ from the snapshot. A source whose Walk ignores a cancelled ctx
-delays the end of the backup until its scan returns.
+them. An embedder's directory source implements a second walk method to offer them. The running
+count can lag the store on a slow file system, and a source that changes during the run yields
+totals that differ from the snapshot. A source whose Rewalk ignores a cancelled ctx delays the end
+of the backup until its scan returns. Tests: `TestBackupScanCountsLikeTheSnapshot`,
+`TestRewalkYieldsWalkEntriesFromTheStatAlone`, `TestBackupScanEventsInterleaveWithoutOverlap`.

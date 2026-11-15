@@ -25,14 +25,12 @@ const (
 	scanHangs // until ctx is cancelled
 )
 
-// scanSource wraps a Source whose files are read inside fn, so the walk of
-// the store calls open before it returns and the walk that returns without
-// one is the scan. With gate set, every open waits for the scan to return,
-// so the scan always finishes before the first file is stored; with release
-// set, the opens wait for release instead.
+// scanSource wraps a Source and counts its walks; Rewalk is the scan. With
+// gate set, every open waits for the scan to return, so the scan always
+// finishes before the first file is stored; with release set, the opens wait
+// for release instead.
 type scanSource struct {
 	ark.Source
-	rewalk    bool
 	gate      bool
 	behaviour scanBehaviour
 	release   <-chan struct{}
@@ -43,49 +41,57 @@ type scanSource struct {
 }
 
 func newScanSource(src ark.Source, gate bool, b scanBehaviour) *scanSource {
-	return &scanSource{Source: src, rewalk: true, gate: gate, behaviour: b, scanned: make(chan struct{})}
+	return &scanSource{Source: src, gate: gate, behaviour: b, scanned: make(chan struct{})}
 }
-
-func (s *scanSource) Rewalk() bool { return s.rewalk }
 
 func (s *scanSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 	s.walks.Add(1)
-	opened := false
-	err := s.Source.Walk(ctx, func(e ark.FileInfo, open func() (io.ReadCloser, error)) error {
-		if open == nil {
-			return fn(e, nil)
+	return s.Source.Walk(ctx, func(e ark.FileInfo, open func() (io.ReadCloser, error)) error {
+		if open == nil || !s.gate {
+			return fn(e, open)
 		}
 		return fn(e, func() (io.ReadCloser, error) {
-			opened = true
-			if s.gate {
-				release := s.release
-				if release == nil {
-					release = s.scanned
-				}
-				select {
-				case <-release:
-				case <-time.After(10 * time.Second):
-					return nil, errors.New("the scan never returned")
-				}
+			release := s.release
+			if release == nil {
+				release = s.scanned
+			}
+			select {
+			case <-release:
+			case <-time.After(10 * time.Second):
+				return nil, errors.New("the scan never returned")
 			}
 			return open()
 		})
 	})
-	if opened || err != nil {
-		return err
+}
+
+// Rewalk walks the wrapped source's Rewalk when it has one, else its Walk
+// without opening anything.
+func (s *scanSource) Rewalk(ctx context.Context, fn func(ark.FileInfo) error) error {
+	s.walks.Add(1)
+	var err error
+	if rs, ok := s.Source.(ark.RewalkSource); ok {
+		err = rs.Rewalk(ctx, fn)
+	} else {
+		err = s.Source.Walk(ctx, func(e ark.FileInfo, _ func() (io.ReadCloser, error)) error { return fn(e) })
 	}
-	switch s.behaviour {
-	case scanSucceeds:
-	case scanFails:
-		err = errors.New("scan failed")
-	case scanHangs:
-		<-ctx.Done()
-		s.sawCancel.Store(true)
-		err = ctx.Err()
+	if err == nil {
+		switch s.behaviour {
+		case scanSucceeds:
+		case scanFails:
+			err = errors.New("scan failed")
+		case scanHangs:
+			<-ctx.Done()
+			s.sawCancel.Store(true)
+			err = ctx.Err()
+		}
 	}
 	close(s.scanned)
 	return err
 }
+
+// hidden embeds a Source and so hides every optional method of it.
+type hidden struct{ ark.Source }
 
 // eventLog records the events of one backup and when each came, without a
 // lock: overlapping calls trip the inFlight check and, under -race, the race
@@ -160,13 +166,16 @@ func TestBackupScanWalksOnlyWhenAsked(t *testing.T) {
 	}{
 		{"rewalk source with scan", true, true, true, 2},
 		{"rewalk source without scan", true, false, true, 1},
-		{"source that opts out", false, true, true, 1},
+		{"wrapper that hides Rewalk", false, true, true, 1},
 		{"scan without a progress handler", true, true, false, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := openConcRepo(t, 2)
 			src := newScanSource(&concSource{name: "s", files: concFiles(4)}, false, scanSucceeds)
-			src.rewalk = tc.rewalk
+			var backed ark.Source = src
+			if !tc.rewalk {
+				backed = hidden{src}
+			}
 			var opts []ark.BackupOption
 			if tc.scan {
 				opts = append(opts, ark.WithBackupScan())
@@ -174,7 +183,7 @@ func TestBackupScanWalksOnlyWhenAsked(t *testing.T) {
 			if tc.progress {
 				opts = append(opts, ark.WithBackupProgress(func(ark.ProgressEvent) {}))
 			}
-			if _, err := repo.Backup(context.Background(), src, opts...); err != nil {
+			if _, err := repo.Backup(context.Background(), backed, opts...); err != nil {
 				t.Fatalf("Backup: %v", err)
 			}
 			if got := src.walks.Load(); got != tc.walks {
@@ -218,7 +227,9 @@ func TestBackupScanTotalsReachStoreEvents(t *testing.T) {
 // the store's.
 type slowRewalk struct{ *concSource }
 
-func (s slowRewalk) Rewalk() bool { return true }
+func (s slowRewalk) Rewalk(ctx context.Context, fn func(ark.FileInfo) error) error {
+	return s.Walk(ctx, func(e ark.FileInfo, _ func() (io.ReadCloser, error)) error { return fn(e) })
+}
 
 func (s slowRewalk) Walk(ctx context.Context, fn ark.WalkFunc) error {
 	return s.concSource.Walk(ctx, func(e ark.FileInfo, open func() (io.ReadCloser, error)) error {

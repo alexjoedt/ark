@@ -2,7 +2,6 @@ package ark
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"sync"
 	"time"
@@ -24,16 +23,17 @@ type backupScan struct {
 	wg     sync.WaitGroup
 }
 
-// startScan starts the counting walk when opts ask for it and src promises a
-// second concurrent Walk; otherwise it returns nil. mu serialises progress
+// startScan starts the counting walk when opts ask for it and src is a
+// RewalkSource; otherwise it returns nil. mu serialises progress
 // calls with the store's.
 func startScan(ctx context.Context, src Source, opts backupOptions, mu *sync.Mutex, logger *slog.Logger) *backupScan {
 	if !opts.scan {
 		return nil
 	}
 	// A wrapper that does not forward Rewalk silently costs the totals.
-	if rs, ok := src.(RewalkSource); !ok || !rs.Rewalk() {
-		logger.DebugContext(ctx, "counting scan skipped", "rewalk", ok)
+	rs, ok := src.(RewalkSource)
+	if !ok {
+		logger.DebugContext(ctx, "counting scan skipped", "rewalk", false)
 		return nil
 	}
 	ctx, cancel := context.WithCancel(ctx)
@@ -42,7 +42,7 @@ func startScan(ctx context.Context, src Source, opts backupOptions, mu *sync.Mut
 		var files int
 		var bytes int64
 		last := time.Now()
-		err := src.Walk(ctx, func(entry FileInfo, _ func() (io.ReadCloser, error)) error {
+		err := rs.Rewalk(ctx, func(entry FileInfo) error {
 			switch entry.Type {
 			case FileTypeRegular:
 				files++

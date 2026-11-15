@@ -67,10 +67,10 @@
 // when every open is independent of the walk's position; a wrapper that embeds
 // a Source hides the method and must forward it.
 //
-// A source that can be walked a second time while a first Walk runs, never
-// calling open, implements RewalkSource with Rewalk returning true. A backup
-// with WithBackupScan then counts its files and bytes in that second walk for
-// the totals of its progress events. The same forwarding rule applies.
+// A source that can be walked a second time while a first Walk runs, reading
+// only names and stat metadata, implements RewalkSource. A backup with
+// WithBackupScan then counts its files and bytes in that second walk for the
+// totals of its progress events. The same forwarding rule applies.
 //
 // A zero FileInfo.ModTime means "unknown": the file never counts as unchanged
 // and is read on every backup. Set ModTime, and ChangeTime and Inode where the

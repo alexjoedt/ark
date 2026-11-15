@@ -167,9 +167,12 @@ func (s *fileSource) Meta() ark.SourceMeta {
 // fn returns: each opens its file by path, so a backup reads files in parallel.
 func (s *fileSource) ConcurrentOpen() bool { return true }
 
-// Rewalk reports that Walk may run twice at once: each walk keeps its own
-// state and reads the directory tree again.
-func (s *fileSource) Rewalk() bool { return true }
+// Rewalk walks the tree as Walk does, with the same excludes and hardlink
+// detection, but stops at the lstat: no xattrs, no readlink, no open. Each
+// walk keeps its own state, so it runs beside a Walk.
+func (s *fileSource) Rewalk(ctx context.Context, fn func(ark.FileInfo) error) error {
+	return s.walk(ctx, false, func(e ark.FileInfo, _ func() (io.ReadCloser, error)) error { return fn(e) })
+}
 
 var (
 	_ ark.ConcurrentSource = (*fileSource)(nil)
@@ -184,6 +187,12 @@ var (
 // A file with more than one name reaches fn as a regular file under the name
 // the walk sees first and as ark.FileTypeHardlink under every later one.
 func (s *fileSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
+	return s.walk(ctx, true, fn)
+}
+
+// walk is Walk with full set; without it, entries carry the lstat fields
+// only and open is nil.
+func (s *fileSource) walk(ctx context.Context, full bool, fn ark.WalkFunc) error {
 	linked := make(map[inodeKey]string)
 
 	return filepath.WalkDir(s.root, func(path string, d os.DirEntry, walkErr error) error {
@@ -234,9 +243,11 @@ func (s *fileSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 		}
 
 		if d.Type()&os.ModeSymlink != 0 {
-			target, err := os.Readlink(path)
-			if err != nil {
-				return fmt.Errorf("arkfs: readlink %s: %w", path, err)
+			var target string
+			if full {
+				if target, err = os.Readlink(path); err != nil {
+					return fmt.Errorf("arkfs: readlink %s: %w", path, err)
+				}
 			}
 			uid, gid := fileOwner(fi)
 			return fn(ark.FileInfo{
@@ -252,9 +263,11 @@ func (s *fileSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 
 		// Directories.
 		if d.IsDir() {
-			xattrs, err := readXattrs(path)
-			if err != nil {
-				return err
+			var xattrs map[string][]byte
+			if full {
+				if xattrs, err = readXattrs(path); err != nil {
+					return err
+				}
 			}
 			uid, gid := fileOwner(fi)
 			return fn(ark.FileInfo{
@@ -294,6 +307,10 @@ func (s *fileSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 				return fn(entry, nil)
 			}
 			linked[key] = rel
+		}
+
+		if !full {
+			return fn(entry, nil)
 		}
 
 		// Only a file with content uses them, so only it carries them.

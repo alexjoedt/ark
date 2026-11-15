@@ -120,12 +120,12 @@ func WithBackupProgress(fn ProgressFunc) BackupOption {
 // beside the store, so progress events carry FilesTotal and BytesTotal: the
 // running count goes in FilesDone and BytesDone of PhaseScan events while the
 // scan runs, the final count in the totals of the last PhaseScan event and of
-// every PhaseStore event after it. It applies to a RewalkSource whose Rewalk
-// returns true and does nothing for any other source or when the backup has
-// no progress handler, per call or on the repository. The count follows the
-// source's excludes and includes unchanged files. A scan that fails is
-// dropped, one still running when the files are stored is cancelled; neither
-// changes the backup.
+// every PhaseStore event after it. It applies to a RewalkSource and does
+// nothing for any other source or when the backup has no progress handler,
+// per call or on the repository. The count follows the source's excludes and
+// includes unchanged files, as do the FilesDone and BytesDone of PhaseStore
+// events. A scan that fails is dropped, one still running when the files are
+// stored is cancelled; neither changes the backup, so totals are best effort.
 func WithBackupScan() BackupOption {
 	return func(o *backupOptions) { o.scan = true }
 }
