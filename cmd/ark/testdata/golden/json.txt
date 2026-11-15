@@ -56,8 +56,8 @@
 --- stderr
 === --json find b.txt (exit 0)
 --- stdout
-{"snapshot_id":"<id2>","path":"sub/b.txt","size":5,"mtime":"<time>"}
-{"snapshot_id":"<id1>","path":"sub/b.txt","size":5,"mtime":"<time>"}
+{"snapshot_id":"<id2>","path":"sub/b.txt","type":"regular","size":5,"mtime":"<time>"}
+{"snapshot_id":"<id1>","path":"sub/b.txt","type":"regular","size":5,"mtime":"<time>"}
 --- stderr
 === --json find nothing-here (exit 0)
 --- stdout

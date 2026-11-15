@@ -32,7 +32,7 @@ func TestCommandSurface(t *testing.T) {
 		"restore":   {"path", "dry-run", "cache"},
 		"snapshots": {"name", "type", "tag", "host", "last"},
 		"ls":        {"long"},
-		"find":      {"name", "tag", "host"},
+		"find":      {"name", "type", "tag", "host"},
 		"inspect":   {},
 		"forget": {
 			"keep-last",

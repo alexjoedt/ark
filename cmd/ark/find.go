@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	ark "github.com/alexjoedt/ark"
@@ -25,6 +24,7 @@ func findCommand() *cli.Command {
    at the snapshot root, a matched directory lists everything below it.`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "name", Aliases: []string{"N"}, Usage: "source `NAME` (path or volume)"},
+			&cli.StringFlag{Name: "type", Usage: "source `TYPE`, file or docker-volume"},
 			&cli.StringSliceFlag{
 				Name:    "tag",
 				Aliases: []string{"t"},
@@ -43,6 +43,7 @@ func findCommand() *cli.Command {
 
 			filter := ark.SnapshotFilter{
 				Name: cmd.String("name"),
+				Type: ark.SourceType(cmd.String("type")),
 				Tags: cmd.StringSlice("tag"),
 				Host: cmd.String("host"),
 			}
@@ -67,7 +68,7 @@ func findCommand() *cli.Command {
 				s, f := hit.Snapshot, hit.File
 				if m.JSON {
 					last = s.ID
-					return p.JSONLine(matchJSON{SnapshotID: s.ID, Path: f.Path, Size: f.Size, Mtime: f.ModTime})
+					return p.JSONLine(matchJSON{SnapshotID: s.ID, Path: f.Path, Type: string(f.Type), Size: f.Size, Mtime: f.ModTime})
 				}
 				if s.ID != last && !m.Quiet {
 					if last != "" {
@@ -80,7 +81,7 @@ func findCommand() *cli.Command {
 				return nil
 			})
 			if err != nil {
-				return fmt.Errorf("find: %w", err)
+				return err
 			}
 			if last == "" {
 				p.Notef("no matches")
@@ -94,6 +95,7 @@ func findCommand() *cli.Command {
 type matchJSON struct {
 	SnapshotID string    `json:"snapshot_id"`
 	Path       string    `json:"path"`
+	Type       string    `json:"type"`
 	Size       int64     `json:"size"`
 	Mtime      time.Time `json:"mtime"`
 }

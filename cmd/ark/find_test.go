@@ -80,6 +80,9 @@ func TestFind(t *testing.T) {
 	if got := text("-N", "two", "keep.txt"); got != group(third, "keep.txt") {
 		t.Fatalf("--name:\n%s", got)
 	}
+	if got := text("--type", "docker-volume", "keep.txt"); got != "" {
+		t.Fatalf("--type docker-volume:\n%s", got)
+	}
 	writeProfile(t, profileDirFor(t), "two", "backup:\n  path: "+src+"\n")
 	if got := text("-P", "two", "keep.txt"); got != group(third, "keep.txt") {
 		t.Fatalf("-P two:\n%s", got)
@@ -100,8 +103,8 @@ func TestFind(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &m); err != nil {
 			t.Fatalf("not one object per line: %q", line)
 		}
-		if m.Mtime.IsZero() || (m.Path == "keep.txt" && m.Size != int64(len("keep.txt"))) {
-			t.Fatalf("match %+v lacks mtime or size", m)
+		if m.Mtime.IsZero() || m.Type != "regular" || (m.Path == "keep.txt" && m.Size != int64(len("keep.txt"))) {
+			t.Fatalf("match %+v lacks mtime, type or size", m)
 		}
 		got = append(got, m.SnapshotID[:8]+" "+m.Path)
 	}
