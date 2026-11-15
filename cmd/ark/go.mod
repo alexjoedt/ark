@@ -5,6 +5,7 @@ go 1.27.4
 require (
 	github.com/alexjoedt/ark v1.0.0
 	github.com/alexjoedt/ark/arkdocker v1.0.0
+	github.com/hanwen/go-fuse/v2 v2.12.1
 	github.com/joho/godotenv v1.5.1
 	github.com/moby/moby/api v1.57.0
 	github.com/moby/moby/client v0.6.3

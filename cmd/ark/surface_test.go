@@ -34,6 +34,7 @@ func TestCommandSurface(t *testing.T) {
 		"ls":        {"long"},
 		"find":      {"name", "type", "tag", "host"},
 		"inspect":   {},
+		"mount":     {},
 		"forget": {
 			"keep-last",
 			"keep-hourly",

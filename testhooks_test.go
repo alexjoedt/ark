@@ -168,3 +168,21 @@ func WriteBase32Snapshot(ctx context.Context, r *Repository, id string) (string,
 	m.ID = encodeBase32(b)
 	return m.ID, r.saveManifest(ctx, m)
 }
+
+// ChunkOffsets returns where each chunk of the regular file name of s starts,
+// for tests that read across chunk boundaries.
+func ChunkOffsets(s *SnapshotFS, name string) ([]int64, error) {
+	if err := s.rd.enter(); err != nil {
+		return nil, err
+	}
+	defer s.rd.leave()
+	e, err := s.find(name)
+	if err != nil {
+		return nil, err
+	}
+	offsets := make([]int64, len(e.chunks))
+	for i, c := range e.chunks {
+		offsets[i] = c.Offset
+	}
+	return offsets, nil
+}

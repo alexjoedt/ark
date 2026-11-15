@@ -175,6 +175,7 @@ func newApp() *cli.Command {
 			snapshotsCommand(),
 			lsCommand(),
 			findCommand(),
+			mountCommand(),
 			inspectCommand(),
 			forgetCommand(),
 			pruneCommand(),

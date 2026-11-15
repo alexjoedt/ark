@@ -68,6 +68,15 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: docker pull busybox:stable
 
+      # The runner has /dev/fuse; fusermount3 comes from fuse3. Installed
+      # before Test so the FUSE tests of ark mount run instead of skipping;
+      # the index refresh only runs when the image lacks it.
+      - name: Install fuse3
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          command -v fusermount3 > /dev/null ||
+            { sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends fuse3; }
+
       # The kill harness runs in this step too: ARK_KILL_RUNS fixes its count,
       # the ubuntu leg adds the arksftp variant through ARK_SFTP_TEST_URI (about
       # 11 s per run, 2 min for both variants locally). The concurrent-writers
@@ -84,6 +93,11 @@ jobs:
       - name: Exit code contract
         if: matrix.os == 'ubuntu-latest'
         run: sh cmd/ark/test/exitcodes.sh
+
+      # ark mount checked against ark restore through the kernel FUSE driver.
+      - name: Mount against restore
+        if: matrix.os == 'ubuntu-latest'
+        run: sh cmd/ark/test/mount.sh
 
       - name: Verify modules
         run: go mod verify

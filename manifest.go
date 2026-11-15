@@ -236,7 +236,8 @@ func walkSnapshot(
 		// A path filter can keep a link and drop its target. The link then
 		// arrives as a regular file with the target's content.
 		if !filter.keep(e.LinkDest) {
-			target, err := lookupTreeEntry(ctx, trees, m.RootTree, e.LinkDest)
+			load := func(hash string) (*treeNode, error) { return loadTreeNode(ctx, trees, hash) }
+			target, err := lookupTreeEntry(load, m.RootTree, e.LinkDest)
 			if err != nil {
 				return fmt.Errorf("manifest: hardlink %s: %w", e.Path, err)
 			}
