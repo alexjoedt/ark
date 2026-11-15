@@ -49,6 +49,7 @@ func importCommand() *cli.Command {
 				return fmt.Errorf("import %s: %w", file, err)
 			}
 			pr.Done(out.R("snapshot", "%s", out.ShortID(snap.ID)),
+				out.R("source", "%s", snap.SourceName),
 				out.R("files", "%s", out.Count(snap.Stats.FileCount)),
 				out.R("size", "%s", out.Bytes(snap.Stats.TotalSize)))
 

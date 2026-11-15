@@ -33,7 +33,8 @@ func checkCommand() *cli.Command {
 				return fmt.Errorf("check: %w", err)
 			}
 			pr.Done(out.R("snapshots", "%d", res.SnapshotsChecked),
-				out.R("findings", "%d", len(res.Errors)+len(res.Warnings)))
+				out.R("errors", "%d", len(res.Errors)),
+				out.R("warnings", "%d", len(res.Warnings)))
 
 			if p.Mode().JSON {
 				if err := p.JSON(map[string]any{

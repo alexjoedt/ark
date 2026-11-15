@@ -258,10 +258,8 @@ func dockerRestoreCommand() *cli.Command {
 				pr.Fail()
 				return fmt.Errorf("docker restore %s: %w", snap.ID, err)
 			}
-			pr.Done(out.R("snapshot", "%s", out.ShortID(snap.ID)),
-				out.R("files", "%s", out.Count(res.FilesRestored)),
-				out.R("size", "%s", out.Bytes(res.BytesRestored)),
-				out.R("into", "volume %s", volume))
+			pr.Done(out.R("files", "%s", out.Count(res.FilesRestored)),
+				out.R("size", "%s", out.Bytes(res.BytesRestored)))
 
 			if p.Mode().JSON {
 				return p.JSON(map[string]any{

@@ -37,7 +37,7 @@ func verifyCommand() *cli.Command {
 			defer repo.Close()
 
 			p := printer(cmd)
-			pr := startProgress(p, "verify "+out.ShortID(cmd.Args().First()))
+			pr := startProgress(p, "verify "+cmd.Args().First())
 			res, err := repo.Verify(ctx, cmd.Args().First())
 			if err != nil {
 				pr.Fail()
@@ -45,7 +45,8 @@ func verifyCommand() *cli.Command {
 			}
 			pr.Done(out.R("snapshot", "%s", out.ShortID(res.SnapshotID)),
 				out.R("chunks", "%d", res.ChunksChecked),
-				out.R("corrupt", "%d", len(res.CorruptChunks)+len(res.MissingChunks)))
+				out.R("missing", "%d", len(res.MissingChunks)),
+				out.R("corrupt", "%d", len(res.CorruptChunks)))
 
 			if p.Mode().JSON {
 				if err := p.JSON(verifyJSON{

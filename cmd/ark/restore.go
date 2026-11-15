@@ -81,8 +81,7 @@ func restoreCommand() *cli.Command {
 				pr.Fail()
 				return fmt.Errorf("restore %s: %w", snap.ID, err)
 			}
-			pr.Done(out.R("snapshot", "%s", out.ShortID(snap.ID)),
-				out.R("files", "%s", out.Count(res.FilesRestored)),
+			pr.Done(out.R("files", "%s", out.Count(res.FilesRestored)),
 				out.R("size", "%s", out.Bytes(res.BytesRestored)),
 				out.R("into", "%s", dest))
 

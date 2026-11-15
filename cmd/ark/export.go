@@ -59,7 +59,7 @@ func exportCommand() *cli.Command {
 				}
 				return fmt.Errorf("export %s: %w", snap.ID, err)
 			}
-			pr.Done(out.R("snapshot", "%s", out.ShortID(snap.ID)), out.R("size", "%s", out.Bytes(n.n)))
+			pr.Done(out.R("size", "%s", out.Bytes(n.n)))
 
 			// stdout carries the archive, nothing else may land there
 			if file != "" && p.Mode().JSON {

@@ -143,9 +143,6 @@ func (pr *Progress) stopSpinner() {
 // time since Progress started; rows follow, aligned.
 func (pr *Progress) Done(rows ...Row) {
 	pr.stopSpinner()
-	if pr.p.mode.Quiet || pr.p.mode.JSON {
-		return
-	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s  done in %s\n", pr.label, Duration(time.Since(pr.start)))
 	w := 0
@@ -155,7 +152,7 @@ func (pr *Progress) Done(rows ...Row) {
 	for _, r := range rows {
 		fmt.Fprintf(&b, "  %-*s%s\n", w+3, r.Key, r.Value)
 	}
-	fmt.Fprint(pr.p.stderr, b.String())
+	pr.p.Infof("%s", strings.TrimSuffix(b.String(), "\n"))
 }
 
 // Row is one line of the summary block.

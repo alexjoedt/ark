@@ -49,9 +49,7 @@ func repairIndexCommand() *cli.Command {
 				pr.Fail()
 				return fmt.Errorf("repair index: %w", err)
 			}
-			pr.Done(out.R("packs", "%d", res.PacksIndexed),
-				out.R("blobs", "%d", res.BlobsIndexed),
-				out.R("unreadable", "%d", len(res.UnreadablePacks)))
+			pr.Done(out.R("unreadable", "%d", len(res.UnreadablePacks)))
 
 			if p.Mode().JSON {
 				if err := p.JSON(map[string]any{
