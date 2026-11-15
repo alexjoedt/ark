@@ -347,6 +347,24 @@ WantedBy=timers.target
 
 `systemctl --user enable --now ark-docs.timer` starts it.
 
+### Mount
+
+`ark mount DIR` serves every snapshot read-only through FUSE until Ctrl-C:
+
+```bash
+ark mount /mnt/ark                # in another shell:
+ls /mnt/ark/ids/                  # one directory per snapshot
+```
+
+- `ids/<id>/`, `names/<name>/<time>/`, `tags/<tag>/<time>/` and `hosts/<host>/<time>/`, plus a
+  `latest` link per name. The snapshot list is the one at mount start; remount to see newer ones.
+- The mount holds a shared lock for as long as it runs, so `ark prune` and `ark forget --prune`
+  cannot take their exclusive lock and exit 3 (after `--lock-wait`, if set) until it is unmounted.
+- Ctrl-C unmounts. While a process still uses the mount it keeps serving and retries every second;
+  a second Ctrl-C quits anyway.
+- Linux needs FUSE 3: `/dev/fuse` and `fusermount3` (package `fuse3`). macOS needs
+  [macFUSE](https://macfuse.github.io/) and is best effort. Windows and 32-bit Linux are not supported.
+
 ## Compatibility
 
 From 1.0.0 on, ark follows semantic versioning. All three modules release together under one version
