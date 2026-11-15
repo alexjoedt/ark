@@ -3,17 +3,21 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	ark "github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/arklocal"
 	"github.com/alexjoedt/ark/cmd/ark/internal/out"
 )
 
@@ -21,7 +25,7 @@ func TestBuildLayout(t *testing.T) {
 	at := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
 	snaps := []*ark.Snapshot{
 		{
-			ID: "aaaaaaaa11", SourceName: "/srv/data", Host: ".hidden", Tags: []string{"a/b", "x"},
+			ID: "aaaaaaaa11", SourceName: "/srv/data", Host: ".hidden", Tags: []string{"a/b", "x", "a_b"},
 			CreatedAt: at.Add(500 * time.Millisecond),
 		},
 		{ID: "aaaaaaaa22", SourceName: "/srv/data", Host: "", Tags: []string{"x", "x"}, CreatedAt: at},
@@ -51,8 +55,18 @@ func TestBuildLayout(t *testing.T) {
 		t.Errorf("hosts = %v", got)
 	}
 	tags := root.dirs["tags"].dirs
-	if got := keys(tags); !slices.Equal(got, []string{"a_b", "x"}) {
-		t.Errorf("tags = %v", got)
+	if got := keys(tags); !slices.Equal(got, []string{"a_b", "a_b-1", "x"}) {
+		t.Errorf("tags = %v, want a_b for itself and a_b-1 for a/b", got)
+	}
+	if len(tags["a_b"].snaps) != 1 || len(tags["a_b-1"].snaps) != 1 {
+		t.Errorf(
+			"tags/a_b = %v, tags/a_b-1 = %v, want the snapshot once in each",
+			tags["a_b"].snaps,
+			tags["a_b-1"].snaps,
+		)
+	}
+	if !root.time.Equal(at.Add(time.Hour)) || !data.time.Equal(at.Add(500*time.Millisecond)) {
+		t.Errorf("dir times = %v, %v, want the newest snapshot below", root.time, data.time)
 	}
 	if len(tags["x"].snaps) != 2 {
 		t.Errorf("tags/x = %v, want each snapshot once", tags["x"].snaps)
@@ -225,7 +239,7 @@ func TestMount(t *testing.T) {
 	}
 }
 
-func TestMountBusyUnmountExits1(t *testing.T) {
+func TestMountBusyKeepsServing(t *testing.T) {
 	mountable(t)
 	repo := initRepo(t)
 	t.Setenv("ARK_REPOSITORY", repo)
@@ -234,18 +248,107 @@ func TestMountBusyUnmountExits1(t *testing.T) {
 	}
 	mnt := t.TempDir()
 	done := startMount(t, mnt)
+	t.Cleanup(func() {
+		for _, cmd := range []string{"fusermount3", "fusermount"} {
+			if exec.Command(cmd, "-u", mnt).Run() == nil {
+				break
+			}
+		}
+	})
 	f, err := os.Open(filepath.Join(mnt, "ids"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	code := interrupt(t, done)
+	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		t.Fatalf("exit %d while the mount is busy, want it to keep serving", code)
+	case <-time.After(time.Second):
+	}
+	if _, err := os.ReadDir(filepath.Join(mnt, "ids")); err != nil {
+		t.Errorf("busy mount stopped serving: %v", err)
+	}
 	_ = f.Close()
-	for _, cmd := range []string{"fusermount3", "fusermount"} {
-		if exec.Command(cmd, "-u", mnt).Run() == nil {
-			break
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Errorf("exit after the mount was released = %d, want 0", code)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("mount did not exit after it was released")
+	}
+}
+
+// linkSource holds a file and a hardlink to it stored with other metadata,
+// as a tar stream can.
+type linkSource struct{}
+
+func (linkSource) Meta() ark.SourceMeta {
+	return ark.SourceMeta{Name: "links", Type: ark.SourceTypeFile}
+}
+
+func (linkSource) Walk(_ context.Context, fn ark.WalkFunc) error {
+	body := strings.Repeat("x", 600)
+	mtime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	err := fn(ark.FileInfo{Path: "a", Size: 600, Mode: 0o644, UID: 1000, ModTime: mtime, Type: ark.FileTypeRegular},
+		func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(body)), nil })
+	if err != nil {
+		return err
+	}
+	return fn(
+		ark.FileInfo{Path: "b", Mode: 0o600, ModTime: mtime.Add(time.Hour), Type: ark.FileTypeHardlink, LinkDest: "a"},
+		nil,
+	)
+}
+
+func TestMountAttributes(t *testing.T) {
+	mountable(t)
+	repo := initRepo(t)
+	t.Setenv("ARK_REPOSITORY", repo)
+	b, err := arklocal.New(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := ark.Open(context.Background(), b, ark.WithoutPassword())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := r.Backup(context.Background(), linkSource{})
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mnt := t.TempDir()
+	done := startMount(t, mnt)
+	defer func() {
+		if code := interrupt(t, done); code != 0 {
+			t.Errorf("exit after SIGINT = %d, want 0", code)
+		}
+	}()
+	snapDir := filepath.Join(mnt, "ids", out.ShortID(snap.ID))
+	var st [2]syscall.Stat_t
+	for i, name := range []string{"b", "a"} {
+		if err := syscall.Stat(filepath.Join(snapDir, name), &st[i]); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if code != 1 {
-		t.Errorf("exit with a busy mountpoint = %d, want 1", code)
+	for i, s := range st {
+		if s.Ino != st[0].Ino || s.Mode&0o777 != 0o644 || s.Uid != 1000 || s.Blocks == 0 {
+			t.Errorf("stat %d: ino %d mode %o uid %d blocks %d, want ino %d, the target's 644 and uid 1000, blocks",
+				i, s.Ino, s.Mode&0o777, s.Uid, s.Blocks, st[0].Ino)
+		}
+	}
+	for _, dir := range []string{mnt, filepath.Join(mnt, "ids"), snapDir} {
+		var s syscall.Stat_t
+		if err := syscall.Stat(dir, &s); err != nil {
+			t.Fatal(err)
+		}
+		mtime := time.Unix(s.Mtim.Unix())
+		if d := mtime.Sub(snap.CreatedAt); d < -time.Second || d > time.Second || s.Nlink != 1 {
+			t.Errorf("%s: mtime %v nlink %d, want the snapshot time %v and 1", dir, mtime, s.Nlink, snap.CreatedAt)
+		}
 	}
 }

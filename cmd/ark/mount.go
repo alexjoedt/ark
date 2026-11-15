@@ -10,11 +10,13 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -72,11 +74,9 @@ func mountCommand() *cli.Command {
 			if err != nil {
 				return err
 			}
-			root := &mountRoot{layout: buildLayout(snaps), fsys: map[string]*ark.SnapshotFS{}}
+			root := &mountRoot{layout: buildLayout(snaps), fsys: map[string]*lazyFS{}}
 			for _, s := range snaps {
-				if root.fsys[s.ID], err = rd.FS(s.ID); err != nil {
-					return err
-				}
+				root.fsys[s.ID] = &lazyFS{rd: rd, id: s.ID, created: s.CreatedAt}
 			}
 
 			p := printer(cmd)
@@ -103,13 +103,33 @@ func mountCommand() *cli.Command {
 			select {
 			case <-served:
 			case <-ctx.Done():
-				if err := srv.Unmount(); err != nil {
-					return fmt.Errorf("unmount %s: %w", dir, err)
-				}
-				<-served
+				unmount(srv, served, p.Notef, dir)
 			}
 			return nil
 		},
+	}
+}
+
+// unmount ends the mount after Ctrl-C. A busy mount keeps serving and the
+// unmount is retried until it succeeds or someone else unmounts: exiting
+// would leave a dead mountpoint behind. A second Ctrl-C ends the process.
+func unmount(srv *fuse.Server, served <-chan struct{}, notef func(string, ...any), dir string) {
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for warned := false; ; warned = true {
+		err := srv.Unmount()
+		if err == nil {
+			<-served
+			return
+		}
+		if !warned {
+			notef("unmount %s: %v: still serving until it is no longer in use, Ctrl-C again to quit anyway", dir, err)
+		}
+		select {
+		case <-served:
+			return
+		case <-tick.C:
+		}
 	}
 }
 
@@ -153,6 +173,7 @@ type vdir struct {
 	dirs  map[string]*vdir
 	snaps map[string]string // entry name to snapshot ID
 	links map[string]string // entry name to symlink target
+	time  time.Time         // newest snapshot below
 }
 
 func newVdir() *vdir {
@@ -166,6 +187,12 @@ func (d *vdir) dir(name string) *vdir {
 		d.dirs[name] = sub
 	}
 	return sub
+}
+
+func (d *vdir) touch(t time.Time) {
+	if t.After(d.time) {
+		d.time = t
+	}
 }
 
 // buildLayout lays out snaps as ids/, names/, tags/ and hosts/.
@@ -182,12 +209,13 @@ func buildLayout(snaps []*ark.Snapshot) *vdir {
 			id = s.ID
 		}
 		ids.snaps[escapeName(id)] = s.ID
+		ids.touch(s.CreatedAt)
+		root.touch(s.CreatedAt)
 	}
 
 	groups := map[string]map[string][]*ark.Snapshot{"names": {}, "tags": {}, "hosts": {}}
 	for _, s := range snaps {
 		add := func(kind, key string) {
-			key = escapeName(key)
 			groups[kind][key] = append(groups[kind][key], s)
 		}
 		add("names", s.SourceName)
@@ -198,12 +226,14 @@ func buildLayout(snaps []*ark.Snapshot) *vdir {
 	}
 	for kind, byKey := range groups {
 		top := root.dir(kind)
-		for key, list := range byKey {
-			d := top.dir(key)
+		for key, name := range dirNames(slices.Sorted(maps.Keys(byKey))) {
+			d := top.dir(name)
 			newest := ""
-			for _, s := range sortByTime(list) {
+			for _, s := range sortByTime(byKey[key]) {
 				newest = timeName(d, s.CreatedAt)
 				d.snaps[newest] = s.ID
+				d.touch(s.CreatedAt)
+				top.touch(s.CreatedAt)
 			}
 			if kind == "names" {
 				d.links["latest"] = newest
@@ -243,6 +273,32 @@ func escapeName(s string) string {
 	return s
 }
 
+// dirNames maps each of the sorted keys to its directory name. A key that
+// needs no escaping keeps itself; an escaped key that collides with a taken
+// name gets a -1, -2 suffix, in key order, so distinct keys never share a
+// directory.
+func dirNames(keys []string) map[string]string {
+	names := make(map[string]string, len(keys))
+	taken := map[string]bool{}
+	for _, k := range keys {
+		if escapeName(k) == k {
+			names[k], taken[k] = k, true
+		}
+	}
+	for _, k := range keys {
+		if _, ok := names[k]; ok {
+			continue
+		}
+		base := escapeName(k)
+		name := base
+		for i := 1; taken[name]; i++ {
+			name = base + "-" + strconv.Itoa(i)
+		}
+		names[k], taken[name] = name, true
+	}
+	return names
+}
+
 // inode derives a stable inode number from parent and name. 0 is invalid and
 // 1 is the root.
 func inode(parent uint64, name string) uint64 {
@@ -264,10 +320,18 @@ func inode(parent uint64, name string) uint64 {
 type mountRoot struct {
 	gofs.Inode
 	layout *vdir
-	fsys   map[string]*ark.SnapshotFS
+	fsys   map[string]*lazyFS
 }
 
-var _ gofs.NodeOnAdder = (*mountRoot)(nil)
+var (
+	_ gofs.NodeOnAdder   = (*mountRoot)(nil)
+	_ gofs.NodeGetattrer = (*mountRoot)(nil)
+)
+
+func (r *mountRoot) Getattr(_ context.Context, _ gofs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	dirAttr(&out.Attr, 0o555, r.layout.time)
+	return 0
+}
 
 func (r *mountRoot) OnAdd(ctx context.Context) {
 	r.add(ctx, &r.Inode, r.layout, 1)
@@ -276,13 +340,17 @@ func (r *mountRoot) OnAdd(ctx context.Context) {
 func (r *mountRoot) add(ctx context.Context, parent *gofs.Inode, d *vdir, ino uint64) {
 	for name, sub := range d.dirs {
 		cino := inode(ino, name)
-		ch := parent.NewPersistentInode(ctx, &layoutDir{}, gofs.StableAttr{Mode: syscall.S_IFDIR, Ino: cino})
+		ch := parent.NewPersistentInode(
+			ctx,
+			&layoutDir{time: sub.time},
+			gofs.StableAttr{Mode: syscall.S_IFDIR, Ino: cino},
+		)
 		parent.AddChild(name, ch, false)
 		r.add(ctx, ch, sub, cino)
 	}
 	for name, id := range d.snaps {
 		cino := inode(ino, name)
-		n := &snapNode{fsys: r.fsys[id], name: ".", root: cino}
+		n := &snapNode{snap: r.fsys[id], name: ".", root: cino}
 		ch := parent.NewPersistentInode(ctx, n, gofs.StableAttr{Mode: syscall.S_IFDIR, Ino: cino})
 		parent.AddChild(name, ch, false)
 	}
@@ -294,21 +362,89 @@ func (r *mountRoot) add(ctx context.Context, parent *gofs.Inode, d *vdir, ino ui
 }
 
 // layoutDir is a directory of the layout; go-fuse serves its children.
-type layoutDir struct{ gofs.Inode }
+type layoutDir struct {
+	gofs.Inode
+	time time.Time
+}
 
 var _ gofs.NodeGetattrer = (*layoutDir)(nil)
 
-func (*layoutDir) Getattr(_ context.Context, _ gofs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0o555
+func (d *layoutDir) Getattr(_ context.Context, _ gofs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	dirAttr(&out.Attr, 0o555, d.time)
 	return 0
+}
+
+// dirAttr fills the attributes of a directory without a stored entry.
+func dirAttr(a *fuse.Attr, perm uint32, t time.Time) {
+	a.Mode = syscall.S_IFDIR | perm
+	a.Nlink = 1
+	a.SetTimes(&t, &t, &t)
+}
+
+// lazyFS opens a snapshot's file system at its first use, so the mount
+// serves without loading every manifest first and a snapshot that fails to
+// open fails alone. A failed open is retried at the next use.
+type lazyFS struct {
+	rd      *ark.Reader
+	id      string
+	created time.Time
+
+	mu   sync.Mutex
+	fsys *ark.SnapshotFS
+}
+
+func (l *lazyFS) get() (*ark.SnapshotFS, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.fsys == nil {
+		fsys, err := l.rd.FS(l.id)
+		if err != nil {
+			return nil, err
+		}
+		l.fsys = fsys
+	}
+	return l.fsys, nil
+}
+
+func (l *lazyFS) Lstat(name string) (fs.FileInfo, error) {
+	fsys, err := l.get()
+	if err != nil {
+		return nil, err
+	}
+	return fsys.Lstat(name)
+}
+
+func (l *lazyFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	fsys, err := l.get()
+	if err != nil {
+		return nil, err
+	}
+	return fsys.ReadDir(name)
+}
+
+func (l *lazyFS) Open(name string) (fs.File, error) {
+	fsys, err := l.get()
+	if err != nil {
+		return nil, err
+	}
+	return fsys.Open(name)
+}
+
+func (l *lazyFS) ReadLink(name string) (string, error) {
+	fsys, err := l.get()
+	if err != nil {
+		return "", err
+	}
+	return fsys.ReadLink(name)
 }
 
 // snapNode is an entry of one snapshot, name its io/fs path. Inode numbers
 // hash the snapshot root's inode and the path, so a hardlink, numbered by its
-// target's path, shares its target's inode.
+// target's path, shares its target's inode and reports its target's
+// attributes.
 type snapNode struct {
 	gofs.Inode
-	fsys *ark.SnapshotFS
+	snap *lazyFS
 	name string
 	root uint64
 }
@@ -333,26 +469,49 @@ func (n *snapNode) ino(name string, info fs.FileInfo) uint64 {
 	if name == "." {
 		return n.root
 	}
-	if fi, ok := info.Sys().(ark.FileInfo); ok && fi.Type == ark.FileTypeHardlink {
-		name = path.Clean(strings.TrimPrefix(fi.LinkDest, "./"))
+	if target, ok := linkTarget(info); ok {
+		name = target
 	}
 	return inode(n.root, name)
 }
 
+// linkTarget returns the io/fs name a hardlink's entry names.
+func linkTarget(info fs.FileInfo) (string, bool) {
+	fi, ok := info.Sys().(ark.FileInfo)
+	if !ok || fi.Type != ark.FileTypeHardlink {
+		return "", false
+	}
+	return path.Clean(strings.TrimPrefix(fi.LinkDest, "./")), true
+}
+
+// stat returns the entry at name, a hardlink's target in its place, and its
+// inode. Both names of a hardlink are one kernel inode, so both must report
+// the same attributes.
+func (n *snapNode) stat(name string) (fs.FileInfo, uint64, error) {
+	info, err := n.snap.Lstat(name)
+	if err != nil {
+		return nil, 0, err
+	}
+	ino := n.ino(name, info)
+	if target, ok := linkTarget(info); ok {
+		info, err = n.snap.Lstat(target)
+	}
+	return info, ino, err
+}
+
 func (n *snapNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*gofs.Inode, syscall.Errno) {
 	p := n.child(name)
-	info, err := n.fsys.Lstat(p)
+	info, ino, err := n.stat(p)
 	if err != nil {
 		return nil, errno(p, err)
 	}
-	ino := n.ino(p, info)
 	fillAttr(&out.Attr, info, ino)
-	ch := &snapNode{fsys: n.fsys, name: p, root: n.root}
+	ch := &snapNode{snap: n.snap, name: p, root: n.root}
 	return n.NewInode(ctx, ch, gofs.StableAttr{Mode: out.Mode & syscall.S_IFMT, Ino: ino}), 0
 }
 
 func (n *snapNode) Readdir(context.Context) (gofs.DirStream, syscall.Errno) {
-	list, err := n.fsys.ReadDir(n.name)
+	list, err := n.snap.ReadDir(n.name)
 	if err != nil {
 		return nil, errno(n.name, err)
 	}
@@ -369,16 +528,23 @@ func (n *snapNode) Readdir(context.Context) (gofs.DirStream, syscall.Errno) {
 }
 
 func (n *snapNode) Getattr(_ context.Context, _ gofs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	info, err := n.fsys.Lstat(n.name)
+	if n.name == "." {
+		// What SnapshotFS reports for its root, without opening it: listing
+		// the layout's snapshot directories loads no manifest.
+		dirAttr(&out.Attr, 0o755, n.snap.created)
+		out.Ino = n.root
+		return 0
+	}
+	info, ino, err := n.stat(n.name)
 	if err != nil {
 		return errno(n.name, err)
 	}
-	fillAttr(&out.Attr, info, n.ino(n.name, info))
+	fillAttr(&out.Attr, info, ino)
 	return 0
 }
 
 func (n *snapNode) Open(context.Context, uint32) (gofs.FileHandle, uint32, syscall.Errno) {
-	f, err := n.fsys.Open(n.name)
+	f, err := n.snap.Open(n.name)
 	if err != nil {
 		return nil, 0, errno(n.name, err)
 	}
@@ -391,7 +557,7 @@ func (n *snapNode) Open(context.Context, uint32) (gofs.FileHandle, uint32, sysca
 }
 
 func (n *snapNode) Readlink(context.Context) ([]byte, syscall.Errno) {
-	target, err := n.fsys.ReadLink(n.name)
+	target, err := n.snap.ReadLink(n.name)
 	if err != nil {
 		return nil, errno(n.name, err)
 	}
