@@ -127,7 +127,7 @@ type ConcurrentSource interface {
 // is safe to call concurrently with Walk and returns soon after its ctx is
 // cancelled. A backup with WithBackupScan counts files and bytes with it. A
 // wrapper over a source without Rewalk returns [errors.ErrUnsupported] from it,
-// which drops the scan.
+// which skips the scan.
 type RewalkSource interface {
 	Source
 	Rewalk(ctx context.Context, fn func(entry FileInfo) error) error

@@ -116,6 +116,16 @@ func (s namedSource) ConcurrentOpen() bool {
 	return ok && cs.ConcurrentOpen()
 }
 
+// Rewalk forwards the wrapped source's counting walk, so a named backup keeps
+// its scan totals.
+func (s namedSource) Rewalk(ctx context.Context, fn func(ark.FileInfo) error) error {
+	rs, ok := s.Source.(ark.RewalkSource)
+	if !ok {
+		return errors.ErrUnsupported
+	}
+	return rs.Rewalk(ctx, fn)
+}
+
 // listFlag is a repeatable string flag whose values are never split on
 // commas, so a pattern like "a,b" stays one value.
 type listFlag = cli.FlagBase[[]string, cli.NoConfig, listCreator]

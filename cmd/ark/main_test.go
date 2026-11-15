@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -1036,6 +1037,29 @@ func TestNamedSourceKeepsConcurrentOpen(t *testing.T) {
 	cs, ok := ark.Source(namedSource{Source: src, name: "x"}).(ark.ConcurrentSource)
 	if !ok || !cs.ConcurrentOpen() {
 		t.Error("namedSource over an arkfs source does not report ConcurrentOpen")
+	}
+}
+
+func TestNamedSourceKeepsRewalk(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("abc"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src, err := arkfs.NewSource(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	err = namedSource{Source: src, name: "x"}.Rewalk(context.Background(), func(e ark.FileInfo) error {
+		paths = append(paths, e.Path)
+		return nil
+	})
+	if err != nil || len(paths) != 1 || paths[0] != "a.txt" {
+		t.Errorf("Rewalk through namedSource = %v, %v; want [a.txt], nil", paths, err)
+	}
+	stream := namedSource{Source: ark.NewStreamSource("s", strings.NewReader("")), name: "x"}
+	if err := stream.Rewalk(context.Background(), nil); !errors.Is(err, errors.ErrUnsupported) {
+		t.Errorf("Rewalk over a stream source = %v, want errors.ErrUnsupported", err)
 	}
 }
 

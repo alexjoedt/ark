@@ -2,6 +2,7 @@ package ark
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -33,7 +34,7 @@ func startScan(ctx context.Context, src Source, opts backupOptions, mu *sync.Mut
 	// A wrapper that does not forward Rewalk silently costs the totals.
 	rs, ok := src.(RewalkSource)
 	if !ok {
-		logger.DebugContext(ctx, "counting scan skipped", "rewalk", false)
+		logger.DebugContext(ctx, "counting scan skipped")
 		return nil
 	}
 	ctx, cancel := context.WithCancel(ctx)
@@ -58,6 +59,10 @@ func startScan(ctx context.Context, src Source, opts backupOptions, mu *sync.Mut
 			}
 			return nil
 		})
+		if errors.Is(err, errors.ErrUnsupported) {
+			logger.DebugContext(ctx, "counting scan skipped")
+			return
+		}
 		if err != nil {
 			logger.DebugContext(ctx, "counting scan dropped", "error", err)
 			return

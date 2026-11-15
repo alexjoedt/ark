@@ -171,7 +171,7 @@ func (s *fileSource) ConcurrentOpen() bool { return true }
 // detection, but stops at the lstat: no xattrs, no readlink, no open. Each
 // walk keeps its own state, so it runs beside a Walk.
 func (s *fileSource) Rewalk(ctx context.Context, fn func(ark.FileInfo) error) error {
-	return s.walk(ctx, false, func(e ark.FileInfo, _ func() (io.ReadCloser, error)) error { return fn(e) })
+	return s.walk(ctx, func(_ string, _ os.FileInfo, e ark.FileInfo) error { return fn(e) })
 }
 
 var (
@@ -187,12 +187,51 @@ var (
 // A file with more than one name reaches fn as a regular file under the name
 // the walk sees first and as ark.FileTypeHardlink under every later one.
 func (s *fileSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
-	return s.walk(ctx, true, fn)
+	return s.walk(ctx, func(path string, fi os.FileInfo, entry ark.FileInfo) error {
+		var err error
+		switch entry.Type {
+		case ark.FileTypeSymlink:
+			if entry.LinkDest, err = os.Readlink(path); err != nil {
+				return fmt.Errorf("arkfs: readlink %s: %w", path, err)
+			}
+			return fn(entry, nil)
+		case ark.FileTypeDirectory:
+			if entry.Xattrs, err = readXattrs(path); err != nil {
+				return err
+			}
+			return fn(entry, nil)
+		case ark.FileTypeHardlink, ark.FileTypeUnsupported:
+			return fn(entry, nil)
+		case ark.FileTypeRegular:
+		}
+
+		// Only a file with content uses them, so only it carries them.
+		entry.ChangeTime, entry.Inode = changeID(fi)
+
+		if entry.Xattrs, err = readXattrs(path); err != nil {
+			return err
+		}
+
+		// The file is opened only when the core reads it, which it skips
+		// for a file the parent snapshot holds unchanged, and possibly after
+		// fn returned (ConcurrentOpen), so the caller owns the close.
+		return fn(entry, func() (io.ReadCloser, error) {
+			f, err := os.Open(path)
+			if err != nil {
+				return nil, fmt.Errorf("arkfs: open %s: %w", path, err)
+			}
+			return struct {
+				io.Reader
+				io.Closer
+			}{io.LimitReader(f, entry.Size), f}, nil
+		})
+	})
 }
 
-// walk is Walk with full set; without it, entries carry the lstat fields
-// only and open is nil.
-func (s *fileSource) walk(ctx context.Context, full bool, fn ark.WalkFunc) error {
+// walk visits the entries Walk yields, under the excludes and with hardlink
+// detection, and passes each with only the fields its lstat gives. Every read
+// past the lstat belongs in Walk, so Rewalk never pays for it.
+func (s *fileSource) walk(ctx context.Context, fn func(path string, fi os.FileInfo, entry ark.FileInfo) error) error {
 	linked := make(map[inodeKey]string)
 
 	return filepath.WalkDir(s.root, func(path string, d os.DirEntry, walkErr error) error {
@@ -242,45 +281,6 @@ func (s *fileSource) walk(ctx context.Context, full bool, fn ark.WalkFunc) error
 			}
 		}
 
-		if d.Type()&os.ModeSymlink != 0 {
-			var target string
-			if full {
-				if target, err = os.Readlink(path); err != nil {
-					return fmt.Errorf("arkfs: readlink %s: %w", path, err)
-				}
-			}
-			uid, gid := fileOwner(fi)
-			return fn(ark.FileInfo{
-				Path:     rel,
-				Type:     ark.FileTypeSymlink,
-				Mode:     fi.Mode().Perm(),
-				ModTime:  fi.ModTime(),
-				UID:      uid,
-				GID:      gid,
-				LinkDest: target,
-			}, nil)
-		}
-
-		// Directories.
-		if d.IsDir() {
-			var xattrs map[string][]byte
-			if full {
-				if xattrs, err = readXattrs(path); err != nil {
-					return err
-				}
-			}
-			uid, gid := fileOwner(fi)
-			return fn(ark.FileInfo{
-				Path:    rel,
-				Type:    ark.FileTypeDirectory,
-				Mode:    fi.Mode().Perm(),
-				ModTime: fi.ModTime(),
-				UID:     uid,
-				GID:     gid,
-				Xattrs:  xattrs,
-			}, nil)
-		}
-
 		uid, gid := fileOwner(fi)
 		entry := ark.FileInfo{
 			Path:    rel,
@@ -292,11 +292,17 @@ func (s *fileSource) walk(ctx context.Context, full bool, fn ark.WalkFunc) error
 			GID:     gid,
 		}
 
-		// Devices, fifos and sockets: the core counts them and drops them.
-		if !fi.Mode().IsRegular() {
-			entry.Type = ark.FileTypeUnsupported
-			entry.Size = 0
-			return fn(entry, nil)
+		switch {
+		case d.Type()&os.ModeSymlink != 0:
+			entry.Type, entry.Size = ark.FileTypeSymlink, 0
+			return fn(path, fi, entry)
+		case d.IsDir():
+			entry.Type, entry.Size = ark.FileTypeDirectory, 0
+			return fn(path, fi, entry)
+		case !fi.Mode().IsRegular():
+			// Devices, fifos and sockets: the core counts them and drops them.
+			entry.Type, entry.Size = ark.FileTypeUnsupported, 0
+			return fn(path, fi, entry)
 		}
 
 		// A second name for an inode already yielded stores no content again.
@@ -304,34 +310,10 @@ func (s *fileSource) walk(ctx context.Context, full bool, fn ark.WalkFunc) error
 			if first, seen := linked[key]; seen {
 				entry.Type = ark.FileTypeHardlink
 				entry.LinkDest = first
-				return fn(entry, nil)
+				return fn(path, fi, entry)
 			}
 			linked[key] = rel
 		}
-
-		if !full {
-			return fn(entry, nil)
-		}
-
-		// Only a file with content uses them, so only it carries them.
-		entry.ChangeTime, entry.Inode = changeID(fi)
-
-		if entry.Xattrs, err = readXattrs(path); err != nil {
-			return err
-		}
-
-		// The file is opened only when the core reads it, which it skips
-		// for a file the parent snapshot holds unchanged, and possibly after
-		// fn returned (ConcurrentOpen), so the caller owns the close.
-		return fn(entry, func() (io.ReadCloser, error) {
-			f, err := os.Open(path)
-			if err != nil {
-				return nil, fmt.Errorf("arkfs: open %s: %w", path, err)
-			}
-			return struct {
-				io.Reader
-				io.Closer
-			}{io.LimitReader(f, entry.Size), f}, nil
-		})
+		return fn(path, fi, entry)
 	})
 }

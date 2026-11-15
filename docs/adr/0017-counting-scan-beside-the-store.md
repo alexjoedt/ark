@@ -25,7 +25,8 @@ same order and under the same excludes, from names and stat metadata alone. It o
 reads no xattrs, ACLs or symlink targets; a second name of an inode still comes as a hardlink.
 arkfs implements it; `StreamSource` and the Docker volume source do not. A wrapper that embeds a
 Source hides the method and forwards it, as with `ConcurrentSource`; over a source without it,
-the wrapper's Rewalk returns `errors.ErrUnsupported`, which drops the scan.
+the wrapper's Rewalk returns `errors.ErrUnsupported`, which skips the scan like a source without
+the method. `arktest.RunSourceSinkTests` checks every Rewalk against the Walk of its source.
 
 The scan is opt-in: `WithBackupScan()` starts a counting Rewalk beside the store for a
 `RewalkSource`, and does nothing for any other source, without the option or when the backup has
@@ -70,4 +71,5 @@ them. An embedder's directory source implements a second walk method to offer th
 count can lag the store on a slow file system, and a source that changes during the run yields
 totals that differ from the snapshot. A source whose Rewalk ignores a cancelled ctx delays the end
 of the backup until its scan returns. Tests: `TestBackupScanCountsLikeTheSnapshot`,
-`TestRewalkYieldsWalkEntriesFromTheStatAlone`, `TestBackupScanEventsInterleaveWithoutOverlap`.
+`TestRewalkHonoursExcludes`, `TestScanOverUnsupportedRewalkIsSkipped`,
+`TestBackupScanEventsInterleaveWithoutOverlap` and the conformance suite's `Rewalk` case.
