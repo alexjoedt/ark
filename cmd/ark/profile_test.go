@@ -296,3 +296,58 @@ func TestProfileErrorsExit2(t *testing.T) {
 		t.Fatalf("backup ran after a failing run-before: %d snapshots", len(list))
 	}
 }
+
+func TestProfileReviewCases(t *testing.T) {
+	dir := profileDirFor(t)
+	repo := initRepo(t)
+	docs, other := t.TempDir(), t.TempDir()
+	path := writeProfile(t, dir, "docs", "repo: "+repo+"\nbackup:\n  path: "+docs+`
+forget:
+  keep-daily: 7
+  keep-within: 30d
+  run-after: touch forgot.txt
+`)
+
+	// another directory is not filed under the profile's name
+	if code, _ := runCapture(t, "backup", "-P", "docs", other); code != 2 {
+		t.Fatalf("backup -P docs with another path: exit %d, want 2", code)
+	}
+	if s := profileBackup(t, "-P", "docs", "--name", "other", other); s.Name != "other" {
+		t.Fatalf("snapshot named %q, want other", s.Name)
+	}
+	own := profileBackup(t, "-P", "docs")
+	foreign := profileBackup(t, "-r", repo, "--host", "elsewhere", other)
+
+	// a dry run runs no hooks
+	if code, out := runCapture(t, "forget", "-P", "docs", "--dry-run"); code != 0 {
+		t.Fatalf("forget --dry-run exit %d: %s", code, out)
+	}
+	ran := filepath.Join(filepath.Dir(path), "forgot.txt")
+	if _, err := os.Stat(ran); err == nil {
+		t.Fatal("run-after ran on a dry run")
+	}
+	// an empty --keep-within drops the profile's rule
+	if code, out := runCapture(t, "forget", "-P", "docs", "--keep-within", "", "--dry-run"); code != 0 {
+		t.Fatalf("forget --keep-within '' exit %d: %s", code, out)
+	}
+
+	// named ids ignore the profile's policy and scope
+	code, out := runCapture(t, "--json", "forget", "-P", "docs", "--yes", own.ID, foreign.ID)
+	if code != 0 {
+		t.Fatalf("forget -P docs ids exit %d: %s", code, out)
+	}
+	var res struct {
+		Remove []profileSnapshot `json:"remove"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil || len(res.Remove) != 2 {
+		t.Fatalf("removed %q, want both named ids", out)
+	}
+	if code, _ := runCapture(t, "forget", "-P", "docs", "--keep-last", "1", own.ID); code != 2 {
+		t.Fatalf("ids with --keep-last: exit %d, want 2", code)
+	}
+
+	// version reads no profile
+	if code, _ := runCapture(t, "-P", "missing", "version"); code != 0 {
+		t.Fatalf("version with a missing profile: exit %d, want 0", code)
+	}
+}

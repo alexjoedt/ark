@@ -51,7 +51,7 @@ func (s passwordSource) read(cmd *cli.Command, confirm bool, prof *arkprofile.Pr
 		pp = *prof
 	}
 	var insecure string
-	switch v := getenv(s.insecureEnv); {
+	switch v := os.Getenv(s.insecureEnv); {
 	case cmd.Bool(s.insecureFlag):
 		insecure = "--" + s.insecureFlag
 	case pp.InsecureNoPassword:
@@ -66,7 +66,7 @@ func (s passwordSource) read(cmd *cli.Command, confirm bool, prof *arkprofile.Pr
 		}
 	}
 
-	flagFile, envFile, env := cmd.String(s.fileFlag), getenv(s.fileEnv), os.Getenv(s.envVar)
+	flagFile, envFile, env := cmd.String(s.fileFlag), os.Getenv(s.fileEnv), os.Getenv(s.envVar)
 	var from string
 	switch {
 	case flagFile != "":
@@ -133,14 +133,6 @@ func readPasswordFile(path string) (string, error) {
 		return "", exitcode.Usagef("password file %s is empty", path)
 	}
 	return pw, err
-}
-
-// getenv is [os.Getenv] that reads nothing for an empty name.
-func getenv(name string) string {
-	if name == "" {
-		return ""
-	}
-	return os.Getenv(name)
 }
 
 func promptPassword(fd int, prompt string) (string, error) {

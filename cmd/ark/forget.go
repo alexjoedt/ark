@@ -42,11 +42,17 @@ func forgetCommand() *cli.Command {
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			lp := profileFrom(ctx)
-			policy, err := forgetPolicy(cmd, lp)
+			ids := cmd.Args().Slice()
+			// named ids are removed as named: the profile's policy and
+			// snapshot scope do not apply to them
+			scope := lp
+			if len(ids) > 0 {
+				scope = nil
+			}
+			policy, err := forgetPolicy(cmd, scope)
 			if err != nil {
 				return err
 			}
-			ids := cmd.Args().Slice()
 			filter := ark.SnapshotFilter{
 				IDs:  ids,
 				Name: cmd.String("name"),
@@ -55,10 +61,10 @@ func forgetCommand() *cli.Command {
 				Host: cmd.String("host"),
 			}
 			prune := cmd.Bool("prune")
-			if lp != nil {
-				pf, err := lp.Filter()
+			if scope != nil {
+				pf, err := scope.Filter()
 				if err != nil {
-					return exitcode.Usagef("profile %s: %w", lp.Name, err)
+					return exitcode.Usagef("profile %s: %w", scope.Name, err)
 				}
 				if !cmd.IsSet("name") {
 					filter.Name = pf.Name
@@ -66,9 +72,9 @@ func forgetCommand() *cli.Command {
 				if !cmd.IsSet("host") {
 					filter.Host = pf.Host
 				}
-				if !cmd.IsSet("prune") {
-					prune = lp.Forget.Prune
-				}
+			}
+			if lp != nil && !cmd.IsSet("prune") {
+				prune = lp.Forget.Prune
 			}
 			hasPolicy := policy != (ark.ForgetPolicy{})
 			switch {
@@ -77,9 +83,12 @@ func forgetCommand() *cli.Command {
 			case len(ids) > 0 && cmd.Bool("all"):
 				return exitcode.Usagef("--all removes by filter, do not name ids")
 			}
-			return withHooks(ctx, lp, "forget", func(ctx context.Context) error {
-				return runForget(ctx, cmd, policy, filter, prune)
-			})
+			run := func(ctx context.Context) error { return runForget(ctx, cmd, policy, filter, prune) }
+			// a dry run removes nothing, so the hooks around a removal do not run
+			if cmd.Bool("dry-run") {
+				return run(ctx)
+			}
+			return withHooks(ctx, lp, "forget", run)
 		},
 	}
 }
@@ -167,12 +176,16 @@ func forgetPolicy(cmd *cli.Command, lp *loadedProfile) (ark.ForgetPolicy, error)
 			*f.dst = cmd.Int(f.name)
 		}
 	}
-	if s := cmd.String("keep-within"); cmd.IsSet("keep-within") {
-		d, err := out.ParseDuration(s)
-		if err != nil {
-			return policy, exitcode.Usagef("--keep-within: %v", err)
+	if cmd.IsSet("keep-within") {
+		// an empty value drops the profile's rule
+		policy.KeepWithin = 0
+		if s := cmd.String("keep-within"); s != "" {
+			d, err := out.ParseDuration(s)
+			if err != nil {
+				return policy, exitcode.Usagef("--keep-within: %v", err)
+			}
+			policy.KeepWithin = d
 		}
-		policy.KeepWithin = d
 	}
 	return policy, nil
 }

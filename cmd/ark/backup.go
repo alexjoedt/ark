@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -47,6 +48,9 @@ func backupCommand() *cli.Command {
 				return exitcode.Usagef("usage: ark backup [options] <path>, or -P NAME with a backup.path")
 			}
 			dir := eff.Backup.Path
+			if err := checkOtherPath(cmd, lp); err != nil {
+				return err
+			}
 			return withHooks(ctx, lp, "backup", func(ctx context.Context) error {
 				src, err := eff.Source()
 				if errors.Is(err, path.ErrBadPattern) {
@@ -64,6 +68,14 @@ func backupCommand() *cli.Command {
 
 				p := printer(cmd)
 				bopts := append(eff.BackupOptions(), ark.WithParent(cmd.String("parent")))
+				// an empty --host or --comment clears the profile's value,
+				// which BackupOptions would leave out or default
+				if cmd.IsSet("host") {
+					bopts = append(bopts, ark.WithHost(cmd.String("host")))
+				}
+				if cmd.IsSet("comment") {
+					bopts = append(bopts, ark.WithComment(cmd.String("comment")))
+				}
 				// The counting scan only feeds the live display's totals and ETA.
 				if p.Live() {
 					bopts = append(bopts, ark.WithBackupScan())
@@ -119,6 +131,30 @@ func backupProfile(cmd *cli.Command, lp *loadedProfile) arkprofile.Profile {
 		b.ExcludeCloudFiles = cmd.Bool("exclude-cloud-files")
 	}
 	return eff
+}
+
+// checkOtherPath refuses a path on the command line that is not the profile's
+// backup.path unless --name names its snapshots: filed under the profile's
+// name, it would become the parent of the profile's next backup and fall
+// under the profile's forget policy.
+func checkOtherPath(cmd *cli.Command, lp *loadedProfile) error {
+	if lp == nil || cmd.NArg() != 1 || cmd.String("name") != "" {
+		return nil
+	}
+	arg, err := filepath.Abs(cmd.Args().First())
+	if err != nil {
+		return fmt.Errorf("backup %s: %w", cmd.Args().First(), err)
+	}
+	if lp.Backup.Path != "" {
+		own, err := filepath.Abs(lp.Backup.Path)
+		if err != nil {
+			return fmt.Errorf("profile %s: backup.path: %w", lp.Name, err)
+		}
+		if own == arg {
+			return nil
+		}
+	}
+	return exitcode.Usagef("backup %s: not the backup.path of profile %s, give --name for its snapshots", arg, lp.Name)
 }
 
 // listFlag is a repeatable string flag whose values are never split on

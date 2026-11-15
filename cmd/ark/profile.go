@@ -74,10 +74,18 @@ func profileDir() (string, error) {
 	return filepath.Join(base, "ark", "profiles"), nil
 }
 
-// setProfileLoad gives every leaf command loadProfile as its Before.
+// setProfileLoad runs loadProfile before the own Before of every leaf command
+// except version, which reads no profile.
 func setProfileLoad(cmd *cli.Command) {
-	if len(cmd.Commands) == 0 && cmd.Before == nil {
-		cmd.Before = loadProfile
+	if len(cmd.Commands) == 0 && cmd.Name != "version" {
+		own := cmd.Before
+		cmd.Before = func(ctx context.Context, c *cli.Command) (context.Context, error) {
+			ctx, err := loadProfile(ctx, c)
+			if err != nil || own == nil {
+				return ctx, err
+			}
+			return own(ctx, c)
+		}
 	}
 	for _, sub := range cmd.Commands {
 		setProfileLoad(sub)

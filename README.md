@@ -301,7 +301,10 @@ ark backup -P docs -t manual    # a flag beats the profile, a list flag replaces
 - A flag given on the command line beats the profile, the profile beats the environment, the
   environment beats the default.
 - The snapshot is named after the profile unless `backup.name` says otherwise; `ark forget -P` and
-  `ark snapshots -P` select that name, forget also only this host's snapshots.
+  `ark snapshots -P` select that name, forget also only this host's snapshots. A path on the command
+  line other than `backup.path` needs `--name`, so it never lands under the profile's name. Snapshot
+  ids given to `ark forget -P` are removed as named, without the profile's policy or name filter.
+- The hooks of `forget` do not run on `--dry-run`.
 - `$VAR` and `${VAR}` expand in every value but the hooks; an unset variable exits 2. `~` and relative
   paths in `repo`, `password-file`, `backup.path` and `backup.exclude-file` are taken from the home
   directory and the profile's directory. A profile never holds a password: a `password:` key exits 2.
