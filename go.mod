@@ -7,6 +7,7 @@ require (
 	github.com/klauspost/compress v1.20.4
 	github.com/pkg/sftp v1.13.12
 	go.yaml.in/yaml/v3 v3.0.6
+	go.yaml.in/yaml/v4 v4.0.0
 	golang.org/x/crypto v0.59.0
 	golang.org/x/sys v0.50.0
 )
