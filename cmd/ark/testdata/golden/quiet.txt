@@ -6,6 +6,14 @@
 --- stdout
 <id2>
 --- stderr
+=== --quiet find b.txt (exit 0)
+--- stdout
+sub/b.txt
+sub/b.txt
+--- stderr
+=== --quiet find nothing-here (exit 0)
+--- stdout
+--- stderr
 === --quiet check (exit 0)
 --- stdout
 2 snapshots ok

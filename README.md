@@ -196,6 +196,7 @@ ark init
 ark backup /etc --tag daily
 ark snapshots
 ark ls <id>
+ark find '*.conf'           # every snapshot and path whose name matches, newest first
 ark restore <id> /tmp/etc-restore
 ark forget --keep-daily 7 --keep-weekly 4 --prune
 ark check
