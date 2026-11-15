@@ -473,6 +473,22 @@ func (b *Backend) List(ctx context.Context, t ark.HandleType, fn func(ark.BlobIn
 	return nil
 }
 
+// Empty reports whether the repository directory is missing or holds no
+// entries at all, so a caller can refuse to initialize over existing data.
+func (b *Backend) Empty(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	entries, err := b.client.ReadDir(b.basePath)
+	if os.IsNotExist(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("arksftp: read %s: %w", b.basePath, err)
+	}
+	return len(entries) == 0, nil
+}
+
 // Stat returns metadata for the object stored under h.
 func (b *Backend) Stat(ctx context.Context, h ark.Handle) (ark.BlobInfo, error) {
 	if err := ctx.Err(); err != nil {

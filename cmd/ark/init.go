@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/arksftp"
 	"github.com/alexjoedt/ark/arkuri"
 	"github.com/alexjoedt/ark/chunker"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
@@ -23,8 +24,8 @@ func initCommand() *cli.Command {
 		UsageText: `ark init [--chunk-min SIZE] [--chunk-avg SIZE] [--chunk-max SIZE]
 
    Writes the repository config and a key file sealed with the password,
-   asked twice at a prompt. Fails if the repository already exists or,
-   for a local path, if the directory exists and is not empty.
+   asked twice at a prompt. Fails if the repository directory, local or
+   over sftp, exists and is not empty.
    Chunker sizes are stored in the repository and cannot be changed later.`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "chunk-min", Usage: "minimum chunk `SIZE`", Value: "256KiB"},
@@ -59,6 +60,16 @@ func initCommand() *cli.Command {
 				return fmt.Errorf("open repository %s: %w", uri, err)
 			}
 			defer b.Close()
+
+			if s, ok := b.(*arksftp.Backend); ok {
+				empty, err := s.Empty(ctx)
+				if err != nil {
+					return fmt.Errorf("check repository %s: %w", uri, err)
+				}
+				if !empty {
+					return fmt.Errorf("repository %s exists and is not empty", uri)
+				}
+			}
 
 			err = ark.Init(ctx, b, pw, ark.WithChunkerConfig(cfg))
 			switch {
