@@ -14,7 +14,7 @@ import (
 	"syscall"
 
 	ark "github.com/alexjoedt/ark"
-	"github.com/alexjoedt/ark/arkuri"
+	"github.com/alexjoedt/ark/arkprofile"
 	"github.com/alexjoedt/ark/cmd/ark/internal/config"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
 	"github.com/alexjoedt/ark/cmd/ark/internal/out"
@@ -32,6 +32,9 @@ func main() {
 func run(args []string) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	// After the first signal a second one ends the process, also while a
+	// cleanup hook that ignores the cancel still runs.
+	context.AfterFunc(ctx, cancel)
 
 	// Load --env-file before app.Run so the flag env sources see the values.
 	err := config.PreloadEnvFile(args)
@@ -99,21 +102,30 @@ func newApp() *cli.Command {
 		Usage:   "deduplicated backups for directories and Docker volumes",
 		Version: version.GetVersion(),
 		Flags: []cli.Flag{
+			// repo, password-file and insecure-no-password read their variables
+			// in openRepo, after the profile: a flag Source would count as set.
 			&cli.StringFlag{
 				Name:    "repo",
 				Aliases: []string{"r"},
-				Usage:   "repository path or `URI`, e.g. /srv/ark or sftp://user@host/srv/ark",
-				Sources: cli.EnvVars("ARK_REPOSITORY"),
+				Usage:   "repository path or `URI`, e.g. /srv/ark or sftp://user@host/srv/ark [$ARK_REPOSITORY]",
 			},
 			&cli.StringFlag{
-				Name:    "password-file",
-				Usage:   "read the repository password from `FILE`, else $ARK_PASSWORD, else a prompt",
-				Sources: cli.EnvVars("ARK_PASSWORD_FILE"),
+				Name:    "profile",
+				Aliases: []string{"P"},
+				Usage:   "fill the flags from profile `NAME` in $XDG_CONFIG_HOME/ark/profiles",
+			},
+			&cli.StringFlag{
+				Name:    "profile-file",
+				Aliases: []string{"f"},
+				Usage:   "fill the flags from the profile in `FILE`",
+			},
+			&cli.StringFlag{
+				Name:  "password-file",
+				Usage: "read the repository password from `FILE`, else $ARK_PASSWORD, else a prompt [$ARK_PASSWORD_FILE]",
 			},
 			&cli.BoolFlag{
-				Name:    "insecure-no-password",
-				Usage:   "the repository has no password, anyone with backend access can read it",
-				Sources: cli.EnvVars("ARK_INSECURE_NO_PASSWORD"),
+				Name:  "insecure-no-password",
+				Usage: "the repository has no password, anyone with backend access can read it [$ARK_INSECURE_NO_PASSWORD]",
 			},
 			&cli.BoolFlag{
 				Name:    "json",
@@ -173,6 +185,7 @@ func newApp() *cli.Command {
 	}
 	addRemoved(app)
 	setUsageErrors(app)
+	setProfileLoad(app)
 	return app
 }
 
@@ -245,34 +258,61 @@ func jsonRequested(args []string) bool {
 	return slices.Contains(args, "--json") || slices.Contains(args, "-j")
 }
 
-// openRepo opens the repository named by --repo or ARK_REPOSITORY through
-// arkuri. There is no default location.
+// repoURI is --repo, else the profile's repo, else ARK_REPOSITORY. There is
+// no default location.
+func repoURI(ctx context.Context, cmd *cli.Command) (string, error) {
+	root := cmd.Root()
+	uri := os.Getenv("ARK_REPOSITORY")
+	switch lp := profileFrom(ctx); {
+	case root.IsSet("repo"):
+		uri = root.String("repo")
+	case lp != nil && lp.Repo != "":
+		uri = lp.Repo
+	}
+	if uri == "" {
+		return "", exitcode.Usagef("no repository given, set --repo, a profile's repo or ARK_REPOSITORY")
+	}
+	return uri, nil
+}
+
+// readRepoPassword resolves the repository password with the profile's
+// source between the flags and the variables.
+func readRepoPassword(ctx context.Context, cmd *cli.Command, confirm bool) (ark.Passphrase, error) {
+	var prof *arkprofile.Profile
+	if lp := profileFrom(ctx); lp != nil {
+		prof = lp.Profile
+	}
+	return repoPassword.read(cmd.Root(), confirm, prof)
+}
+
+// openRepo opens the repository through arkprofile, so the CLI and an
+// embedder open a profile's repository the same way. The flags beat the
+// profile's lock-wait and concurrency.
 //
 //nolint:unparam // callers may pass options
 func openRepo(ctx context.Context, cmd *cli.Command, repoOpts ...ark.Option) (*ark.Repository, error) {
 	root := cmd.Root()
-	uri := root.String("repo")
-	if uri == "" {
-		return nil, exitcode.Usagef("no repository given, set --repo or ARK_REPOSITORY")
-	}
-	pw, err := repoPassword.read(root, false)
+	uri, err := repoURI(ctx, cmd)
 	if err != nil {
 		return nil, err
 	}
-	b, err := arkuri.Open(ctx, uri)
+	pw, err := readRepoPassword(ctx, cmd, false)
 	if err != nil {
-		return nil, fmt.Errorf("open repository %s: %w", uri, err)
+		return nil, err
 	}
-	opts := []ark.Option{
-		ark.WithLogger(slog.Default()),
-		ark.WithLockWait(root.Duration("lock-wait")),
-		ark.WithConcurrency(root.Int("concurrency")),
+	eff := arkprofile.Profile{Repo: uri, LockWait: root.Duration("lock-wait"), Concurrency: root.Int("concurrency")}
+	if lp := profileFrom(ctx); lp != nil {
+		if !root.IsSet("lock-wait") && lp.LockWait > 0 {
+			eff.LockWait = lp.LockWait
+		}
+		if !root.IsSet("concurrency") && lp.Concurrency > 0 {
+			eff.Concurrency = lp.Concurrency
+		}
 	}
-	opts = append(opts, hookOptions(cmd)...)
-	repo, err := ark.Open(ctx, b, pw, append(opts, repoOpts...)...)
+	opts := append([]ark.Option{ark.WithLogger(slog.Default())}, hookOptions(cmd, eff.LockWait > 0)...)
+	repo, err := eff.Open(ctx, pw, append(opts, repoOpts...)...)
 	if err != nil {
-		_ = b.Close()
-		return nil, fmt.Errorf("open repository %s: %w", uri, err)
+		return nil, fmt.Errorf("%s: %w", uri, err)
 	}
 	return repo, nil
 }

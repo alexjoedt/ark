@@ -15,6 +15,8 @@ func TestCommandSurface(t *testing.T) {
 		// --version is urfave's own flag, added at run time; TestVersionLine covers it
 		"": {
 			"repo",
+			"profile",
+			"profile-file",
 			"json",
 			"verbose",
 			"quiet",

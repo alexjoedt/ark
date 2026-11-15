@@ -34,12 +34,21 @@ func snapshotsCommand() *cli.Command {
 			}
 			defer repo.Close()
 
-			snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{
+			filter := ark.SnapshotFilter{
 				Name: cmd.String("name"),
 				Type: ark.SourceType(cmd.String("type")),
 				Tags: cmd.StringSlice("tag"),
 				Host: cmd.String("host"),
-			})
+			}
+			// A profile narrows the list to its snapshots, on every host.
+			if lp := profileFrom(ctx); lp != nil && !cmd.IsSet("name") {
+				pf, err := lp.Filter()
+				if err != nil {
+					return exitcode.Usagef("profile %s: %w", lp.Name, err)
+				}
+				filter.Name = pf.Name
+			}
+			snaps, err := repo.Snapshots(ctx, filter)
 			if err != nil {
 				return fmt.Errorf("snapshots: %w", err)
 			}

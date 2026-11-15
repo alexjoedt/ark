@@ -31,15 +31,15 @@ func initCommand() *cli.Command {
 			if cmd.NArg() != 0 {
 				return exitcode.Usagef("ark init takes no arguments, set the repository with --repo or ARK_REPOSITORY")
 			}
-			uri := cmd.Root().String("repo")
-			if uri == "" {
-				return exitcode.Usagef("no repository given, set --repo or ARK_REPOSITORY")
+			uri, err := repoURI(ctx, cmd)
+			if err != nil {
+				return err
 			}
 			cfg, err := chunkerConfig(cmd)
 			if err != nil {
 				return err
 			}
-			pw, err := repoPassword.read(cmd.Root(), true)
+			pw, err := readRepoPassword(ctx, cmd, true)
 			if err != nil {
 				return err
 			}

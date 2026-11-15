@@ -1,53 +1,96 @@
 package main
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"strings"
+	"strconv"
 
 	"github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/arkprofile"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/term"
 )
 
-// passwordSource names the flags and the variable one password is read from.
+// passwordSource names the flags and the variables one password is read from.
 // There is no --password flag, it would show in the process list.
 type passwordSource struct {
 	fileFlag, envVar, insecureFlag, prompt string
+	// fileEnv and insecureEnv are the variables behind the two flags, if any.
+	fileEnv, insecureEnv string
 }
 
 var (
-	repoPassword = passwordSource{"password-file", "ARK_PASSWORD", "insecure-no-password", "repository password"}
-	newPassword  = passwordSource{
-		"new-password-file",
-		"ARK_NEW_PASSWORD",
-		"new-insecure-no-password",
-		"new repository password",
+	repoPassword = passwordSource{
+		fileFlag:     "password-file",
+		envVar:       "ARK_PASSWORD",
+		insecureFlag: "insecure-no-password",
+		prompt:       "repository password",
+		fileEnv:      "ARK_PASSWORD_FILE",
+		insecureEnv:  "ARK_INSECURE_NO_PASSWORD",
+	}
+	newPassword = passwordSource{
+		fileFlag:     "new-password-file",
+		envVar:       "ARK_NEW_PASSWORD",
+		insecureFlag: "new-insecure-no-password",
+		prompt:       "new repository password",
 	}
 )
 
-// read resolves the passphrase from the flags of cmd: the password file, then
-// the environment, then a prompt on the terminal. confirm prompts twice.
-func (s passwordSource) read(cmd *cli.Command, confirm bool) (ark.Passphrase, error) {
-	file := cmd.String(s.fileFlag)
-	env := os.Getenv(s.envVar)
-	if cmd.Bool(s.insecureFlag) {
-		if file != "" || env != "" {
-			return ark.Passphrase{}, exitcode.Usagef(
-				"--%s conflicts with --%s and %s",
-				s.insecureFlag,
-				s.fileFlag,
-				s.envVar,
-			)
+// read resolves the passphrase from the first source that is set: the
+// password file flag, the profile's password-file or password-env, the file
+// variable, the password variable, else a prompt on the terminal. No password
+// from the flag, the profile or the variable conflicts with every password
+// source. confirm prompts twice.
+func (s passwordSource) read(cmd *cli.Command, confirm bool, prof *arkprofile.Profile) (ark.Passphrase, error) {
+	var pp arkprofile.Profile
+	if prof != nil {
+		pp = *prof
+	}
+	var insecure string
+	switch v := getenv(s.insecureEnv); {
+	case cmd.Bool(s.insecureFlag):
+		insecure = "--" + s.insecureFlag
+	case pp.InsecureNoPassword:
+		insecure = "the profile's insecure-no-password"
+	case v != "":
+		on, err := strconv.ParseBool(v)
+		if err != nil {
+			return ark.Passphrase{}, exitcode.Usagef("%s=%q: want true or false", s.insecureEnv, v)
 		}
-		return ark.WithoutPassword(), nil
+		if on {
+			insecure = s.insecureEnv
+		}
+	}
+
+	flagFile, envFile, env := cmd.String(s.fileFlag), getenv(s.fileEnv), os.Getenv(s.envVar)
+	var from string
+	switch {
+	case flagFile != "":
+		from = "--" + s.fileFlag
+	case pp.PasswordFile != "":
+		from = "the profile's password-file"
+	case pp.PasswordEnv != "":
+		from = "the profile's password-env"
+	case envFile != "":
+		from = s.fileEnv
+	case env != "":
+		from = s.envVar
+	}
+	if insecure != "" && from != "" {
+		return ark.Passphrase{}, exitcode.Usagef("%s conflicts with %s", insecure, from)
 	}
 
 	switch {
-	case file != "":
-		pw, err := readPasswordFile(file)
+	case insecure != "":
+		return ark.WithoutPassword(), nil
+	case flagFile == "" && (pp.PasswordFile != "" || pp.PasswordEnv != ""):
+		return profilePassphrase(prof)
+	case flagFile != "" || envFile != "":
+		pw, err := readPasswordFile(cmp.Or(flagFile, envFile))
 		if err != nil {
 			return ark.Passphrase{}, err
 		}
@@ -82,21 +125,22 @@ func (s passwordSource) read(cmd *cli.Command, confirm bool) (ark.Passphrase, er
 	return ark.WithPassword(pw), nil
 }
 
-// readPasswordFile returns the file's contents without one trailing line
-// ending, so both `echo pw > file` and an editor's save work.
+// readPasswordFile reads the file as a profile's password-file is read; an
+// empty file is a usage error.
 func readPasswordFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read password file: %w", err)
-	}
-	pw := string(data)
-	if s, ok := strings.CutSuffix(pw, "\n"); ok {
-		pw = strings.TrimSuffix(s, "\r")
-	}
-	if pw == "" {
+	pw, err := arkprofile.ReadPasswordFile(path)
+	if errors.Is(err, arkprofile.ErrNoPassword) {
 		return "", exitcode.Usagef("password file %s is empty", path)
 	}
-	return pw, nil
+	return pw, err
+}
+
+// getenv is [os.Getenv] that reads nothing for an empty name.
+func getenv(name string) string {
+	if name == "" {
+		return ""
+	}
+	return os.Getenv(name)
 }
 
 func promptPassword(fd int, prompt string) (string, error) {
@@ -140,7 +184,7 @@ func keyCommand() *cli.Command {
 					}
 					defer repo.Close()
 
-					pw, err := newPassword.read(cmd, true)
+					pw, err := newPassword.read(cmd, true, nil)
 					if err != nil {
 						return err
 					}

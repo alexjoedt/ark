@@ -41,7 +41,8 @@ func forgetCommand() *cli.Command {
 			&cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "skip the confirmation prompt"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			policy, err := forgetPolicy(cmd)
+			lp := profileFrom(ctx)
+			policy, err := forgetPolicy(cmd, lp)
 			if err != nil {
 				return err
 			}
@@ -53,6 +54,22 @@ func forgetCommand() *cli.Command {
 				Tags: cmd.StringSlice("tag"),
 				Host: cmd.String("host"),
 			}
+			prune := cmd.Bool("prune")
+			if lp != nil {
+				pf, err := lp.Filter()
+				if err != nil {
+					return exitcode.Usagef("profile %s: %w", lp.Name, err)
+				}
+				if !cmd.IsSet("name") {
+					filter.Name = pf.Name
+				}
+				if !cmd.IsSet("host") {
+					filter.Host = pf.Host
+				}
+				if !cmd.IsSet("prune") {
+					prune = lp.Forget.Prune
+				}
+			}
 			hasPolicy := policy != (ark.ForgetPolicy{})
 			switch {
 			case len(ids) > 0 && hasPolicy:
@@ -60,69 +77,97 @@ func forgetCommand() *cli.Command {
 			case len(ids) > 0 && cmd.Bool("all"):
 				return exitcode.Usagef("--all removes by filter, do not name ids")
 			}
-
-			repo, err := openRepo(ctx, cmd)
-			if err != nil {
-				return err
-			}
-			defer repo.Close()
-
-			// --all turns the filter into an id list, the library refuses an empty policy
-			if cmd.Bool("all") {
-				matches, err := repo.Snapshots(ctx, filter)
-				if err != nil {
-					return fmt.Errorf("forget: %w", err)
-				}
-				for _, s := range matches {
-					filter.IDs = append(filter.IDs, s.ID)
-				}
-				if len(filter.IDs) == 0 {
-					return printForget(cmd, &ark.ForgetResult{Keep: nil, Remove: nil, DryRun: cmd.Bool("dry-run")})
-				}
-			}
-
-			// preview first, so the prompt can name what goes
-			preview, err := repo.Forget(ctx, policy, filter, ark.WithForgetDryRun())
-			if err != nil {
-				return fmt.Errorf("forget: %w", err)
-			}
-			if cmd.Bool("dry-run") || len(preview.Remove) == 0 {
-				return printForget(cmd, preview)
-			}
-
-			p := printer(cmd)
-			if err := p.Confirm(fmt.Sprintf("remove %d snapshots", len(preview.Remove))); err != nil {
-				return err
-			}
-			pr := startProgress(p, "forget")
-			res, err := repo.Forget(ctx, policy, filter)
-			if err != nil {
-				pr.Fail()
-				return fmt.Errorf("forget: %w", err)
-			}
-			pr.Done()
-			if err := printForget(cmd, res); err != nil {
-				return err
-			}
-			if cmd.Bool("prune") {
-				return runPrune(ctx, cmd, repo, false)
-			}
-			return nil
+			return withHooks(ctx, lp, "forget", func(ctx context.Context) error {
+				return runForget(ctx, cmd, policy, filter, prune)
+			})
 		},
 	}
 }
 
-// forgetPolicy maps the --keep-* flags. A bad duration is a usage error.
-func forgetPolicy(cmd *cli.Command) (ark.ForgetPolicy, error) {
-	policy := ark.ForgetPolicy{
-		KeepLast:    cmd.Int("keep-last"),
-		KeepHourly:  cmd.Int("keep-hourly"),
-		KeepDaily:   cmd.Int("keep-daily"),
-		KeepWeekly:  cmd.Int("keep-weekly"),
-		KeepMonthly: cmd.Int("keep-monthly"),
-		KeepYearly:  cmd.Int("keep-yearly"),
+// runForget removes what policy or the ids in filter select, after a
+// confirmation, and prunes afterwards when prune is set.
+func runForget(
+	ctx context.Context,
+	cmd *cli.Command,
+	policy ark.ForgetPolicy,
+	filter ark.SnapshotFilter,
+	prune bool,
+) error {
+	repo, err := openRepo(ctx, cmd)
+	if err != nil {
+		return err
 	}
-	if s := cmd.String("keep-within"); s != "" {
+	defer repo.Close()
+
+	// --all turns the filter into an id list, the library refuses an empty policy
+	if cmd.Bool("all") {
+		matches, err := repo.Snapshots(ctx, filter)
+		if err != nil {
+			return fmt.Errorf("forget: %w", err)
+		}
+		for _, s := range matches {
+			filter.IDs = append(filter.IDs, s.ID)
+		}
+		if len(filter.IDs) == 0 {
+			return printForget(cmd, &ark.ForgetResult{Keep: nil, Remove: nil, DryRun: cmd.Bool("dry-run")})
+		}
+	}
+
+	// preview first, so the prompt can name what goes
+	preview, err := repo.Forget(ctx, policy, filter, ark.WithForgetDryRun())
+	if err != nil {
+		return fmt.Errorf("forget: %w", err)
+	}
+	if cmd.Bool("dry-run") || len(preview.Remove) == 0 {
+		return printForget(cmd, preview)
+	}
+
+	p := printer(cmd)
+	if err := p.Confirm(fmt.Sprintf("remove %d snapshots", len(preview.Remove))); err != nil {
+		return err
+	}
+	pr := startProgress(p, "forget")
+	res, err := repo.Forget(ctx, policy, filter)
+	if err != nil {
+		pr.Fail()
+		return fmt.Errorf("forget: %w", err)
+	}
+	pr.Done()
+	if err := printForget(cmd, res); err != nil {
+		return err
+	}
+	if prune {
+		return runPrune(ctx, cmd, repo, false)
+	}
+	return nil
+}
+
+// forgetPolicy is the profile's forget policy with every --keep-* flag given
+// on the command line put over its rule. A bad duration is a usage error.
+func forgetPolicy(cmd *cli.Command, lp *loadedProfile) (ark.ForgetPolicy, error) {
+	var policy ark.ForgetPolicy
+	if lp != nil {
+		var err error
+		if policy, err = lp.ForgetPolicy(); err != nil {
+			return policy, exitcode.Usagef("profile %s: %w", lp.Name, err)
+		}
+	}
+	for _, f := range []struct {
+		name string
+		dst  *int
+	}{
+		{"keep-last", &policy.KeepLast},
+		{"keep-hourly", &policy.KeepHourly},
+		{"keep-daily", &policy.KeepDaily},
+		{"keep-weekly", &policy.KeepWeekly},
+		{"keep-monthly", &policy.KeepMonthly},
+		{"keep-yearly", &policy.KeepYearly},
+	} {
+		if cmd.IsSet(f.name) {
+			*f.dst = cmd.Int(f.name)
+		}
+	}
+	if s := cmd.String("keep-within"); cmd.IsSet("keep-within") {
 		d, err := out.ParseDuration(s)
 		if err != nil {
 			return policy, exitcode.Usagef("--keep-within: %v", err)
