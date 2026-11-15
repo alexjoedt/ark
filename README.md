@@ -173,13 +173,16 @@ order. There is no default path. The password comes from, in this order:
 | Source | Flag, profile key or variable |
 |---|---|
 | a file, one trailing newline stripped | `--password-file` |
+| the output of a shell command, same stripping | `--password-command` |
 | the profile | `password-file`, or `password-env` naming the variable |
-| a file named in the environment | `ARK_PASSWORD_FILE` |
+| a file or command named in the environment | `ARK_PASSWORD_FILE`, `ARK_PASSWORD_COMMAND` |
 | the environment | `ARK_PASSWORD` |
 | a prompt, only on a terminal | `ark init` asks twice |
 | no password at all | `--insecure-no-password`, profile `insecure-no-password: true` or `ARK_INSECURE_NO_PASSWORD=1` |
 
-No password conflicts with any password source: giving both exits 2.
+No password conflicts with any password source: giving both exits 2. So do a file and a command
+on the same layer. The command runs with `sh -c`, shares stdin and stderr, and a non-zero exit
+fails the command.
 
 There is no `--password` flag, it would show in the process list. `ark key passwd` changes the
 password and reads the new one from `--new-password-file`, `ARK_NEW_PASSWORD` or a prompt;

@@ -24,6 +24,7 @@ func TestCommandSurface(t *testing.T) {
 			"lock-wait",
 			"concurrency",
 			"password-file",
+			"password-command",
 			"insecure-no-password",
 		},
 		"init":      {"chunk-min", "chunk-avg", "chunk-max"},

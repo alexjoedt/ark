@@ -103,7 +103,7 @@ func newApp() *cli.Command {
 		Usage:   "deduplicated backups for directories and Docker volumes",
 		Version: version.GetVersion(),
 		Flags: []cli.Flag{
-			// repo, password-file and insecure-no-password read their variables
+			// repo, password-file, password-command and insecure-no-password read their variables
 			// in openRepo, after the profile: a flag Source would count as set.
 			&cli.StringFlag{
 				Name:    "repo",
@@ -123,6 +123,10 @@ func newApp() *cli.Command {
 			&cli.StringFlag{
 				Name:  "password-file",
 				Usage: "read the repository password from `FILE`, else $ARK_PASSWORD, else a prompt [$ARK_PASSWORD_FILE]",
+			},
+			&cli.StringFlag{
+				Name:  "password-command",
+				Usage: "read the repository password from the output of shell `COMMAND` [$ARK_PASSWORD_COMMAND]",
 			},
 			&cli.BoolFlag{
 				Name:  "insecure-no-password",
@@ -313,7 +317,7 @@ func readRepoPassword(ctx context.Context, cmd *cli.Command, confirm bool) (ark.
 	if lp := profileFrom(ctx); lp != nil {
 		prof = lp.Profile
 	}
-	return repoPassword.read(cmd.Root(), confirm, prof)
+	return repoPassword.read(ctx, cmd.Root(), confirm, prof)
 }
 
 // openRepo opens the repository through arkprofile, so the CLI and an

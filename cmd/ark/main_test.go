@@ -986,6 +986,46 @@ func TestPasswordFile(t *testing.T) {
 	}
 }
 
+func TestPasswordCommand(t *testing.T) {
+	repo := initProtected(t, "right")
+	t.Setenv("ARK_REPOSITORY", "")
+	t.Setenv("ARK_INSECURE_NO_PASSWORD", "")
+	t.Setenv("ARK_PASSWORD", "wrong")
+	t.Setenv("ARK_PASSWORD_FILE", "")
+	t.Setenv("ARK_PASSWORD_COMMAND", "")
+	pwFile := filepath.Join(t.TempDir(), "pw")
+	if err := os.WriteFile(pwFile, []byte("right"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		name string
+		args []string
+		env  []string
+		code int
+	}{
+		{"flag", []string{"--password-command", "echo right"}, nil, 0},
+		{"crlf stripped", []string{"--password-command", `printf 'right\r\n'`}, nil, 0},
+		{"wrong", []string{"--password-command", "echo nope"}, nil, 6},
+		{"empty output", []string{"--password-command", "true"}, nil, 2},
+		{"failing command", []string{"--password-command", "exit 3"}, nil, 1},
+		{"with password-file", []string{"--password-command", "echo right", "--password-file", pwFile}, nil, 2},
+		{"variable", nil, []string{"ARK_PASSWORD_COMMAND", "echo right"}, 0},
+		{"flag beats variable", []string{"--password-command", "echo right"}, []string{"ARK_PASSWORD_COMMAND", "echo nope"}, 0},
+		{"variable with file variable", nil, []string{"ARK_PASSWORD_COMMAND", "echo right", "ARK_PASSWORD_FILE", pwFile}, 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			for i := 0; i < len(tt.env); i += 2 {
+				t.Setenv(tt.env[i], tt.env[i+1])
+			}
+			args := append([]string{"-r", repo}, tt.args...)
+			if code, out := runCapture(t, append(args, "snapshots")...); code != tt.code {
+				t.Errorf("exit %d, want %d: %s", code, tt.code, out)
+			}
+		})
+	}
+}
+
 func TestKeyPasswd(t *testing.T) {
 	repo := initProtected(t, "old")
 	t.Setenv("ARK_REPOSITORY", repo)

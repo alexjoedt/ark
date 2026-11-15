@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkprofile"
@@ -18,8 +20,9 @@ import (
 // There is no --password flag, it would show in the process list.
 type passwordSource struct {
 	fileFlag, envVar, insecureFlag, prompt string
-	// fileEnv and insecureEnv are the variables behind the two flags, if any.
-	fileEnv, insecureEnv string
+	// fileEnv, commandEnv and insecureEnv are the variables behind the
+	// flags, if any. commandFlag is optional.
+	commandFlag, fileEnv, commandEnv, insecureEnv string
 }
 
 var (
@@ -28,7 +31,9 @@ var (
 		envVar:       "ARK_PASSWORD",
 		insecureFlag: "insecure-no-password",
 		prompt:       "repository password",
+		commandFlag:  "password-command",
 		fileEnv:      "ARK_PASSWORD_FILE",
+		commandEnv:   "ARK_PASSWORD_COMMAND",
 		insecureEnv:  "ARK_INSECURE_NO_PASSWORD",
 	}
 	newPassword = passwordSource{
@@ -41,16 +46,18 @@ var (
 
 // passwordOrigin is the setting a password, or no password, comes from.
 type passwordOrigin struct {
-	label string // names it in a conflict: "--password-file", "ARK_PASSWORD"
-	layer string // cli, profile or env
-	value string // what profile show prints: "file F", "variable V", "none, X"
-	file  string // the password file the CLI reads itself, if any
+	label   string // names it in a conflict: "--password-file", "ARK_PASSWORD"
+	layer   string // cli, profile or env
+	value   string // what profile show prints: "file F", "command C", "variable V", "none, X"
+	file    string // the password file the CLI reads itself, if any
+	command string // the shell command whose output is the password, if any
 }
 
 // resolve picks the sources read would use without reading a password: the
 // first setting for no password (flag, profile, variable) and the first
-// password source (file flag, the profile's password-file or password-env,
-// the file variable, the password variable). Either is zero when unset.
+// password source (file or command flag, the profile's password-file or
+// password-env, the file or command variable, the password variable). Either
+// is zero when unset. A file and a command on the same layer conflict.
 func (s passwordSource) resolve(cmd *cli.Command, pp arkprofile.Profile) (insecure, from passwordOrigin, err error) {
 	switch v := os.Getenv(s.insecureEnv); {
 	case cmd.Bool(s.insecureFlag):
@@ -70,17 +77,27 @@ func (s passwordSource) resolve(cmd *cli.Command, pp arkprofile.Profile) (insecu
 		insecure.value = "none, " + insecure.label
 	}
 
-	switch flagFile, envFile := cmd.String(s.fileFlag), os.Getenv(s.fileEnv); {
+	flagFile, flagCmd := cmd.String(s.fileFlag), cmd.String(s.commandFlag)
+	envFile, envCmd := os.Getenv(s.fileEnv), os.Getenv(s.commandEnv)
+	switch {
+	case flagFile != "" && flagCmd != "":
+		return insecure, from, exitcode.Usagef("--%s conflicts with --%s", s.fileFlag, s.commandFlag)
 	case flagFile != "":
-		from = passwordOrigin{"--" + s.fileFlag, "cli", "file " + flagFile, flagFile}
+		from = passwordOrigin{label: "--" + s.fileFlag, layer: "cli", value: "file " + flagFile, file: flagFile}
+	case flagCmd != "":
+		from = passwordOrigin{label: "--" + s.commandFlag, layer: "cli", value: "command " + flagCmd, command: flagCmd}
 	case pp.PasswordFile != "":
-		from = passwordOrigin{"the profile's password-file", "profile", "file " + pp.PasswordFile, ""}
+		from = passwordOrigin{label: "the profile's password-file", layer: "profile", value: "file " + pp.PasswordFile}
 	case pp.PasswordEnv != "":
-		from = passwordOrigin{"the profile's password-env", "profile", "variable " + pp.PasswordEnv, ""}
+		from = passwordOrigin{label: "the profile's password-env", layer: "profile", value: "variable " + pp.PasswordEnv}
+	case envFile != "" && envCmd != "":
+		return insecure, from, exitcode.Usagef("%s conflicts with %s", s.fileEnv, s.commandEnv)
 	case envFile != "":
-		from = passwordOrigin{s.fileEnv, "env", "file " + envFile, envFile}
+		from = passwordOrigin{label: s.fileEnv, layer: "env", value: "file " + envFile, file: envFile}
+	case envCmd != "":
+		from = passwordOrigin{label: s.commandEnv, layer: "env", value: "command " + envCmd, command: envCmd}
 	case os.Getenv(s.envVar) != "":
-		from = passwordOrigin{s.envVar, "env", "variable " + s.envVar, ""}
+		from = passwordOrigin{label: s.envVar, layer: "env", value: "variable " + s.envVar}
 	}
 	return insecure, from, nil
 }
@@ -88,7 +105,7 @@ func (s passwordSource) resolve(cmd *cli.Command, pp arkprofile.Profile) (insecu
 // read resolves the passphrase from the source resolve picks, else a prompt
 // on the terminal. No password from the flag, the profile or the variable
 // conflicts with every password source. confirm prompts twice.
-func (s passwordSource) read(cmd *cli.Command, confirm bool, prof *arkprofile.Profile) (ark.Passphrase, error) {
+func (s passwordSource) read(ctx context.Context, cmd *cli.Command, confirm bool, prof *arkprofile.Profile) (ark.Passphrase, error) {
 	var pp arkprofile.Profile
 	if prof != nil {
 		pp = *prof
@@ -112,16 +129,26 @@ func (s passwordSource) read(cmd *cli.Command, confirm bool, prof *arkprofile.Pr
 			return ark.Passphrase{}, err
 		}
 		return ark.WithPassword(pw), nil
+	case from.command != "":
+		pw, err := runPasswordCommand(ctx, from.command)
+		if err != nil {
+			return ark.Passphrase{}, err
+		}
+		return ark.WithPassword(pw), nil
 	case from.label != "":
 		return ark.WithPassword(os.Getenv(s.envVar)), nil
 	}
 
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
+		flags := "--" + s.fileFlag
+		if s.commandFlag != "" {
+			flags += ", --" + s.commandFlag
+		}
 		return ark.Passphrase{}, exitcode.Usagef(
-			"no %s given: set --%s or %s, or pass --%s for a repository without one",
+			"no %s given: set %s or %s, or pass --%s for a repository without one",
 			s.prompt,
-			s.fileFlag,
+			flags,
 			s.envVar,
 			s.insecureFlag,
 		)
@@ -150,6 +177,27 @@ func readPasswordFile(path string) (string, error) {
 		return "", exitcode.Usagef("password file %s is empty", path)
 	}
 	return pw, err
+}
+
+// runPasswordCommand runs command with sh -c and returns its stdout with one
+// trailing newline stripped, as a password file is read. The command shares
+// stdin and stderr, so a pinentry or a password manager can ask; its output
+// never reaches an error message.
+func runPasswordCommand(ctx context.Context, command string) (string, error) {
+	c := exec.CommandContext(ctx, "sh", "-c", command)
+	c.Stdin, c.Stderr = os.Stdin, os.Stderr
+	out, err := c.Output()
+	if err != nil {
+		return "", fmt.Errorf("password command: %w", err)
+	}
+	pw := string(out)
+	if s, ok := strings.CutSuffix(pw, "\n"); ok {
+		pw = strings.TrimSuffix(s, "\r")
+	}
+	if pw == "" {
+		return "", exitcode.Usagef("password command printed no password")
+	}
+	return pw, nil
 }
 
 func promptPassword(fd int, prompt string) (string, error) {
@@ -193,7 +241,7 @@ func keyCommand() *cli.Command {
 					}
 					defer repo.Close()
 
-					pw, err := newPassword.read(cmd, true, nil)
+					pw, err := newPassword.read(ctx, cmd, true, nil)
 					if err != nil {
 						return err
 					}

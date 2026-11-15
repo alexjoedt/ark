@@ -9,12 +9,14 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-// TestNoPasswordFlag pins the passphrase inputs: --password-file, the
+// TestNoPasswordFlag pins the passphrase inputs: --password-file,
+// --password-command, the
 // environment and the prompt. A --password flag would show in the process
 // list, so no command, hidden or not, may take the passphrase as a value.
 func TestNoPasswordFlag(t *testing.T) {
 	allowed := map[string]bool{
 		"password-file":            true,
+		"password-command":         true,
 		"new-password-file":        true,
 		"insecure-no-password":     true,
 		"new-insecure-no-password": true,
