@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -100,8 +101,9 @@ type Hooks struct {
 
 var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
-// Validate reports a name outside [a-z0-9][a-z0-9._-]* and conflicting
-// password sources. Every error matches [ErrInvalid].
+// Validate reports a name outside [a-z0-9][a-z0-9._-]*, conflicting
+// password sources, a negative number or lock-wait and a keep-within that is
+// not a positive duration. Every error matches [ErrInvalid].
 func (p *Profile) Validate() error {
 	if !validName.MatchString(p.Name) {
 		return invalidf(
@@ -109,7 +111,57 @@ func (p *Profile) Validate() error {
 			p.Name,
 		)
 	}
-	return p.checkPassword()
+	if err := p.checkPassword(); err != nil {
+		return err
+	}
+	if p.LockWait < 0 {
+		return invalidf("lock-wait %s: want 0 or more", p.LockWait)
+	}
+	f := p.Forget
+	for _, n := range []struct {
+		key string
+		v   int
+	}{
+		{"concurrency", p.Concurrency},
+		{"forget.keep-last", f.KeepLast},
+		{"forget.keep-hourly", f.KeepHourly},
+		{"forget.keep-daily", f.KeepDaily},
+		{"forget.keep-weekly", f.KeepWeekly},
+		{"forget.keep-monthly", f.KeepMonthly},
+		{"forget.keep-yearly", f.KeepYearly},
+	} {
+		if n.v < 0 {
+			return invalidf("%s %d: want 0 or more", n.key, n.v)
+		}
+	}
+	if f.KeepWithin != "" {
+		if _, err := parseWithin(f.KeepWithin); err != nil {
+			return invalidf("forget.keep-within: %v", err)
+		}
+	}
+	return nil
+}
+
+// parseWithin reads keep-within as the CLI does: a Go duration or a day
+// count such as 30d, days being 24 hours, and positive.
+func parseWithin(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	var d time.Duration
+	var err error
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		var n float64
+		n, err = strconv.ParseFloat(days, 64)
+		d = time.Duration(n * float64(24*time.Hour))
+	} else {
+		d, err = time.ParseDuration(s)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a duration such as 72h or 30d", s)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("duration %q must be positive", s)
+	}
+	return d, nil
 }
 
 func (p *Profile) checkPassword() error {

@@ -92,6 +92,46 @@ func TestDecodeIntoAStructEmbeddingAProfile(t *testing.T) {
 	}
 }
 
+func TestDecodeMergesSharedHooks(t *testing.T) {
+	in := `backup:
+  path: /data
+  <<: &hooks
+    run-before: mount /data
+    run-after: umount /data
+forget:
+  <<: [*hooks, {run-finally: sync}]
+  run-after: echo done
+`
+	var p arkprofile.Profile
+	if err := arkprofile.Decode(strings.NewReader(in), &p); err != nil {
+		t.Fatal(err)
+	}
+	want := arkprofile.Hooks{RunBefore: "mount /data", RunAfter: "echo done", RunFinally: "sync"}
+	if p.Backup.RunBefore != "mount /data" || p.Backup.RunAfter != "umount /data" || p.Forget.Hooks != want {
+		t.Fatalf("backup hooks %+v, forget hooks %+v", p.Backup.Hooks, p.Forget.Hooks)
+	}
+}
+
+func TestDecodeRefusesAStructThatCannotHoldAProfile(t *testing.T) {
+	var shared struct {
+		arkprofile.Profile `yaml:",inline"`
+
+		Repo string `yaml:"repo"`
+	}
+	if err := arkprofile.Decode(strings.NewReader("repo: x\n"), &shared); err == nil ||
+		errors.Is(err, arkprofile.ErrInvalid) {
+		t.Errorf("key shared with the profile: %v", err)
+	}
+
+	var pointer struct {
+		*arkprofile.Profile `yaml:",inline"`
+	}
+	if err := arkprofile.Decode(strings.NewReader("repo: x\n"), &pointer); err == nil ||
+		errors.Is(err, arkprofile.ErrInvalid) {
+		t.Errorf("inline *Profile: %v", err)
+	}
+}
+
 func TestDecodeRejects(t *testing.T) {
 	tests := []struct {
 		name, in, want string
@@ -122,6 +162,19 @@ func TestDecodeRejects(t *testing.T) {
 		{"scalar for a list", "backup:\n  tag: docs\n", "line 2: backup.tag: want a list of strings"},
 		{"bare number as duration", "lock-wait: 30\n", "line 1: lock-wait: want a duration such as 30s or 5m"},
 		{"bad bool", "insecure-no-password: maybe\n", "line 1: insecure-no-password: want true or false"},
+		{"fraction for a whole number", "concurrency: 1.5\n", "line 1: concurrency: want a whole number"},
+		{"fraction in a section", "forget:\n  keep-daily: 7.5\n", "line 2: forget.keep-daily: want a whole number"},
+		{"complex key", "? [a]\n: 1\n", "line 1: profile: a key must be a plain name, not a list or a mapping"},
+		{
+			"merge of a scalar",
+			"forget:\n  <<: x\n",
+			"line 2: forget.<<: want a mapping or a list of mappings to merge",
+		},
+		{
+			"unknown key through a merge",
+			"backup: &b\n  path: /p\nforget:\n  <<: *b\n",
+			"line 2: forget.path: unknown field",
+		},
 		{"syntax", "repo: [\n", "line 1: did not find expected node content"},
 	}
 	for _, tt := range tests {
@@ -144,6 +197,7 @@ func TestDecodeRejects(t *testing.T) {
 func TestValidate(t *testing.T) {
 	ok := arkprofile.Profile{Name: "docs", Repo: "/srv/ark", PasswordEnv: "DOCS_PW"}
 	ok.Backup.Path = "/data"
+	ok.Forget.KeepWithin = "30d"
 	if err := ok.Validate(); err != nil {
 		t.Fatalf("profile built in code: %v", err)
 	}
@@ -161,6 +215,12 @@ func TestValidate(t *testing.T) {
 		{"upper case", func(p *arkprofile.Profile) { p.Name = "Docs" }},
 		{"leading dot", func(p *arkprofile.Profile) { p.Name = ".docs" }},
 		{"slash", func(p *arkprofile.Profile) { p.Name = "a/b" }},
+		{"negative concurrency", func(p *arkprofile.Profile) { p.Concurrency = -4 }},
+		{"negative lock-wait", func(p *arkprofile.Profile) { p.LockWait = -time.Second }},
+		{"negative keep-daily", func(p *arkprofile.Profile) { p.Forget.KeepDaily = -1 }},
+		{"negative keep-yearly", func(p *arkprofile.Profile) { p.Forget.KeepYearly = -1 }},
+		{"bad keep-within", func(p *arkprofile.Profile) { p.Forget.KeepWithin = "30x" }},
+		{"zero keep-within", func(p *arkprofile.Profile) { p.Forget.KeepWithin = "0d" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

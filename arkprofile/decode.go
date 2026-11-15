@@ -19,9 +19,13 @@ import (
 // Decoding is strict: an unknown key, a key given twice, a `password:` key, a
 // value of the wrong kind, an empty input and a second document fail with an
 // error naming the line and the field path, such as
-// "line 4: backup.pahts: unknown field". Strictness covers the struct fields
-// down to nested structs; a map or a slice decodes as YAML has it. Every
-// error matches [ErrInvalid]. Decode does not call [Profile.Validate].
+// "line 4: backup.pahts: unknown field"; a fraction for a whole number is the
+// wrong kind. Strictness covers the struct fields down to nested structs; a
+// map or a slice decodes as YAML has it. Anchors, aliases and the merge key
+// `<<` work as in YAML. Every error matches [ErrInvalid] except the one for
+// a v that cannot hold a profile: an inline field that is not a struct (a
+// *Profile included) or a key two fields share.
+// Decode does not call [Profile.Validate].
 func Decode(r io.Reader, v any) error {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() || rv.Elem().Kind() != reflect.Struct {
@@ -53,9 +57,7 @@ func Decode(r io.Reader, v any) error {
 }
 
 func decodeStruct(n *yaml.Node, v reflect.Value, path string) error {
-	if n.Kind == yaml.AliasNode {
-		n = n.Alias
-	}
+	n = resolve(n)
 	if n.Kind == yaml.ScalarNode && n.Tag == "!!null" {
 		return nil
 	}
@@ -68,19 +70,16 @@ func decodeStruct(n *yaml.Node, v reflect.Value, path string) error {
 	}
 
 	fields := map[string]reflect.Value{}
-	collectFields(v, fields)
-	seen := map[string]int{}
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		k, val := n.Content[i], n.Content[i+1]
-		p := k.Value
-		if path != "" {
-			p = path + "." + k.Value
-		}
-		if line, ok := seen[k.Value]; ok {
-			return fieldErrorf(k.Line, p, "already defined at line %d", line)
-		}
-		seen[k.Value] = k.Line
-
+	if err := collectFields(v, fields); err != nil {
+		return err
+	}
+	pairs, err := mappingPairs(n, path)
+	if err != nil {
+		return err
+	}
+	for _, kv := range pairs {
+		k, val := kv[0], kv[1]
+		p := joinPath(path, k.Value)
 		f, ok := fields[k.Value]
 		switch {
 		case !ok && k.Value == "password":
@@ -92,21 +91,99 @@ func decodeStruct(n *yaml.Node, v reflect.Value, path string) error {
 			if err := decodeStruct(val, f, p); err != nil {
 				return err
 			}
+		case isInteger(f.Type()) && resolve(val).ShortTag() == "!!float":
+			return fieldErrorf(val.Line, p, "want %s", describe(f.Type()))
 		default:
 			if err := val.Decode(f.Addr().Interface()); err != nil {
 				if _, ok := errors.AsType[*yaml.TypeError](err); ok {
 					return fieldErrorf(val.Line, p, "want %s", describe(f.Type()))
 				}
-				return fieldErrorf(val.Line, p, "%v", err)
+				return fieldErrorf(val.Line, p, "%s", strings.TrimPrefix(err.Error(), "yaml: "))
 			}
 		}
 	}
 	return nil
 }
 
+// mappingPairs returns the key-value pairs of the mapping n with the merge
+// key `<<` resolved: n's own keys win over merged ones, and an earlier merged
+// mapping wins over a later one. A key given twice in n fails.
+func mappingPairs(n *yaml.Node, path string) ([][2]*yaml.Node, error) {
+	var own, merged [][2]*yaml.Node
+	seen := map[string]int{}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k, val := n.Content[i], n.Content[i+1]
+		if k.Kind != yaml.ScalarNode {
+			where := path
+			if where == "" {
+				where = "profile"
+			}
+			return nil, fieldErrorf(k.Line, where, "a key must be a plain name, not a list or a mapping")
+		}
+		if k.ShortTag() == "!!merge" {
+			pairs, err := mergedPairs(val, path)
+			if err != nil {
+				return nil, err
+			}
+			merged = append(merged, pairs...)
+			continue
+		}
+		if line, ok := seen[k.Value]; ok {
+			return nil, fieldErrorf(k.Line, joinPath(path, k.Value), "already defined at line %d", line)
+		}
+		seen[k.Value] = k.Line
+		own = append(own, [2]*yaml.Node{k, val})
+	}
+	for _, kv := range merged {
+		if _, ok := seen[kv[0].Value]; !ok {
+			seen[kv[0].Value] = kv[0].Line
+			own = append(own, kv)
+		}
+	}
+	return own, nil
+}
+
+// mergedPairs returns the pairs a merge key's value brings in: one mapping or
+// a list of them, each usually an alias.
+func mergedPairs(val *yaml.Node, path string) ([][2]*yaml.Node, error) {
+	val = resolve(val)
+	items := []*yaml.Node{val}
+	if val.Kind == yaml.SequenceNode {
+		items = val.Content
+	}
+	var out [][2]*yaml.Node
+	for _, m := range items {
+		m = resolve(m)
+		if m.Kind != yaml.MappingNode {
+			return nil, fieldErrorf(m.Line, joinPath(path, "<<"), "want a mapping or a list of mappings to merge")
+		}
+		pairs, err := mappingPairs(m, path)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, pairs...)
+	}
+	return out, nil
+}
+
+func resolve(n *yaml.Node) *yaml.Node {
+	if n.Kind == yaml.AliasNode {
+		return n.Alias
+	}
+	return n
+}
+
+func joinPath(path, key string) string {
+	if path == "" {
+		return key
+	}
+	return path + "." + key
+}
+
 // collectFields maps the yaml keys of v's fields to the fields, with the
-// fields of inline structs at v's level.
-func collectFields(v reflect.Value, out map[string]reflect.Value) {
+// fields of inline structs at v's level. A key used by two fields fails, as
+// it does in yaml.v3.
+func collectFields(v reflect.Value, out map[string]reflect.Value) error {
 	t := v.Type()
 	for i := range t.NumField() {
 		sf := t.Field(i)
@@ -117,15 +194,25 @@ func collectFields(v reflect.Value, out map[string]reflect.Value) {
 		if name == "-" {
 			continue
 		}
-		if sf.Type.Kind() == reflect.Struct && hasOption(opts, "inline") {
-			collectFields(v.Field(i), out)
+		if hasOption(opts, "inline") {
+			if sf.Type.Kind() != reflect.Struct {
+				return fmt.Errorf("decode a profile: inline field %s of %s must be a struct, not %s",
+					sf.Name, t, sf.Type)
+			}
+			if err := collectFields(v.Field(i), out); err != nil {
+				return err
+			}
 			continue
 		}
 		if name == "" {
 			name = strings.ToLower(sf.Name)
 		}
+		if _, dup := out[name]; dup {
+			return fmt.Errorf("decode a profile: key %q is used by two fields, the second in %s", name, t)
+		}
 		out[name] = v.Field(i)
 	}
+	return nil
 }
 
 func hasOption(opts, want string) bool {
@@ -148,6 +235,15 @@ var (
 func isSection(t reflect.Type) bool {
 	pt := reflect.PointerTo(t)
 	return t.Kind() == reflect.Struct && !pt.Implements(unmarshalerType) && !pt.Implements(textUnmarshalerType)
+}
+
+func isInteger(t reflect.Type) bool {
+	switch t.Kind() { //nolint:exhaustive // only the integer kinds matter
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return t != durationType
+	}
+	return false
 }
 
 func describe(t reflect.Type) string {
