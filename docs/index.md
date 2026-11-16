@@ -37,6 +37,7 @@ features:
 ark keeps deduplicated, compressed and encrypted backups as a Go library, with a CLI on top.
 
 - [Getting started](getting-started.md): install ark and make a first backup.
+- [CLI](cli/index.md): every command, the global flags, profiles and exit codes.
 - [Series](SERIES.md): how snapshots group into series.
 - [Labels](LABELS.md): how labels tell jobs of one source apart.
 - [Mount](MOUNT.md): browse every snapshot read-only through FUSE.

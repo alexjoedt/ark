@@ -103,5 +103,5 @@ ark check
 - [Series](SERIES.md): how snapshots group into series and what `--source` and `--host` do.
 - [Labels](LABELS.md): tell jobs of one source apart and select them.
 - [Mount](MOUNT.md): browse every snapshot read-only through FUSE.
-- [CLI reference](https://github.com/alexjoedt/ark#cli): every command, profiles, exit codes.
+- [CLI reference](cli/index.md): every command, profiles, exit codes.
 - [Repository format](FORMAT.md) and [Security](SECURITY.md): the on-disk layout and the threat model.

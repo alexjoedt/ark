@@ -28,6 +28,7 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: 'Guide', link: '/getting-started' },
+      { text: 'CLI', link: '/cli/' },
       { text: 'Reference', link: '/FORMAT' },
       { text: 'Decisions', link: '/adr/' },
     ],
@@ -39,6 +40,14 @@ export default defineConfig({
           { text: 'Series', link: '/SERIES' },
           { text: 'Labels', link: '/LABELS' },
           { text: 'Mount', link: '/MOUNT' },
+        ],
+      },
+      {
+        text: 'CLI',
+        items: [
+          { text: 'Overview', link: '/cli/' },
+          { text: 'Commands', link: '/cli/commands' },
+          { text: 'Profiles', link: '/cli/profiles' },
         ],
       },
       {
