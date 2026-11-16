@@ -266,7 +266,7 @@ func (r *Repository) latestSnapshotID(ctx context.Context, series seriesKey) (st
 		return "", err
 	}
 	for _, m := range manifests {
-		if (seriesKey{m.SourceType, m.SourceName, m.Host}) == series {
+		if manifestToSnapshot(m).series() == series {
 			return m.ID, nil
 		}
 	}
