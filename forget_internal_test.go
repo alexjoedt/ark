@@ -98,24 +98,33 @@ func ids(snaps []*Snapshot) []string {
 	return out
 }
 
-func TestForgetPolicyAppliesPerSourceName(t *testing.T) {
-	snaps := forgetFixture()
-	for i, s := range snaps {
-		s.SourceName = "a"
-		if i%2 == 1 {
-			s.SourceName = "b"
-		}
+// Each field of the series key splits the fixture into two groups on its own.
+func TestForgetPolicyAppliesPerSeries(t *testing.T) {
+	tests := []struct {
+		name string
+		odd  func(*Snapshot)
+	}{
+		{"source name", func(s *Snapshot) { s.SourceName = "b" }},
+		{"source type", func(s *Snapshot) { s.SourceType = "docker-volume" }},
+		{"host", func(s *Snapshot) { s.Host = "b" }},
 	}
-	res := applyForgetPolicy(snaps, ForgetPolicy{KeepLast: 1})
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			snaps := forgetFixture()
+			for i, s := range snaps {
+				s.SourceName, s.SourceType, s.Host = "a", SourceTypeFile, "a"
+				if i%2 == 1 {
+					tc.odd(s)
+				}
+			}
+			res := applyForgetPolicy(snaps, ForgetPolicy{KeepLast: 1})
 
-	var keep []string
-	for _, s := range res.Keep {
-		keep = append(keep, s.ID)
-	}
-	if !slices.Equal(keep, []string{"s0", "s1"}) {
-		t.Fatalf("keep = %v, want the newest of each source", keep)
-	}
-	if len(res.Remove) != 8 || res.Remove[0].ID != "s2" || res.Remove[7].ID != "s9" {
-		t.Fatalf("remove = %d entries, first %s", len(res.Remove), res.Remove[0].ID)
+			if keep := ids(res.Keep); !slices.Equal(keep, []string{"s0", "s1"}) {
+				t.Fatalf("keep = %v, want the newest of each series", keep)
+			}
+			if len(res.Remove) != 8 || res.Remove[0].ID != "s2" || res.Remove[7].ID != "s9" {
+				t.Fatalf("remove = %d entries, first %s", len(res.Remove), res.Remove[0].ID)
+			}
+		})
 	}
 }

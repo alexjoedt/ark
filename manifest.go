@@ -253,21 +253,20 @@ func walkSnapshot(
 	return nil
 }
 
-// latestSnapshotID returns the id of the newest snapshot written for
-// sourceName from host, or an empty string when the repository holds none.
-// Another host's snapshot of the same name is never the parent: its files
+// latestSnapshotID returns the id of the newest snapshot of series, or an
+// empty string when the repository holds none. Another host's snapshot of the
+// same name, or one of another source type, is never the parent: its files
 // may match by path, size and mtime and still differ.
 //
 // The manifests are the only record of what a source last backed up; there is
-// no pointer object that can drift from them. Source names and hosts are
-// compared verbatim as the manifest stores them.
-func (r *Repository) latestSnapshotID(ctx context.Context, sourceName, host string) (string, error) {
+// no pointer object that can drift from them.
+func (r *Repository) latestSnapshotID(ctx context.Context, series seriesKey) (string, error) {
 	manifests, err := r.readManifests(ctx)
 	if err != nil {
 		return "", err
 	}
 	for _, m := range manifests {
-		if m.SourceName == sourceName && m.Host == host {
+		if manifestToSnapshot(m).series() == series {
 			return m.ID, nil
 		}
 	}

@@ -1,6 +1,7 @@
 package ark_test
 
 import (
+	"cmp"
 	"context"
 	"io"
 	"os"
@@ -14,14 +15,16 @@ import (
 	"github.com/alexjoedt/ark/arkmem"
 )
 
-// stubSource yields one regular file under a fixed source name.
+// stubSource yields one regular file under a fixed source name. typ defaults
+// to ark.SourceTypeFile.
 type stubSource struct {
 	name    string
 	content string
+	typ     ark.SourceType
 }
 
 func (s stubSource) Meta() ark.SourceMeta {
-	return ark.SourceMeta{Name: s.name, Type: ark.SourceTypeFile}
+	return ark.SourceMeta{Name: s.name, Type: cmp.Or(s.typ, ark.SourceTypeFile)}
 }
 
 func (s stubSource) Walk(_ context.Context, fn ark.WalkFunc) error {
@@ -115,6 +118,33 @@ func TestBackupParentNeverCrossesHosts(t *testing.T) {
 	}
 	if again.ParentID != a.ID {
 		t.Errorf("parent is %q, want host a's snapshot %q", again.ParentID, a.ID)
+	}
+}
+
+// A file source and a docker volume can share a name and a host; they are two
+// series, and a tar entry must never be taken unread from a file's snapshot.
+func TestBackupParentNeverCrossesSourceTypes(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+	host := ark.WithHost("h")
+
+	file, err := repo.Backup(ctx, stubSource{name: "db", content: "one"}, host)
+	if err != nil {
+		t.Fatalf("file backup: %v", err)
+	}
+	volume, err := repo.Backup(ctx, stubSource{name: "db", content: "two", typ: "docker-volume"}, host)
+	if err != nil {
+		t.Fatalf("volume backup: %v", err)
+	}
+	if volume.ParentID != "" {
+		t.Errorf("the volume took parent %q from the file source", volume.ParentID)
+	}
+	again, err := repo.Backup(ctx, stubSource{name: "db", content: "three"}, host)
+	if err != nil {
+		t.Fatalf("second file backup: %v", err)
+	}
+	if again.ParentID != file.ID {
+		t.Errorf("parent is %q, want the file source's snapshot %q", again.ParentID, file.ID)
 	}
 }
 

@@ -17,6 +17,18 @@ type Snapshot struct {
 	Stats      SnapshotStats
 }
 
+// seriesKey identifies a series: the snapshots of one source type and source
+// name written from one host. Parent selection and the forget keep policy
+// group by it. The three fields are compared verbatim as the manifest stores
+// them, so an empty host is a series of its own.
+type seriesKey struct {
+	sourceType SourceType
+	sourceName string
+	host       string
+}
+
+func (s *Snapshot) series() seriesKey { return seriesKey{s.SourceType, s.SourceName, s.Host} }
+
 // SnapshotStats holds deduplication and compression statistics for a snapshot.
 // Skipped counts entries the source yielded that the v1 format does not model:
 // device nodes, fifos and sockets. FilesUnchanged counts the regular files a
@@ -76,7 +88,10 @@ type SnapshotFilter struct {
 	// Before includes only snapshots created before this time (exclusive).
 	Before time.Time
 
-	// After includes only snapshots created after this time (inclusive).
+	// After includes only snapshots created at or after this time
+	// (inclusive). Until the fix that matched this documentation it was
+	// exclusive: a caller that polls with the last seen CreatedAt as a cursor
+	// gets that snapshot again and skips it by ID.
 	After time.Time
 }
 
@@ -104,15 +119,20 @@ func WithTags(tags ...string) BackupOption {
 	return func(o *backupOptions) { o.tags = tags }
 }
 
-// WithHost overrides the hostname recorded in the snapshot.
+// WithHost sets the host recorded in the snapshot; the default is empty, the
+// library never reads the machine's hostname. The host is part of the series
+// key with the source type and source name: snapshots of one source from two
+// hosts are two series, each with its own parent chain and its own keep
+// policy in [Repository.Forget].
 func WithHost(h string) BackupOption {
 	return func(o *backupOptions) { o.host = h }
 }
 
 // WithParent names the parent snapshot explicitly, as a full id or a unique
-// prefix. Without it the parent is the newest snapshot of the same source and
-// host ([WithHost], empty by default). A parent of another source is recorded
-// but no file is taken from it unread.
+// prefix. Without it the parent is the newest snapshot of the same series:
+// source type, source name and host ([WithHost], empty by default). A parent
+// of another source type or name is recorded but no file is taken from it
+// unread.
 func WithParent(id string) BackupOption {
 	return func(o *backupOptions) { o.parent = id }
 }

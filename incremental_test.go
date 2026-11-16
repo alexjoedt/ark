@@ -2,6 +2,7 @@ package ark_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -30,6 +31,7 @@ type statFile struct {
 // resume before the rest.
 type statSource struct {
 	name    string
+	typ     ark.SourceType // empty = ark.SourceTypeFile
 	files   map[string]statFile
 	opens   map[string]int
 	walking chan struct{}
@@ -41,7 +43,7 @@ func newStatSource(name string, files map[string]statFile) *statSource {
 }
 
 func (s *statSource) Meta() ark.SourceMeta {
-	return ark.SourceMeta{Name: s.name, Type: ark.SourceTypeFile}
+	return ark.SourceMeta{Name: s.name, Type: cmp.Or(s.typ, ark.SourceTypeFile)}
 }
 
 func (s *statSource) Walk(_ context.Context, fn ark.WalkFunc) error {
@@ -273,6 +275,16 @@ func TestBackupRereadsRacyAndForeignParentFiles(t *testing.T) {
 	}
 	if len(foreign.opens) != len(foreign.files) {
 		t.Errorf("with a foreign parent opened %v, want every file", foreign.opened())
+	}
+
+	// The same name under another source type is as foreign.
+	typed := newStatSource("other", baseFiles())
+	typed.typ = "docker-volume"
+	if _, err := repo.Backup(ctx, typed, ark.WithParent(other.ID)); err != nil {
+		t.Fatalf("backup with a parent of another type: %v", err)
+	}
+	if len(typed.opens) != len(typed.files) {
+		t.Errorf("with a parent of another type opened %v, want every file", typed.opened())
 	}
 }
 

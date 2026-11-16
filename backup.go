@@ -25,13 +25,13 @@ func (r *Repository) runBackup(
 	parentID := opts.parent
 	if parentID == "" {
 		var err error
-		parentID, err = r.latestSnapshotID(ctx, meta.Name, opts.host)
+		parentID, err = r.latestSnapshotID(ctx, seriesKey{meta.Type, meta.Name, opts.host})
 		if err != nil {
 			logger.WarnContext(ctx, "failed to resolve the parent snapshot", "error", err)
 		}
 	}
 
-	parent, checked, err := r.parentFiles(ctx, session, parentID, meta.Name)
+	parent, checked, err := r.parentFiles(ctx, session, parentID, meta)
 	if err != nil {
 		logger.WarnContext(ctx, "failed to load the parent snapshot, reading every file",
 			"parent", parentID, "error", err)
@@ -318,12 +318,13 @@ func unstoredChunk(ctx context.Context, s *objectStore, chunks []chunkRef) (bool
 
 // parentFiles loads the regular files of snapshot id that a backup of source
 // may take unread, keyed by path. An empty id has no parent and returns no
-// files. A parent of another source is refused: with only Size and ModTime to
-// compare, its files could match another volume's by accident. While the
-// lost-pack marker is stored, a file with a chunk that no stored pack holds is
-// left out, so the backup reads it again; checked reports that this was done.
+// files. A parent of another source name or type is refused: with only Size
+// and ModTime to compare, its files could match another volume's by accident.
+// While the lost-pack marker is stored, a file with a chunk that no stored
+// pack holds is left out, so the backup reads it again; checked reports that
+// this was done.
 func (r *Repository) parentFiles(
-	ctx context.Context, session *packSession, id, source string,
+	ctx context.Context, session *packSession, id string, source SourceMeta,
 ) (files map[string]fileEntry, checked bool, err error) {
 	if id == "" {
 		return map[string]fileEntry{}, false, nil
@@ -332,8 +333,8 @@ func (r *Repository) parentFiles(
 	if err != nil {
 		return nil, false, err
 	}
-	if m.SourceName != source {
-		return nil, false, fmt.Errorf("parent %s belongs to source %q", id, m.SourceName)
+	if m.SourceName != source.Name || m.SourceType != source.Type {
+		return nil, false, fmt.Errorf("parent %s belongs to %s source %q", id, m.SourceType, m.SourceName)
 	}
 	// A rewrite in the same timestamp tick as the parent's read leaves the
 	// stat unchanged, so a file whose mtime is not clearly older than the

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -119,6 +121,59 @@ func TestForgetRefusesAZeroPolicyWithoutIDs(t *testing.T) {
 	}
 	if len(snaps) != 1 {
 		t.Errorf("the refused Forget removed snapshots: %d left, want 1", len(snaps))
+	}
+}
+
+// A keep policy with an empty filter judges every series on its own: two hosts
+// backing up one path, and a file and a docker source sharing a name, each
+// keep their newest snapshot.
+func TestForgetKeepsTheNewestOfEverySeries(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+
+	series := []struct {
+		src  stubSource
+		host string
+	}{
+		{stubSource{name: "/srv/app"}, "a"},
+		{stubSource{name: "/srv/app"}, "b"},
+		{stubSource{name: "db"}, "a"},
+		{stubSource{name: "db", typ: "docker-volume"}, "a"},
+		{stubSource{name: "db", typ: "docker-volume"}, ""},
+	}
+	// Two rounds; the last series of a round is the newest in the repository.
+	var newest []string
+	for round := range 2 {
+		newest = newest[:0]
+		for _, s := range series {
+			s.src.content = strconv.Itoa(round)
+			snap, err := repo.Backup(ctx, s.src, ark.WithHost(s.host))
+			if err != nil {
+				t.Fatalf("Backup %+v: %v", s, err)
+			}
+			newest = append(newest, snap.ID)
+		}
+	}
+
+	res, err := repo.Forget(ctx, ark.ForgetPolicy{KeepLast: 1}, ark.SnapshotFilter{})
+	if err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+	if len(res.Remove) != len(series) {
+		t.Errorf("removed %d snapshots, want the %d older ones", len(res.Remove), len(series))
+	}
+	left, err := repo.Snapshots(ctx, ark.SnapshotFilter{})
+	if err != nil {
+		t.Fatalf("Snapshots: %v", err)
+	}
+	var got []string
+	for _, s := range left {
+		got = append(got, s.ID)
+	}
+	slices.Sort(got)
+	slices.Sort(newest)
+	if !slices.Equal(got, newest) {
+		t.Errorf("left %v, want the newest of every series %v", got, newest)
 	}
 }
 

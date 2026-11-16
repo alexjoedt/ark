@@ -369,6 +369,10 @@ func (r *Repository) deleteSnapshot(ctx context.Context, id string) error {
 // Forget removes the snapshots that policy does not keep among those matching
 // filter. Chunks stay until Prune.
 //
+// The policy is applied once per series, the matching snapshots that share
+// source type, source name and host, so an empty filter keeps what the policy
+// says of every series in the repository.
+//
 // A policy without a positive rule removes every match, so it is only
 // accepted together with filter.IDs; otherwise Forget returns ErrEmptyPolicy
 // and deletes nothing.
@@ -722,7 +726,7 @@ func (f SnapshotFilter) Match(s *Snapshot) bool {
 	if !f.Before.IsZero() && !s.CreatedAt.Before(f.Before) {
 		return false
 	}
-	if !f.After.IsZero() && !s.CreatedAt.After(f.After) {
+	if !f.After.IsZero() && s.CreatedAt.Before(f.After) {
 		return false
 	}
 	if len(f.Tags) > 0 {

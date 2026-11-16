@@ -26,7 +26,8 @@ func backupCommand() *cli.Command {
 		UsageText: `ark backup [options] <path>
 
    Backs up the directory at <path>. The snapshot's source name is the absolute path.
-   The parent is the newest snapshot with the same source name and host unless --parent is set.`,
+   The parent is the newest snapshot with the same source type, source name and host
+   unless --parent is set.`,
 		Flags: []cli.Flag{
 			&cli.StringSliceFlag{Name: "tag", Aliases: []string{"t"}, Usage: "add a `TAG`, repeatable"},
 			&cli.StringFlag{Name: "comment", Aliases: []string{"c"}, Usage: "free `TEXT` stored with the snapshot"},

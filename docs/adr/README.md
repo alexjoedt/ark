@@ -35,3 +35,4 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0018 | [Profile files and the arkprofile package](0018-profile-files-and-the-arkprofile-package.md) | accepted | 2026-11-15 |
 | 0019 | [Find and the arkfind package](0019-find-and-the-arkfind-package.md) | accepted | 2026-11-15 |
 | 0020 | [Read session with an io/fs view per snapshot](0020-read-session-with-an-io-fs-view.md) | accepted | 2026-11-15 |
+| 0021 | [One series key: source type, source name and host](0021-one-series-key-type-source-host.md) | accepted | 2026-11-16 |
