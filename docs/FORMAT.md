@@ -22,7 +22,7 @@ treepacks/   packs of directory nodes
 dataindex/   index objects: which pack holds which chunk
 treeindex/   index objects: the same for directory nodes
 snapshots/   one sealed manifest per snapshot, named by a random id
-locks/       sealed shared and exclusive locks
+locks/       sealed shared and exclusive locks, stale after 30 minutes without a refresh
 lostpacks/   at most one sealed marker: an index load found a listed data pack gone or a data index object that does not open
 ```
 
