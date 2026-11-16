@@ -18,8 +18,11 @@ ark is on the v0 line. Until `v1.1.0` is cut
 
 `v1.0.0` and `v1.0.1` are retracted in all three `go.mod` files: they were published before the API
 and the format had settled. The first stable release will be `v1.1.0`, and from then on the API
-follows the Go compatibility rules, every 1.x release reads the 1.x on-disk format, flags keep
-their meaning and `--json` output only gains fields.
+follows the Go compatibility rules for the exported API of `ark`, `arkfs`, `arkglob`, `arklocal`,
+`arksftp`, `arkuri`, `arkmem`, `arktest`, `chunker` and `arkdocker` (minors add, only a major
+removes). Every 1.x release reads the 1.x on-disk format; minors may add optional fields. Flags keep
+their meaning and `--json` output only gains fields. `ark export` writes plain tar and `ark import`
+reads it. Dependency versions, including the Docker SDK, are not covered.
 
 ## Tag order
 

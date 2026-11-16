@@ -26,3 +26,8 @@ data/
 __debug_*
 .task/
 /test/
+
+# Docs site
+docs/node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
