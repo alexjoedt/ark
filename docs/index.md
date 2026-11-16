@@ -10,8 +10,8 @@ hero:
       text: Get started
       link: /getting-started
     - theme: alt
-      text: Series
-      link: /SERIES
+      text: Library
+      link: /library
     - theme: alt
       text: Repository format
       link: /FORMAT
@@ -20,6 +20,9 @@ hero:
       link: https://github.com/alexjoedt/ark
 
 features:
+  - title: Library
+    details: Backends, sources and sinks, encryption, progress hooks, profiles and search for Go programs.
+    link: /library
   - title: Series and labels
     details: How snapshots group into series, and how labels tell jobs of one source apart.
     link: /SERIES
@@ -38,6 +41,7 @@ ark keeps deduplicated, compressed and encrypted backups as a Go library, with a
 
 - [Getting started](getting-started.md): install ark and make a first backup.
 - [CLI](cli/index.md): every command, the global flags, profiles and exit codes.
+- [Library](library.md): ark from Go: backends, sources and sinks, hooks, profiles and search.
 - [Series](SERIES.md): how snapshots group into series.
 - [Labels](LABELS.md): how labels tell jobs of one source apart.
 - [Mount](MOUNT.md): browse every snapshot read-only through FUSE.

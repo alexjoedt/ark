@@ -29,6 +29,7 @@ export default defineConfig({
     nav: [
       { text: 'Guide', link: '/getting-started' },
       { text: 'CLI', link: '/cli/' },
+      { text: 'Library', link: '/library' },
       { text: 'Reference', link: '/FORMAT' },
       { text: 'Decisions', link: '/adr/' },
     ],
@@ -49,6 +50,10 @@ export default defineConfig({
           { text: 'Commands', link: '/cli/commands' },
           { text: 'Profiles', link: '/cli/profiles' },
         ],
+      },
+      {
+        text: 'Library',
+        items: [{ text: 'Go library', link: '/library' }],
       },
       {
         text: 'Reference',
