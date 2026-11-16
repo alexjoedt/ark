@@ -45,6 +45,8 @@ func TestBackupRejectsInvalidLabels(t *testing.T) {
 		{"empty key", map[string]string{"": "x"}, false},
 		{"64 char name", map[string]string{strings.Repeat("a", 64): "x"}, false},
 		{"254 char prefix", map[string]string{strings.Repeat("a", 254) + "/app": "x"}, false},
+		{"63 char prefix part", map[string]string{strings.Repeat("a", 63) + ".com/app": "x"}, true},
+		{"64 char prefix part", map[string]string{strings.Repeat("a", 64) + ".com/app": "x"}, false},
 		{"value over 1 KiB", map[string]string{"app": strings.Repeat("v", 1025)}, false},
 		{"newline in value", map[string]string{"app": "a\nb"}, false},
 		{"DEL in value", map[string]string{"app": "a\x7fb"}, false},
@@ -127,5 +129,31 @@ func TestBackupLabelsAreStoredAndFiltered(t *testing.T) {
 		if got := snaps[0]; got.ID != labeled.ID || got.Labels["src"] != "s" || got.Labels["app"] != "my-app" {
 			t.Errorf("filter %v found %+v, want %s with both labels", tt.labels, got, labeled.ID)
 		}
+	}
+}
+
+// Several WithLabels calls add up, and the labels they set can be checked
+// before Backup, as the Docker engine does before it stops containers.
+func TestWithLabelsAddUp(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+	snap, err := repo.Backup(ctx, stubSource{name: "docs", content: "one"},
+		ark.WithLabels(map[string]string{"app": "x", "env": "dev"}),
+		ark.WithLabels(map[string]string{"env": "prod"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Labels["app"] != "x" || snap.Labels["env"] != "prod" {
+		t.Errorf("labels = %v, want app=x env=prod", snap.Labels)
+	}
+	if err := ark.ValidateBackupOptions(ark.WithTags("t"), ark.WithLabels(map[string]string{"app": "x"})); err != nil {
+		t.Errorf("ValidateBackupOptions: %v", err)
+	}
+	err = ark.ValidateBackupOptions(
+		ark.WithLabels(map[string]string{"app": "x"}),
+		ark.WithLabels(map[string]string{"-bad": "x"}),
+	)
+	if !errors.Is(err, ark.ErrInvalidLabel) {
+		t.Errorf("ValidateBackupOptions error = %v, want ErrInvalidLabel", err)
 	}
 }

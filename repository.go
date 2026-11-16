@@ -230,10 +230,9 @@ func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOptio
 	// Nobody would see the totals, so the second walk is not paid for.
 	o.scan = o.scan && (o.progress != nil || r.progress != nil)
 	o.progress = r.observer(OperationBackup, o.progress)
-	if len(o.labels) > 0 {
-		if err := checkBackupLabels(src.Meta().Labels, o.labels); err != nil {
-			return nil, err
-		}
+	meta := src.Meta()
+	if err := checkBackupLabels(meta.Labels, o.labels); err != nil {
+		return nil, err
 	}
 
 	ctx, lock, err := r.acquire(ctx, false)
@@ -249,7 +248,7 @@ func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOptio
 		}
 		o.parent = parent
 	}
-	m, err := r.runBackup(ctx, src, *o, r.writeSession())
+	m, err := r.runBackup(ctx, src, meta, *o, r.writeSession())
 	if err != nil {
 		return nil, err
 	}

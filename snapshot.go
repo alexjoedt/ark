@@ -129,10 +129,16 @@ func WithTags(tags ...string) BackupOption {
 }
 
 // WithLabels adds labels to the snapshot, beside those the source records.
-// Backup checks them with [ValidateLabels] and refuses a key the source sets
-// as well, both before it writes anything.
+// Several calls add up; for a key set twice the later value wins. Backup
+// checks them with [ValidateLabels] and refuses a key the source sets as
+// well, both before it writes anything.
 func WithLabels(labels map[string]string) BackupOption {
-	return func(o *backupOptions) { o.labels = maps.Clone(labels) }
+	return func(o *backupOptions) {
+		if o.labels == nil {
+			o.labels = make(map[string]string, len(labels))
+		}
+		maps.Copy(o.labels, labels)
+	}
 }
 
 // WithHost sets the host recorded in the snapshot; the default is empty, the

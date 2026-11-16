@@ -15,11 +15,10 @@ import (
 // runBackup executes the CDC backup pipeline by walking src and chunking
 // every regular file into the CAS. Returns the completed manifest.
 func (r *Repository) runBackup(
-	ctx context.Context, src Source, opts backupOptions, session *packSession,
+	ctx context.Context, src Source, meta SourceMeta, opts backupOptions, session *packSession,
 ) (*manifest, error) {
 	start := time.Now()
 
-	meta := src.Meta()
 	logger := r.logger.With("component", "backup", "source", meta.Name, "host", opts.host)
 	parentID := opts.parent
 	if parentID == "" {
