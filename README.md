@@ -17,8 +17,8 @@ ark backs up anything you can walk as a tree of files: a directory, a Docker vol
 an API export. Content is split with FastCDC, stored once, compressed with zstd and encrypted.
 
 - `github.com/alexjoedt/ark` is the library module: the core package `ark`, the backends `arklocal`,
-  `arksftp` and `arkmem`, `arkuri`, `arkfs` for directories, the test suites in `arktest` and
-  `chunker`.
+  `arksftp` and `arkmem`, `arkuri`, `arkfs` for directories, `arkprofile`, `arkfind`, `arkglob`, the
+  test suites in `arktest` and `chunker`.
 - `github.com/alexjoedt/ark/arkdocker` adds Docker volumes, in its own module so the Docker SDK stays
   out of the core.
 - `github.com/alexjoedt/ark/cmd/ark` is the `ark` binary, a restic-style CLI.
@@ -61,7 +61,7 @@ if err != nil {
 	return err
 }
 pw := ark.WithPassword(os.Getenv("ARK_PASSWORD"))
-if err := ark.Init(ctx, b, pw); err != nil { // once per repository
+if err := ark.Init(ctx, b, pw); err != nil && !errors.Is(err, ark.ErrAlreadyInitialized) {
 	return err
 }
 repo, err := ark.Open(ctx, b, pw)
@@ -101,8 +101,6 @@ task tidy    # tidies every module and syncs the workspace
 ```
 
 `go build ./...` stops at the root module. Use `go build github.com/alexjoedt/ark/...`.
-
-Releases: [docs/RELEASING.md](docs/RELEASING.md). Architecture decisions: [docs/adr/README.md](docs/adr/README.md).
 
 ## License
 
