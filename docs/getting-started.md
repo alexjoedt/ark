@@ -6,7 +6,7 @@ This page takes a repository from nothing to a first backup, a restore and a ret
 
 Download the archive for your platform from the [GitHub releases](https://github.com/alexjoedt/ark/releases) (`ark_Linux_x86_64.tar.gz`, `ark_Darwin_arm64.tar.gz` and so on), unpack it and put `ark` on your `PATH`.
 
-With a Go toolchain, build it from source instead:
+With Go 1.27.4 or newer, build it from source instead:
 
 ```bash
 go install github.com/alexjoedt/ark/cmd/ark@latest
@@ -22,15 +22,19 @@ Every command needs a repository, taken from `--repo`, a profile's `repo` or `AR
 export ARK_REPOSITORY=/srv/ark                  # or sftp://backup@nas/srv/ark
 ```
 
-The password comes from the first of these that is set:
+The password comes from the first source that is set, checked in this order:
 
 | Source | Flag or variable |
 |---|---|
-| a file, one trailing newline stripped | `--password-file`, `ARK_PASSWORD_FILE` |
-| the output of a shell command | `--password-command`, `ARK_PASSWORD_COMMAND` |
+| a file, one trailing newline stripped | `--password-file` |
+| the output of a shell command | `--password-command` |
+| the selected profile's `password-file`, then its `password-env` | profile |
+| a file, as above | `ARK_PASSWORD_FILE` |
+| the output of a shell command | `ARK_PASSWORD_COMMAND` |
 | the environment | `ARK_PASSWORD` |
-| a prompt, only on a terminal | `ark init` asks twice |
-| no password at all | `--insecure-no-password`, `ARK_INSECURE_NO_PASSWORD=1` |
+| a prompt, only on a terminal | none; every command asks, `ark init` twice |
+
+A file and a command on the same level conflict and end in a usage error. So does `--insecure-no-password` (or `ARK_INSECURE_NO_PASSWORD=1`, or the profile's `insecure-no-password`) together with any password source above; it stands for no password at all. Without a password source, every command asks on a terminal and fails without one, for example under cron.
 
 There is no `--password` flag, it would show in the process list. Without a password anyone with access to the backend can read the repository; use `--insecure-no-password` only on purpose. For the examples below:
 
@@ -92,7 +96,7 @@ Try `--dry-run` first to see which snapshots would be kept and which removed. De
 ark check
 ```
 
-reports damage in the repository. Run it now and then, especially before relying on old snapshots.
+`ark check` reports damage in the repository. Run it now and then, especially before relying on old snapshots.
 
 ## Where next
 
