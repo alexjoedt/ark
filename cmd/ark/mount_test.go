@@ -38,6 +38,9 @@ func TestBuildLayout(t *testing.T) {
 		file("dddddddd55", "/home/latest", "", 0),
 		file("eeeeeeee66", "/home/"+sec, "", 0),
 		file("ffffffff77", "/.cfg", "", 0),
+		file("gggggggg88", "home", "", 0),
+		file("hhhhhhhh99", "/home", "_", 0),
+		{ID: "44444444bb", SourceType: "files", SourceName: "n", Host: "h", CreatedAt: at},
 		{ID: "1111111188", SourceType: arkdocker.SourceTypeDockerVolume, SourceName: "pg", Host: "h", CreatedAt: at},
 		{ID: "2222222299", SourceType: ark.SourceTypeStream, SourceName: "db/dump", Host: "h", CreatedAt: at},
 		{ID: "33333333aa", SourceType: "custom/x", SourceName: "n", Host: "h", CreatedAt: at},
@@ -52,12 +55,24 @@ func TestBuildLayout(t *testing.T) {
 		t.Errorf("ids = %v, want full IDs for the shared prefix and a short one otherwise", ids)
 	}
 	sources := root.dirs["sources"]
-	if got := keys(sources.dirs); !slices.Equal(got, []string{"custom_x", "docker-volumes", "files", "streams"}) {
+	if got := keys(sources.dirs); !slices.Equal(
+		got,
+		[]string{"custom_xs", "docker-volumes", "files", "filess", "streams"},
+	) {
 		t.Errorf("sources = %v", got)
 	}
 	files := sources.dirs["files"]
-	if got := keys(files.dirs); !slices.Equal(got, []string{"_", "h2"}) {
-		t.Errorf("files hosts = %v, want _ for the empty host and h2", got)
+	if got := keys(files.dirs); !slices.Equal(got, []string{"_", "__", "h2"}) {
+		t.Errorf("files hosts = %v, want _ for the empty host, __ for host _ and h2", got)
+	}
+	if files.dirs["__"].dirs["home"].snaps[sec] != "hhhhhhhh99" {
+		t.Errorf("files/__ = %v, want host _'s /home", keys(files.dirs["__"].dirs))
+	}
+	if got := sources.dirs["filess"].dirs["h"].dirs["n"]; got == nil || got.snaps[sec] != "44444444bb" {
+		t.Errorf("filess = %v, want the type named files", keys(sources.dirs["filess"].dirs))
+	}
+	if got := files.dirs["_"].dirs["home-1"]; got == nil || got.snaps[sec] != "gggggggg88" {
+		t.Errorf("files/_ = %v, want home-1 for the relative source home", keys(files.dirs["_"].dirs))
 	}
 	home := files.dirs["_"].dirs["home"]
 	if home == nil {
@@ -69,8 +84,8 @@ func TestBuildLayout(t *testing.T) {
 	if home.links["latest"] != sec+"-1" {
 		t.Errorf("home latest = %q, want %q (h2's newer /home is another series)", home.links["latest"], sec+"-1")
 	}
-	if got := keys(home.dirs); !slices.Equal(got, []string{sec + "-2", "alex", "latest-1"}) {
-		t.Errorf("home dirs = %v, want alex and the clashing names suffixed", got)
+	if got := keys(home.dirs); !slices.Equal(got, []string{"_" + sec, "_latest", "alex"}) {
+		t.Errorf("home dirs = %v, want alex and the time and latest names marked with _", got)
 	}
 	if alex := home.dirs["alex"]; alex.links["latest"] == "" || len(alex.snaps) != 1 {
 		t.Errorf("home/alex = %v, %v, want one snapshot and latest", alex.snaps, alex.links)

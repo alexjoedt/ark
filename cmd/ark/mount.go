@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,7 +24,6 @@ import (
 	"time"
 
 	ark "github.com/alexjoedt/ark"
-	"github.com/alexjoedt/ark/arkdocker"
 	"github.com/alexjoedt/ark/arkuri"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
 	"github.com/alexjoedt/ark/cmd/ark/internal/out"
@@ -45,11 +45,13 @@ func mountCommand() *cli.Command {
 
    Mounts the repository's snapshots read-only at dir until Ctrl-C:
    ids/<id>/, tags/<tag>/<time>/ and sources/<type>/<host>/<source>/<time>/
-   with a latest link to the newest snapshot of that source. Types are files,
-   docker-volumes and streams; an empty host is _. A source path such as
-   /home/alex nests as home/alex/, so /home and /home/alex share home/, and a
-   name that clashes with a time or latest gets a -1 suffix. The snapshot list
-   is the one at mount start. The mount holds a shared lock, so prune waits
+   with a latest link to the newest snapshot of that source. A type dir is
+   the type name plus s (files, docker-volumes, streams); an empty host is _.
+   A source path such as /home/alex nests as home/alex/, so /home and
+   /home/alex share home/. A host or path element that is empty, latest,
+   shaped like a time or starts with . or _ gets a _ in front, and a relative
+   source that clashes with an absolute one gets a -1 suffix. The snapshot
+   list is the one at mount start. The mount holds a shared lock, so prune waits
    until it is unmounted.`,
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 1 {
@@ -235,7 +237,7 @@ func buildLayout(snaps []*ark.Snapshot) *vdir {
 			byTag[t] = append(byTag[t], s)
 		}
 	}
-	for tag, name := range dirNames(slices.Sorted(maps.Keys(byTag)), escapeName, nil) {
+	for tag, name := range dirNames(slices.Sorted(maps.Keys(byTag)), escapeName) {
 		d := top.dir(name)
 		for _, s := range sortByTime(byTag[tag]) {
 			d.snaps[timeName(d, s.CreatedAt)] = s.ID
@@ -258,7 +260,7 @@ func buildLayout(snaps []*ark.Snapshot) *vdir {
 		list = append(list, series{path: append([]string{string(k.typ), k.host}, sourcePath(k.name)...), snaps: ss})
 	}
 	sources := root.dir("sources")
-	addSeries(sources, list, 0)
+	addSeries(sources, list, typeDir)
 	return root
 }
 
@@ -271,8 +273,8 @@ type series struct {
 
 // addSeries lays out list in d. The series whose path ends here get their
 // time dirs and latest in d; the others go one level down, in a directory
-// named after their next path element. depth 0 is the source type.
-func addSeries(d *vdir, list []series, depth int) {
+// named after their next path element by escape.
+func addSeries(d *vdir, list []series, escape func(string) string) {
 	sub := map[string][]series{}
 	for _, s := range list {
 		if len(s.path) > 0 {
@@ -286,40 +288,32 @@ func addSeries(d *vdir, list []series, depth int) {
 			d.touch(snap.CreatedAt)
 		}
 	}
-	taken := map[string]bool{}
-	for name := range d.snaps {
-		taken[name] = true
-	}
-	for name := range d.links {
-		taken[name] = true
-	}
-	escape := pathDir
-	if depth == 0 {
-		escape = typeDir
-	}
-	for k, name := range dirNames(slices.Sorted(maps.Keys(sub)), escape, taken) {
+	for k, name := range dirNames(slices.Sorted(maps.Keys(sub)), escape) {
 		c := d.dir(name)
-		addSeries(c, sub[k], depth+1)
+		addSeries(c, sub[k], pathDir)
 		d.touch(c.time)
 	}
 }
 
-// pathDir is the directory name of a host or a source path element.
+// timeShaped matches the names timeName gives.
+var timeShaped = regexp.MustCompile(`^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(-\d+)?$`)
+
+// pathDir is the directory name of a host or a source path element, without
+// the leading "/" of an absolute path. A "_" in front marks a name that is
+// empty, latest, shaped like a time or starts with "." or "_", so the name
+// never clashes with a snapshot or latest next to it, does not depend on
+// which snapshots exist, and distinct elements without "/" stay distinct.
 func pathDir(s string) string {
-	return escapeName(strings.TrimPrefix(s, "/"))
+	s = strings.ReplaceAll(strings.TrimPrefix(s, "/"), "/", "_")
+	if s == "" || s[0] == '.' || s[0] == '_' || s == "latest" || timeShaped.MatchString(s) {
+		return "_" + s
+	}
+	return s
 }
 
-// typeDir is the directory name of a source type.
+// typeDir is the directory name of a source type: its name plus s.
 func typeDir(t string) string {
-	switch ark.SourceType(t) {
-	case ark.SourceTypeFile:
-		return "files"
-	case ark.SourceTypeStream:
-		return "streams"
-	case arkdocker.SourceTypeDockerVolume:
-		return "docker-volumes"
-	}
-	return escapeName(t)
+	return escapeName(t + "s")
 }
 
 // sourcePath splits a source name into its directory path: /home/alex is
@@ -364,18 +358,20 @@ func escapeName(s string) string {
 	return s
 }
 
-// dirNames maps each of the sorted keys to its directory name, avoiding the
-// names already taken. A key that escape leaves as it is keeps itself; any
-// other key, or one whose name is taken, gets its escaped name with a -1, -2
-// suffix as needed, in key order, so distinct keys never share a directory.
-func dirNames(keys []string, escape func(string) string, taken map[string]bool) map[string]string {
+// dirNames maps each of the sorted keys to its directory name. A key that
+// escape leaves as it is, apart from a leading "/", keeps that name, an
+// absolute key ahead of a relative one; any other key, or one whose name is
+// taken, gets its escaped name with a -1, -2 suffix as needed, in key order,
+// so distinct keys never share a directory.
+func dirNames(keys []string, escape func(string) string) map[string]string {
 	names := make(map[string]string, len(keys))
-	if taken == nil {
-		taken = map[string]bool{}
-	}
-	for _, k := range keys {
-		if escape(k) == k && !taken[k] {
-			names[k], taken[k] = k, true
+	taken := map[string]bool{}
+	for _, abs := range []bool{true, false} {
+		for _, k := range keys {
+			name := escape(k)
+			if strings.HasPrefix(k, "/") == abs && name == strings.TrimPrefix(k, "/") && !taken[name] {
+				names[k], taken[name] = name, true
+			}
 		}
 	}
 	for _, k := range keys {
