@@ -93,7 +93,11 @@ func imageReference(image string) string {
 }
 
 // Meta returns the source metadata stored in the snapshot manifest.
-func (s *dockerVolumeSource) Meta() ark.SourceMeta { return s.meta }
+func (s *dockerVolumeSource) Meta() ark.SourceMeta {
+	m := s.meta
+	m.Labels = maps.Clone(m.Labels)
+	return m
+}
 
 // Walk streams the volume's tar archive and calls fn for every entry. The
 // "data/" prefix the helper container adds is stripped from paths and from

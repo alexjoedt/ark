@@ -146,3 +146,11 @@ func TestVolumeSourceLabelsAreReserved(t *testing.T) {
 		}
 	}
 }
+
+func TestVolumeSourceMetaIsACopy(t *testing.T) {
+	src := newVolumeSource(&Client{host: "tcp://h:2375"}, "v", nil)
+	src.Meta().Labels["x/y"] = "z"
+	if _, ok := src.Meta().Labels["x/y"]; ok {
+		t.Error("a label added to Meta().Labels reached the source")
+	}
+}
