@@ -142,7 +142,7 @@ directory with `ark export <id> | tar x`.
 
 `ark snapshots [options]`
 
-Lists snapshots, filtered by `--source NAME` (`-s`), `--type file|docker-volume`, `--tag TAG`
+Lists snapshots, filtered by `--source NAME` (`-s`), `--type file|docker-volume|stream`, `--tag TAG`
 (`-t`), `--host NAME` and `--label KEY=VALUE`; repeated tags and labels must all match.
 `--last N` keeps the newest N of every series. With `-P` only the profile's snapshots are listed.
 

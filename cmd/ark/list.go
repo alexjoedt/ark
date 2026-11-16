@@ -18,7 +18,7 @@ func snapshotsCommand() *cli.Command {
 		Usage: "list snapshots",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "source", Aliases: []string{"s"}, Usage: "source `NAME` (path or volume)"},
-			&cli.StringFlag{Name: "type", Usage: "source `TYPE`, file or docker-volume"},
+			&cli.StringFlag{Name: "type", Usage: "source `TYPE`, file, docker-volume or stream"},
 			&cli.StringSliceFlag{
 				Name:    "tag",
 				Aliases: []string{"t"},

@@ -34,7 +34,7 @@ func forgetCommand() *cli.Command {
 			&cli.StringFlag{Name: "keep-within", Usage: "keep everything younger than `DURATION`, e.g. 72h, 30d"},
 			&cli.BoolFlag{Name: "all", Usage: "remove every snapshot matching the filter"},
 			&cli.StringFlag{Name: "source", Aliases: []string{"s"}, Usage: "filter by source `NAME`"},
-			&cli.StringFlag{Name: "type", Usage: "filter by source `TYPE`, file or docker-volume"},
+			&cli.StringFlag{Name: "type", Usage: "filter by source `TYPE`, file, docker-volume or stream"},
 			&cli.StringSliceFlag{Name: "tag", Aliases: []string{"t"}, Usage: "filter by `TAG`, repeatable"},
 			&cli.StringFlag{Name: "host", Usage: "filter by host `NAME`"},
 			labelFlag("must carry the label `KEY=VALUE`, repeatable, all must match"),
