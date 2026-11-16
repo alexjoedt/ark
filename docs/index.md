@@ -7,6 +7,9 @@ hero:
   tagline: Content split with FastCDC, stored once, compressed with zstd and encrypted, in a local directory or over SFTP.
   actions:
     - theme: brand
+      text: Get started
+      link: /getting-started
+    - theme: alt
       text: Series
       link: /SERIES
     - theme: alt
@@ -33,6 +36,7 @@ features:
 
 ark keeps deduplicated, compressed and encrypted backups as a Go library, with a CLI on top.
 
+- [Getting started](getting-started.md): install ark and make a first backup.
 - [Series](SERIES.md): how snapshots group into series.
 - [Labels](LABELS.md): how labels tell jobs of one source apart.
 - [Mount](MOUNT.md): browse every snapshot read-only through FUSE.

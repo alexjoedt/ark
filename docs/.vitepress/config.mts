@@ -27,7 +27,7 @@ export default defineConfig({
   },
   themeConfig: {
     nav: [
-      { text: 'Guide', link: '/SERIES' },
+      { text: 'Guide', link: '/getting-started' },
       { text: 'Reference', link: '/FORMAT' },
       { text: 'Decisions', link: '/adr/' },
     ],
@@ -35,6 +35,7 @@ export default defineConfig({
       {
         text: 'Guide',
         items: [
+          { text: 'Getting started', link: '/getting-started' },
           { text: 'Series', link: '/SERIES' },
           { text: 'Labels', link: '/LABELS' },
           { text: 'Mount', link: '/MOUNT' },
