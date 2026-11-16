@@ -207,6 +207,11 @@ ark check
 ark repair index            # after check or prune report a lost or damaged index
 ```
 
+A backup is one series per source type, source and host. `--source NAME` names the source (default:
+the absolute path), `--host NAME` the host (default: the hostname) and `--label KEY=VALUE`, repeatable,
+stores a label that `ark snapshots`, `ark find` and `ark forget` filter on, all given labels
+must match. See [Series](docs/SERIES.md) and [Labels](docs/LABELS.md).
+
 `ark backup` leaves paths out with `--exclude/-e PATTERN` and `--exclude-file FILE`, both
 repeatable, and `--exclude-cloud-files` skips files that exist only in the cloud (iCloud `.name.icloud`
 placeholders, and on macOS every dataless File Provider entry), so a backup does not download a whole
@@ -260,7 +265,7 @@ ark docker restore <id>                # into the volume it came from
 ark docker restore <id> postgres_copy  # or into another one, created if missing
 ```
 
-A volume is one series per host: the parent of a backup, `ark forget` and the LAST SNAPSHOT of
+A volume is one [series](docs/SERIES.md) per host: the parent of a backup, `ark forget` and the LAST SNAPSHOT of
 `ark docker volumes` only see the snapshots of the same host. The host is this machine's hostname for
 a local daemon and the daemon's own name for a remote `--docker-host` (`tcp://`, `ssh://`), unless
 `--host` sets it. Volume snapshots written before the host was recorded have none: `ark docker
@@ -322,6 +327,8 @@ ark profile show docs           # each effective value and its source: cli, prof
   command line other than `backup.path` needs `--source`, so it never lands under the profile's
   source. Snapshot ids given to `ark forget -P` are removed as named, without the profile's policy or
   source filter.
+- `backup.label` sets labels as a map, `label: {app: docs}`; a `--label` flag adds to them and wins for
+  a key in both. See [Labels](docs/LABELS.md).
 - The hooks of `forget` do not run on `--dry-run`.
 - `$VAR` and `${VAR}` expand in every value but the hooks; an unset variable exits 2. `~` and relative
   paths in `repo`, `password-file`, `backup.path` and `backup.exclude-file` are taken from the home
@@ -370,7 +377,7 @@ ls /mnt/ark/ids/                  # one directory per snapshot
 
 - `ids/<id>/`, `tags/<tag>/<time>/` and `sources/<type>/<host>/<source>/<time>/` with a `latest`
   link per source, for example `sources/files/myhost/home/alex/latest`. The snapshot list is the one
-  at mount start; remount to see newer ones.
+  at mount start; remount to see newer ones. [Mount](docs/MOUNT.md) has the full layout.
 - The mount holds a shared lock for as long as it runs, so `ark prune` and `ark forget --prune`
   cannot take their exclusive lock and exit 3 (after `--lock-wait`, if set) until it is unmounted.
 - Ctrl-C unmounts. While a process still uses the mount it keeps serving and retries every second;
