@@ -211,12 +211,17 @@ func dockerBackupCommand() *cli.Command {
 			&cli.StringFlag{Name: "parent", Usage: "explicit parent snapshot `ID`"},
 			&cli.StringSliceFlag{Name: "tag", Aliases: []string{"t"}, Usage: "add a `TAG`, repeatable"},
 			&cli.StringFlag{Name: "comment", Aliases: []string{"c"}, Usage: "free `TEXT` stored with the snapshot"},
+			labelFlag("record the label `KEY=VALUE`, repeatable, the value may hold commas"),
 		}, stopFlags()...),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.NArg() != 1 {
 				return exitcode.Usagef("usage: ark docker backup [options] <volume>")
 			}
 			volume := cmd.Args().First()
+			labels, err := labelValue(cmd, false)
+			if err != nil {
+				return err
+			}
 
 			e, repo, err := openDocker(ctx, cmd)
 			if err != nil {
@@ -236,6 +241,7 @@ func dockerBackupCommand() *cli.Command {
 				ark.WithComment(cmd.String("comment")),
 				ark.WithHost(host),
 				ark.WithParent(cmd.String("parent")),
+				ark.WithLabels(labels),
 			)
 			if err != nil {
 				pr.Fail()

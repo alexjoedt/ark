@@ -222,6 +222,8 @@ func TestValidate(t *testing.T) {
 		{"negative keep-yearly", func(p *arkprofile.Profile) { p.Forget.KeepYearly = -1 }},
 		{"bad keep-within", func(p *arkprofile.Profile) { p.Forget.KeepWithin = "30x" }},
 		{"zero keep-within", func(p *arkprofile.Profile) { p.Forget.KeepWithin = "0d" }},
+		{"bad label key", func(p *arkprofile.Profile) { p.Backup.Labels = map[string]string{"-app": "x"} }},
+		{"reserved label", func(p *arkprofile.Profile) { p.Backup.Labels = map[string]string{"ark/path": "/x"} }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

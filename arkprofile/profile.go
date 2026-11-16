@@ -20,6 +20,7 @@
 //	  host: laptop                   # host recorded in the snapshot
 //	  comment: nightly
 //	  source: documents              # source name, default: the profile's name
+//	  label: {app: docs}             # labels recorded in the snapshot
 //	  run-before: mount /mnt/docs    # hooks, each run through sh -c
 //	  run-after: echo stored
 //	  run-after-fail: 'echo "backup failed: $ARK_ERROR"'
@@ -98,6 +99,8 @@ type Backup struct {
 	Comment           string   `yaml:"comment"`
 	// Source is the snapshot's source name; empty means the profile's name.
 	Source string `yaml:"source"`
+	// Labels are recorded in the snapshot; their keys follow [ark.ValidateLabels].
+	Labels map[string]string `yaml:"label"`
 
 	Hooks `yaml:",inline"`
 }
@@ -128,8 +131,9 @@ type Hooks struct {
 var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 // Validate reports a name outside [a-z0-9][a-z0-9._-]*, conflicting
-// password sources, a negative number or lock-wait and a keep-within that is
-// not a positive duration. Every error matches [ErrInvalid].
+// password sources, a negative number or lock-wait, a backup label that
+// [ark.ValidateLabels] refuses and a keep-within that is not a positive
+// duration. Every error matches [ErrInvalid].
 func (p *Profile) Validate() error {
 	if !validName.MatchString(p.Name) {
 		return invalidf(
@@ -142,6 +146,9 @@ func (p *Profile) Validate() error {
 	}
 	if p.LockWait < 0 {
 		return invalidf("lock-wait %s: want 0 or more", p.LockWait)
+	}
+	if err := ark.ValidateLabels(p.Backup.Labels); err != nil {
+		return invalidf("backup.label: %v", err)
 	}
 	f := p.Forget
 	for _, n := range []struct {

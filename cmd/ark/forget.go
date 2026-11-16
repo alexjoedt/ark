@@ -37,6 +37,7 @@ func forgetCommand() *cli.Command {
 			&cli.StringFlag{Name: "type", Usage: "filter by source `TYPE`, file or docker-volume"},
 			&cli.StringSliceFlag{Name: "tag", Aliases: []string{"t"}, Usage: "filter by `TAG`, repeatable"},
 			&cli.StringFlag{Name: "host", Usage: "filter by host `NAME`"},
+			labelFlag("must carry the label `KEY=VALUE`, repeatable, all must match"),
 			&cli.BoolFlag{Name: "prune", Usage: "run prune afterwards"},
 			&cli.BoolFlag{Name: "dry-run", Aliases: []string{"n"}, Usage: "show keep and remove lists, delete nothing"},
 			&cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "skip the confirmation prompt"},
@@ -54,7 +55,12 @@ func forgetCommand() *cli.Command {
 			if err != nil {
 				return err
 			}
+			labels, err := labelValue(cmd, true)
+			if err != nil {
+				return err
+			}
 			filter := ark.SnapshotFilter{
+				Labels: labels,
 				IDs:    ids,
 				Source: cmd.String("source"),
 				Type:   ark.SourceType(cmd.String("type")),

@@ -31,6 +31,7 @@ func findCommand() *cli.Command {
 				Usage:   "must carry `TAG`, repeatable, all must match",
 			},
 			&cli.StringFlag{Name: "host", Usage: "host `NAME`"},
+			labelFlag("must carry the label `KEY=VALUE`, repeatable, all must match"),
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			patterns := cmd.Args().Slice()
@@ -41,11 +42,16 @@ func findCommand() *cli.Command {
 				return exitcode.Usagef("find: %w", err)
 			}
 
+			labels, err := labelValue(cmd, true)
+			if err != nil {
+				return err
+			}
 			filter := ark.SnapshotFilter{
 				Source: cmd.String("source"),
 				Type:   ark.SourceType(cmd.String("type")),
 				Tags:   cmd.StringSlice("tag"),
 				Host:   cmd.String("host"),
+				Labels: labels,
 			}
 			if lp := profileFrom(ctx); lp != nil && cmd.String("source") == "" {
 				pf, err := lp.Filter()
@@ -68,7 +74,10 @@ func findCommand() *cli.Command {
 				s, f := hit.Snapshot, hit.File
 				if m.JSON {
 					last = s.ID
-					return p.JSONLine(matchJSON{SnapshotID: s.ID, Path: f.Path, Type: string(f.Type), Size: f.Size, Mtime: f.ModTime})
+					return p.JSONLine(matchJSON{
+						SnapshotID: s.ID, Path: f.Path, Type: string(f.Type), Size: f.Size, Mtime: f.ModTime,
+						Labels: out.Labels(s.Labels),
+					})
 				}
 				if s.ID != last && !m.Quiet {
 					if last != "" {
@@ -93,9 +102,10 @@ func findCommand() *cli.Command {
 
 // matchJSON is one line of ark find --json, frozen for 1.x.
 type matchJSON struct {
-	SnapshotID string    `json:"snapshot_id"`
-	Path       string    `json:"path"`
-	Type       string    `json:"type"`
-	Size       int64     `json:"size"`
-	Mtime      time.Time `json:"mtime"`
+	SnapshotID string            `json:"snapshot_id"`
+	Path       string            `json:"path"`
+	Type       string            `json:"type"`
+	Size       int64             `json:"size"`
+	Mtime      time.Time         `json:"mtime"`
+	Labels     map[string]string `json:"labels"`
 }

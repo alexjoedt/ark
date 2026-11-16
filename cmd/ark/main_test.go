@@ -810,6 +810,8 @@ func TestDockerCommandsWithoutDaemon(t *testing.T) {
 	}{
 		{"help", []string{"docker", "--help"}, 0, "volumes"},
 		{"backup usage", []string{"-r", repo, "docker", "backup"}, 2, ""},
+		{"backup label without =", []string{"-r", repo, "docker", "backup", "--label", "app", "vol"}, 2, ""},
+		{"backup reserved label", []string{"-r", repo, "docker", "backup", "--label", "ark/path=x", "vol"}, 2, ""},
 		{"restore usage", []string{"-r", repo, "docker", "restore"}, 2, ""},
 		{"restore unknown id", []string{"-r", repo, "docker", "restore", "nope"}, 4, ""},
 		{
@@ -862,20 +864,21 @@ func TestDockerRoundTrip(t *testing.T) {
 
 	repo := initRepo(t)
 	t.Setenv("ARK_REPOSITORY", "")
-	code, out := runCapture(t, "--json", "-r", repo, "docker", "backup", "-t", "n", vol)
+	code, out := runCapture(t, "--json", "-r", repo, "docker", "backup", "-t", "n", "--label", "app=db,main", vol)
 	if code != 0 {
 		t.Fatalf("docker backup exit %d: %s", code, out)
 	}
 	var snap struct {
-		ID         string `json:"id"`
-		SourceName string `json:"source_name"`
-		SourceType string `json:"source_type"`
+		ID         string            `json:"id"`
+		SourceName string            `json:"source_name"`
+		SourceType string            `json:"source_type"`
+		Labels     map[string]string `json:"labels"`
 	}
 	if err := json.Unmarshal(
 		[]byte(out),
 		&snap,
 	); err != nil || snap.SourceType != "docker-volume" ||
-		snap.SourceName != vol {
+		snap.SourceName != vol || snap.Labels["app"] != "db,main" {
 		t.Fatalf("stdout %q, %v", out, err)
 	}
 

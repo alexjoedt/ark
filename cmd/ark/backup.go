@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -34,6 +35,7 @@ func backupCommand() *cli.Command {
 			&cli.StringFlag{Name: "host", Usage: "host `NAME` stored with the snapshot", Value: hostname},
 			&cli.StringFlag{Name: "parent", Usage: "explicit parent snapshot `ID`"},
 			&cli.StringFlag{Name: "source", Aliases: []string{"s"}, Usage: "source `NAME` (default: absolute path)"},
+			labelFlag("record the label `KEY=VALUE`, repeatable, the value may hold commas"),
 			&listFlag{
 				Name:    "exclude",
 				Aliases: []string{"e"},
@@ -44,7 +46,10 @@ func backupCommand() *cli.Command {
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			lp := profileFrom(ctx)
-			eff := backupProfile(cmd, lp)
+			eff, err := backupProfile(cmd, lp)
+			if err != nil {
+				return err
+			}
 			if cmd.NArg() > 1 || eff.Backup.Path == "" {
 				return exitcode.Usagef("usage: ark backup [options] <path>, or -P NAME with a backup.path")
 			}
@@ -100,14 +105,27 @@ func backupCommand() *cli.Command {
 }
 
 // backupProfile is the profile's backup section with every flag given on the
-// command line put over it; a list flag replaces the profile's list. Without
-// a profile it holds the flags alone.
-func backupProfile(cmd *cli.Command, lp *loadedProfile) arkprofile.Profile {
+// command line put over it; a list flag replaces the profile's list, a
+// --label replaces the profile's label of that key only. Without a profile it
+// holds the flags alone.
+func backupProfile(cmd *cli.Command, lp *loadedProfile) (arkprofile.Profile, error) {
+	labels, err := labelValue(cmd, false)
+	if err != nil {
+		return arkprofile.Profile{}, err
+	}
 	var eff arkprofile.Profile
 	if lp != nil {
 		eff = *lp.Profile
 	}
 	b := &eff.Backup
+	if len(labels) > 0 {
+		merged := maps.Clone(b.Labels)
+		if merged == nil {
+			merged = make(map[string]string, len(labels))
+		}
+		maps.Copy(merged, labels)
+		b.Labels = merged
+	}
 	if cmd.NArg() == 1 {
 		b.Path = cmd.Args().First()
 	}
@@ -136,7 +154,7 @@ func backupProfile(cmd *cli.Command, lp *loadedProfile) arkprofile.Profile {
 	if cmd.IsSet("exclude-cloud-files") {
 		b.ExcludeCloudFiles = cmd.Bool("exclude-cloud-files")
 	}
-	return eff
+	return eff, nil
 }
 
 // checkOtherPath refuses a path on the command line that is not the profile's
@@ -191,4 +209,36 @@ func (v *stringList) Get() any { return *v.p }
 func listValue(cmd *cli.Command, name string) []string {
 	v, _ := cmd.Value(name).([]string)
 	return v
+}
+
+// labelFlag is --label: repeatable, never split on commas.
+func labelFlag(usage string) cli.Flag {
+	return &listFlag{Name: "label", Usage: usage}
+}
+
+// labelValue reads --label KEY=VALUE, split at the first "=", and checks the
+// labels as the library does, so a bad one exits 2 before the repository is
+// opened. A filter may name ark's own keys, such as ark/path; a backup may
+// not set them. A key given twice with two values is refused.
+func labelValue(cmd *cli.Command, filter bool) (map[string]string, error) {
+	list := listValue(cmd, "label")
+	labels := make(map[string]string, len(list))
+	check := make(map[string]string, len(list))
+	for _, kv := range list {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			return nil, exitcode.Usagef("--label %q: want KEY=VALUE", kv)
+		}
+		if old, dup := labels[k]; dup && old != v {
+			return nil, exitcode.Usagef("--label %q: key %q given twice", kv, k)
+		}
+		labels[k] = v
+		if !filter || !strings.HasPrefix(k, ark.ReservedLabelPrefix) {
+			check[k] = v
+		}
+	}
+	if err := ark.ValidateLabels(check); err != nil {
+		return nil, exitcode.Usagef("--label: %w", err)
+	}
+	return labels, nil
 }

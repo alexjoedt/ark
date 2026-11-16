@@ -40,6 +40,7 @@ func TestBackupAndForgetThroughAProfile(t *testing.T) {
 			Excludes: []string{"*.tmp"},
 			Host:     "laptop",
 			Comment:  "nightly",
+			Labels:   map[string]string{"app": "docs"},
 		},
 		Forget: arkprofile.Forget{KeepLast: 1},
 	}
@@ -65,7 +66,8 @@ func TestBackupAndForgetThroughAProfile(t *testing.T) {
 	last := backup(docs)
 
 	if first.SourceName != "docs" || first.Host != "laptop" || first.Comment != "nightly" ||
-		!reflect.DeepEqual(first.Tags, []string{"daily"}) || !reflect.DeepEqual(first.Excludes, []string{"*.tmp"}) {
+		!reflect.DeepEqual(first.Tags, []string{"daily"}) || !reflect.DeepEqual(first.Excludes, []string{"*.tmp"}) ||
+		first.Labels["app"] != "docs" {
 		t.Fatalf("snapshot = %+v", first)
 	}
 	if first.Stats.FileCount != 1 {

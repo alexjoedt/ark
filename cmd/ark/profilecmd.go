@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -194,6 +196,7 @@ func effectiveValues(root *cli.Command, lp *loadedProfile) []profileValue {
 		profileOnly("backup.host", b.Host, host),
 		profileOnly("backup.comment", b.Comment, ""),
 		profileOnly("backup.source", b.Source, lp.Name),
+		profileOnly("backup.label", labelList(b.Labels), ""),
 	}
 	values = append(values, hookValues("backup", b.Hooks)...)
 	values = append(values,
@@ -207,6 +210,15 @@ func effectiveValues(root *cli.Command, lp *loadedProfile) []profileValue {
 		profileBool("forget.prune", f.Prune),
 	)
 	return append(values, hookValues("forget", f.Hooks)...)
+}
+
+// labelList shows labels as KEY=VALUE pairs sorted by key.
+func labelList(labels map[string]string) string {
+	pairs := make([]string, 0, len(labels))
+	for _, k := range slices.Sorted(maps.Keys(labels)) {
+		pairs = append(pairs, k+"="+labels[k])
+	}
+	return strings.Join(pairs, ", ")
 }
 
 func hookValues(section string, h arkprofile.Hooks) []profileValue {

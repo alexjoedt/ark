@@ -59,7 +59,7 @@ func (p *Profile) Source() (ark.Source, error) {
 	return arkfs.NewSource(b.Path, opts...)
 }
 
-// BackupOptions returns the tags, host and comment of the backup section. The
+// BackupOptions returns the tags, labels, host and comment of the backup section. The
 // host defaults to the machine's hostname, so machines sharing a repository
 // and a profile name keep apart: each one's parent and forget see only its
 // own snapshots.
@@ -68,6 +68,9 @@ func (p *Profile) BackupOptions() []ark.BackupOption {
 	var opts []ark.BackupOption
 	if len(b.Tags) > 0 {
 		opts = append(opts, ark.WithTags(b.Tags...))
+	}
+	if len(b.Labels) > 0 {
+		opts = append(opts, ark.WithLabels(b.Labels))
 	}
 	if h := p.host(); h != "" {
 		opts = append(opts, ark.WithHost(h))
