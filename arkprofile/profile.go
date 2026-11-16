@@ -148,7 +148,7 @@ func (p *Profile) Validate() error {
 		return invalidf("lock-wait %s: want 0 or more", p.LockWait)
 	}
 	if err := ark.ValidateLabels(p.Backup.Labels); err != nil {
-		return invalidf("backup.label: %v", err)
+		return invalidf("backup.label: %w", err)
 	}
 	f := p.Forget
 	for _, n := range []struct {
@@ -302,11 +302,12 @@ func CheckFile(fi fs.FileInfo) error {
 	return nil
 }
 
-type invalidError struct{ msg string }
+type invalidError struct{ err error }
 
-func (e *invalidError) Error() string        { return e.msg }
+func (e *invalidError) Error() string        { return e.err.Error() }
 func (e *invalidError) Is(target error) bool { return target == ErrInvalid }
+func (e *invalidError) Unwrap() error        { return e.err }
 
 func invalidf(format string, args ...any) error {
-	return &invalidError{fmt.Sprintf(format, args...)}
+	return &invalidError{fmt.Errorf(format, args...)}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -45,11 +44,12 @@ func backupCommand() *cli.Command {
 			&cli.BoolFlag{Name: "exclude-cloud-files", Usage: "leave out files that exist only in the cloud"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			lp := profileFrom(ctx)
-			eff, err := backupProfile(cmd, lp)
+			labels, err := labelValue(cmd, false)
 			if err != nil {
 				return err
 			}
+			lp := profileFrom(ctx)
+			eff := backupProfile(cmd, lp)
 			if cmd.NArg() > 1 || eff.Backup.Path == "" {
 				return exitcode.Usagef("usage: ark backup [options] <path>, or -P NAME with a backup.path")
 			}
@@ -73,7 +73,8 @@ func backupCommand() *cli.Command {
 				defer repo.Close()
 
 				p := printer(cmd)
-				bopts := append(eff.BackupOptions(), ark.WithParent(cmd.String("parent")))
+				// --label adds to the profile's labels, a key in both takes the flag's value
+				bopts := append(eff.BackupOptions(), ark.WithParent(cmd.String("parent")), ark.WithLabels(labels))
 				// an empty --host or --comment clears the profile's value,
 				// which BackupOptions would leave out or default
 				if cmd.IsSet("host") {
@@ -105,27 +106,15 @@ func backupCommand() *cli.Command {
 }
 
 // backupProfile is the profile's backup section with every flag given on the
-// command line put over it; a list flag replaces the profile's list, a
-// --label replaces the profile's label of that key only. Without a profile it
-// holds the flags alone.
-func backupProfile(cmd *cli.Command, lp *loadedProfile) (arkprofile.Profile, error) {
-	labels, err := labelValue(cmd, false)
-	if err != nil {
-		return arkprofile.Profile{}, err
-	}
+// command line put over it; a list flag replaces the profile's list. --label
+// is left to the caller, which adds it with ark.WithLabels. Without a profile
+// it holds the flags alone.
+func backupProfile(cmd *cli.Command, lp *loadedProfile) arkprofile.Profile {
 	var eff arkprofile.Profile
 	if lp != nil {
 		eff = *lp.Profile
 	}
 	b := &eff.Backup
-	if len(labels) > 0 {
-		merged := maps.Clone(b.Labels)
-		if merged == nil {
-			merged = make(map[string]string, len(labels))
-		}
-		maps.Copy(merged, labels)
-		b.Labels = merged
-	}
 	if cmd.NArg() == 1 {
 		b.Path = cmd.Args().First()
 	}
@@ -154,7 +143,7 @@ func backupProfile(cmd *cli.Command, lp *loadedProfile) (arkprofile.Profile, err
 	if cmd.IsSet("exclude-cloud-files") {
 		b.ExcludeCloudFiles = cmd.Bool("exclude-cloud-files")
 	}
-	return eff, nil
+	return eff
 }
 
 // checkOtherPath refuses a path on the command line that is not the profile's
@@ -216,14 +205,14 @@ func labelFlag(usage string) cli.Flag {
 	return &listFlag{Name: "label", Usage: usage}
 }
 
-// labelValue reads --label KEY=VALUE, split at the first "=", and checks the
-// labels as the library does, so a bad one exits 2 before the repository is
-// opened. A filter may name ark's own keys, such as ark/path; a backup may
-// not set them. A key given twice with two values is refused.
+// labelValue reads --label KEY=VALUE, split at the first "=". For a backup it
+// checks the labels as the library does, so a bad one exits 2 before the
+// repository is opened. A filter checks the shape only: it may name any key a
+// source records, ark's own ark/ keys and a third-party source's keys in
+// another syntax included. A key given twice with two values is refused.
 func labelValue(cmd *cli.Command, filter bool) (map[string]string, error) {
 	list := listValue(cmd, "label")
 	labels := make(map[string]string, len(list))
-	check := make(map[string]string, len(list))
 	for _, kv := range list {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok {
@@ -233,11 +222,11 @@ func labelValue(cmd *cli.Command, filter bool) (map[string]string, error) {
 			return nil, exitcode.Usagef("--label %q: key %q given twice", kv, k)
 		}
 		labels[k] = v
-		if !filter || !strings.HasPrefix(k, ark.ReservedLabelPrefix) {
-			check[k] = v
-		}
 	}
-	if err := ark.ValidateLabels(check); err != nil {
+	if filter {
+		return labels, nil
+	}
+	if err := ark.ValidateLabels(labels); err != nil {
 		return nil, exitcode.Usagef("--label: %w", err)
 	}
 	return labels, nil

@@ -229,8 +229,12 @@ func TestValidate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			p := ok
 			tt.edit(&p)
-			if err := p.Validate(); !errors.Is(err, arkprofile.ErrInvalid) {
+			err := p.Validate()
+			if !errors.Is(err, arkprofile.ErrInvalid) {
 				t.Fatalf("Validate = %v, want ErrInvalid", err)
+			}
+			if strings.Contains(tt.name, "label") && !errors.Is(err, ark.ErrInvalidLabel) {
+				t.Errorf("Validate = %v, want ark.ErrInvalidLabel too", err)
 			}
 		})
 	}

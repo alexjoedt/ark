@@ -161,10 +161,16 @@ func TestBadLabelsExitTwoBeforeOpen(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "missing")
 	src := t.TempDir()
 	long := "app=" + strings.Repeat("x", 1025)
-	bad := []string{"-app=x", "my app=x", "Example.com/app=x", long, "app=a\tb", "app", "app=a --label app=b"}
+	// a filter checks the shape only, a backup the key and value as well
+	malformed := []string{"app", "app=a --label app=b"}
+	bad := append([]string{"-app=x", "my app=x", "Example.com/app=x", long, "app=a\tb"}, malformed...)
 	for _, l := range bad {
 		args := strings.Split(l, " --label ")
-		for _, cmd := range [][]string{{"backup", "--source", "x"}, {"snapshots"}, {"forget", "--all", "--yes"}} {
+		cmds := [][]string{{"backup", "--source", "x"}}
+		if slices.Contains(malformed, l) {
+			cmds = append(cmds, []string{"snapshots"}, []string{"forget", "--all", "--yes"})
+		}
+		for _, cmd := range cmds {
 			full := append([]string{"-r", repo}, cmd...)
 			for _, a := range args {
 				full = append(full, "--label", a)
@@ -185,9 +191,11 @@ func TestBadLabelsExitTwoBeforeOpen(t *testing.T) {
 			t.Errorf("%v: exit %d, want 2", args, code)
 		}
 	}
-	// a filter may name ark's own keys
-	if code, _ := runCapture(t, "-r", repo, "snapshots", "--label", "ark/path=/x"); code == 2 {
-		t.Error("snapshots --label ark/path=/x: exit 2, want a repository error")
+	// a filter may name ark's own keys and keys a third-party source records
+	for _, l := range []string{"ark/path=/x", "Example.com/app=x", "my app=x"} {
+		if code, _ := runCapture(t, "-r", repo, "snapshots", "--label", l); code == 2 {
+			t.Errorf("snapshots --label %s: exit 2, want a repository error", l)
+		}
 	}
 }
 
@@ -223,7 +231,7 @@ func TestProfileLabelsMergeUnderTheCLI(t *testing.T) {
 	}
 
 	code, out := runCapture(t, "--json", "profile", "show", "docs")
-	if code != 0 || !strings.Contains(out, `"app=docs, env=prod"`) {
+	if code != 0 || !strings.Contains(out, `"app=\"docs\", env=\"prod\""`) {
 		t.Fatalf("profile show exit %d: %s", code, out)
 	}
 

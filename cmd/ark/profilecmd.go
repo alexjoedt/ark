@@ -212,11 +212,12 @@ func effectiveValues(root *cli.Command, lp *loadedProfile) []profileValue {
 	return append(values, hookValues("forget", f.Hooks)...)
 }
 
-// labelList shows labels as KEY=VALUE pairs sorted by key.
+// labelList shows labels as KEY="VALUE" pairs sorted by key; the value is
+// quoted since it may hold commas.
 func labelList(labels map[string]string) string {
 	pairs := make([]string, 0, len(labels))
 	for _, k := range slices.Sorted(maps.Keys(labels)) {
-		pairs = append(pairs, k+"="+labels[k])
+		pairs = append(pairs, k+"="+strconv.Quote(labels[k]))
 	}
 	return strings.Join(pairs, ", ")
 }
