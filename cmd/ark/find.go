@@ -47,7 +47,7 @@ func findCommand() *cli.Command {
 				Tags:   cmd.StringSlice("tag"),
 				Host:   cmd.String("host"),
 			}
-			if lp := profileFrom(ctx); lp != nil && !cmd.IsSet("source") {
+			if lp := profileFrom(ctx); lp != nil && cmd.String("source") == "" {
 				pf, err := lp.Filter()
 				if err != nil {
 					return exitcode.Usagef("profile %s: %w", lp.Name, err)

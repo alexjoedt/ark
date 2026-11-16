@@ -114,10 +114,15 @@ func backupProfile(cmd *cli.Command, lp *loadedProfile) arkprofile.Profile {
 	for _, f := range []struct {
 		name string
 		dst  *string
-	}{{"comment", &b.Comment}, {"host", &b.Host}, {"source", &b.Source}} {
+	}{{"comment", &b.Comment}, {"host", &b.Host}} {
 		if cmd.IsSet(f.name) {
 			*f.dst = cmd.String(f.name)
 		}
+	}
+	// An empty --source counts as not given, as in checkOtherPath and the
+	// profile scope of snapshots, find and forget.
+	if s := cmd.String("source"); s != "" {
+		b.Source = s
 	}
 	if cmd.IsSet("tag") {
 		b.Tags = cmd.StringSlice("tag")

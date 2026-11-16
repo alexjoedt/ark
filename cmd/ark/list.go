@@ -41,7 +41,7 @@ func snapshotsCommand() *cli.Command {
 				Host:   cmd.String("host"),
 			}
 			// A profile narrows the list to its snapshots, on every host.
-			if lp := profileFrom(ctx); lp != nil && !cmd.IsSet("source") {
+			if lp := profileFrom(ctx); lp != nil && cmd.String("source") == "" {
 				pf, err := lp.Filter()
 				if err != nil {
 					return exitcode.Usagef("profile %s: %w", lp.Name, err)

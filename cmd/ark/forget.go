@@ -67,7 +67,7 @@ func forgetCommand() *cli.Command {
 				if err != nil {
 					return exitcode.Usagef("profile %s: %w", scope.Name, err)
 				}
-				if !cmd.IsSet("source") {
+				if cmd.String("source") == "" {
 					filter.Source = pf.Source
 				}
 				if !cmd.IsSet("host") {
