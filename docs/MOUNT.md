@@ -38,9 +38,12 @@ sources/
 - `<source path>` nests: `/home/alex` is `home/alex/`, so `/home` and `/home/alex` share `home/`.
   The sources of one [series](SERIES.md) are one directory, so `latest` is per series.
 - An empty host is `_`.
-- A host or path element that is empty, `latest`, shaped like a time or starts with `.` or `_` gets
-  a `_` in front. A relative source name that clashes with an absolute one gets a `-1` suffix. Names
-  never depend on which other snapshots exist.
+- A `/` in a host becomes `_`. A host or path element that is empty, `latest`, shaped like a time
+  or starts with `.` or `_` gets a `_` in front.
+- A name that escaping changed, or a relative source name that an absolute one also uses, gets a
+  `-1`, `-2` suffix when another directory already holds it. Only such names depend on the other
+  snapshots: relative `home` is `home/` until a snapshot of `/home` exists, then `home-1/`; host
+  `a/b` is `a_b/` until a host named `a_b` exists, then `a_b-1/`.
 - A second snapshot in the same second gets a `-1`, `-2` suffix.
 - `ids/` uses the short id, the full id when two snapshots share the prefix.
 

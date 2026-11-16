@@ -10,8 +10,8 @@ and never change afterwards. The reasoning is in `docs/adr/0022-snapshot-labels.
   subdomain of at most 253 characters, parts of at most 63, followed by a `/`. The name is 1 to 63
   letters, digits, `-`, `_` and `.`, starting and ending with a letter or digit.
 - A value is UTF-8 of at most 1 KiB without control characters, and may be empty.
-- Keys that start with `ark/` are reserved for ark's own sources. A backup that sets one exits 2,
-  and so does a key the source sets as well. The library returns an error that wraps
+- Keys that start with `ark/` are reserved for ark's own sources. A backup that sets one exits 2.
+  The library refuses such a key too, and also a key the source records itself; both errors wrap
   `ark.ErrInvalidLabel`.
 
 ## Reserved keys
@@ -21,6 +21,11 @@ and never change afterwards. The reasoning is in `docs/adr/0022-snapshot-labels.
 | `ark/path` | directory backups | the absolute path that was backed up, also when `--source` names it differently |
 | `ark/docker-host` | Docker volume backups | the Docker host the engine talks to (`DOCKER_HOST` or `--docker-host`), left out when none is set |
 | `ark/container.N.name`, `.image`, `.image_id`, `.state`, `.compose_project`, `.compose_service` | Docker volume backups | the containers that used the volume, N counts from 0 in the order of their names; empty values are left out |
+
+Docker volume snapshots of ark 1.0.1 and earlier recorded these keys without the prefix, as
+`docker_host` and `container.N.*`, and keep them, so a filter that should match old and new
+snapshots needs one run per key: `--label ark/docker-host=tcp://h:2375` finds only the new ones,
+`--label docker_host=tcp://h:2375` only the old ones.
 
 ## Set and filter
 

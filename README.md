@@ -208,7 +208,7 @@ ark repair index            # after check or prune report a lost or damaged inde
 ```
 
 A backup is one series per source type, source and host. `--source NAME` names the source (default:
-the absolute path), `--host NAME` the host (default: the hostname) and `--label KEY=VALUE`, repeatable,
+the absolute path, with `-P` the profile's name), `--host NAME` the host (default: the hostname) and `--label KEY=VALUE`, repeatable,
 stores a label that `ark snapshots`, `ark find` and `ark forget` filter on, all given labels
 must match. See [Series](docs/SERIES.md) and [Labels](docs/LABELS.md).
 
@@ -375,15 +375,10 @@ ark mount /mnt/ark                # in another shell:
 ls /mnt/ark/ids/                  # one directory per snapshot
 ```
 
-- `ids/<id>/`, `tags/<tag>/<time>/` and `sources/<type>/<host>/<source>/<time>/` with a `latest`
-  link per source, for example `sources/files/myhost/home/alex/latest`. The snapshot list is the one
-  at mount start; remount to see newer ones. [Mount](docs/MOUNT.md) has the full layout.
-- The mount holds a shared lock for as long as it runs, so `ark prune` and `ark forget --prune`
-  cannot take their exclusive lock and exit 3 (after `--lock-wait`, if set) until it is unmounted.
-- Ctrl-C unmounts. While a process still uses the mount it keeps serving and retries every second;
-  a second Ctrl-C or SIGTERM quits anyway, with exit 1, and leaves the mountpoint to unmount by hand.
-- Linux needs FUSE 3: `/dev/fuse` and `fusermount3` (package `fuse3`). macOS needs
-  [macFUSE](https://macfuse.github.io/) and is best effort. Windows and 32-bit Linux are not supported.
+`ids/<id>/`, `tags/<tag>/<time>/` and `sources/<type>/<host>/<source>/<time>/` with a `latest` link
+per series, for example `sources/files/myhost/home/alex/latest`. The mount holds a shared lock, so
+`ark prune` and `ark forget --prune` exit 3 until it is unmounted. Linux needs FUSE 3, macOS macFUSE.
+[Mount](docs/MOUNT.md) has the full layout, the behaviour on Ctrl-C and the platforms.
 
 ## Compatibility
 

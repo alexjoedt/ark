@@ -1,7 +1,8 @@
 # Series
 
-A series is the run of snapshots one backup job writes. Three things work on it: the parent of the
-next backup, the keep policy of `ark forget` and `ark snapshots --last`. The reasoning is in
+A series is the run of snapshots one backup job writes. Four things work on it: the parent of the
+next backup, the keep policy of `ark forget`, `ark snapshots --last` and the `latest` links of
+`ark mount`. The reasoning is in
 `docs/adr/0021-one-series-key-type-source-host.md`.
 
 ## The key
@@ -11,7 +12,7 @@ A series is the set of snapshots that share all three of:
 | Field | Set by | Example |
 |---|---|---|
 | source type | the source: `file`, `docker-volume`, `stream` | `file` |
-| source name | `--source`, else the absolute path of the directory; the volume name for Docker | `/home/alex` |
+| source name | `--source`, else the absolute path of the directory; with `-P` `backup.source`, else the profile's name; the volume name for Docker | `/home/alex` |
 | host | `--host`, else the machine's hostname | `laptop` |
 
 The fields are compared verbatim as the manifest stores them. The same path backed up from two
@@ -42,5 +43,7 @@ The `ark` CLI sets the host itself: the machine's hostname for `ark backup`, and
 
 ## Changing the source name
 
-A different `--source` or a profile whose name changed starts a new series, with no parent. Pass
-`--parent <id>` for the first backup to reuse the files of the old one.
+A different `--source` or a profile whose name changed starts a new series, with no parent, so its
+first backup reads and hashes every file again. `--parent` cannot bridge the rename: a parent of
+another source name is refused with a warning and the backup runs without one. Chunks the old series
+stored are still not uploaded twice.
