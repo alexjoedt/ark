@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -270,7 +271,7 @@ func TestBackupDirectory(t *testing.T) {
 		t.Fatalf("got %+v", first)
 	}
 
-	// the parent is resolved by source name and host, --name changes that name
+	// the parent is resolved by source type, name and host, --name changes that name
 	second := backup("--host", "web1", src)
 	if second.ParentID != first.ID {
 		t.Fatalf("parent %q, want %q", second.ParentID, first.ID)
@@ -503,9 +504,11 @@ func TestSnapshotsLastAndLsPrefix(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// two sources, three snapshots of the first
-	for _, name := range []string{"one", "one", "one", "two"} {
-		if code, out := runCapture(t, "-r", repo, "backup", "--name", name, "-t", "n", src); code != 0 {
+	// two sources, three snapshots of the first, and the first once more from
+	// another host: three series
+	for _, args := range [][]string{{"one"}, {"one"}, {"one"}, {"two"}, {"one", "--host", "elsewhere"}} {
+		args = append([]string{"-r", repo, "backup", "-t", "n", "--name"}, append(args, src)...)
+		if code, out := runCapture(t, args...); code != 0 {
 			t.Fatalf("backup exit %d: %s", code, out)
 		}
 	}
@@ -522,8 +525,8 @@ func TestSnapshotsLastAndLsPrefix(t *testing.T) {
 	for _, s := range list {
 		counts[s.SourceName]++
 	}
-	if counts["one"] != 2 || counts["two"] != 1 || len(list) != 3 {
-		t.Fatalf("got %v", counts)
+	if counts["one"] != 3 || counts["two"] != 1 || len(list) != 4 {
+		t.Fatalf("got %v, want two of one, one of two and one of the other host", counts)
 	}
 	code, out = runCapture(t, "--json", "-r", repo, "snapshots", "-N", "two", "-t", "n", "-t", "missing")
 	if code != 0 || strings.TrimSpace(out) != "[]" {
@@ -556,6 +559,30 @@ func TestSnapshotsLastAndLsPrefix(t *testing.T) {
 	}
 	if code, out := runCapture(t, "-r", repo, "inspect", list[0].ID); code != 0 || !strings.Contains(out, "Source:") {
 		t.Fatalf("inspect: exit %d, %q", code, out)
+	}
+}
+
+// --last counts per series: each of source type, source name and host opens a
+// series of its own, the key the library's parent and forget policy use.
+func TestLastPerSeries(t *testing.T) {
+	snap := func(id string, typ ark.SourceType, name, host string) *ark.Snapshot {
+		return &ark.Snapshot{ID: id, SourceType: typ, SourceName: name, Host: host}
+	}
+	got := lastPerSeries([]*ark.Snapshot{
+		snap("1", "file", "db", "a"),
+		snap("2", "docker-volume", "db", "a"),
+		snap("3", "file", "db", "b"),
+		snap("4", "file", "app", "a"),
+		snap("5", "docker-volume", "db", ""),
+		snap("6", "file", "db", "a"),
+		snap("7", "docker-volume", "db", "a"),
+	}, 1)
+	var ids []string
+	for _, s := range got {
+		ids = append(ids, s.ID)
+	}
+	if want := []string{"1", "2", "3", "4", "5"}; !slices.Equal(ids, want) {
+		t.Errorf("kept %v, want the newest of each series %v", ids, want)
 	}
 }
 
@@ -606,7 +633,7 @@ func TestForgetAndPrune(t *testing.T) {
 	// prompt without a terminal and without --yes is exit 2 as well
 	forget(2, ids[0])
 
-	// dry run keeps everything: --keep-last per source name
+	// dry run keeps everything: --keep-last per series
 	r := forget(0, "--keep-last", "1", "--dry-run")
 	if !r.DryRun || len(r.Remove) != 2 || len(r.Keep) != 2 {
 		t.Fatalf("got %d remove, %d keep, dry %v", len(r.Remove), len(r.Keep), r.DryRun)

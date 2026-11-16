@@ -3,8 +3,10 @@ package ark
 import "time"
 
 // ForgetPolicy defines the retention rules applied by Repository.Forget.
-// The policy is applied per source name, so a busy source never pushes
-// another source's snapshots out of the window. Zero value keeps everything.
+// The policy is applied per series: the snapshots that share source type,
+// source name and host. A busy series never pushes another's snapshots out of
+// the window, and two hosts backing up the same source each keep their own.
+// Zero value keeps everything.
 type ForgetPolicy struct {
 	// KeepLast keeps the most recent n snapshots regardless of age.
 	KeepLast int

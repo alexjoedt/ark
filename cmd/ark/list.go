@@ -25,7 +25,7 @@ func snapshotsCommand() *cli.Command {
 				Usage:   "must carry `TAG`, repeatable, all must match",
 			},
 			&cli.StringFlag{Name: "host", Usage: "host `NAME`"},
-			&cli.IntFlag{Name: "last", Usage: "newest `N` per source name"},
+			&cli.IntFlag{Name: "last", Usage: "newest `N` per series (type, source, host)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			repo, err := openRepo(ctx, cmd)
@@ -53,7 +53,7 @@ func snapshotsCommand() *cli.Command {
 				return fmt.Errorf("snapshots: %w", err)
 			}
 			if n := cmd.Int("last"); n > 0 {
-				snaps = lastPerSource(snaps, n)
+				snaps = lastPerSeries(snaps, n)
 			}
 
 			p := printer(cmd)
@@ -73,14 +73,20 @@ func snapshotsCommand() *cli.Command {
 	}
 }
 
-// lastPerSource keeps the newest n snapshots of every source name. snaps
-// arrive newest first and keep that order.
-func lastPerSource(snaps []*ark.Snapshot, n int) []*ark.Snapshot {
-	seen := make(map[string]int)
+// lastPerSeries keeps the newest n snapshots of every series: source type,
+// source name and host, the key the library's parent selection and forget
+// policy use. snaps arrive newest first and keep that order.
+func lastPerSeries(snaps []*ark.Snapshot, n int) []*ark.Snapshot {
+	type series struct {
+		typ        ark.SourceType
+		name, host string
+	}
+	seen := make(map[series]int)
 	kept := snaps[:0]
 	for _, s := range snaps {
-		if seen[s.SourceName] < n {
-			seen[s.SourceName]++
+		key := series{s.SourceType, s.SourceName, s.Host}
+		if seen[key] < n {
+			seen[key]++
 			kept = append(kept, s)
 		}
 	}

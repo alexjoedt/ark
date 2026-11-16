@@ -5,21 +5,23 @@ import (
 	"time"
 )
 
-// applyForgetPolicy applies policy once per source name and merges the
-// groups, so one busy source cannot push another's snapshots out of the
-// window. Snapshots are expected to be sorted newest first.
+// applyForgetPolicy applies policy once per series (source type, source name
+// and host) and merges the groups, so one busy series cannot push another's
+// snapshots out of the window. Snapshots are expected to be sorted newest
+// first.
 func applyForgetPolicy(snapshots []*Snapshot, policy ForgetPolicy) *ForgetResult {
 	result := &ForgetResult{}
-	groups := make(map[string][]*Snapshot)
-	var order []string
+	groups := make(map[seriesKey][]*Snapshot)
+	var order []seriesKey
 	for _, s := range snapshots {
-		if _, seen := groups[s.SourceName]; !seen {
-			order = append(order, s.SourceName)
+		key := s.series()
+		if _, seen := groups[key]; !seen {
+			order = append(order, key)
 		}
-		groups[s.SourceName] = append(groups[s.SourceName], s)
+		groups[key] = append(groups[key], s)
 	}
-	for _, name := range order {
-		g := applyForgetPolicyToGroup(groups[name], policy)
+	for _, key := range order {
+		g := applyForgetPolicyToGroup(groups[key], policy)
 		result.Keep = append(result.Keep, g.Keep...)
 		result.Remove = append(result.Remove, g.Remove...)
 	}
@@ -32,7 +34,7 @@ func sortNewestFirst(snaps []*Snapshot) {
 	sort.SliceStable(snaps, func(i, j int) bool { return snaps[i].CreatedAt.After(snaps[j].CreatedAt) })
 }
 
-// applyForgetPolicyToGroup selects keep and remove for one source name.
+// applyForgetPolicyToGroup selects keep and remove for one series.
 func applyForgetPolicyToGroup(snapshots []*Snapshot, policy ForgetPolicy) *ForgetResult {
 	result := &ForgetResult{}
 	if len(snapshots) == 0 {

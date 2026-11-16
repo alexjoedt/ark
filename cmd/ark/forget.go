@@ -21,8 +21,9 @@ func forgetCommand() *cli.Command {
    ark forget --keep-within 30d
 
    Removes snapshots. Either name ids, or give a policy that says what to keep;
-   the policy is applied per source name. A policy that keeps nothing is refused,
-   use --all to remove every matching snapshot on purpose. Chunks stay until prune.`,
+   the policy is applied per series (source type, source name and host). A policy that
+   keeps nothing is refused, use --all to remove every matching snapshot on purpose.
+   Chunks stay until prune.`,
 		Flags: []cli.Flag{
 			&cli.IntFlag{Name: "keep-last", Usage: "keep the `N` newest"},
 			&cli.IntFlag{Name: "keep-hourly", Usage: "keep the newest of `N` hours"},
