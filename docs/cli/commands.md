@@ -1,7 +1,7 @@
 # Commands
 
-Every command takes the [global flags](index.md#global-flags) and needs a repository and a
-password as described in [CLI](index.md). A snapshot `<id>` is the full id or a unique prefix of it.
+Every command takes the [global flags](index.md#global-flags). All but `ark profile` and
+`ark version` need a repository and a password as described in [CLI](index.md). A snapshot `<id>` is the full id or a unique prefix of it.
 `ark <command> --help` lists every flag.
 
 ```bash
@@ -101,12 +101,16 @@ ark backup ~ -e node_modules -e '*.tmp' -e /Library --exclude-file ~/.config/ark
 `ark backup` ends with a summary of what the snapshot holds and what the run added:
 
 ```
-  files      548 974
+  snapshot   4f9c2a1e
+  files      548 974  (530 112 unchanged, 3 skipped)
   size       9.2 GiB
   new        6.7 GiB, stored as 3.4 GiB
 ```
 
-- `files` counts regular files and every further name of a hardlinked file.
+- `snapshot` is the short id of the new snapshot.
+
+- `files` counts regular files and every further name of a hardlinked file. The note in parentheses
+  appears when files were taken unchanged from the parent snapshot or skipped.
 - `size` is the content of the backed-up tree: the bytes of every regular file, a file under several
   names counted once. Files taken unchanged from the parent snapshot count too.
 - `new` is the raw size of the distinct data chunks this run wrote to the repository. A chunk counts

@@ -45,7 +45,9 @@ Each key means what the flag of the same name means, see [CLI](index.md#global-f
 ## Rules
 
 - A flag given on the command line beats the profile, the profile beats the environment, the
-  environment beats the default.
+  environment beats the default. No password is the exception: `insecure-no-password` on any layer
+  together with a password source on any other exits 2, nothing is overridden, see
+  [Password](index.md#password).
 - The snapshot's source is the profile's name unless `backup.source` says otherwise; `ark forget -P`
   and `ark snapshots -P` select that source, forget also only this host's snapshots. A path on the
   command line other than `backup.path` needs `--source`, so it never lands under the profile's
@@ -57,8 +59,8 @@ Each key means what the flag of the same name means, see [CLI](index.md#global-f
   relative paths in `repo`, `password-file`, `backup.path` and `backup.exclude-file` are taken from
   the home directory and the profile's directory. A profile never holds a password: a `password:` key
   exits 2.
-- An unknown key or section, a bad name (`[a-z0-9][a-z0-9._-]*`) or a file writable by group or
-  others exits 2 naming the file and the key.
+- An unknown key or section, a bad name (`[a-z0-9][a-z0-9._-]*`), a file writable by group or
+  others or a file owned by someone other than you or root exits 2 naming the file and the problem.
 
 `ark profile list` prints name, repository and backup path of every profile in the profile
 directory; a file that does not load is listed with its error, and the command fails only when no

@@ -13,8 +13,9 @@ A release archive holds the same binary. `ark version` (or `ark --version`) prin
 
 ## Repository
 
-Every command needs a repository, from `--repo`, a profile's `repo` or `ARK_REPOSITORY`, in this
-order. There is no default path.
+Every command that opens a repository takes it from `--repo`, a profile's `repo` or
+`ARK_REPOSITORY`, in this order. There is no default path. `ark profile` and `ark version` need
+neither a repository nor a password.
 
 | Form | Backend |
 |---|---|
@@ -23,9 +24,12 @@ order. There is no default path.
 
 An SFTP repository takes its non-secret options as query parameters: `known_hosts=FILE` (default
 `~/.ssh/known_hosts`), `identity=FILE` and `insecure=1`, which skips the host key check. Secrets never
-go into the URI. ark authenticates with the keys of a running ssh-agent (`SSH_AUTH_SOCK`), then the
-`identity` file or the default keys in `~/.ssh` (`id_rsa`, `id_ecdsa`, `id_ed25519`), then the
-password in `ARK_SFTP_PASSWORD`. An encrypted key file is unlocked with `ARK_SFTP_KEY_PASSPHRASE`.
+go into the URI. A user, port or `identity` the URI leaves out comes from the host's stanza in
+`~/.ssh/config`, then `/etc/ssh/ssh_config` (`User`, `Port`, `IdentityFile`; a `HostName` there
+replaces the host), else the current user and port 22. ark authenticates with the keys of a running
+ssh-agent (`SSH_AUTH_SOCK`), then the identity file or, without one, the default keys in `~/.ssh`
+(`id_rsa`, `id_ecdsa`, `id_ed25519`), then the password in `ARK_SFTP_PASSWORD`. An encrypted key file
+is unlocked with `ARK_SFTP_KEY_PASSPHRASE`.
 
 ## Password
 
@@ -39,10 +43,10 @@ The password comes from the first source that is set, in this order:
 | a file or command named in the environment | `ARK_PASSWORD_FILE`, `ARK_PASSWORD_COMMAND` |
 | the environment | `ARK_PASSWORD` |
 | a prompt, only on a terminal | every command asks, `ark init` twice |
-| no password at all | `--insecure-no-password`, profile `insecure-no-password: true` or `ARK_INSECURE_NO_PASSWORD=1` |
 
-No password conflicts with any password source: giving both exits 2. So do a file and a command on
-the same layer. The command runs with `sh -c`, shares stdin and stderr, and a non-zero exit fails the
+A repository without a password is not a step in this order: `--insecure-no-password`, the profile's
+`insecure-no-password: true` or `ARK_INSECURE_NO_PASSWORD=1` conflicts with every password source in
+the table, on any layer, and giving both exits 2. So do a file and a command on the same layer. The command runs with `sh -c`, shares stdin and stderr, and a non-zero exit fails the
 command.
 
 There is no `--password` flag, it would show in the process list. `ark key passwd` changes the
@@ -102,7 +106,8 @@ terminal, long commands draw a live progress block; `--quiet` turns it off and p
 ```
 
 `ark verify`, `ark check` and `ark repair index` print their report object instead and still exit 5
-when it lists damage.
+when it lists damage. `ark profile list` prints its entries, a broken profile with its `error`, and
+exits 1 without an error object when no profile loads.
 
 Destructive commands (`forget`, `prune`, `docker restore`) ask for confirmation on a terminal.
 Without one, and always with `--json`, they exit 2 unless `--yes` is set.
