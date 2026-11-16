@@ -78,12 +78,12 @@ chmod 750 "$src/dir/sub"
 touch -d '2026-01-02 03:04:05.123456789' "$src/a.txt" "$src/dir/sub"
 
 "$ark" -r "$repo" init > /dev/null
-"$ark" -q -r "$repo" backup --name src --tag t "$src" > /dev/null
+"$ark" -q -r "$repo" backup --source src --tag t "$src" > /dev/null
 
 printf 'changed\n' >> "$src/dir/private"
 rm "$src/dir/sub/empty"
 printf 'new\n' > "$src/new.txt"
-"$ark" -q -r "$repo" backup --name src --tag t "$src" > /dev/null
+"$ark" -q -r "$repo" backup --source src --tag t "$src" > /dev/null
 
 start
 

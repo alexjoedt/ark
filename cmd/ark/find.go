@@ -23,7 +23,7 @@ func findCommand() *cli.Command {
    Patterns follow --exclude: without a "/" a base name anywhere, a leading "/" anchors
    at the snapshot root, a matched directory lists everything below it.`,
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "name", Aliases: []string{"N"}, Usage: "source `NAME` (path or volume)"},
+			&cli.StringFlag{Name: "source", Aliases: []string{"s"}, Usage: "source `NAME` (path or volume)"},
 			&cli.StringFlag{Name: "type", Usage: "source `TYPE`, file or docker-volume"},
 			&cli.StringSliceFlag{
 				Name:    "tag",
@@ -42,17 +42,17 @@ func findCommand() *cli.Command {
 			}
 
 			filter := ark.SnapshotFilter{
-				Name: cmd.String("name"),
-				Type: ark.SourceType(cmd.String("type")),
-				Tags: cmd.StringSlice("tag"),
-				Host: cmd.String("host"),
+				Source: cmd.String("source"),
+				Type:   ark.SourceType(cmd.String("type")),
+				Tags:   cmd.StringSlice("tag"),
+				Host:   cmd.String("host"),
 			}
-			if lp := profileFrom(ctx); lp != nil && !cmd.IsSet("name") {
+			if lp := profileFrom(ctx); lp != nil && !cmd.IsSet("source") {
 				pf, err := lp.Filter()
 				if err != nil {
 					return exitcode.Usagef("profile %s: %w", lp.Name, err)
 				}
-				filter.Name = pf.Name
+				filter.Source = pf.Source
 			}
 
 			repo, err := openRepo(ctx, cmd)

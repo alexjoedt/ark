@@ -19,7 +19,7 @@
 //	  exclude-cloud-files: true      # leave out files that exist only in the cloud
 //	  host: laptop                   # host recorded in the snapshot
 //	  comment: nightly
-//	  name: documents                # snapshot name, default: the profile's name
+//	  source: documents              # source name, default: the profile's name
 //	  run-before: mount /mnt/docs    # hooks, each run through sh -c
 //	  run-after: echo stored
 //	  run-after-fail: 'echo "backup failed: $ARK_ERROR"'
@@ -73,7 +73,7 @@ var (
 // Profile is one stored backup configuration.
 type Profile struct {
 	// Name is the profile's name, set by [Load] from the file's base name. It
-	// defaults the snapshot name and the name filter of forget.
+	// defaults the source name and the source filter of forget.
 	Name string `yaml:"-"`
 
 	Repo               string        `yaml:"repo"                 ark:"location"`
@@ -96,8 +96,8 @@ type Backup struct {
 	ExcludeCloudFiles bool     `yaml:"exclude-cloud-files"`
 	Host              string   `yaml:"host"`
 	Comment           string   `yaml:"comment"`
-	// Name is the snapshot's source name; empty means the profile's name.
-	Name string `yaml:"name"`
+	// Source is the snapshot's source name; empty means the profile's name.
+	Source string `yaml:"source"`
 
 	Hooks `yaml:",inline"`
 }

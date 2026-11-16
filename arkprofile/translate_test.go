@@ -108,7 +108,7 @@ func TestSourceNames(t *testing.T) {
 		want string
 	}{
 		{"profile name", arkprofile.Profile{Name: "docs", Backup: arkprofile.Backup{Path: dir}}, "docs"},
-		{"backup.name wins", arkprofile.Profile{Name: "docs", Backup: arkprofile.Backup{Path: dir, Name: "d"}}, "d"},
+		{"backup.source wins", arkprofile.Profile{Name: "docs", Backup: arkprofile.Backup{Path: dir, Source: "d"}}, "d"},
 		{"no name keeps the path", arkprofile.Profile{Backup: arkprofile.Backup{Path: dir}}, dir},
 	}
 	for _, tt := range tests {
@@ -124,8 +124,8 @@ func TestSourceNames(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if f.Name != tt.want {
-				t.Errorf("filter name = %q, want %q", f.Name, tt.want)
+			if f.Source != tt.want {
+				t.Errorf("filter source = %q, want %q", f.Source, tt.want)
 			}
 		})
 	}

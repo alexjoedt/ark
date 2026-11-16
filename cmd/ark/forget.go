@@ -16,7 +16,7 @@ func forgetCommand() *cli.Command {
 		Usage:     "remove snapshots by id or policy",
 		ArgsUsage: "[<id>...]",
 		UsageText: `ark forget [options] [<id>...]
-   ark forget --keep-last N [--name NAME] [--prune]
+   ark forget --keep-last N [--source NAME] [--prune]
    ark forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6
    ark forget --keep-within 30d
 
@@ -33,7 +33,7 @@ func forgetCommand() *cli.Command {
 			&cli.IntFlag{Name: "keep-yearly", Usage: "keep the newest of `N` years"},
 			&cli.StringFlag{Name: "keep-within", Usage: "keep everything younger than `DURATION`, e.g. 72h, 30d"},
 			&cli.BoolFlag{Name: "all", Usage: "remove every snapshot matching the filter"},
-			&cli.StringFlag{Name: "name", Aliases: []string{"N"}, Usage: "filter by source `NAME`"},
+			&cli.StringFlag{Name: "source", Aliases: []string{"s"}, Usage: "filter by source `NAME`"},
 			&cli.StringFlag{Name: "type", Usage: "filter by source `TYPE`, file or docker-volume"},
 			&cli.StringSliceFlag{Name: "tag", Aliases: []string{"t"}, Usage: "filter by `TAG`, repeatable"},
 			&cli.StringFlag{Name: "host", Usage: "filter by host `NAME`"},
@@ -55,11 +55,11 @@ func forgetCommand() *cli.Command {
 				return err
 			}
 			filter := ark.SnapshotFilter{
-				IDs:  ids,
-				Name: cmd.String("name"),
-				Type: ark.SourceType(cmd.String("type")),
-				Tags: cmd.StringSlice("tag"),
-				Host: cmd.String("host"),
+				IDs:    ids,
+				Source: cmd.String("source"),
+				Type:   ark.SourceType(cmd.String("type")),
+				Tags:   cmd.StringSlice("tag"),
+				Host:   cmd.String("host"),
 			}
 			prune := cmd.Bool("prune")
 			if scope != nil {
@@ -67,8 +67,8 @@ func forgetCommand() *cli.Command {
 				if err != nil {
 					return exitcode.Usagef("profile %s: %w", scope.Name, err)
 				}
-				if !cmd.IsSet("name") {
-					filter.Name = pf.Name
+				if !cmd.IsSet("source") {
+					filter.Source = pf.Source
 				}
 				if !cmd.IsSet("host") {
 					filter.Host = pf.Host

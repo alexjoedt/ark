@@ -179,7 +179,7 @@ func TestMount(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(src, "dir", "file.txt"), mtime, mtime); err != nil {
 		t.Fatal(err)
 	}
-	code, stdout := runCapture(t, "--json", "backup", "--name", "app/data", "--host", "h1", "-t", ".t", src)
+	code, stdout := runCapture(t, "--json", "backup", "--source", "app/data", "--host", "h1", "-t", ".t", src)
 	var snap struct {
 		ID        string    `json:"id"`
 		CreatedAt time.Time `json:"created_at"`
@@ -243,7 +243,7 @@ func TestMountBusyKeepsServing(t *testing.T) {
 	mountable(t)
 	repo := initRepo(t)
 	t.Setenv("ARK_REPOSITORY", repo)
-	if code, _ := runCapture(t, "backup", "--name", "n", t.TempDir()); code != 0 {
+	if code, _ := runCapture(t, "backup", "--source", "n", t.TempDir()); code != 0 {
 		t.Fatalf("backup exit %d", code)
 	}
 	mnt := t.TempDir()
@@ -285,7 +285,7 @@ func TestMountBusySecondInterruptQuits(t *testing.T) {
 	mountable(t)
 	repo := initRepo(t)
 	t.Setenv("ARK_REPOSITORY", repo)
-	if code, _ := runCapture(t, "backup", "--name", "n", t.TempDir()); code != 0 {
+	if code, _ := runCapture(t, "backup", "--source", "n", t.TempDir()); code != 0 {
 		t.Fatalf("backup exit %d", code)
 	}
 	mnt := t.TempDir()

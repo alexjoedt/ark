@@ -27,7 +27,7 @@ backup:
   exclude-cloud-files: true
   host: laptop
   comment: nightly
-  name: documents
+  source: documents
   run-before: mount /mnt/docs
   run-finally: umount /mnt/docs
 forget:
@@ -56,7 +56,7 @@ func TestDecodeFillsEveryField(t *testing.T) {
 			ExcludeCloudFiles: true,
 			Host:              "laptop",
 			Comment:           "nightly",
-			Name:              "documents",
+			Source:            "documents",
 			Hooks:             arkprofile.Hooks{RunBefore: "mount /mnt/docs", RunFinally: "umount /mnt/docs"},
 		},
 		Forget: arkprofile.Forget{
@@ -140,6 +140,7 @@ func TestDecodeRejects(t *testing.T) {
 		{"unknown key in a section", "backup:\n  path: /p\n  pahts: [/q]\n", "line 3: backup.pahts: unknown field"},
 		{"unknown section", "prune:\n  keep-last: 1\n", "line 1: prune: unknown field"},
 		{"name is not a key", "name: docs\n", "line 1: name: unknown field"},
+		{"backup.name is not a key", "backup:\n  name: docs\n", "line 2: backup.name: unknown field"},
 		{"duplicate key", "repo: /a\nrepo: /b\n", "line 2: repo: already defined at line 1"},
 		{
 			"duplicate key in a section",

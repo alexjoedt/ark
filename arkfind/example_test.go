@@ -51,7 +51,7 @@ func ExampleFind() {
 		panic(err)
 	}
 
-	err = arkfind.Find(ctx, repo, ark.SnapshotFilter{Name: "notes"}, []string{"*.txt"}, func(m arkfind.Match) error {
+	err = arkfind.Find(ctx, repo, ark.SnapshotFilter{Source: "notes"}, []string{"*.txt"}, func(m arkfind.Match) error {
 		fmt.Printf("%s %s %d bytes\n", m.Snapshot.Tags[0], m.File.Path, m.File.Size)
 		return nil
 	})

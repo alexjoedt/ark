@@ -73,8 +73,8 @@ type SnapshotFilter struct {
 	// full ids before matching, so Match itself compares them verbatim.
 	IDs []string
 
-	// Name filters by source name (volume name, path, etc.); empty = all.
-	Name string
+	// Source filters by source name (volume name, path, etc.); empty = all.
+	Source string
 
 	// Type filters by source type, e.g. SourceTypeFile; empty = all.
 	Type SourceType

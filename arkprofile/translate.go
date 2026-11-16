@@ -12,12 +12,12 @@ import (
 	"github.com/alexjoedt/ark/arkuri"
 )
 
-// snapshotName is the source name of the profile's snapshots: backup.name,
+// sourceName is the source name of the profile's snapshots: backup.source,
 // else the profile's name, else the absolute backup.path as arkfs names it.
-func (p *Profile) snapshotName() string {
+func (p *Profile) sourceName() string {
 	switch {
-	case p.Backup.Name != "":
-		return p.Backup.Name
+	case p.Backup.Source != "":
+		return p.Backup.Source
 	case p.Name != "", p.Backup.Path == "":
 		return p.Name
 	}
@@ -39,14 +39,14 @@ func (p *Profile) host() string {
 }
 
 // Source returns the arkfs source of backup.path with the profile's excludes,
-// exclude files and cloud-file option, named backup.name, else the profile's
+// exclude files and cloud-file option, named backup.source, else the profile's
 // name, else the absolute backup.path.
 func (p *Profile) Source() (ark.Source, error) {
 	b := p.Backup
 	if b.Path == "" {
 		return nil, invalidf("backup.path is empty")
 	}
-	opts := []arkfs.SourceOption{arkfs.WithName(p.snapshotName())}
+	opts := []arkfs.SourceOption{arkfs.WithName(p.sourceName())}
 	if len(b.Excludes) > 0 {
 		opts = append(opts, arkfs.WithExclude(b.Excludes...))
 	}
@@ -106,11 +106,11 @@ func (p *Profile) ForgetPolicy() (ark.ForgetPolicy, error) {
 // and other machines alone. It fails on a profile without a name and without
 // backup.path, which names no snapshots, rather than select every one.
 func (p *Profile) Filter() (ark.SnapshotFilter, error) {
-	name := p.snapshotName()
-	if name == "" {
-		return ark.SnapshotFilter{}, invalidf("no snapshot name: set the profile's name, backup.name or backup.path")
+	source := p.sourceName()
+	if source == "" {
+		return ark.SnapshotFilter{}, invalidf("no source name: set the profile's name, backup.source or backup.path")
 	}
-	return ark.SnapshotFilter{Name: name, Host: p.host()}, nil
+	return ark.SnapshotFilter{Source: source, Host: p.host()}, nil
 }
 
 // Open opens the repository at repo through [arkuri.Open] with pw, applying

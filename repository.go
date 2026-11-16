@@ -714,7 +714,7 @@ func (f SnapshotFilter) Match(s *Snapshot) bool {
 	if len(f.IDs) > 0 && !slices.Contains(f.IDs, s.ID) {
 		return false
 	}
-	if f.Name != "" && s.SourceName != f.Name {
+	if f.Source != "" && s.SourceName != f.Source {
 		return false
 	}
 	if f.Type != "" && s.SourceType != f.Type {

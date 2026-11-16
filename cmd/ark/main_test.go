@@ -107,6 +107,10 @@ func TestRunExitCodes(t *testing.T) {
 		{"unknown flag", []string{"--bogus", "snapshots"}, 2, "usage", nil},
 		{"serve is gone", []string{"serve"}, 2, "usage", nil},
 		{"unknown subcommand flag", []string{"-r", repo, "snapshots", "--bogus"}, 2, "usage", nil},
+		{"backup --name is gone", []string{"-r", repo, "backup", "--name", "x", "."}, 2, "usage", nil},
+		{"snapshots --name is gone", []string{"-r", repo, "snapshots", "--name", "x"}, 2, "usage", nil},
+		{"find -N is gone", []string{"-r", repo, "find", "-N", "x", "*"}, 2, "usage", nil},
+		{"forget -N is gone", []string{"-r", repo, "forget", "-N", "x", "--all"}, 2, "usage", nil},
 		{"verbose and quiet", []string{"-v", "-q", "-r", repo, "snapshots"}, 2, "usage", nil},
 		{"missing argument", []string{"-r", repo, "inspect"}, 2, "usage", nil},
 		{"init twice", []string{"-r", repo, "init"}, 1, "error", nil},
@@ -271,7 +275,7 @@ func TestBackupDirectory(t *testing.T) {
 		t.Fatalf("got %+v", first)
 	}
 
-	// the parent is resolved by source type, name and host, --name changes that name
+	// the parent is resolved by source type, name and host, --source changes it
 	second := backup("--host", "web1", src)
 	if second.ParentID != first.ID {
 		t.Fatalf("parent %q, want %q", second.ParentID, first.ID)
@@ -279,7 +283,7 @@ func TestBackupDirectory(t *testing.T) {
 	if web2 := backup("--host", "web2", src); web2.ParentID != "" {
 		t.Fatalf("host web2 took parent %q from web1", web2.ParentID)
 	}
-	named := backup("--name", "app", src)
+	named := backup("--source", "app", src)
 	if named.SourceName != "app" || named.ParentID != "" {
 		t.Fatalf("got %+v", named)
 	}
@@ -507,7 +511,7 @@ func TestSnapshotsLastAndLsPrefix(t *testing.T) {
 	// two sources, three snapshots of the first, and the first once more from
 	// another host: three series
 	for _, args := range [][]string{{"one"}, {"one"}, {"one"}, {"two"}, {"one", "--host", "elsewhere"}} {
-		args = append([]string{"-r", repo, "backup", "-t", "n", "--name"}, append(args, src)...)
+		args = append([]string{"-r", repo, "backup", "-t", "n", "--source"}, append(args, src)...)
 		if code, out := runCapture(t, args...); code != 0 {
 			t.Fatalf("backup exit %d: %s", code, out)
 		}
@@ -528,7 +532,7 @@ func TestSnapshotsLastAndLsPrefix(t *testing.T) {
 	if counts["one"] != 3 || counts["two"] != 1 || len(list) != 4 {
 		t.Fatalf("got %v, want two of one, one of two and one of the other host", counts)
 	}
-	code, out = runCapture(t, "--json", "-r", repo, "snapshots", "-N", "two", "-t", "n", "-t", "missing")
+	code, out = runCapture(t, "--json", "-r", repo, "snapshots", "-s", "two", "-t", "n", "-t", "missing")
 	if code != 0 || strings.TrimSpace(out) != "[]" {
 		t.Fatalf("tag filter: exit %d, %q", code, out)
 	}
@@ -595,7 +599,7 @@ func TestForgetAndPrune(t *testing.T) {
 	}
 	var ids []string
 	for _, name := range []string{"one", "one", "one", "two"} {
-		code, out := runCapture(t, "--json", "-r", repo, "backup", "--name", name, src)
+		code, out := runCapture(t, "--json", "-r", repo, "backup", "--source", name, src)
 		if code != 0 {
 			t.Fatalf("backup exit %d: %s", code, out)
 		}
@@ -646,7 +650,7 @@ func TestForgetAndPrune(t *testing.T) {
 	if r := forget(0, "--keep-within", "30d", "--dry-run"); len(r.Remove) != 0 {
 		t.Fatalf("keep-within removed %d", len(r.Remove))
 	}
-	if r := forget(0, "--all", "-N", "two", "--yes"); len(r.Remove) != 1 || r.Remove[0].ID != ids[3] {
+	if r := forget(0, "--all", "-s", "two", "--yes"); len(r.Remove) != 1 || r.Remove[0].ID != ids[3] {
 		t.Fatalf("got %+v", r)
 	}
 	if r := forget(0, "--keep-last", "1", "--yes"); len(r.Remove) != 2 {
@@ -942,8 +946,8 @@ func TestRemovedFlagsAndCommands(t *testing.T) {
 		args        []string
 		replacement string
 	}{
-		{[]string{"snapshots", "--volume", "x"}, "--name"},
-		{[]string{"forget", "--volume", "x"}, "--name"},
+		{[]string{"snapshots", "--volume", "x"}, "--source"},
+		{[]string{"forget", "--volume", "x"}, "--source"},
 		{[]string{"forget", "--until", "1d"}, "--keep-within"},
 		{[]string{"forget", "--force"}, "--yes"},
 		{[]string{"prune", "--force"}, "--yes"},

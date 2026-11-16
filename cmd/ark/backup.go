@@ -33,7 +33,7 @@ func backupCommand() *cli.Command {
 			&cli.StringFlag{Name: "comment", Aliases: []string{"c"}, Usage: "free `TEXT` stored with the snapshot"},
 			&cli.StringFlag{Name: "host", Usage: "host `NAME` stored with the snapshot", Value: hostname},
 			&cli.StringFlag{Name: "parent", Usage: "explicit parent snapshot `ID`"},
-			&cli.StringFlag{Name: "name", Usage: "source `NAME` override (default: absolute path)"},
+			&cli.StringFlag{Name: "source", Aliases: []string{"s"}, Usage: "source `NAME` (default: absolute path)"},
 			&listFlag{
 				Name:    "exclude",
 				Aliases: []string{"e"},
@@ -114,7 +114,7 @@ func backupProfile(cmd *cli.Command, lp *loadedProfile) arkprofile.Profile {
 	for _, f := range []struct {
 		name string
 		dst  *string
-	}{{"comment", &b.Comment}, {"host", &b.Host}, {"name", &b.Name}} {
+	}{{"comment", &b.Comment}, {"host", &b.Host}, {"source", &b.Source}} {
 		if cmd.IsSet(f.name) {
 			*f.dst = cmd.String(f.name)
 		}
@@ -135,11 +135,11 @@ func backupProfile(cmd *cli.Command, lp *loadedProfile) arkprofile.Profile {
 }
 
 // checkOtherPath refuses a path on the command line that is not the profile's
-// backup.path unless --name names its snapshots: filed under the profile's
+// backup.path unless --source names its snapshots: filed under the profile's
 // name, it would become the parent of the profile's next backup and fall
 // under the profile's forget policy.
 func checkOtherPath(cmd *cli.Command, lp *loadedProfile) error {
-	if lp == nil || cmd.NArg() != 1 || cmd.String("name") != "" {
+	if lp == nil || cmd.NArg() != 1 || cmd.String("source") != "" {
 		return nil
 	}
 	arg, err := filepath.Abs(cmd.Args().First())
@@ -155,7 +155,8 @@ func checkOtherPath(cmd *cli.Command, lp *loadedProfile) error {
 			return nil
 		}
 	}
-	return exitcode.Usagef("backup %s: not the backup.path of profile %s, give --name for its snapshots", arg, lp.Name)
+	return exitcode.Usagef(
+		"backup %s: not the backup.path of profile %s, give --source for its snapshots", arg, lp.Name)
 }
 
 // listFlag is a repeatable string flag whose values are never split on

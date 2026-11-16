@@ -307,7 +307,7 @@ forget:
 ```
 
 ```bash
-ark backup -P docs              # snapshot named docs, the profile's tags and excludes
+ark backup -P docs              # source docs, the profile's tags and excludes
 ark forget -P docs --yes        # the policy on the docs snapshots of this host, then prune
 ark snapshots -P docs           # only the docs snapshots
 ark backup -P docs -t manual    # a flag beats the profile, a list flag replaces its list
@@ -317,10 +317,11 @@ ark profile show docs           # each effective value and its source: cli, prof
 
 - A flag given on the command line beats the profile, the profile beats the environment, the
   environment beats the default.
-- The snapshot is named after the profile unless `backup.name` says otherwise; `ark forget -P` and
-  `ark snapshots -P` select that name, forget also only this host's snapshots. A path on the command
-  line other than `backup.path` needs `--name`, so it never lands under the profile's name. Snapshot
-  ids given to `ark forget -P` are removed as named, without the profile's policy or name filter.
+- The snapshot's source is the profile's name unless `backup.source` says otherwise; `ark forget -P`
+  and `ark snapshots -P` select that source, forget also only this host's snapshots. A path on the
+  command line other than `backup.path` needs `--source`, so it never lands under the profile's
+  source. Snapshot ids given to `ark forget -P` are removed as named, without the profile's policy or
+  source filter.
 - The hooks of `forget` do not run on `--dry-run`.
 - `$VAR` and `${VAR}` expand in every value but the hooks; an unset variable exits 2. `~` and relative
   paths in `repo`, `password-file`, `backup.path` and `backup.exclude-file` are taken from the home
