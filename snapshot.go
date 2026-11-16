@@ -88,7 +88,10 @@ type SnapshotFilter struct {
 	// Before includes only snapshots created before this time (exclusive).
 	Before time.Time
 
-	// After includes only snapshots created after this time (inclusive).
+	// After includes only snapshots created at or after this time
+	// (inclusive). Until the fix that matched this documentation it was
+	// exclusive: a caller that polls with the last seen CreatedAt as a cursor
+	// gets that snapshot again and skips it by ID.
 	After time.Time
 }
 
