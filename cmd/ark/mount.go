@@ -23,6 +23,7 @@ import (
 	"time"
 
 	ark "github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/arkdocker"
 	"github.com/alexjoedt/ark/arkuri"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
 	"github.com/alexjoedt/ark/cmd/ark/internal/out"
@@ -43,9 +44,13 @@ func mountCommand() *cli.Command {
 		UsageText: `ark mount [options] <dir>
 
    Mounts the repository's snapshots read-only at dir until Ctrl-C:
-   ids/<id>/, names/<name>/<time>/ with a latest link, tags/<tag>/<time>/ and
-   hosts/<host>/<time>/. The snapshot list is the one at mount start. The mount
-   holds a shared lock, so prune waits until it is unmounted.`,
+   ids/<id>/, tags/<tag>/<time>/ and sources/<type>/<host>/<source>/<time>/
+   with a latest link to the newest snapshot of that source. Types are files,
+   docker-volumes and streams; an empty host is _. A source path such as
+   /home/alex nests as home/alex/, so /home and /home/alex share home/, and a
+   name that clashes with a time or latest gets a -1 suffix. The snapshot list
+   is the one at mount start. The mount holds a shared lock, so prune waits
+   until it is unmounted.`,
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 1 {
 				return exitcode.Usagef("usage: ark mount [options] <dir>")
@@ -205,7 +210,7 @@ func (d *vdir) touch(t time.Time) {
 	}
 }
 
-// buildLayout lays out snaps as ids/, names/, tags/ and hosts/.
+// buildLayout lays out snaps as ids/, tags/ and sources/.
 func buildLayout(snaps []*ark.Snapshot) *vdir {
 	root := newVdir()
 	ids := root.dir("ids")
@@ -223,34 +228,110 @@ func buildLayout(snaps []*ark.Snapshot) *vdir {
 		root.touch(s.CreatedAt)
 	}
 
-	groups := map[string]map[string][]*ark.Snapshot{"names": {}, "tags": {}, "hosts": {}}
+	top := root.dir("tags")
+	byTag := map[string][]*ark.Snapshot{}
 	for _, s := range snaps {
-		add := func(kind, key string) {
-			groups[kind][key] = append(groups[kind][key], s)
-		}
-		add("names", s.SourceName)
-		add("hosts", s.Host)
 		for _, t := range slices.Compact(slices.Sorted(slices.Values(s.Tags))) {
-			add("tags", t)
+			byTag[t] = append(byTag[t], s)
 		}
 	}
-	for kind, byKey := range groups {
-		top := root.dir(kind)
-		for key, name := range dirNames(slices.Sorted(maps.Keys(byKey))) {
-			d := top.dir(name)
-			newest := ""
-			for _, s := range sortByTime(byKey[key]) {
-				newest = timeName(d, s.CreatedAt)
-				d.snaps[newest] = s.ID
-				d.touch(s.CreatedAt)
-				top.touch(s.CreatedAt)
-			}
-			if kind == "names" {
-				d.links["latest"] = newest
-			}
+	for tag, name := range dirNames(slices.Sorted(maps.Keys(byTag)), escapeName, nil) {
+		d := top.dir(name)
+		for _, s := range sortByTime(byTag[tag]) {
+			d.snaps[timeName(d, s.CreatedAt)] = s.ID
+			d.touch(s.CreatedAt)
+			top.touch(s.CreatedAt)
 		}
 	}
+
+	type key struct {
+		typ        ark.SourceType
+		name, host string
+	}
+	bySeries := map[key][]*ark.Snapshot{}
+	for _, s := range snaps {
+		k := key{s.SourceType, s.SourceName, s.Host}
+		bySeries[k] = append(bySeries[k], s)
+	}
+	var list []series
+	for k, ss := range bySeries {
+		list = append(list, series{path: append([]string{string(k.typ), k.host}, sourcePath(k.name)...), snaps: ss})
+	}
+	sources := root.dir("sources")
+	addSeries(sources, list, 0)
 	return root
+}
+
+// series is the snapshots of one source type, host and source name, with
+// the directory path below sources/ left to lay out.
+type series struct {
+	path  []string
+	snaps []*ark.Snapshot
+}
+
+// addSeries lays out list in d. The series whose path ends here get their
+// time dirs and latest in d; the others go one level down, in a directory
+// named after their next path element. depth 0 is the source type.
+func addSeries(d *vdir, list []series, depth int) {
+	sub := map[string][]series{}
+	for _, s := range list {
+		if len(s.path) > 0 {
+			sub[s.path[0]] = append(sub[s.path[0]], series{s.path[1:], s.snaps})
+			continue
+		}
+		for _, snap := range sortByTime(s.snaps) {
+			name := timeName(d, snap.CreatedAt)
+			d.snaps[name] = snap.ID
+			d.links["latest"] = name
+			d.touch(snap.CreatedAt)
+		}
+	}
+	taken := map[string]bool{}
+	for name := range d.snaps {
+		taken[name] = true
+	}
+	for name := range d.links {
+		taken[name] = true
+	}
+	escape := pathDir
+	if depth == 0 {
+		escape = typeDir
+	}
+	for k, name := range dirNames(slices.Sorted(maps.Keys(sub)), escape, taken) {
+		c := d.dir(name)
+		addSeries(c, sub[k], depth+1)
+		d.touch(c.time)
+	}
+}
+
+// pathDir is the directory name of a host or a source path element.
+func pathDir(s string) string {
+	return escapeName(strings.TrimPrefix(s, "/"))
+}
+
+// typeDir is the directory name of a source type.
+func typeDir(t string) string {
+	switch ark.SourceType(t) {
+	case ark.SourceTypeFile:
+		return "files"
+	case ark.SourceTypeStream:
+		return "streams"
+	case arkdocker.SourceTypeDockerVolume:
+		return "docker-volumes"
+	}
+	return escapeName(t)
+}
+
+// sourcePath splits a source name into its directory path: /home/alex is
+// home/alex. A leading "/" stays on the first element, so /home and home
+// stay apart.
+func sourcePath(name string) []string {
+	if rest, ok := strings.CutPrefix(name, "/"); ok {
+		p := strings.Split(rest, "/")
+		p[0] = "/" + p[0]
+		return p
+	}
+	return strings.Split(name, "/")
 }
 
 func sortByTime(list []*ark.Snapshot) []*ark.Snapshot {
@@ -283,15 +364,17 @@ func escapeName(s string) string {
 	return s
 }
 
-// dirNames maps each of the sorted keys to its directory name. A key that
-// needs no escaping keeps itself; an escaped key that collides with a taken
-// name gets a -1, -2 suffix, in key order, so distinct keys never share a
-// directory.
-func dirNames(keys []string) map[string]string {
+// dirNames maps each of the sorted keys to its directory name, avoiding the
+// names already taken. A key that escape leaves as it is keeps itself; any
+// other key, or one whose name is taken, gets its escaped name with a -1, -2
+// suffix as needed, in key order, so distinct keys never share a directory.
+func dirNames(keys []string, escape func(string) string, taken map[string]bool) map[string]string {
 	names := make(map[string]string, len(keys))
-	taken := map[string]bool{}
+	if taken == nil {
+		taken = map[string]bool{}
+	}
 	for _, k := range keys {
-		if escapeName(k) == k {
+		if escape(k) == k && !taken[k] {
 			names[k], taken[k] = k, true
 		}
 	}
@@ -299,7 +382,7 @@ func dirNames(keys []string) map[string]string {
 		if _, ok := names[k]; ok {
 			continue
 		}
-		base := escapeName(k)
+		base := escape(k)
 		name := base
 		for i := 1; taken[name]; i++ {
 			name = base + "-" + strconv.Itoa(i)

@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Mounts a local repository with two snapshots and checks the mount against
 # ark restore: every snapshot's tree, mode, size and mtime, a read of a large
-# file at a random offset, the names/, tags/ and hosts/ layout with latest,
+# file at a random offset, the sources/ and tags/ layout with latest,
 # that SIGINT unmounts and leaves no lock behind, and that a second SIGINT
 # quits a busy mount. Linux only; needs go, fuse3 (fusermount3) and
 # /dev/fuse. Run from anywhere.
@@ -78,12 +78,12 @@ chmod 750 "$src/dir/sub"
 touch -d '2026-01-02 03:04:05.123456789' "$src/a.txt" "$src/dir/sub"
 
 "$ark" -r "$repo" init > /dev/null
-"$ark" -q -r "$repo" backup --source src --tag t "$src" > /dev/null
+"$ark" -q -r "$repo" backup --source /data/src --host h --tag t "$src" > /dev/null
 
 printf 'changed\n' >> "$src/dir/private"
 rm "$src/dir/sub/empty"
 printf 'new\n' > "$src/new.txt"
-"$ark" -q -r "$repo" backup --source src --tag t "$src" > /dev/null
+"$ark" -q -r "$repo" backup --source /data/src --host h --tag t "$src" > /dev/null
 
 start
 
@@ -133,13 +133,13 @@ done
 # The second snapshot is the only one with new.txt.
 before=$fail
 count() { ls -A "$1" 2>/dev/null | wc -l; }
-[ "$(count "$mnt/names/src")" = 3 ] || bad "names/src lists $(count "$mnt/names/src") entries, want 2 times and latest"
-[ -L "$mnt/names/src/latest" ] && [ -f "$mnt/names/src/latest/new.txt" ] ||
-	bad "names/src/latest is not a link to the newer snapshot"
+series="$mnt/sources/files/h/data/src"
+[ "$(count "$series")" = 3 ] || bad "sources/files/h/data/src lists $(count "$series") entries, want 2 times and latest"
+[ -L "$series/latest" ] && [ -f "$series/latest/new.txt" ] ||
+	bad "sources/files/h/data/src/latest is not a link to the newer snapshot"
+[ "$(ls -A "$mnt" | tr '\n' ' ')" = "ids sources tags " ] || bad "mount root lists $(ls -A "$mnt"), want ids sources tags"
 [ "$(count "$mnt/tags/t")" = 2 ] || bad "tags/t lists $(count "$mnt/tags/t") snapshots, want 2"
-[ "$(count "$mnt/hosts")" = 1 ] && [ "$(count "$mnt/hosts/"*)" = 2 ] ||
-	bad "hosts/ does not list one host with 2 snapshots"
-if [ "$fail" = "$before" ]; then echo "ok: names, tags, hosts and latest"; fi
+if [ "$fail" = "$before" ]; then echo "ok: sources, tags and latest"; fi
 
 # A background job of a non-interactive shell starts with SIGINT ignored; the
 # signal.NotifyContext in main re-enables it.
@@ -154,7 +154,7 @@ if [ "$fail" = "$before" ]; then echo "ok: SIGINT unmounts and leaves no lock"; 
 # A busy mount keeps serving after SIGINT; a second SIGINT quits anyway.
 before=$fail
 start
-exec 3< "$mnt/names/src/latest/a.txt"
+exec 3< "$series/latest/a.txt"
 kill -INT "$pid"
 sleep 1
 kill -0 "$pid" 2>/dev/null || bad "busy mount exited after the first SIGINT"

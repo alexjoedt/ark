@@ -368,8 +368,9 @@ ark mount /mnt/ark                # in another shell:
 ls /mnt/ark/ids/                  # one directory per snapshot
 ```
 
-- `ids/<id>/`, `names/<name>/<time>/`, `tags/<tag>/<time>/` and `hosts/<host>/<time>/`, plus a
-  `latest` link per name. The snapshot list is the one at mount start; remount to see newer ones.
+- `ids/<id>/`, `tags/<tag>/<time>/` and `sources/<type>/<host>/<source>/<time>/` with a `latest`
+  link per source, for example `sources/files/myhost/home/alex/latest`. The snapshot list is the one
+  at mount start; remount to see newer ones.
 - The mount holds a shared lock for as long as it runs, so `ark prune` and `ark forget --prune`
   cannot take their exclusive lock and exit 3 (after `--lock-wait`, if set) until it is unmounted.
 - Ctrl-C unmounts. While a process still uses the mount it keeps serving and retries every second;
