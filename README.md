@@ -254,16 +254,18 @@ Docker volumes live under `ark docker`. The daemon comes from `--docker-host` or
 
 ```bash
 ark docker volumes
-ark docker backup postgres_data --comment "before upgrade"  # --host NAME overrides the hostname
+ark docker backup postgres_data --comment "before upgrade"  # --host NAME overrides the host
 ark snapshots --type docker-volume    # only volume snapshots, file backups have type file
 ark docker restore <id>                # into the volume it came from
 ark docker restore <id> postgres_copy  # or into another one, created if missing
 ```
 
 A volume is one series per host: the parent of a backup, `ark forget` and the LAST SNAPSHOT of
-`ark docker volumes` only see the snapshots of the same `--host`. Volume snapshots written before the
-host was recorded have none, so the first backup after the update has no parent and reads the volume
-once.
+`ark docker volumes` only see the snapshots of the same host. The host is this machine's hostname for
+a local daemon and the daemon's own name for a remote `--docker-host` (`tcp://`, `ssh://`), unless
+`--host` sets it. Volume snapshots written before the host was recorded have none: `ark docker
+volumes` shows them until the host has its own, and the first backup after the update has no parent
+and reads the volume once, unless `--parent <id>` names the last of them.
 
 `ark restore` refuses Docker volume snapshots. Use `ark docker restore`, or unpack one into a
 directory with `ark export <id> | tar x`.

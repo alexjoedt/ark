@@ -55,6 +55,16 @@ func (c *Client) ServerVersion(ctx context.Context) (string, error) {
 	return info.Info.ServerVersion, nil
 }
 
+// DaemonName returns the name the Docker daemon reports for itself, the
+// hostname of the machine it runs on.
+func (c *Client) DaemonName(ctx context.Context) (string, error) {
+	info, err := c.cli.Info(ctx, dockerclient.InfoOptions{})
+	if err != nil {
+		return "", fmt.Errorf("arkdocker: failed to query docker info: %w", err)
+	}
+	return info.Info.Name, nil
+}
+
 // Close closes the Docker client connection.
 func (c *Client) Close() error {
 	if c.cli != nil {

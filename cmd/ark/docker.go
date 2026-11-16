@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	ark "github.com/alexjoedt/ark"
@@ -78,15 +79,19 @@ func dockerVolumesCommand() *cli.Command {
 			defer repo.Close()
 			defer e.Close()
 
+			host, err := dockerSeriesHost(ctx, cmd, e)
+			if err != nil {
+				return fmt.Errorf("docker volumes: %w", err)
+			}
 			vols, err := e.ListVolumes(ctx)
 			if err != nil {
 				return fmt.Errorf("docker volumes: %w", err)
 			}
-			snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{})
+			snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{Type: arkdocker.SourceTypeDockerVolume})
 			if err != nil {
 				return fmt.Errorf("docker volumes: %w", err)
 			}
-			last := lastVolumeSnapshots(snaps, cmd.String("host"))
+			last := lastVolumeSnapshots(snaps, host)
 
 			p := printer(cmd)
 			if p.Mode().JSON {
@@ -114,24 +119,68 @@ func dockerVolumesCommand() *cli.Command {
 	}
 }
 
-// hostFlag is --host of the docker commands: the machine's hostname unless
-// told otherwise, as for ark backup.
+// hostFlag is --host of the docker commands. Its default is computed by
+// dockerSeriesHost, which needs the daemon.
 func hostFlag() cli.Flag {
-	hostname, _ := os.Hostname()
-	return &cli.StringFlag{Name: "host", Usage: "host `NAME` of the snapshots", Value: hostname}
+	return &cli.StringFlag{
+		Name:  "host",
+		Usage: "host `NAME` of the snapshots (default: this machine's hostname, or a remote daemon's name)",
+	}
+}
+
+// dockerSeriesHost is the host docker snapshots are filed under: --host if
+// set, else the hostname of the machine the volumes live on. That is this
+// machine for a local daemon and the daemon's own name for a remote one, so
+// the same volume name on two daemons is two series. A local daemon is not
+// asked, Docker Desktop names itself docker-desktop on every machine.
+func dockerSeriesHost(ctx context.Context, cmd *cli.Command, e *arkdocker.Engine) (string, error) {
+	if cmd.IsSet("host") {
+		h := cmd.String("host")
+		if strings.Contains(h, "://") {
+			return "", exitcode.Usagef("--host %q is a daemon address, the daemon is set with --docker-host", h)
+		}
+		return h, nil
+	}
+	if remoteDaemon(cmd.String("docker-host")) {
+		return e.Client().DaemonName(ctx)
+	}
+	h, err := os.Hostname()
+	if err != nil {
+		return "", fmt.Errorf("hostname: %w, set --host", err)
+	}
+	return h, nil
+}
+
+// remoteDaemon reports whether the daemon address is on another machine:
+// tcp:// or ssh://, not a local socket or pipe and not the default.
+func remoteDaemon(addr string) bool {
+	return addr != "" && !strings.HasPrefix(addr, "unix://") && !strings.HasPrefix(addr, "npipe://")
 }
 
 // lastVolumeSnapshots maps a volume name to the time of its newest snapshot
 // recorded for host: the series key of the library, so another machine's
-// backup of the same volume name does not show here. snaps arrive newest first.
+// backup of the same volume name does not show here. A volume with none
+// falls back to its snapshots without a host, written before the host was
+// recorded. snaps are volume snapshots, newest first.
 func lastVolumeSnapshots(snaps []*ark.Snapshot, host string) map[string]time.Time {
 	last := make(map[string]time.Time)
+	legacy := make(map[string]time.Time)
 	for _, s := range snaps {
-		if s.SourceType != arkdocker.SourceTypeDockerVolume || s.Host != host {
+		m := last
+		switch s.Host {
+		case host:
+		case "":
+			m = legacy
+		default:
 			continue
 		}
-		if _, ok := last[s.SourceName]; !ok {
-			last[s.SourceName] = s.CreatedAt
+		if _, ok := m[s.SourceName]; !ok {
+			m[s.SourceName] = s.CreatedAt
+		}
+	}
+	for name, t := range legacy {
+		if _, ok := last[name]; !ok {
+			last[name] = t
 		}
 	}
 	return last
@@ -154,10 +203,12 @@ func dockerBackupCommand() *cli.Command {
 
    Stops running containers that use <volume>, backs it up, restarts them.
    The snapshot's source name is the volume name, source type docker-volume. The
-   host is the machine's hostname unless --host is set; the parent is the newest
-   snapshot of the same volume and host.`,
+   host is this machine's hostname, or the daemon's name when --docker-host is a
+   remote daemon, unless --host is set. The parent is the newest snapshot of the
+   same volume and host unless --parent is set.`,
 		Flags: append([]cli.Flag{
 			hostFlag(),
+			&cli.StringFlag{Name: "parent", Usage: "explicit parent snapshot `ID`"},
 			&cli.StringSliceFlag{Name: "tag", Aliases: []string{"t"}, Usage: "add a `TAG`, repeatable"},
 			&cli.StringFlag{Name: "comment", Aliases: []string{"c"}, Usage: "free `TEXT` stored with the snapshot"},
 		}, stopFlags()...),
@@ -174,12 +225,17 @@ func dockerBackupCommand() *cli.Command {
 			defer repo.Close()
 			defer e.Close()
 
+			host, err := dockerSeriesHost(ctx, cmd, e)
+			if err != nil {
+				return fmt.Errorf("docker backup %s: %w", volume, err)
+			}
 			p := printer(cmd)
 			pr := startProgress(p, "backup volume "+volume)
 			snap, err := e.BackupVolume(ctx, volume,
 				ark.WithTags(cmd.StringSlice("tag")...),
 				ark.WithComment(cmd.String("comment")),
-				ark.WithHost(cmd.String("host")),
+				ark.WithHost(host),
+				ark.WithParent(cmd.String("parent")),
 			)
 			if err != nil {
 				pr.Fail()

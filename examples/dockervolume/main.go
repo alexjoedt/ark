@@ -48,7 +48,13 @@ func main() {
 	}
 	defer engine.Close()
 
-	snap, err := engine.BackupVolume(ctx, volume)
+	// The host keeps this machine's series apart from other machines that
+	// back up a volume of the same name into a shared repository.
+	host, err := os.Hostname()
+	if err != nil {
+		log.Fatal(err)
+	}
+	snap, err := engine.BackupVolume(ctx, volume, ark.WithHost(host))
 	if err != nil {
 		log.Fatal(err)
 	}
