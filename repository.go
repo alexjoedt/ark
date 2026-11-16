@@ -726,7 +726,7 @@ func (f SnapshotFilter) Match(s *Snapshot) bool {
 	if !f.Before.IsZero() && !s.CreatedAt.Before(f.Before) {
 		return false
 	}
-	if !f.After.IsZero() && !s.CreatedAt.After(f.After) {
+	if !f.After.IsZero() && s.CreatedAt.Before(f.After) {
 		return false
 	}
 	if len(f.Tags) > 0 {
