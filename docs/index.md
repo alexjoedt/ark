@@ -30,3 +30,13 @@ features:
     details: The architecture decision records behind the format, the API and the CLI.
     link: /adr/
 ---
+
+ark keeps deduplicated, compressed and encrypted backups as a Go library, with a CLI on top.
+
+- [Series](SERIES.md): how snapshots group into series.
+- [Labels](LABELS.md): how labels tell jobs of one source apart.
+- [Mount](MOUNT.md): browse every snapshot read-only through FUSE.
+- [Repository format](FORMAT.md): the byte layout of a repository.
+- [Security](SECURITY.md): the threat model.
+- [Releasing](RELEASING.md): versioning and how releases are cut.
+- [Decisions](adr/README.md): the architecture decision records.

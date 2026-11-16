@@ -7,7 +7,7 @@ const adrs = readdirSync(adrDir)
   .filter((name) => /^\d{4}-.+\.md$/.test(name))
   .sort()
   .map((name) => ({
-    text: readFileSync(new URL(name, adrDir), 'utf8').split('\n', 1)[0].replace(/^# /, ''),
+    text: readFileSync(new URL(name, adrDir), 'utf8').split(/\r?\n/, 1)[0].replace(/^\uFEFF?# /, ''),
     link: `/adr/${name.replace(/\.md$/, '')}`,
   }))
 
@@ -53,7 +53,6 @@ export default defineConfig({
         collapsed: true,
         items: [
           { text: 'Index', link: '/adr/' },
-          { text: 'Template', link: '/adr/template' },
           ...adrs,
         ],
       },
