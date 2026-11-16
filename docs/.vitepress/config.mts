@@ -18,7 +18,9 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
   rewrites: { 'adr/README.md': 'adr/index.md' },
+  head: [['link', { rel: 'icon', type: 'image/svg+xml', href: '/ark/ark.svg' }]],
   markdown: {
+    theme: { light: 'github-light-default', dark: 'github-dark-default' },
     // The pages are plain Markdown that also reads on GitHub; placeholders
     // such as <name> are text, not Vue tags.
     config: (md) => {
@@ -26,6 +28,7 @@ export default defineConfig({
     },
   },
   themeConfig: {
+    logo: '/ark.svg',
     nav: [
       { text: 'Guide', link: '/getting-started' },
       { text: 'CLI', link: '/cli/' },

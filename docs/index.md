@@ -1,25 +1,30 @@
 ---
 layout: home
 
-hero:
-  name: ark
-  text: Deduplicated backups as a Go library, with a CLI on top
-  tagline: Content split with FastCDC, stored once, compressed with zstd and encrypted, in a local directory or over SFTP.
+landing:
+  eyebrow: [Go library, CLI, local or SFTP]
+  title: Every chunk, stored once.
+  tagline: ark keeps deduplicated, compressed and encrypted backups as a Go library, with a CLI on top.
+  install: go install github.com/alexjoedt/ark/cmd/ark@latest
   actions:
-    - theme: brand
-      text: Get started
+    - text: Get started
       link: /getting-started
-    - theme: alt
-      text: Library
-      link: /library
-    - theme: alt
-      text: Repository format
+    - text: Repository format
       link: /FORMAT
-    - theme: alt
-      text: GitHub
-      link: https://github.com/alexjoedt/ark
+  steps:
+    - title: Split
+      details: FastCDC cuts content into chunks at boundaries that follow the data, so an insert moves one chunk and not the whole file.
+    - title: Store once
+      details: A chunk is named by the HMAC-SHA256 of its plaintext. A name the repository already holds is not written again.
+    - title: Compress and encrypt
+      details: Chunks are compressed with zstd and encrypted before they leave the machine.
+    - title: Pack
+      details: Blobs are gathered into packs named by their SHA-256, in a local directory or over SFTP.
 
 features:
+  - title: CLI
+    details: Every command, the global flags, profiles and exit codes.
+    link: /cli/
   - title: Library
     details: Backends, sources and sinks, encryption, progress hooks, profiles and search for Go programs.
     link: /library
