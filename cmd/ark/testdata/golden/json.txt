@@ -9,6 +9,9 @@
   "tags": [],
   "comment": "",
   "excludes": [],
+  "labels": {
+    "ark/path": "<src>"
+  },
   "parent_id": "",
   "stats": {
     "total_files": 2,
@@ -37,6 +40,9 @@
   "tags": [],
   "comment": "",
   "excludes": [],
+  "labels": {
+    "ark/path": "<src>"
+  },
   "parent_id": "<id1>",
   "stats": {
     "total_files": 2,
@@ -56,8 +62,8 @@
 --- stderr
 === --json find b.txt (exit 0)
 --- stdout
-{"snapshot_id":"<id2>","path":"sub/b.txt","type":"regular","size":5,"mtime":"<time>"}
-{"snapshot_id":"<id1>","path":"sub/b.txt","type":"regular","size":5,"mtime":"<time>"}
+{"snapshot_id":"<id2>","path":"sub/b.txt","type":"regular","size":5,"mtime":"<time>","labels":{"ark/path":"<src>"}}
+{"snapshot_id":"<id1>","path":"sub/b.txt","type":"regular","size":5,"mtime":"<time>","labels":{"ark/path":"<src>"}}
 --- stderr
 === --json find nothing-here (exit 0)
 --- stdout
@@ -112,6 +118,9 @@ no matches
       "tags": [],
       "comment": "",
       "excludes": [],
+      "labels": {
+        "ark/path": "<src>"
+      },
       "parent_id": "<id1>",
       "stats": {
         "total_files": 2,
@@ -139,6 +148,9 @@ no matches
       "tags": [],
       "comment": "",
       "excludes": [],
+      "labels": {
+        "ark/path": "<src>"
+      },
       "parent_id": "",
       "stats": {
         "total_files": 2,

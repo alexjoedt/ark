@@ -123,7 +123,7 @@ func TestBackupExcludes(t *testing.T) {
 		t.Fatalf("inspect: exit %d, %q", code, out)
 	}
 
-	plain := backupJSON(t, repo, "--name", "plain", src)
+	plain := backupJSON(t, repo, "--source", "plain", src)
 	if plain.Excludes == nil || len(plain.Excludes) != 0 {
 		t.Fatalf("excludes without patterns %#v, want []", plain.Excludes)
 	}

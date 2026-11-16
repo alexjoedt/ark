@@ -1,13 +1,16 @@
 package ark
 
-import "time"
+import (
+	"maps"
+	"time"
+)
 
 // Snapshot describes a completed backup, as returned by the public API.
 type Snapshot struct {
 	ID         string
 	SourceName string
 	SourceType SourceType
-	SourceMeta map[string]string // labels the source recorded, see SourceMeta.Labels
+	Labels     map[string]string // the source's labels and those of WithLabels
 	Excludes   []string          // patterns the source excluded, see SourceMeta.Excludes
 	Host       string
 	Tags       []string
@@ -73,8 +76,8 @@ type SnapshotFilter struct {
 	// full ids before matching, so Match itself compares them verbatim.
 	IDs []string
 
-	// Name filters by source name (volume name, path, etc.); empty = all.
-	Name string
+	// Source filters by source name (volume name, path, etc.); empty = all.
+	Source string
 
 	// Type filters by source type, e.g. SourceTypeFile; empty = all.
 	Type SourceType
@@ -84,6 +87,11 @@ type SnapshotFilter struct {
 
 	// Host filters by host; empty = all.
 	Host string
+
+	// Labels filters to snapshots carrying every given label with exactly
+	// the given value; empty = all. A pair with an empty value needs the key
+	// with an empty value, not just the key.
+	Labels map[string]string
 
 	// Before includes only snapshots created before this time (exclusive).
 	Before time.Time
@@ -100,6 +108,7 @@ type SnapshotFilter struct {
 type backupOptions struct {
 	comment  string
 	tags     []string
+	labels   map[string]string
 	host     string
 	parent   string
 	progress ProgressFunc
@@ -117,6 +126,19 @@ func WithComment(s string) BackupOption {
 // WithTags attaches one or more tags to the snapshot.
 func WithTags(tags ...string) BackupOption {
 	return func(o *backupOptions) { o.tags = tags }
+}
+
+// WithLabels adds labels to the snapshot, beside those the source records.
+// Several calls add up; for a key set twice the later value wins. Backup
+// checks them with [ValidateLabels] and refuses a key the source sets as
+// well, both before it writes anything.
+func WithLabels(labels map[string]string) BackupOption {
+	return func(o *backupOptions) {
+		if o.labels == nil {
+			o.labels = make(map[string]string, len(labels))
+		}
+		maps.Copy(o.labels, labels)
+	}
 }
 
 // WithHost sets the host recorded in the snapshot; the default is empty, the

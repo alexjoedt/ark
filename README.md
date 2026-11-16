@@ -207,6 +207,11 @@ ark check
 ark repair index            # after check or prune report a lost or damaged index
 ```
 
+A backup is one series per source type, source and host. `--source NAME` names the source (default:
+the absolute path, with `-P` the profile's name), `--host NAME` the host (default: the hostname) and `--label KEY=VALUE`, repeatable,
+stores a label that `ark snapshots`, `ark find` and `ark forget` filter on, all given labels
+must match. See [Series](docs/SERIES.md) and [Labels](docs/LABELS.md).
+
 `ark backup` leaves paths out with `--exclude/-e PATTERN` and `--exclude-file FILE`, both
 repeatable, and `--exclude-cloud-files` skips files that exist only in the cloud (iCloud `.name.icloud`
 placeholders, and on macOS every dataless File Provider entry), so a backup does not download a whole
@@ -260,7 +265,7 @@ ark docker restore <id>                # into the volume it came from
 ark docker restore <id> postgres_copy  # or into another one, created if missing
 ```
 
-A volume is one series per host: the parent of a backup, `ark forget` and the LAST SNAPSHOT of
+A volume is one [series](docs/SERIES.md) per host: the parent of a backup, `ark forget` and the LAST SNAPSHOT of
 `ark docker volumes` only see the snapshots of the same host. The host is this machine's hostname for
 a local daemon and the daemon's own name for a remote `--docker-host` (`tcp://`, `ssh://`), unless
 `--host` sets it. Volume snapshots written before the host was recorded have none: `ark docker
@@ -307,7 +312,7 @@ forget:
 ```
 
 ```bash
-ark backup -P docs              # snapshot named docs, the profile's tags and excludes
+ark backup -P docs              # source docs, the profile's tags and excludes
 ark forget -P docs --yes        # the policy on the docs snapshots of this host, then prune
 ark snapshots -P docs           # only the docs snapshots
 ark backup -P docs -t manual    # a flag beats the profile, a list flag replaces its list
@@ -317,10 +322,13 @@ ark profile show docs           # each effective value and its source: cli, prof
 
 - A flag given on the command line beats the profile, the profile beats the environment, the
   environment beats the default.
-- The snapshot is named after the profile unless `backup.name` says otherwise; `ark forget -P` and
-  `ark snapshots -P` select that name, forget also only this host's snapshots. A path on the command
-  line other than `backup.path` needs `--name`, so it never lands under the profile's name. Snapshot
-  ids given to `ark forget -P` are removed as named, without the profile's policy or name filter.
+- The snapshot's source is the profile's name unless `backup.source` says otherwise; `ark forget -P`
+  and `ark snapshots -P` select that source, forget also only this host's snapshots. A path on the
+  command line other than `backup.path` needs `--source`, so it never lands under the profile's
+  source. Snapshot ids given to `ark forget -P` are removed as named, without the profile's policy or
+  source filter.
+- `backup.label` sets labels as a map, `label: {app: docs}`; a `--label` flag adds to them and wins for
+  a key in both. See [Labels](docs/LABELS.md).
 - The hooks of `forget` do not run on `--dry-run`.
 - `$VAR` and `${VAR}` expand in every value but the hooks; an unset variable exits 2. `~` and relative
   paths in `repo`, `password-file`, `backup.path` and `backup.exclude-file` are taken from the home
@@ -367,14 +375,10 @@ ark mount /mnt/ark                # in another shell:
 ls /mnt/ark/ids/                  # one directory per snapshot
 ```
 
-- `ids/<id>/`, `names/<name>/<time>/`, `tags/<tag>/<time>/` and `hosts/<host>/<time>/`, plus a
-  `latest` link per name. The snapshot list is the one at mount start; remount to see newer ones.
-- The mount holds a shared lock for as long as it runs, so `ark prune` and `ark forget --prune`
-  cannot take their exclusive lock and exit 3 (after `--lock-wait`, if set) until it is unmounted.
-- Ctrl-C unmounts. While a process still uses the mount it keeps serving and retries every second;
-  a second Ctrl-C or SIGTERM quits anyway, with exit 1, and leaves the mountpoint to unmount by hand.
-- Linux needs FUSE 3: `/dev/fuse` and `fusermount3` (package `fuse3`). macOS needs
-  [macFUSE](https://macfuse.github.io/) and is best effort. Windows and 32-bit Linux are not supported.
+`ids/<id>/`, `tags/<tag>/<time>/` and `sources/<type>/<host>/<source>/<time>/` with a `latest` link
+per series, for example `sources/files/myhost/home/alex/latest`. The mount holds a shared lock, so
+`ark prune` and `ark forget --prune` exit 3 until it is unmounted. Linux needs FUSE 3, macOS macFUSE.
+[Mount](docs/MOUNT.md) has the full layout, the behaviour on Ctrl-C and the platforms.
 
 ## Compatibility
 

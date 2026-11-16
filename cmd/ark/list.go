@@ -17,7 +17,7 @@ func snapshotsCommand() *cli.Command {
 		Name:  "snapshots",
 		Usage: "list snapshots",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "name", Aliases: []string{"N"}, Usage: "source `NAME` (path or volume)"},
+			&cli.StringFlag{Name: "source", Aliases: []string{"s"}, Usage: "source `NAME` (path or volume)"},
 			&cli.StringFlag{Name: "type", Usage: "source `TYPE`, file or docker-volume"},
 			&cli.StringSliceFlag{
 				Name:    "tag",
@@ -25,9 +25,14 @@ func snapshotsCommand() *cli.Command {
 				Usage:   "must carry `TAG`, repeatable, all must match",
 			},
 			&cli.StringFlag{Name: "host", Usage: "host `NAME`"},
+			labelFlag("must carry the label `KEY=VALUE`, repeatable, all must match"),
 			&cli.IntFlag{Name: "last", Usage: "newest `N` per series (type, source, host)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			labels, err := labelValue(cmd, true)
+			if err != nil {
+				return err
+			}
 			repo, err := openRepo(ctx, cmd)
 			if err != nil {
 				return err
@@ -35,18 +40,19 @@ func snapshotsCommand() *cli.Command {
 			defer repo.Close()
 
 			filter := ark.SnapshotFilter{
-				Name: cmd.String("name"),
-				Type: ark.SourceType(cmd.String("type")),
-				Tags: cmd.StringSlice("tag"),
-				Host: cmd.String("host"),
+				Source: cmd.String("source"),
+				Type:   ark.SourceType(cmd.String("type")),
+				Tags:   cmd.StringSlice("tag"),
+				Host:   cmd.String("host"),
+				Labels: labels,
 			}
 			// A profile narrows the list to its snapshots, on every host.
-			if lp := profileFrom(ctx); lp != nil && !cmd.IsSet("name") {
+			if lp := profileFrom(ctx); lp != nil && cmd.String("source") == "" {
 				pf, err := lp.Filter()
 				if err != nil {
 					return exitcode.Usagef("profile %s: %w", lp.Name, err)
 				}
-				filter.Name = pf.Name
+				filter.Source = pf.Source
 			}
 			snaps, err := repo.Snapshots(ctx, filter)
 			if err != nil {

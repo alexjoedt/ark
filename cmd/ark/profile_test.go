@@ -312,11 +312,24 @@ forget:
 	if code, _ := runCapture(t, "backup", "-P", "docs", other); code != 2 {
 		t.Fatalf("backup -P docs with another path: exit %d, want 2", code)
 	}
-	if s := profileBackup(t, "-P", "docs", "--name", "other", other); s.Name != "other" {
+	if s := profileBackup(t, "-P", "docs", "--source", "other", other); s.Name != "other" {
 		t.Fatalf("snapshot named %q, want other", s.Name)
 	}
 	own := profileBackup(t, "-P", "docs")
 	foreign := profileBackup(t, "-r", repo, "--host", "elsewhere", other)
+
+	// an empty --source keeps the profile's source scope
+	if code, _ := runCapture(t, "backup", "-P", "docs", "--source", "", other); code != 2 {
+		t.Fatalf("backup -P docs --source '' with another path: exit %d, want 2", code)
+	}
+	if code, out := runCapture(t, "--json", "snapshots", "-P", "docs", "-s", ""); code != 0 ||
+		strings.Contains(out, foreign.ID) || !strings.Contains(out, own.ID) {
+		t.Fatalf("snapshots -P docs -s '': exit %d, %s", code, out)
+	}
+	code, out := runCapture(t, "--json", "forget", "-P", "docs", "--host", "elsewhere", "-s", "", "--all", "--dry-run")
+	if code != 0 || strings.Contains(out, foreign.ID) {
+		t.Fatalf("forget -P docs -s '' --all: exit %d, %s", code, out)
+	}
 
 	// a dry run runs no hooks
 	if code, out := runCapture(t, "forget", "-P", "docs", "--dry-run"); code != 0 {
@@ -332,7 +345,7 @@ forget:
 	}
 
 	// named ids ignore the profile's policy and scope
-	code, out := runCapture(t, "--json", "forget", "-P", "docs", "--yes", own.ID, foreign.ID)
+	code, out = runCapture(t, "--json", "forget", "-P", "docs", "--yes", own.ID, foreign.ID)
 	if code != 0 {
 		t.Fatalf("forget -P docs ids exit %d: %s", code, out)
 	}
@@ -383,14 +396,14 @@ func TestProfileShowSources(t *testing.T) {
 		return got
 	}
 	want := map[string][2]string{
-		"repo":         {"/env/repo", "env"},
-		"concurrency":  {"3", "cli"},
-		"lock-wait":    {"10s", "profile"},
-		"backup.tag":   {"a, b", "profile"},
-		"backup.path":  {"/data", "profile"},
-		"backup.name":  {"docs", "default"},
-		"password":     {"variable SHOW_SECRET", "profile"},
-		"forget.prune": {"false", "default"},
+		"repo":          {"/env/repo", "env"},
+		"concurrency":   {"3", "cli"},
+		"lock-wait":     {"10s", "profile"},
+		"backup.tag":    {"a, b", "profile"},
+		"backup.path":   {"/data", "profile"},
+		"backup.source": {"docs", "default"},
+		"password":      {"variable SHOW_SECRET", "profile"},
+		"forget.prune":  {"false", "default"},
 	}
 	for _, args := range [][]string{
 		{"profile", "show", "docs", "--concurrency", "3"},

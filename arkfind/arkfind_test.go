@@ -213,7 +213,7 @@ func TestFindFilter(t *testing.T) {
 		want   []*ark.Snapshot
 	}{
 		{"none", ark.SnapshotFilter{}, []*ark.Snapshot{home2, work, home1}},
-		{"name", ark.SnapshotFilter{Name: "home"}, []*ark.Snapshot{home2, home1}},
+		{"name", ark.SnapshotFilter{Source: "home"}, []*ark.Snapshot{home2, home1}},
 		{"tags", ark.SnapshotFilter{Tags: []string{"weekly"}}, []*ark.Snapshot{home2, work}},
 		{"host", ark.SnapshotFilter{Host: "laptop"}, []*ark.Snapshot{work, home1}},
 	}

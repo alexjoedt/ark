@@ -60,16 +60,16 @@ func TestContainerLabels(t *testing.T) {
 		{Name: "db", Image: "ghcr.io/x/pg:16", ImageID: "sha256:aaa", State: "exited"},
 	}
 	want := map[string]string{
-		"container.0.name":            "db",
-		"container.0.image":           "ghcr.io/x/pg:16",
-		"container.0.image_id":        "sha256:aaa",
-		"container.0.state":           "exited",
-		"container.1.name":            "web",
-		"container.1.image":           "nginx:latest",
-		"container.1.image_id":        "sha256:bbb",
-		"container.1.state":           "running",
-		"container.1.compose_project": "shop",
-		"container.1.compose_service": "web",
+		"ark/container.0.name":            "db",
+		"ark/container.0.image":           "ghcr.io/x/pg:16",
+		"ark/container.0.image_id":        "sha256:aaa",
+		"ark/container.0.state":           "exited",
+		"ark/container.1.name":            "web",
+		"ark/container.1.image":           "nginx:latest",
+		"ark/container.1.image_id":        "sha256:bbb",
+		"ark/container.1.state":           "running",
+		"ark/container.1.compose_project": "shop",
+		"ark/container.1.compose_service": "web",
 	}
 	if got := containerLabels(ctrs); !maps.Equal(got, want) {
 		t.Errorf("labels\n got %v\nwant %v", got, want)
@@ -121,5 +121,36 @@ func TestRunningContainersKeepsOnlyRunning(t *testing.T) {
 func TestVolumeSourceCannotBeWalkedTwice(t *testing.T) {
 	if _, ok := NewVolumeSource(&Client{}, "v").(ark.RewalkSource); ok {
 		t.Error("the volume source implements ark.RewalkSource; its tar stream cannot be walked twice")
+	}
+}
+
+func TestVolumeSourceLabelsAreReserved(t *testing.T) {
+	ctrs := []ContainerInfo{{
+		Name: "db", Image: "pg:16", ImageID: "sha256:a", State: "exited",
+		ComposeProject: "p", ComposeService: "s",
+	}}
+	for _, host := range []string{"", "tcp://h:2375"} {
+		labels := newVolumeSource(&Client{host: host}, "v", ctrs).Meta().Labels
+		_, hasHost := labels["ark/docker-host"]
+		if hasHost != (host != "") || labels["ark/docker-host"] != host {
+			t.Errorf("host %q: ark/docker-host = %q (set %v)", host, labels["ark/docker-host"], hasHost)
+		}
+		for k := range labels {
+			rest, ok := strings.CutPrefix(k, ark.ReservedLabelPrefix)
+			if !ok {
+				t.Errorf("key %q lacks the ark/ prefix", k)
+			}
+			if err := ark.ValidateLabels(map[string]string{"example.com/" + rest: labels[k]}); err != nil {
+				t.Errorf("key %q has no valid shape: %v", k, err)
+			}
+		}
+	}
+}
+
+func TestVolumeSourceMetaIsACopy(t *testing.T) {
+	src := newVolumeSource(&Client{host: "tcp://h:2375"}, "v", nil)
+	src.Meta().Labels["x/y"] = "z"
+	if _, ok := src.Meta().Labels["x/y"]; ok {
+		t.Error("a label added to Meta().Labels reached the source")
 	}
 }

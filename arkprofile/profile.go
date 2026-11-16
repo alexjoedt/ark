@@ -19,7 +19,8 @@
 //	  exclude-cloud-files: true      # leave out files that exist only in the cloud
 //	  host: laptop                   # host recorded in the snapshot
 //	  comment: nightly
-//	  name: documents                # snapshot name, default: the profile's name
+//	  source: documents              # source name, default: the profile's name
+//	  label: {app: docs}             # labels recorded in the snapshot
 //	  run-before: mount /mnt/docs    # hooks, each run through sh -c
 //	  run-after: echo stored
 //	  run-after-fail: 'echo "backup failed: $ARK_ERROR"'
@@ -73,7 +74,7 @@ var (
 // Profile is one stored backup configuration.
 type Profile struct {
 	// Name is the profile's name, set by [Load] from the file's base name. It
-	// defaults the snapshot name and the name filter of forget.
+	// defaults the source name and the source filter of forget.
 	Name string `yaml:"-"`
 
 	Repo               string        `yaml:"repo"                 ark:"location"`
@@ -96,8 +97,10 @@ type Backup struct {
 	ExcludeCloudFiles bool     `yaml:"exclude-cloud-files"`
 	Host              string   `yaml:"host"`
 	Comment           string   `yaml:"comment"`
-	// Name is the snapshot's source name; empty means the profile's name.
-	Name string `yaml:"name"`
+	// Source is the snapshot's source name; empty means the profile's name.
+	Source string `yaml:"source"`
+	// Labels are recorded in the snapshot; their keys follow [ark.ValidateLabels].
+	Labels map[string]string `yaml:"label"`
 
 	Hooks `yaml:",inline"`
 }
@@ -128,8 +131,9 @@ type Hooks struct {
 var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 // Validate reports a name outside [a-z0-9][a-z0-9._-]*, conflicting
-// password sources, a negative number or lock-wait and a keep-within that is
-// not a positive duration. Every error matches [ErrInvalid].
+// password sources, a negative number or lock-wait, a backup label that
+// [ark.ValidateLabels] refuses and a keep-within that is not a positive
+// duration. Every error matches [ErrInvalid].
 func (p *Profile) Validate() error {
 	if !validName.MatchString(p.Name) {
 		return invalidf(
@@ -142,6 +146,9 @@ func (p *Profile) Validate() error {
 	}
 	if p.LockWait < 0 {
 		return invalidf("lock-wait %s: want 0 or more", p.LockWait)
+	}
+	if err := ark.ValidateLabels(p.Backup.Labels); err != nil {
+		return invalidf("backup.label: %w", err)
 	}
 	f := p.Forget
 	for _, n := range []struct {
@@ -295,11 +302,12 @@ func CheckFile(fi fs.FileInfo) error {
 	return nil
 }
 
-type invalidError struct{ msg string }
+type invalidError struct{ err error }
 
-func (e *invalidError) Error() string        { return e.msg }
+func (e *invalidError) Error() string        { return e.err.Error() }
 func (e *invalidError) Is(target error) bool { return target == ErrInvalid }
+func (e *invalidError) Unwrap() error        { return e.err }
 
 func invalidf(format string, args ...any) error {
-	return &invalidError{fmt.Sprintf(format, args...)}
+	return &invalidError{fmt.Errorf(format, args...)}
 }

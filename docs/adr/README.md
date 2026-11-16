@@ -36,3 +36,4 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0019 | [Find and the arkfind package](0019-find-and-the-arkfind-package.md) | accepted | 2026-11-15 |
 | 0020 | [Read session with an io/fs view per snapshot](0020-read-session-with-an-io-fs-view.md) | accepted | 2026-11-15 |
 | 0021 | [One series key: source type, source name and host](0021-one-series-key-type-source-host.md) | accepted | 2026-11-16 |
+| 0022 | [Snapshot labels](0022-snapshot-labels.md) | accepted | 2026-11-16 |

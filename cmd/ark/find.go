@@ -23,7 +23,7 @@ func findCommand() *cli.Command {
    Patterns follow --exclude: without a "/" a base name anywhere, a leading "/" anchors
    at the snapshot root, a matched directory lists everything below it.`,
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "name", Aliases: []string{"N"}, Usage: "source `NAME` (path or volume)"},
+			&cli.StringFlag{Name: "source", Aliases: []string{"s"}, Usage: "source `NAME` (path or volume)"},
 			&cli.StringFlag{Name: "type", Usage: "source `TYPE`, file or docker-volume"},
 			&cli.StringSliceFlag{
 				Name:    "tag",
@@ -31,6 +31,7 @@ func findCommand() *cli.Command {
 				Usage:   "must carry `TAG`, repeatable, all must match",
 			},
 			&cli.StringFlag{Name: "host", Usage: "host `NAME`"},
+			labelFlag("must carry the label `KEY=VALUE`, repeatable, all must match"),
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			patterns := cmd.Args().Slice()
@@ -41,18 +42,23 @@ func findCommand() *cli.Command {
 				return exitcode.Usagef("find: %w", err)
 			}
 
-			filter := ark.SnapshotFilter{
-				Name: cmd.String("name"),
-				Type: ark.SourceType(cmd.String("type")),
-				Tags: cmd.StringSlice("tag"),
-				Host: cmd.String("host"),
+			labels, err := labelValue(cmd, true)
+			if err != nil {
+				return err
 			}
-			if lp := profileFrom(ctx); lp != nil && !cmd.IsSet("name") {
+			filter := ark.SnapshotFilter{
+				Source: cmd.String("source"),
+				Type:   ark.SourceType(cmd.String("type")),
+				Tags:   cmd.StringSlice("tag"),
+				Host:   cmd.String("host"),
+				Labels: labels,
+			}
+			if lp := profileFrom(ctx); lp != nil && cmd.String("source") == "" {
 				pf, err := lp.Filter()
 				if err != nil {
 					return exitcode.Usagef("profile %s: %w", lp.Name, err)
 				}
-				filter.Name = pf.Name
+				filter.Source = pf.Source
 			}
 
 			repo, err := openRepo(ctx, cmd)
@@ -68,7 +74,10 @@ func findCommand() *cli.Command {
 				s, f := hit.Snapshot, hit.File
 				if m.JSON {
 					last = s.ID
-					return p.JSONLine(matchJSON{SnapshotID: s.ID, Path: f.Path, Type: string(f.Type), Size: f.Size, Mtime: f.ModTime})
+					return p.JSONLine(matchJSON{
+						SnapshotID: s.ID, Path: f.Path, Type: string(f.Type), Size: f.Size, Mtime: f.ModTime,
+						Labels: out.Labels(s.Labels),
+					})
 				}
 				if s.ID != last && !m.Quiet {
 					if last != "" {
@@ -93,9 +102,10 @@ func findCommand() *cli.Command {
 
 // matchJSON is one line of ark find --json, frozen for 1.x.
 type matchJSON struct {
-	SnapshotID string    `json:"snapshot_id"`
-	Path       string    `json:"path"`
-	Type       string    `json:"type"`
-	Size       int64     `json:"size"`
-	Mtime      time.Time `json:"mtime"`
+	SnapshotID string            `json:"snapshot_id"`
+	Path       string            `json:"path"`
+	Type       string            `json:"type"`
+	Size       int64             `json:"size"`
+	Mtime      time.Time         `json:"mtime"`
+	Labels     map[string]string `json:"labels"`
 }

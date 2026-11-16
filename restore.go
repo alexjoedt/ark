@@ -47,7 +47,7 @@ func (r *Repository) runRestore(
 	meta := SourceMeta{
 		Name:     m.SourceName,
 		Type:     m.SourceType,
-		Labels:   m.SourceMeta,
+		Labels:   m.Labels,
 		Excludes: m.Excludes,
 	}
 	if err := sink.Open(ctx, meta); err != nil {

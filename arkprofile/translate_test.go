@@ -40,6 +40,7 @@ func TestBackupAndForgetThroughAProfile(t *testing.T) {
 			Excludes: []string{"*.tmp"},
 			Host:     "laptop",
 			Comment:  "nightly",
+			Labels:   map[string]string{"app": "docs"},
 		},
 		Forget: arkprofile.Forget{KeepLast: 1},
 	}
@@ -65,7 +66,8 @@ func TestBackupAndForgetThroughAProfile(t *testing.T) {
 	last := backup(docs)
 
 	if first.SourceName != "docs" || first.Host != "laptop" || first.Comment != "nightly" ||
-		!reflect.DeepEqual(first.Tags, []string{"daily"}) || !reflect.DeepEqual(first.Excludes, []string{"*.tmp"}) {
+		!reflect.DeepEqual(first.Tags, []string{"daily"}) || !reflect.DeepEqual(first.Excludes, []string{"*.tmp"}) ||
+		first.Labels["app"] != "docs" {
 		t.Fatalf("snapshot = %+v", first)
 	}
 	if first.Stats.FileCount != 1 {
@@ -108,7 +110,7 @@ func TestSourceNames(t *testing.T) {
 		want string
 	}{
 		{"profile name", arkprofile.Profile{Name: "docs", Backup: arkprofile.Backup{Path: dir}}, "docs"},
-		{"backup.name wins", arkprofile.Profile{Name: "docs", Backup: arkprofile.Backup{Path: dir, Name: "d"}}, "d"},
+		{"backup.source wins", arkprofile.Profile{Name: "docs", Backup: arkprofile.Backup{Path: dir, Source: "d"}}, "d"},
 		{"no name keeps the path", arkprofile.Profile{Backup: arkprofile.Backup{Path: dir}}, dir},
 	}
 	for _, tt := range tests {
@@ -124,8 +126,8 @@ func TestSourceNames(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if f.Name != tt.want {
-				t.Errorf("filter name = %q, want %q", f.Name, tt.want)
+			if f.Source != tt.want {
+				t.Errorf("filter source = %q, want %q", f.Source, tt.want)
 			}
 		})
 	}

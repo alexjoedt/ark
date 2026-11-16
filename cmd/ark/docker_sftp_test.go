@@ -296,12 +296,12 @@ func volumeRoundTrip(t *testing.T, d *volumeDocker, e *arkdocker.Engine) {
 
 	ctr := d.inspect(t, user)
 	for key, want := range map[string]string{
-		"container.0.name":     strings.TrimPrefix(ctr.Name, "/"),
-		"container.0.image":    d.image,
-		"container.0.image_id": ctr.Image,
-		"container.0.state":    "running",
+		"ark/container.0.name":     strings.TrimPrefix(ctr.Name, "/"),
+		"ark/container.0.image":    d.image,
+		"ark/container.0.image_id": ctr.Image,
+		"ark/container.0.state":    "running",
 	} {
-		if got := snap.SourceMeta[key]; got == "" || got != want {
+		if got := snap.Labels[key]; got == "" || got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)
 		}
 	}

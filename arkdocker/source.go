@@ -36,7 +36,7 @@ func NewVolumeSource(client *Client, volume string) ark.Source {
 func newVolumeSource(client *Client, volume string, ctrs []ContainerInfo) ark.Source {
 	labels := map[string]string{}
 	if client.host != "" {
-		labels["docker_host"] = client.host
+		labels[ark.ReservedLabelPrefix+"docker-host"] = client.host
 	}
 	maps.Copy(labels, containerLabels(ctrs))
 	return &dockerVolumeSource{
@@ -59,7 +59,7 @@ func containerLabels(ctrs []ContainerInfo) map[string]string {
 		return strings.Compare(a.Name, b.Name)
 	})
 	for i, ctr := range sorted {
-		prefix := "container." + strconv.Itoa(i) + "."
+		prefix := ark.ReservedLabelPrefix + "container." + strconv.Itoa(i) + "."
 		for k, v := range map[string]string{
 			"name":            ctr.Name,
 			"image":           imageReference(ctr.Image),
@@ -93,7 +93,11 @@ func imageReference(image string) string {
 }
 
 // Meta returns the source metadata stored in the snapshot manifest.
-func (s *dockerVolumeSource) Meta() ark.SourceMeta { return s.meta }
+func (s *dockerVolumeSource) Meta() ark.SourceMeta {
+	m := s.meta
+	m.Labels = maps.Clone(m.Labels)
+	return m
+}
 
 // Walk streams the volume's tar archive and calls fn for every entry. The
 // "data/" prefix the helper container adds is stripped from paths and from

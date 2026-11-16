@@ -111,6 +111,9 @@ func (e *Engine) BackupVolume(ctx context.Context, volume string, opts ...ark.Ba
 	unlock := e.lockVolume(volume)
 	defer unlock()
 
+	if err := ark.ValidateBackupOptions(opts...); err != nil {
+		return nil, fmt.Errorf("arkdocker: backup failed for volume %s: %w", volume, err)
+	}
 	e.logger.InfoContext(ctx, "starting volume backup", "volume", volume)
 
 	exists, err := e.docker.VolumeExists(ctx, volume)

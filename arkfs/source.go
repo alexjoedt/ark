@@ -25,6 +25,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -150,8 +151,9 @@ func NewSource(root string, opts ...SourceOption) (ark.Source, error) {
 	s := &fileSource{
 		root: abs,
 		meta: ark.SourceMeta{
-			Name: abs,
-			Type: ark.SourceTypeFile,
+			Name:   abs,
+			Type:   ark.SourceTypeFile,
+			Labels: map[string]string{ark.ReservedLabelPrefix + "path": abs},
 		},
 		dataless: dataless,
 	}
@@ -171,6 +173,7 @@ func NewSource(root string, opts ...SourceOption) (ark.Source, error) {
 func (s *fileSource) Meta() ark.SourceMeta {
 	m := s.meta
 	m.Excludes = slices.Clone(m.Excludes)
+	m.Labels = maps.Clone(m.Labels)
 	return m
 }
 

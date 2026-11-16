@@ -29,6 +29,10 @@ lostpacks/   at most one sealed marker: an index load found a listed data pack g
 `config`, the key files, snapshot manifests, locks and the marker stay single objects, one per
 file. Chunks and directory nodes are never stored alone: they live in packs, and the index finds them.
 
+A snapshot manifest holds the source type, source name, host, tags, comment, statistics and the
+snapshot labels under the key `source_meta`. The key kept its name when labels became settable at
+backup, so manifests written before read the same. See [Labels](LABELS.md) and [Series](SERIES.md).
+
 The directory and SFTP backends shard `datapacks/` and `treepacks/` one level deep by the first two
 characters of the name, so a pack is `datapacks/3f/3f9a...`. That is at most 256 directories per
 namespace, created when first needed. All other namespaces are flat. The sharding is a property of

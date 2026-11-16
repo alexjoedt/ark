@@ -41,12 +41,12 @@ func TestFind(t *testing.T) {
 	header := func(s snap) string {
 		return "snapshot " + out.ShortID(s.ID) + " from " + out.TimeLong(s.CreatedAt)
 	}
-	first := backup("--name", "one", "--host", "h1", "-t", "a")
-	second := backup("--name", "one", "--host", "h2", "-t", "a", "-t", "b")
+	first := backup("--source", "one", "--host", "h1", "-t", "a")
+	second := backup("--source", "one", "--host", "h2", "-t", "a", "-t", "b")
 	if err := os.RemoveAll(filepath.Join(src, "dir")); err != nil {
 		t.Fatal(err)
 	}
-	third := backup("--name", "two", "--host", "h2", "-t", "b")
+	third := backup("--source", "two", "--host", "h2", "-t", "b")
 
 	find := func(args ...string) (int, string, string) {
 		t.Helper()
@@ -77,8 +77,8 @@ func TestFind(t *testing.T) {
 	if got := text("--host", "h1", "x.txt"); got != group(first, "dir/x.txt") {
 		t.Fatalf("--host:\n%s", got)
 	}
-	if got := text("-N", "two", "keep.txt"); got != group(third, "keep.txt") {
-		t.Fatalf("--name:\n%s", got)
+	if got := text("-s", "two", "keep.txt"); got != group(third, "keep.txt") {
+		t.Fatalf("-s:\n%s", got)
 	}
 	if got := text("--type", "docker-volume", "keep.txt"); got != "" {
 		t.Fatalf("--type docker-volume:\n%s", got)

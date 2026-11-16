@@ -33,7 +33,8 @@ func backupCommand() *cli.Command {
 			&cli.StringFlag{Name: "comment", Aliases: []string{"c"}, Usage: "free `TEXT` stored with the snapshot"},
 			&cli.StringFlag{Name: "host", Usage: "host `NAME` stored with the snapshot", Value: hostname},
 			&cli.StringFlag{Name: "parent", Usage: "explicit parent snapshot `ID`"},
-			&cli.StringFlag{Name: "name", Usage: "source `NAME` override (default: absolute path)"},
+			&cli.StringFlag{Name: "source", Aliases: []string{"s"}, Usage: "source `NAME` (default: absolute path)"},
+			labelFlag("record the label `KEY=VALUE`, repeatable, the value may hold commas"),
 			&listFlag{
 				Name:    "exclude",
 				Aliases: []string{"e"},
@@ -43,6 +44,10 @@ func backupCommand() *cli.Command {
 			&cli.BoolFlag{Name: "exclude-cloud-files", Usage: "leave out files that exist only in the cloud"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			labels, err := labelValue(cmd, false)
+			if err != nil {
+				return err
+			}
 			lp := profileFrom(ctx)
 			eff := backupProfile(cmd, lp)
 			if cmd.NArg() > 1 || eff.Backup.Path == "" {
@@ -68,7 +73,8 @@ func backupCommand() *cli.Command {
 				defer repo.Close()
 
 				p := printer(cmd)
-				bopts := append(eff.BackupOptions(), ark.WithParent(cmd.String("parent")))
+				// --label adds to the profile's labels, a key in both takes the flag's value
+				bopts := append(eff.BackupOptions(), ark.WithParent(cmd.String("parent")), ark.WithLabels(labels))
 				// an empty --host or --comment clears the profile's value,
 				// which BackupOptions would leave out or default
 				if cmd.IsSet("host") {
@@ -100,8 +106,9 @@ func backupCommand() *cli.Command {
 }
 
 // backupProfile is the profile's backup section with every flag given on the
-// command line put over it; a list flag replaces the profile's list. Without
-// a profile it holds the flags alone.
+// command line put over it; a list flag replaces the profile's list. --label
+// is left to the caller, which adds it with ark.WithLabels. Without a profile
+// it holds the flags alone.
 func backupProfile(cmd *cli.Command, lp *loadedProfile) arkprofile.Profile {
 	var eff arkprofile.Profile
 	if lp != nil {
@@ -114,10 +121,15 @@ func backupProfile(cmd *cli.Command, lp *loadedProfile) arkprofile.Profile {
 	for _, f := range []struct {
 		name string
 		dst  *string
-	}{{"comment", &b.Comment}, {"host", &b.Host}, {"name", &b.Name}} {
+	}{{"comment", &b.Comment}, {"host", &b.Host}} {
 		if cmd.IsSet(f.name) {
 			*f.dst = cmd.String(f.name)
 		}
+	}
+	// An empty --source counts as not given, as in checkOtherPath and the
+	// profile scope of snapshots, find and forget.
+	if s := cmd.String("source"); s != "" {
+		b.Source = s
 	}
 	if cmd.IsSet("tag") {
 		b.Tags = cmd.StringSlice("tag")
@@ -135,11 +147,11 @@ func backupProfile(cmd *cli.Command, lp *loadedProfile) arkprofile.Profile {
 }
 
 // checkOtherPath refuses a path on the command line that is not the profile's
-// backup.path unless --name names its snapshots: filed under the profile's
+// backup.path unless --source names its snapshots: filed under the profile's
 // name, it would become the parent of the profile's next backup and fall
 // under the profile's forget policy.
 func checkOtherPath(cmd *cli.Command, lp *loadedProfile) error {
-	if lp == nil || cmd.NArg() != 1 || cmd.String("name") != "" {
+	if lp == nil || cmd.NArg() != 1 || cmd.String("source") != "" {
 		return nil
 	}
 	arg, err := filepath.Abs(cmd.Args().First())
@@ -155,7 +167,8 @@ func checkOtherPath(cmd *cli.Command, lp *loadedProfile) error {
 			return nil
 		}
 	}
-	return exitcode.Usagef("backup %s: not the backup.path of profile %s, give --name for its snapshots", arg, lp.Name)
+	return exitcode.Usagef(
+		"backup %s: not the backup.path of profile %s, give --source for its snapshots", arg, lp.Name)
 }
 
 // listFlag is a repeatable string flag whose values are never split on
@@ -185,4 +198,36 @@ func (v *stringList) Get() any { return *v.p }
 func listValue(cmd *cli.Command, name string) []string {
 	v, _ := cmd.Value(name).([]string)
 	return v
+}
+
+// labelFlag is --label: repeatable, never split on commas.
+func labelFlag(usage string) cli.Flag {
+	return &listFlag{Name: "label", Usage: usage}
+}
+
+// labelValue reads --label KEY=VALUE, split at the first "=". For a backup it
+// checks the labels as the library does, so a bad one exits 2 before the
+// repository is opened. A filter checks the shape only: it may name any key a
+// source records, ark's own ark/ keys and a third-party source's keys in
+// another syntax included. A key given twice with two values is refused.
+func labelValue(cmd *cli.Command, filter bool) (map[string]string, error) {
+	list := listValue(cmd, "label")
+	labels := make(map[string]string, len(list))
+	for _, kv := range list {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			return nil, exitcode.Usagef("--label %q: want KEY=VALUE", kv)
+		}
+		if old, dup := labels[k]; dup && old != v {
+			return nil, exitcode.Usagef("--label %q: key %q given twice", kv, k)
+		}
+		labels[k] = v
+	}
+	if filter {
+		return labels, nil
+	}
+	if err := ark.ValidateLabels(labels); err != nil {
+		return nil, exitcode.Usagef("--label: %w", err)
+	}
+	return labels, nil
 }

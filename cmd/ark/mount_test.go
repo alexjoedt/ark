@@ -17,43 +17,95 @@ import (
 	"time"
 
 	ark "github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/arkdocker"
 	"github.com/alexjoedt/ark/arklocal"
 	"github.com/alexjoedt/ark/cmd/ark/internal/out"
 )
 
 func TestBuildLayout(t *testing.T) {
 	at := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
+	sec := out.TimeLong(at)
+	file := func(id, name, host string, d time.Duration, tags ...string) *ark.Snapshot {
+		return &ark.Snapshot{
+			ID: id, SourceType: ark.SourceTypeFile, SourceName: name, Host: host, Tags: tags, CreatedAt: at.Add(d),
+		}
+	}
 	snaps := []*ark.Snapshot{
-		{
-			ID: "aaaaaaaa11", SourceName: "/srv/data", Host: ".hidden", Tags: []string{"a/b", "x", "a_b"},
-			CreatedAt: at.Add(500 * time.Millisecond),
-		},
-		{ID: "aaaaaaaa22", SourceName: "/srv/data", Host: "", Tags: []string{"x", "x"}, CreatedAt: at},
-		{ID: "bbbbbbbb33", SourceName: "..", Host: "h", CreatedAt: at.Add(time.Hour)},
+		file("aaaaaaaa11", "/home", "", 500*time.Millisecond, "a/b", "x", "a_b"),
+		file("aaaaaaaa22", "/home", "", 0, "x", "x"),
+		file("bbbbbbbb33", "/home", "h2", time.Hour),
+		file("cccccccc44", "/home/alex", "", 2*time.Hour),
+		file("dddddddd55", "/home/latest", "", 0),
+		file("eeeeeeee66", "/home/"+sec, "", 0),
+		file("ffffffff77", "/.cfg", "", 0),
+		file("gggggggg88", "home", "", 0),
+		file("hhhhhhhh99", "/home", "_", 0),
+		{ID: "44444444bb", SourceType: "files", SourceName: "n", Host: "h", CreatedAt: at},
+		{ID: "1111111188", SourceType: arkdocker.SourceTypeDockerVolume, SourceName: "pg", Host: "h", CreatedAt: at},
+		{ID: "2222222299", SourceType: ark.SourceTypeStream, SourceName: "db/dump", Host: "h", CreatedAt: at},
+		{ID: "33333333aa", SourceType: "custom/x", SourceName: "n", Host: "h", CreatedAt: at},
 	}
 	root := buildLayout(snaps)
-	sec := out.TimeLong(at)
 
+	if got := keys(root.dirs); !slices.Equal(got, []string{"ids", "sources", "tags"}) {
+		t.Errorf("root = %v, want ids, sources, tags only", got)
+	}
 	ids := root.dirs["ids"].snaps
-	if len(ids) != 3 || ids["aaaaaaaa11"] != "aaaaaaaa11" || ids["bbbbbbbb"] != "bbbbbbbb33" {
+	if len(ids) != len(snaps) || ids["aaaaaaaa11"] != "aaaaaaaa11" || ids["bbbbbbbb"] != "bbbbbbbb33" {
 		t.Errorf("ids = %v, want full IDs for the shared prefix and a short one otherwise", ids)
 	}
-	data := root.dirs["names"].dirs["_srv_data"]
-	if data == nil {
-		t.Fatalf("names = %v, want _srv_data", keys(root.dirs["names"].dirs))
+	sources := root.dirs["sources"]
+	if got := keys(sources.dirs); !slices.Equal(
+		got,
+		[]string{"custom_xs", "docker-volumes", "files", "filess", "streams"},
+	) {
+		t.Errorf("sources = %v", got)
 	}
-	if data.snaps[sec] != "aaaaaaaa22" || data.snaps[sec+"-1"] != "aaaaaaaa11" {
-		t.Errorf("same-second names = %v", data.snaps)
+	files := sources.dirs["files"]
+	if got := keys(files.dirs); !slices.Equal(got, []string{"_", "__", "h2"}) {
+		t.Errorf("files hosts = %v, want _ for the empty host, __ for host _ and h2", got)
 	}
-	if data.links["latest"] != sec+"-1" {
-		t.Errorf("latest = %q, want %q", data.links["latest"], sec+"-1")
+	if files.dirs["__"].dirs["home"].snaps[sec] != "hhhhhhhh99" {
+		t.Errorf("files/__ = %v, want host _'s /home", keys(files.dirs["__"].dirs))
 	}
-	if got := keys(root.dirs["names"].dirs); !slices.Equal(got, []string{"_..", "_srv_data"}) {
-		t.Errorf("names = %v", got)
+	if got := sources.dirs["filess"].dirs["h"].dirs["n"]; got == nil || got.snaps[sec] != "44444444bb" {
+		t.Errorf("filess = %v, want the type named files", keys(sources.dirs["filess"].dirs))
 	}
-	if got := keys(root.dirs["hosts"].dirs); !slices.Equal(got, []string{"_", "_.hidden", "h"}) {
-		t.Errorf("hosts = %v", got)
+	if got := files.dirs["_"].dirs["home-1"]; got == nil || got.snaps[sec] != "gggggggg88" {
+		t.Errorf("files/_ = %v, want home-1 for the relative source home", keys(files.dirs["_"].dirs))
 	}
+	home := files.dirs["_"].dirs["home"]
+	if home == nil {
+		t.Fatalf("files/_ = %v, want home", keys(files.dirs["_"].dirs))
+	}
+	if home.snaps[sec] != "aaaaaaaa22" || home.snaps[sec+"-1"] != "aaaaaaaa11" || len(home.snaps) != 2 {
+		t.Errorf("home times = %v, want the two /home snapshots of the empty host, same second suffixed", home.snaps)
+	}
+	if home.links["latest"] != sec+"-1" {
+		t.Errorf("home latest = %q, want %q (h2's newer /home is another series)", home.links["latest"], sec+"-1")
+	}
+	if got := keys(home.dirs); !slices.Equal(got, []string{"_" + sec, "_latest", "alex"}) {
+		t.Errorf("home dirs = %v, want alex and the time and latest names marked with _", got)
+	}
+	if alex := home.dirs["alex"]; alex.links["latest"] == "" || len(alex.snaps) != 1 {
+		t.Errorf("home/alex = %v, %v, want one snapshot and latest", alex.snaps, alex.links)
+	}
+	if got := files.dirs["h2"].dirs["home"].links["latest"]; got != out.TimeLong(at.Add(time.Hour)) {
+		t.Errorf("h2/home latest = %q", got)
+	}
+	if files.dirs["_"].dirs["_.cfg"] == nil {
+		t.Errorf("files/_ = %v, want _.cfg for /.cfg", keys(files.dirs["_"].dirs))
+	}
+	if sources.dirs["docker-volumes"].dirs["h"].dirs["pg"].links["latest"] != sec {
+		t.Error("docker-volumes/h/pg has no latest")
+	}
+	if sources.dirs["streams"].dirs["h"].dirs["db"].dirs["dump"].links["latest"] != sec {
+		t.Error("streams/h/db/dump has no latest")
+	}
+	if !root.time.Equal(at.Add(2*time.Hour)) || !home.time.Equal(at.Add(2*time.Hour)) {
+		t.Errorf("dir times = %v, %v, want the newest snapshot below", root.time, home.time)
+	}
+
 	tags := root.dirs["tags"].dirs
 	if got := keys(tags); !slices.Equal(got, []string{"a_b", "a_b-1", "x"}) {
 		t.Errorf("tags = %v, want a_b for itself and a_b-1 for a/b", got)
@@ -65,14 +117,11 @@ func TestBuildLayout(t *testing.T) {
 			tags["a_b-1"].snaps,
 		)
 	}
-	if !root.time.Equal(at.Add(time.Hour)) || !data.time.Equal(at.Add(500*time.Millisecond)) {
-		t.Errorf("dir times = %v, %v, want the newest snapshot below", root.time, data.time)
-	}
 	if len(tags["x"].snaps) != 2 {
 		t.Errorf("tags/x = %v, want each snapshot once", tags["x"].snaps)
 	}
 	if len(tags["x"].links) != 0 {
-		t.Errorf("tags/x links = %v, want latest only per name", tags["x"].links)
+		t.Errorf("tags/x links = %v, want latest only per source", tags["x"].links)
 	}
 }
 
@@ -179,7 +228,7 @@ func TestMount(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(src, "dir", "file.txt"), mtime, mtime); err != nil {
 		t.Fatal(err)
 	}
-	code, stdout := runCapture(t, "--json", "backup", "--name", "app/data", "--host", "h1", "-t", ".t", src)
+	code, stdout := runCapture(t, "--json", "backup", "--source", "app/data", "--host", "h1", "-t", ".t", src)
 	var snap struct {
 		ID        string    `json:"id"`
 		CreatedAt time.Time `json:"created_at"`
@@ -193,10 +242,9 @@ func TestMount(t *testing.T) {
 	when := out.TimeLong(snap.CreatedAt)
 	for _, dir := range []string{
 		filepath.Join("ids", out.ShortID(snap.ID)),
-		filepath.Join("names", "app_data", when),
-		filepath.Join("names", "app_data", "latest"),
+		filepath.Join("sources", "files", "h1", "app", "data", when),
+		filepath.Join("sources", "files", "h1", "app", "data", "latest"),
 		filepath.Join("tags", "_.t", when),
-		filepath.Join("hosts", "h1", when),
 	} {
 		got, err := os.ReadFile(filepath.Join(mnt, dir, "dir", "file.txt"))
 		if err != nil || string(got) != string(content) {
@@ -207,7 +255,8 @@ func TestMount(t *testing.T) {
 	if entries, err := os.ReadDir(snapDir); err != nil || len(entries) != 3 {
 		t.Errorf("snapshot root lists %v, %v; want dir, hard.txt, link", entries, err)
 	}
-	if target, err := os.Readlink(filepath.Join(mnt, "names", "app_data", "latest")); err != nil || target != when {
+	latest := filepath.Join(mnt, "sources", "files", "h1", "app", "data", "latest")
+	if target, err := os.Readlink(latest); err != nil || target != when {
 		t.Errorf("latest -> %q, %v; want %q", target, err, when)
 	}
 	if target, err := os.Readlink(filepath.Join(snapDir, "link")); err != nil || target != "dir/file.txt" {
@@ -243,7 +292,7 @@ func TestMountBusyKeepsServing(t *testing.T) {
 	mountable(t)
 	repo := initRepo(t)
 	t.Setenv("ARK_REPOSITORY", repo)
-	if code, _ := runCapture(t, "backup", "--name", "n", t.TempDir()); code != 0 {
+	if code, _ := runCapture(t, "backup", "--source", "n", t.TempDir()); code != 0 {
 		t.Fatalf("backup exit %d", code)
 	}
 	mnt := t.TempDir()
@@ -285,7 +334,7 @@ func TestMountBusySecondInterruptQuits(t *testing.T) {
 	mountable(t)
 	repo := initRepo(t)
 	t.Setenv("ARK_REPOSITORY", repo)
-	if code, _ := runCapture(t, "backup", "--name", "n", t.TempDir()); code != 0 {
+	if code, _ := runCapture(t, "backup", "--source", "n", t.TempDir()); code != 0 {
 		t.Fatalf("backup exit %d", code)
 	}
 	mnt := t.TempDir()

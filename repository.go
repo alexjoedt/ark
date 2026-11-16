@@ -230,6 +230,10 @@ func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOptio
 	// Nobody would see the totals, so the second walk is not paid for.
 	o.scan = o.scan && (o.progress != nil || r.progress != nil)
 	o.progress = r.observer(OperationBackup, o.progress)
+	meta := src.Meta()
+	if err := checkBackupLabels(meta.Labels, o.labels); err != nil {
+		return nil, err
+	}
 
 	ctx, lock, err := r.acquire(ctx, false)
 	if err != nil {
@@ -244,7 +248,7 @@ func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOptio
 		}
 		o.parent = parent
 	}
-	m, err := r.runBackup(ctx, src, *o, r.writeSession())
+	m, err := r.runBackup(ctx, src, meta, *o, r.writeSession())
 	if err != nil {
 		return nil, err
 	}
@@ -714,7 +718,7 @@ func (f SnapshotFilter) Match(s *Snapshot) bool {
 	if len(f.IDs) > 0 && !slices.Contains(f.IDs, s.ID) {
 		return false
 	}
-	if f.Name != "" && s.SourceName != f.Name {
+	if f.Source != "" && s.SourceName != f.Source {
 		return false
 	}
 	if f.Type != "" && s.SourceType != f.Type {
@@ -722,6 +726,11 @@ func (f SnapshotFilter) Match(s *Snapshot) bool {
 	}
 	if f.Host != "" && s.Host != f.Host {
 		return false
+	}
+	for k, v := range f.Labels {
+		if got, ok := s.Labels[k]; !ok || got != v {
+			return false
+		}
 	}
 	if !f.Before.IsZero() && !s.CreatedAt.Before(f.Before) {
 		return false

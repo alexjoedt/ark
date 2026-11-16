@@ -370,7 +370,7 @@ func parseArchiveMetadata(data []byte) (*manifest, error) {
 		// value is the string arkdocker uses; source types are stored
 		// verbatim, so naming it here creates no dependency on that package.
 		SourceType: "docker-volume",
-		SourceMeta: legacy.Source.Labels,
+		Labels:     legacy.Source.Labels,
 		Comment:    legacy.Backup.Comment,
 	}, nil
 }

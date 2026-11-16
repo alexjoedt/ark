@@ -24,7 +24,8 @@ type SourceMeta struct {
 	// Type identifies the origin of the data.
 	Type SourceType
 
-	// Labels holds arbitrary key-value metadata (e.g. docker_host, docker_version).
+	// Labels holds arbitrary key-value metadata (e.g. ark/docker-host). The
+	// keys a built-in source records start with [ReservedLabelPrefix].
 	Labels map[string]string
 
 	// Excludes lists the patterns the source left paths out by. The snapshot
