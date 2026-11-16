@@ -184,10 +184,10 @@ func volumeRoundTrip(t *testing.T, c *Client, e *Engine) {
 		t.Fatalf("inspect the container: %v", err)
 	}
 	for key, want := range map[string]string{
-		"container.0.name":     ctr.Name,
-		"container.0.image":    imageReference(c.helperImage),
-		"container.0.image_id": ctr.ImageID,
-		"container.0.state":    "running",
+		"ark/container.0.name":     ctr.Name,
+		"ark/container.0.image":    imageReference(c.helperImage),
+		"ark/container.0.image_id": ctr.ImageID,
+		"ark/container.0.state":    "running",
 	} {
 		if got := snap.Labels[key]; got == "" || got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)

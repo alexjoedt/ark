@@ -36,7 +36,7 @@ func NewVolumeSource(client *Client, volume string) ark.Source {
 func newVolumeSource(client *Client, volume string, ctrs []ContainerInfo) ark.Source {
 	labels := map[string]string{}
 	if client.host != "" {
-		labels["docker_host"] = client.host
+		labels[ark.ReservedLabelPrefix+"docker-host"] = client.host
 	}
 	maps.Copy(labels, containerLabels(ctrs))
 	return &dockerVolumeSource{
@@ -59,7 +59,7 @@ func containerLabels(ctrs []ContainerInfo) map[string]string {
 		return strings.Compare(a.Name, b.Name)
 	})
 	for i, ctr := range sorted {
-		prefix := "container." + strconv.Itoa(i) + "."
+		prefix := ark.ReservedLabelPrefix + "container." + strconv.Itoa(i) + "."
 		for k, v := range map[string]string{
 			"name":            ctr.Name,
 			"image":           imageReference(ctr.Image),

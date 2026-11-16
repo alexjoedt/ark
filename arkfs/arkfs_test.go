@@ -127,3 +127,21 @@ func TestIncrementalBackupCatchesMtimePreservingRewrite(t *testing.T) {
 		}
 	}
 }
+
+func TestSourceRecordsThePathLabel(t *testing.T) {
+	dir := t.TempDir()
+	for _, opts := range [][]arkfs.SourceOption{nil, {arkfs.WithName("notes")}} {
+		src, err := arkfs.NewSource(dir, opts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		labels := src.Meta().Labels
+		if len(labels) != 1 || labels["ark/path"] != dir {
+			t.Errorf("labels %v, want only ark/path = %q", labels, dir)
+		}
+		labels["x"] = "y"
+		if _, ok := src.Meta().Labels["x"]; ok {
+			t.Error("Meta shares the label map")
+		}
+	}
+}
