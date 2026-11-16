@@ -301,7 +301,7 @@ func volumeRoundTrip(t *testing.T, d *volumeDocker, e *arkdocker.Engine) {
 		"container.0.image_id": ctr.Image,
 		"container.0.state":    "running",
 	} {
-		if got := snap.SourceMeta[key]; got == "" || got != want {
+		if got := snap.Labels[key]; got == "" || got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)
 		}
 	}

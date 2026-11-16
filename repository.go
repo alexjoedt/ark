@@ -230,6 +230,11 @@ func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOptio
 	// Nobody would see the totals, so the second walk is not paid for.
 	o.scan = o.scan && (o.progress != nil || r.progress != nil)
 	o.progress = r.observer(OperationBackup, o.progress)
+	if len(o.labels) > 0 {
+		if err := checkBackupLabels(src.Meta().Labels, o.labels); err != nil {
+			return nil, err
+		}
+	}
 
 	ctx, lock, err := r.acquire(ctx, false)
 	if err != nil {
@@ -722,6 +727,11 @@ func (f SnapshotFilter) Match(s *Snapshot) bool {
 	}
 	if f.Host != "" && s.Host != f.Host {
 		return false
+	}
+	for k, v := range f.Labels {
+		if got, ok := s.Labels[k]; !ok || got != v {
+			return false
+		}
 	}
 	if !f.Before.IsZero() && !s.CreatedAt.Before(f.Before) {
 		return false

@@ -50,3 +50,27 @@ func TestSnapshotFilterTimeBounds(t *testing.T) {
 		})
 	}
 }
+
+// Every label of the filter must be on the snapshot with the same value.
+func TestSnapshotFilterMatchesLabels(t *testing.T) {
+	snap := &ark.Snapshot{Labels: map[string]string{"app": "my-app", "empty": ""}}
+	tests := []struct {
+		name   string
+		labels map[string]string
+		want   bool
+	}{
+		{"no labels", nil, true},
+		{"same value", map[string]string{"app": "my-app"}, true},
+		{"other value", map[string]string{"app": "other"}, false},
+		{"one pair missing", map[string]string{"app": "my-app", "env": "prod"}, false},
+		{"empty value present", map[string]string{"empty": ""}, true},
+		{"empty value absent", map[string]string{"env": ""}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := (ark.SnapshotFilter{Labels: tt.labels}).Match(snap); got != tt.want {
+				t.Errorf("Match = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

@@ -163,6 +163,7 @@ func TestBackendHoldsNoPlaintext(t *testing.T) {
 				ark.WithHost(marker+"-host"),
 				ark.WithTags(marker+"-tag"),
 				ark.WithComment("comment "+marker),
+				ark.WithLabels(map[string]string{"app": marker + "-label"}),
 				ark.WithBackupProgress(func(ark.ProgressEvent) {
 					once.Do(func() { during = scanForMarker(t, b) })
 				}),
@@ -176,7 +177,8 @@ func TestBackendHoldsNoPlaintext(t *testing.T) {
 			if len(snap.Excludes) != 1 || !strings.Contains(snap.Excludes[0], marker) {
 				t.Fatalf("the exclude pattern did not reach the snapshot: %q", snap.Excludes)
 			}
-			if snap.Host != marker+"-host" || !strings.Contains(snap.SourceName, marker) {
+			if snap.Host != marker+"-host" || !strings.Contains(snap.SourceName, marker) ||
+				snap.Labels["app"] != marker+"-label" {
 				t.Fatalf("the marker did not reach the snapshot: %+v", snap)
 			}
 			if xattrs {

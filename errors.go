@@ -15,6 +15,11 @@ var (
 	// the filter names no ids, which would remove every matching snapshot.
 	ErrEmptyPolicy = errors.New("ark: forget policy keeps nothing and no ids given")
 
+	// ErrInvalidLabel is returned by ValidateLabels, and by Backup before it
+	// writes anything, for a label key or value a caller may not set, or a
+	// key the source sets as well.
+	ErrInvalidLabel = errors.New("ark: invalid label")
+
 	// ErrIncompatibleSourceType is returned when restoring a snapshot into a
 	// Sink type that is incompatible with the snapshot's SourceType.
 	ErrIncompatibleSourceType = errors.New("ark: incompatible source type")
