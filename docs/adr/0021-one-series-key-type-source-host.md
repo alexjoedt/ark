@@ -26,7 +26,7 @@ policy once per series among the snapshots its filter matches (`applyForgetPolic
 source name match; its host is not checked, naming it is the caller's statement that it fits.
 
 The library leaves the host to the embedder: `WithHost` sets it and the default is empty.
-`ark backup` passes the machine's hostname unless `--host` says otherwise.
+`ark backup` and `ark docker backup` pass the machine's hostname unless `--host` says otherwise.
 
 - Not source name alone, because one repository shared by several machines is the normal case and a
   policy run on one of them must not decide about the others' snapshots.
@@ -51,6 +51,7 @@ parent of another type lends no file (`TestBackupRereadsRacyAndForeignParentFile
 A series that stops receiving backups keeps its last snapshots for good: a renamed machine or a
 changed source name starts a new series, the first backup of it has no parent and reads every file,
 and the old one is removed by id or with `ark forget --all` and a filter. Snapshots without a host
-form a series of their own per source type and name. `ark docker backup` records no host, so the
-snapshots of one volume name from two machines still share that series until the command records
-one. Nothing is migrated: existing snapshots keep the fields they were written with.
+form a series of their own per source type and name: docker volume snapshots written before
+`ark docker backup` recorded a host are such a series, so the first backup after the update has no
+parent and reads the volume once. Nothing is migrated: existing snapshots keep the fields they were
+written with.

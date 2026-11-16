@@ -118,9 +118,13 @@ again:
 
 ```go
 eng, err := arkdocker.New(repo) // DOCKER_HOST, or arkdocker.WithDockerHost
-snap, err := eng.BackupVolume(ctx, "postgres_data")
+snap, err := eng.BackupVolume(ctx, "postgres_data", ark.WithHost("db1"))
 _, err = eng.RestoreVolume(ctx, snap.ID, "postgres_copy") // created if missing
 ```
+
+The library records no host unless you pass `ark.WithHost`; the `ark` CLI always records the hostname.
+A backup takes the newest snapshot with the same source type, source name and host as its parent, so
+embedders that share one repository between machines should set a host.
 
 Your own data goes in through `ark.Source`, two methods: `Meta` names the snapshot, `Walk` yields
 entries. A matching `ark.Sink` (`Open`, `Receive`, `Close`) brings it back, and
@@ -250,11 +254,16 @@ Docker volumes live under `ark docker`. The daemon comes from `--docker-host` or
 
 ```bash
 ark docker volumes
-ark docker backup postgres_data --comment "before upgrade"
+ark docker backup postgres_data --comment "before upgrade"  # --host NAME overrides the hostname
 ark snapshots --type docker-volume    # only volume snapshots, file backups have type file
 ark docker restore <id>                # into the volume it came from
 ark docker restore <id> postgres_copy  # or into another one, created if missing
 ```
+
+A volume is one series per host: the parent of a backup, `ark forget` and the LAST SNAPSHOT of
+`ark docker volumes` only see the snapshots of the same `--host`. Volume snapshots written before the
+host was recorded have none, so the first backup after the update has no parent and reads the volume
+once.
 
 `ark restore` refuses Docker volume snapshots. Use `ark docker restore`, or unpack one into a
 directory with `ark export <id> | tar x`.

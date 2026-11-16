@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	ark "github.com/alexjoedt/ark"
@@ -65,6 +66,7 @@ func dockerVolumesCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "volumes",
 		Usage: "list Docker volumes",
+		Flags: []cli.Flag{hostFlag()},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.NArg() != 0 {
 				return exitcode.Usagef("usage: ark docker volumes")
@@ -84,13 +86,7 @@ func dockerVolumesCommand() *cli.Command {
 			if err != nil {
 				return fmt.Errorf("docker volumes: %w", err)
 			}
-			// snapshots arrive newest first, the first hit per name wins
-			last := make(map[string]time.Time)
-			for _, s := range snaps {
-				if _, ok := last[s.SourceName]; !ok && s.SourceType == arkdocker.SourceTypeDockerVolume {
-					last[s.SourceName] = s.CreatedAt
-				}
-			}
+			last := lastVolumeSnapshots(snaps, cmd.String("host"))
 
 			p := printer(cmd)
 			if p.Mode().JSON {
@@ -118,6 +114,29 @@ func dockerVolumesCommand() *cli.Command {
 	}
 }
 
+// hostFlag is --host of the docker commands: the machine's hostname unless
+// told otherwise, as for ark backup.
+func hostFlag() cli.Flag {
+	hostname, _ := os.Hostname()
+	return &cli.StringFlag{Name: "host", Usage: "host `NAME` of the snapshots", Value: hostname}
+}
+
+// lastVolumeSnapshots maps a volume name to the time of its newest snapshot
+// recorded for host: the series key of the library, so another machine's
+// backup of the same volume name does not show here. snaps arrive newest first.
+func lastVolumeSnapshots(snaps []*ark.Snapshot, host string) map[string]time.Time {
+	last := make(map[string]time.Time)
+	for _, s := range snaps {
+		if s.SourceType != arkdocker.SourceTypeDockerVolume || s.Host != host {
+			continue
+		}
+		if _, ok := last[s.SourceName]; !ok {
+			last[s.SourceName] = s.CreatedAt
+		}
+	}
+	return last
+}
+
 // volumeJSON is one element of ark docker volumes --json.
 type volumeJSON struct {
 	Name         string     `json:"name"`
@@ -134,8 +153,11 @@ func dockerBackupCommand() *cli.Command {
 		UsageText: `ark docker backup [options] <volume>
 
    Stops running containers that use <volume>, backs it up, restarts them.
-   The snapshot's source name is the volume name, source type docker-volume.`,
+   The snapshot's source name is the volume name, source type docker-volume. The
+   host is the machine's hostname unless --host is set; the parent is the newest
+   snapshot of the same volume and host.`,
 		Flags: append([]cli.Flag{
+			hostFlag(),
 			&cli.StringSliceFlag{Name: "tag", Aliases: []string{"t"}, Usage: "add a `TAG`, repeatable"},
 			&cli.StringFlag{Name: "comment", Aliases: []string{"c"}, Usage: "free `TEXT` stored with the snapshot"},
 		}, stopFlags()...),
@@ -157,6 +179,7 @@ func dockerBackupCommand() *cli.Command {
 			snap, err := e.BackupVolume(ctx, volume,
 				ark.WithTags(cmd.StringSlice("tag")...),
 				ark.WithComment(cmd.String("comment")),
+				ark.WithHost(cmd.String("host")),
 			)
 			if err != nil {
 				pr.Fail()
