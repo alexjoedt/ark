@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -1308,5 +1310,30 @@ func TestBackupTime(t *testing.T) {
 	code, out := runCapture(t, "-r", repo, "snapshots")
 	if code != 0 || strings.Count(out, "2015-06-01 12:30:15") != 1 || strings.Count(out, "\n") != 4 {
 		t.Errorf("snapshots: exit %d, want a header and three rows, one at 2015-06-01 12:30:15: %s", code, out)
+	}
+}
+
+// Berlin skips 02:00 to 03:00 when summer time starts and shows it twice when
+// it ends. A --time the clocks never show is refused rather than moved by an
+// hour; one they show twice is taken.
+func TestBackupTimeInAClockChange(t *testing.T) {
+	repo := initRepo(t)
+	src := t.TempDir()
+	backup := func(at string) (int, string) {
+		cmd := exec.CommandContext(t.Context(), os.Args[0], "--json", "-r", repo, "backup", "--time", at, src)
+		cmd.Env = append(os.Environ(), envCLIChild+"=1", "TZ=Europe/Berlin")
+		out, err := cmd.Output()
+		if _, exited := errors.AsType[*exec.ExitError](err); err != nil && !exited {
+			t.Fatalf("backup --time %q: %v", at, err)
+		}
+		return cmd.ProcessState.ExitCode(), string(out)
+	}
+	if code, out := backup("2015-03-29 02:30:00"); code != 2 || !strings.Contains(out, "does not exist") {
+		t.Errorf("skipped time: exit %d, want 2 and a message that it does not exist: %s", code, out)
+	}
+	for _, at := range []string{"2015-03-29 01:59:59", "2015-03-29 03:00:00", "2015-10-25 02:30:00"} {
+		if code, out := backup(at); code != 0 {
+			t.Errorf("--time %q: exit %d, want 0: %s", at, code, out)
+		}
 	}
 }

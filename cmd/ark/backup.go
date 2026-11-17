@@ -216,15 +216,22 @@ func timeFlag() cli.Flag {
 }
 
 // timeOption reads --time as local time into ark.WithTime; without the flag
-// there is no option. A value that does not parse, or a time the library
-// refuses, is a usage error before anything else runs.
+// there is no option. A value that does not parse, a time the local clocks
+// skip, or a time the library refuses, is a usage error before anything else
+// runs. Of an hour the clocks show twice, Go picks one of the two.
 func timeOption(cmd *cli.Command) ([]ark.BackupOption, error) {
 	if !cmd.IsSet("time") {
 		return nil, nil
 	}
-	t, err := time.ParseInLocation(time.DateTime, cmd.String("time"), time.Local)
+	s := cmd.String("time")
+	t, err := time.ParseInLocation(time.DateTime, s, time.Local)
 	if err != nil {
-		return nil, exitcode.Usagef(`--time: %q is not a time such as "2006-01-02 15:04:05"`, cmd.String("time"))
+		return nil, exitcode.Usagef(`--time: %q is not a time such as "2006-01-02 15:04:05"`, s)
+	}
+	// In the hour skipped when summer time starts, Go moves the time by the
+	// shift instead of failing: the clock of t then differs from the one read.
+	if wall, _ := time.Parse(time.DateTime, s); t.Format(time.DateTime) != wall.Format(time.DateTime) {
+		return nil, exitcode.Usagef("--time: %q does not exist in the local time zone, the clocks skip it", s)
 	}
 	opt := ark.WithTime(t)
 	if err := ark.ValidateBackupOptions(opt); err != nil {

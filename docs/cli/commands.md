@@ -76,7 +76,8 @@ and all given labels must match. See [Series](../SERIES.md) and [Labels](../LABE
 `--time` dates a backup of data as it was at an earlier time: `ark snapshots` shows that time and
 `ark forget` counts the snapshot in its hour, day, week, month and year. The parent is still the
 newest snapshot of the series by time, so a backup may be dated before its parent. A time in the
-future is refused, exit 2.
+future is refused, exit 2, and so is a time the local clocks skip when summer time starts. Of an
+hour they show twice when it ends, either of the two is taken; both count in the same hour.
 
 ### Excludes
 
