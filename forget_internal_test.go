@@ -128,3 +128,63 @@ func TestForgetPolicyAppliesPerSeries(t *testing.T) {
 		})
 	}
 }
+
+// A week belongs to the ISO year its Thursday falls in, so a year turn must
+// neither merge the last week of a year with the first of the next nor split
+// one week in two.
+func TestKeepWeeklyAcrossYearTurns(t *testing.T) {
+	day := func(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 12, 0, 0, 0, time.UTC) }
+	tests := []struct {
+		name  string
+		times []time.Time // newest first
+		keep  []string
+	}{
+		{
+			"week 53 of 2026 and week 1 of 2027",
+			[]time.Time{day(2027, 1, 6), day(2026, 12, 30)},
+			[]string{"s0", "s1"},
+		},
+		{
+			"week 53 of 2020 and week 1 of 2021",
+			[]time.Time{day(2021, 1, 6), day(2020, 12, 30)},
+			[]string{"s0", "s1"},
+		},
+		{
+			"week 53 of 2020 spans the year turn",
+			[]time.Time{day(2021, 1, 3), day(2020, 12, 28), day(2020, 12, 27)},
+			[]string{"s0", "s2"},
+		},
+		{
+			"a year starting on Monday",
+			[]time.Time{day(2024, 1, 1), day(2023, 12, 31), day(2023, 12, 25)},
+			[]string{"s0", "s1"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			snaps := make([]*Snapshot, len(tc.times))
+			for i, ts := range tc.times {
+				snaps[i] = &Snapshot{ID: fmt.Sprintf("s%d", i), CreatedAt: ts}
+			}
+			got := ids(applyForgetPolicy(snaps, ForgetPolicy{KeepWeekly: 2}).Keep)
+			if !slices.Equal(got, tc.keep) {
+				t.Errorf("keeps %v, want %v", got, tc.keep)
+			}
+		})
+	}
+}
+
+func TestWeekKeyIsDistinctPerISOWeek(t *testing.T) {
+	seen := make(map[[2]int]time.Time)
+	// 2000-01-03 is the Monday of week 1 of 2000.
+	for monday := time.Date(2000, 1, 3, 0, 0, 0, 0, time.UTC); monday.Year() <= 2040; monday = monday.AddDate(0, 0, 7) {
+		key := weekKey(monday)
+		if other, dup := seen[key]; dup {
+			t.Fatalf("weeks of %s and %s share key %v", other.Format(time.DateOnly), monday.Format(time.DateOnly), key)
+		}
+		seen[key] = monday
+		if sunday := monday.AddDate(0, 0, 6).Add(23 * time.Hour); weekKey(sunday) != key {
+			t.Fatalf("week of %s: Sunday has key %v, Monday %v", monday.Format(time.DateOnly), weekKey(sunday), key)
+		}
+	}
+}

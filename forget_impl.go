@@ -61,40 +61,17 @@ func applyForgetPolicyToGroup(snapshots []*Snapshot, policy ForgetPolicy) *Forge
 		}
 	}
 
-	markPeriod := func(n int, periodStart func(time.Time) time.Time) {
-		if n <= 0 {
-			return
-		}
-		periods := make(map[time.Time]struct{})
-		for _, s := range snapshots {
-			if len(periods) >= n {
-				break
-			}
-			p := periodStart(s.CreatedAt)
-			if _, seen := periods[p]; !seen {
-				periods[p] = struct{}{}
-				keep[s.ID] = struct{}{}
-			}
-		}
-	}
-
-	markPeriod(policy.KeepHourly, func(t time.Time) time.Time {
+	markPeriod(snapshots, keep, policy.KeepHourly, func(t time.Time) time.Time {
 		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, t.Location())
 	})
-	markPeriod(policy.KeepDaily, func(t time.Time) time.Time {
+	markPeriod(snapshots, keep, policy.KeepDaily, func(t time.Time) time.Time {
 		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
 	})
-	markPeriod(policy.KeepWeekly, func(t time.Time) time.Time {
-		year, week := t.ISOWeek()
-		// Monday of the ISO week.
-		jan4 := time.Date(year, 1, 4, 0, 0, 0, 0, t.Location())
-		monday := jan4.AddDate(0, 0, -int(jan4.Weekday()-time.Monday))
-		return monday.AddDate(0, 0, (week-1)*7)
-	})
-	markPeriod(policy.KeepMonthly, func(t time.Time) time.Time {
+	markPeriod(snapshots, keep, policy.KeepWeekly, weekKey)
+	markPeriod(snapshots, keep, policy.KeepMonthly, func(t time.Time) time.Time {
 		return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
 	})
-	markPeriod(policy.KeepYearly, func(t time.Time) time.Time {
+	markPeriod(snapshots, keep, policy.KeepYearly, func(t time.Time) time.Time {
 		return time.Date(t.Year(), 1, 1, 0, 0, 0, 0, t.Location())
 	})
 
@@ -107,4 +84,30 @@ func applyForgetPolicyToGroup(snapshots []*Snapshot, policy ForgetPolicy) *Forge
 	}
 
 	return result
+}
+
+// markPeriod keeps the newest snapshot of each of the n newest periods; key
+// names the period a time falls in.
+func markPeriod[K comparable](snapshots []*Snapshot, keep map[string]struct{}, n int, key func(time.Time) K) {
+	if n <= 0 {
+		return
+	}
+	periods := make(map[K]struct{})
+	for _, s := range snapshots {
+		if len(periods) >= n {
+			break
+		}
+		p := key(s.CreatedAt)
+		if _, seen := periods[p]; !seen {
+			periods[p] = struct{}{}
+			keep[s.ID] = struct{}{}
+		}
+	}
+}
+
+// weekKey names the ISO week of t. The year is the ISO year, which differs
+// from t.Year() in the days around a year turn.
+func weekKey(t time.Time) [2]int {
+	year, week := t.ISOWeek()
+	return [2]int{year, week}
 }
