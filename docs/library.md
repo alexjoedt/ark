@@ -251,7 +251,7 @@ if p.Forget.Prune {
 }
 ```
 
-The counted rules of an `ark.ForgetPolicy`, `KeepLast` to `KeepYearly`, are of type `ark.KeepCount`: a number, or `ark.Unlimited` to keep every snapshot (`KeepLast`) or the newest of every period. `Forget` refuses any other negative count with `ark.ErrInvalidPolicy`. `ark.ParseKeepCount` reads the text form a profile and the CLI use, a whole number or `unlimited`.
+The counted rules of an `ark.ForgetPolicy`, `KeepLast` to `KeepYearly`, are of type `ark.KeepCount`: a number, or `ark.Unlimited` to keep every snapshot (`KeepLast`) or the newest of every period. `Forget` refuses any other negative count with `ark.ErrInvalidPolicy`. `ark.ParseKeepCount` reads the text form a profile and the CLI use, a whole number or `unlimited`. In JSON a count is a number and `ark.Unlimited` the string `"unlimited"`.
 
 `Forget` counts the hours, days, weeks, months and years of a policy in `time.Local`; `ark.WithForgetLocation` names another zone. Earlier versions counted in UTC. The result depends on the zone of the machine, so a program that has to keep the same snapshots wherever it runs passes a fixed zone, for example `ark.WithForgetLocation(time.UTC)`.
 

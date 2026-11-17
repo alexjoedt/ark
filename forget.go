@@ -1,15 +1,18 @@
 package ark
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
 // KeepCount is the count of a counted keep rule: zero keeps nothing,
 // [Unlimited] keeps without a limit. Forget refuses any other negative count
 // with [ErrInvalidPolicy]. As text, in a profile or on the command line, a
-// count is a whole number or the word unlimited.
+// count is a whole number or the word unlimited. In JSON it is a number, and
+// the string "unlimited" for [Unlimited].
 type KeepCount int
 
 // Unlimited makes a counted rule keep all it can: KeepLast every snapshot,
@@ -17,9 +20,10 @@ type KeepCount int
 const Unlimited KeepCount = -1
 
 // ParseKeepCount reads a whole number of zero or more, or the word
-// unlimited. A negative number is refused, so a typo cannot keep everything.
+// unlimited in any case. A negative number is refused, so a typo cannot keep
+// everything.
 func ParseKeepCount(s string) (KeepCount, error) {
-	if s == "unlimited" {
+	if strings.EqualFold(s, "unlimited") {
 		return Unlimited, nil
 	}
 	n, err := strconv.Atoi(s)
@@ -51,6 +55,23 @@ func (c *KeepCount) UnmarshalText(text []byte) error {
 	}
 	*c = n
 	return nil
+}
+
+// MarshalJSON writes the count as a number and [Unlimited] as the string
+// "unlimited", so a policy stored as JSON keeps plain numbers.
+func (c KeepCount) MarshalJSON() ([]byte, error) {
+	if c == Unlimited {
+		return []byte(`"unlimited"`), nil
+	}
+	return []byte(strconv.Itoa(int(c))), nil
+}
+
+// UnmarshalJSON reads a number, or a string in the form ParseKeepCount reads.
+func (c *KeepCount) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
+	}
+	return c.UnmarshalText(bytes.Trim(data, `"`))
 }
 
 // ForgetPolicy defines the retention rules applied by Repository.Forget.
@@ -95,15 +116,15 @@ type ForgetPolicy struct {
 	KeepWithin time.Duration
 }
 
-// counted lists the counted rules of p by field name.
-func (p ForgetPolicy) counted() [6]struct {
+// countedRule is one counted rule of a policy: its field name and count.
+type countedRule struct {
 	name string
 	n    KeepCount
-} {
-	return [6]struct {
-		name string
-		n    KeepCount
-	}{
+}
+
+// counted lists the counted rules of p.
+func (p ForgetPolicy) counted() [6]countedRule {
+	return [6]countedRule{
 		{"KeepLast", p.KeepLast},
 		{"KeepHourly", p.KeepHourly},
 		{"KeepDaily", p.KeepDaily},

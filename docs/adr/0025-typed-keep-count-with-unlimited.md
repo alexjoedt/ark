@@ -21,9 +21,11 @@ rule keeps the newest snapshot of every period. `Repository.Forget` refuses any 
 count with `ErrInvalidPolicy` before it reads anything. An unlimited count is a rule, so such a
 policy is not an empty one.
 
-The text form is a whole number of zero or more, or the word `unlimited`. `ParseKeepCount` reads
-it, and `KeepCount` reads and writes it as text, so the CLI flags and the keep keys of a profile
-share one parser. `ark forget --keep-daily -1` is a usage error that names the word, and so is a
+The text form is a whole number of zero or more, or the word `unlimited` in any case.
+`ParseKeepCount` reads it, and `KeepCount` reads and writes it as text, so the CLI flags and the
+keep keys of a profile share one parser. A profile also takes the other integer forms of YAML, such
+as `0x10`, which the decoder turns into decimal first. In JSON a count stays a number and
+`Unlimited` is the string `"unlimited"`; a number or the text form in a string is read back. `ark forget --keep-daily -1` is a usage error that names the word, and so is a
 negative count in a profile.
 
 - Not a bare -1 in the library, because a count computed wrong then keeps everything without a
@@ -44,6 +46,7 @@ A profile takes a keep count as a quoted string too, `keep-daily: "7"`, since th
 text; a fraction is still refused.
 
 `TestForgetTakesUnlimitedAndRefusesOtherNegativeCounts` pins the unlimited rule and the refused
-counts through `Repository.Forget`, `TestParseKeepCount` the text form and
+counts through `Repository.Forget`, `TestParseKeepCount` the text form, `TestKeepCountJSON` the
+JSON form, `TestDecodeReadsAKeepCountInAnyYAMLIntegerForm` the YAML integers and
 `TestForgetTakesUnlimitedCounts` the flag, the profile key, `ark profile show` and both usage
 errors.

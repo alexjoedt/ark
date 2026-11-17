@@ -74,6 +74,19 @@ func TestDecodeFillsEveryField(t *testing.T) {
 	}
 }
 
+// A keep count reads text, and still takes every integer YAML writes.
+func TestDecodeReadsAKeepCountInAnyYAMLIntegerForm(t *testing.T) {
+	in := "forget:\n  keep-last: 0x10\n  keep-daily: 0o7\n  keep-weekly: 1_000\n  keep-monthly: \"7\"\n  keep-yearly: Unlimited\n"
+	var p arkprofile.Profile
+	if err := arkprofile.Decode(strings.NewReader(in), &p, ""); err != nil {
+		t.Fatal(err)
+	}
+	want := arkprofile.Forget{KeepLast: 16, KeepDaily: 7, KeepWeekly: 1000, KeepMonthly: 7, KeepYearly: ark.Unlimited}
+	if p.Forget != want {
+		t.Errorf("forget = %+v, want %+v", p.Forget, want)
+	}
+}
+
 func TestDecodeIntoAStructEmbeddingAProfile(t *testing.T) {
 	var s struct {
 		arkprofile.Profile `yaml:",inline"`

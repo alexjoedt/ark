@@ -131,9 +131,38 @@ func TestParseKeepCount(t *testing.T) {
 			t.Errorf("KeepCount(%d).String() = %q, want %q", got, got.String(), in)
 		}
 	}
-	for _, in := range []string{"", "-1", "-3", "1.5", "all", "Unlimited", " 3"} {
+	for _, in := range []string{"Unlimited", "UNLIMITED"} {
+		if got, err := ark.ParseKeepCount(in); err != nil || got != ark.Unlimited {
+			t.Errorf("ParseKeepCount(%q) = %d, %v, want Unlimited", in, got, err)
+		}
+	}
+	for _, in := range []string{"", "-1", "-3", "1.5", "all", "0x10", " 3"} {
 		if got, err := ark.ParseKeepCount(in); err == nil {
 			t.Errorf("ParseKeepCount(%q) = %d, want an error", in, got)
+		}
+	}
+}
+
+// A policy in JSON holds plain numbers, and the word for Unlimited.
+func TestKeepCountJSON(t *testing.T) {
+	policy := ark.ForgetPolicy{KeepLast: 3, KeepYearly: ark.Unlimited}
+	data, err := json.Marshal(policy)
+	if err != nil || !bytes.Contains(data, []byte(`"KeepLast":3,`)) ||
+		!bytes.Contains(data, []byte(`"KeepYearly":"unlimited",`)) {
+		t.Fatalf("Marshal = %s, %v, want KeepLast 3 and KeepYearly \"unlimited\"", data, err)
+	}
+	var back ark.ForgetPolicy
+	if err := json.Unmarshal(data, &back); err != nil || back != policy {
+		t.Errorf("Unmarshal(%s) = %+v, %v, want %+v", data, back, err, policy)
+	}
+	in := `{"KeepLast":3,"KeepDaily":"7","KeepWeekly":null,"KeepYearly":"Unlimited"}`
+	policy.KeepDaily = 7
+	if err := json.Unmarshal([]byte(in), &back); err != nil || back != policy {
+		t.Errorf("Unmarshal(%s) = %+v, %v, want %+v", in, back, err, policy)
+	}
+	for _, bad := range []string{`{"KeepLast":-1}`, `{"KeepLast":1.5}`, `{"KeepLast":"all"}`, `{"KeepLast":true}`} {
+		if err := json.Unmarshal([]byte(bad), &back); err == nil {
+			t.Errorf("Unmarshal(%s) = %+v, want an error", bad, back)
 		}
 	}
 }
