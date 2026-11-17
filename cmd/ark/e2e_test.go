@@ -34,17 +34,24 @@ func TestE2ELifecycle(t *testing.T) {
 		lifecycle(t, bin, filepath.Join(t.TempDir(), "repo"))
 	})
 	t.Run("sftp", func(t *testing.T) {
-		base := os.Getenv(envSFTPTestURI)
-		if base == "" {
-			t.Skipf("%s is not set", envSFTPTestURI)
-		}
-		u, err := url.Parse(base)
-		if err != nil {
-			t.Fatalf("parse %s: %v", envSFTPTestURI, err)
-		}
-		u.Path = path.Join(u.Path, "e2e-"+rand.Text())
-		lifecycle(t, bin, u.String())
+		lifecycle(t, bin, sftpTestRepo(t, "e2e-"))
 	})
+}
+
+// sftpTestRepo is the URI of a new directory on the sftp test server, its name
+// starting with prefix; it skips the test when there is no server.
+func sftpTestRepo(t *testing.T, prefix string) string {
+	t.Helper()
+	base := os.Getenv(envSFTPTestURI)
+	if base == "" {
+		t.Skipf("%s is not set", envSFTPTestURI)
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		t.Fatalf("parse %s: %v", envSFTPTestURI, err)
+	}
+	u.Path = path.Join(u.Path, prefix+rand.Text())
+	return u.String()
 }
 
 func lifecycle(t *testing.T, bin, repo string) {

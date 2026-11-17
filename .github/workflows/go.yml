@@ -86,7 +86,9 @@ jobs:
       # for the kill harness or ARK_CONC_SEED for the concurrent test. The
       # forget property test checks ARK_FORGET_RUNS random histories, 1000
       # when unset, about 6 s for the 10,000 here; a failure names its seed,
-      # rerun with ARK_FORGET_SEED.
+      # rerun with ARK_FORGET_SEED. The forget end-to-end test (skipped under
+      # -short) runs here as well, on arklocal and, on the ubuntu leg, on
+      # arksftp: about 15 s and 35 s on four cores.
       - name: Test
         run: go test github.com/alexjoedt/ark/...
         env:
