@@ -44,18 +44,9 @@ const (
 type scenario struct {
 	name    string
 	history []snap
-	policy  ark.ForgetPolicy
-	// versus is a policy of one rule to compare with policy, itself of one
-	// rule, on the same history; nil for a scenario of one policy.
-	versus *ark.ForgetPolicy
-}
-
-// policies returns the policies the scenario runs on its history.
-func (s scenario) policies() []ark.ForgetPolicy {
-	if s.versus == nil {
-		return []ark.ForgetPolicy{s.policy}
-	}
-	return []ark.ForgetPolicy{s.policy, *s.versus}
+	// policies run on the history one at a time: one policy, or two of one
+	// rule each to compare.
+	policies []ark.ForgetPolicy
 }
 
 type snap struct {
@@ -84,6 +75,9 @@ type outcome struct {
 	Removed []string
 	// Shared are the kept snapshots more than one rule keeps, newest first.
 	Shared []string
+	// Reach is how far back each counted period rule keeps, in rule order:
+	// "7 most recent days", "all years".
+	Reach []string
 	// Only are the snapshots this side of a comparison keeps and the other
 	// does not, newest first.
 	Only []string
@@ -99,6 +93,8 @@ type outcome struct {
 // ruleOutcome is what the template sees of one rule of a scenario.
 type ruleOutcome struct {
 	Flag string
+	// Counted is true for a rule with a count.
+	Counted bool
 	// Kept are the snapshots the rule keeps, newest first.
 	Kept []string
 	// Gaps are the periods a counted period rule counts across without a
@@ -156,7 +152,10 @@ func generate(ctx context.Context, list []scenario) ([]file, map[string]*outcome
 		if len(s.history) == 0 {
 			return nil, nil, fmt.Errorf("scenario %s has no snapshot", s.name)
 		}
-		sets, err := forget(ctx, s.history, s.policies()...)
+		if n := len(s.policies); n < 1 || n > 2 {
+			return nil, nil, fmt.Errorf("scenario %s has %d policies, want 1 or 2", s.name, n)
+		}
+		sets, err := forget(ctx, s.history, s.policies...)
 		if err != nil {
 			return nil, nil, fmt.Errorf("scenario %s: %w", s.name, err)
 		}
@@ -178,34 +177,30 @@ func generate(ctx context.Context, list []scenario) ([]file, map[string]*outcome
 // outcomeOf describes and draws what the policies of s did to its history,
 // one set of rows per policy.
 func outcomeOf(s scenario, sets [][]row) (*outcome, []byte, error) {
-	if s.versus == nil {
-		marks, err := mark(s.policy, sets[0])
-		if err != nil {
-			return nil, nil, err
-		}
-		image, err := timeline(marks, sets[0])
-		if err != nil {
-			return nil, nil, fmt.Errorf("drawing: %w", err)
-		}
-		return describe(s.name, marks, sets[0]), image, nil
-	}
-	o := &outcome{Name: s.name}
 	var marks []ruleMark
-	var flags []string
-	for i, p := range s.policies() {
+	var sides []*outcome
+	for i, p := range s.policies {
 		m, err := mark(p, sets[i])
 		if err != nil {
 			return nil, nil, err
 		}
-		if len(m) != 1 {
+		if len(s.policies) > 1 && len(m) != 1 {
 			return nil, nil, fmt.Errorf("a compared policy has %d rules, want 1", len(m))
 		}
 		marks = append(marks, m...)
-		side := describe(s.name, m, sets[i])
-		o.Versus = append(o.Versus, side)
-		flags = append(flags, side.Policy)
+		sides = append(sides, describe(s.name, m, sets[i]))
 	}
+	if len(sides) == 1 {
+		image, err := timeline(marks, sets[0])
+		if err != nil {
+			return nil, nil, fmt.Errorf("drawing: %w", err)
+		}
+		return sides[0], image, nil
+	}
+	o := &outcome{Name: s.name, Versus: sides}
+	var flags []string
 	for i, side := range o.Versus {
+		flags = append(flags, side.Policy)
 		other := o.Versus[1-i]
 		for _, k := range side.Kept {
 			if !slices.Contains(other.Kept, k) {
@@ -259,8 +254,13 @@ var zone = time.UTC
 
 // forget backs the history up and returns, for each policy, every snapshot
 // with what a dry run of the policy does to it, newest first and in zone.
-func forget(ctx context.Context, history []snap, policies ...ark.ForgetPolicy) ([][]row, error) {
+func forget(ctx context.Context, history []snap, policies ...ark.ForgetPolicy) (sets [][]row, err error) {
 	b := arkmem.New()
+	defer func() {
+		if cerr := b.Close(); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("closing the repository: %w", cerr))
+		}
+	}()
 	if err := ark.Init(ctx, b, ark.WithoutPassword()); err != nil {
 		return nil, fmt.Errorf("initializing the repository: %w", err)
 	}
@@ -268,7 +268,7 @@ func forget(ctx context.Context, history []snap, policies ...ark.ForgetPolicy) (
 	// Every backup waits out the lock settle delay, so the backups run side
 	// by side, each through its own Repository like separate processes.
 	// Closing one must not empty the shared arkmem backend, nor may a dry
-	// run; it is closed after the last.
+	// run; forget closes it on return.
 	ids := make([]string, len(history))
 	errs := make([]error, len(history))
 	var wg sync.WaitGroup
@@ -280,7 +280,7 @@ func forget(ctx context.Context, history []snap, policies ...ark.ForgetPolicy) (
 		return nil, err
 	}
 
-	sets := make([][]row, len(policies))
+	sets = make([][]row, len(policies))
 	for p, policy := range policies {
 		result, err := dryRun(ctx, keepOpen{b}, policy)
 		if err != nil {
@@ -296,9 +296,6 @@ func forget(ctx context.Context, history []snap, policies ...ark.ForgetPolicy) (
 		}
 		slices.SortStableFunc(rows, func(a, b row) int { return b.at.Compare(a.at) })
 		sets[p] = rows
-	}
-	if err := b.Close(); err != nil {
-		return nil, fmt.Errorf("closing the repository: %w", err)
 	}
 	return sets, nil
 }
@@ -364,7 +361,10 @@ func describe(name string, marks []ruleMark, rows []row) *outcome {
 	var flags []string
 	for _, m := range marks {
 		flags = append(flags, m.flag)
-		r := ruleOutcome{Flag: m.flag}
+		r := ruleOutcome{Flag: m.flag, Counted: m.count != 0}
+		if m.cut && m.count != 0 {
+			o.Reach = append(o.Reach, reach(m.count, periodWords[m.period].noun))
+		}
 		if m.window != (ark.Within{}) {
 			r.WindowStart = m.winStart.Format(layout)
 		}
@@ -384,7 +384,7 @@ func describe(name string, marks []ruleMark, rows []row) *outcome {
 	o.Policy = strings.Join(flags, " ")
 	var t strings.Builder
 	t.WriteString("| Snapshot | Result | Reason |\n|---|---|---|\n")
-	for _, r := range rows {
+	for i, r := range rows {
 		when := r.at.Format(layout)
 		if !r.kept {
 			o.Removed = append(o.Removed, when)
@@ -392,7 +392,13 @@ func describe(name string, marks []ruleMark, rows []row) *outcome {
 			continue
 		}
 		o.Kept = append(o.Kept, when)
-		if len(r.reasons) > 1 {
+		keptBy := 0
+		for _, m := range marks {
+			if m.keeps[i] {
+				keptBy++
+			}
+		}
+		if keptBy > 1 {
 			o.Shared = append(o.Shared, when)
 		}
 		fmt.Fprintf(&t, "| %s | kept | %s |\n", when, result(r))
@@ -401,9 +407,23 @@ func describe(name string, marks []ruleMark, rows []row) *outcome {
 	return o
 }
 
+// reach is how far back a counted period rule keeps: "7 most recent days".
+func reach(count ark.KeepCount, noun string) string {
+	switch count {
+	case ark.Unlimited:
+		return "all " + noun + "s"
+	case 1:
+		return "most recent " + noun
+	}
+	return fmt.Sprintf("%d most recent %ss", count, noun)
+}
+
 func render(outcomes map[string]*outcome) ([]byte, error) {
 	funcs := template.FuncMap{
 		"list": func(items []string) string {
+			if len(items) == 0 {
+				return "nothing"
+			}
 			if len(items) < 2 {
 				return strings.Join(items, "")
 			}

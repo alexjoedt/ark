@@ -10,55 +10,61 @@ import (
 // template reaches each one by its name.
 func scenarios() []scenario {
 	return []scenario{
-		{name: "keep-last", history: running(), policy: ark.ForgetPolicy{KeepLast: 5}},
-		{name: "keep-hourly", history: hours(), policy: ark.ForgetPolicy{KeepHourly: 4}},
-		{name: "keep-daily", history: running(), policy: ark.ForgetPolicy{KeepDaily: 5}},
-		{name: "keep-weekly", history: running(), policy: ark.ForgetPolicy{KeepWeekly: 4}},
-		{name: "keep-monthly", history: months(), policy: ark.ForgetPolicy{KeepMonthly: 4}},
-		{name: "keep-yearly", history: years(), policy: ark.ForgetPolicy{KeepYearly: 4}},
-		{name: "keep-unlimited", history: running(), policy: ark.ForgetPolicy{KeepDaily: ark.Unlimited}},
-		{name: "keep-within", history: running(), policy: ark.ForgetPolicy{KeepWithin: ark.Within{Days: 5}}},
+		{name: "keep-last", history: running(), policies: []ark.ForgetPolicy{{KeepLast: 5}}},
+		{name: "keep-hourly", history: hours(), policies: []ark.ForgetPolicy{{KeepHourly: 4}}},
+		{name: "keep-daily", history: running(), policies: []ark.ForgetPolicy{{KeepDaily: 5}}},
+		{name: "keep-weekly", history: running(), policies: []ark.ForgetPolicy{{KeepWeekly: 4}}},
+		{name: "keep-monthly", history: months(), policies: []ark.ForgetPolicy{{KeepMonthly: 4}}},
+		{name: "keep-yearly", history: years(), policies: []ark.ForgetPolicy{{KeepYearly: 4}}},
+		{name: "keep-unlimited", history: running(), policies: []ark.ForgetPolicy{{KeepDaily: ark.Unlimited}}},
+		{name: "keep-within", history: running(), policies: []ark.ForgetPolicy{{KeepWithin: ark.Within{Days: 5}}}},
 		{
 			name: "keep-within-hourly", history: hours(),
-			policy: ark.ForgetPolicy{KeepWithinHourly: ark.Within{Hours: 3}},
+			policies: []ark.ForgetPolicy{{KeepWithinHourly: ark.Within{Hours: 3}}},
 		},
 		{
 			name: "keep-within-daily", history: running(),
-			policy: ark.ForgetPolicy{KeepWithinDaily: ark.Within{Days: 7}},
+			policies: []ark.ForgetPolicy{{KeepWithinDaily: ark.Within{Days: 7}}},
 		},
 		{
 			name: "keep-within-weekly", history: running(),
-			policy: ark.ForgetPolicy{KeepWithinWeekly: ark.Within{Days: 14}},
+			policies: []ark.ForgetPolicy{{KeepWithinWeekly: ark.Within{Days: 14}}},
 		},
 		{
 			name: "keep-within-monthly", history: months(),
-			policy: ark.ForgetPolicy{KeepWithinMonthly: ark.Within{Months: 3}},
+			policies: []ark.ForgetPolicy{{KeepWithinMonthly: ark.Within{Months: 3}}},
 		},
 		{
 			name: "keep-within-yearly", history: years(),
-			policy: ark.ForgetPolicy{KeepWithinYearly: ark.Within{Years: 3}},
+			policies: []ark.ForgetPolicy{{KeepWithinYearly: ark.Within{Years: 3}}},
 		},
-		{name: "keep-tag", history: tagged(), policy: ark.ForgetPolicy{KeepTags: [][]string{{"release"}}}},
-		{name: "union", history: running(), policy: ark.ForgetPolicy{KeepDaily: 3, KeepWeekly: 3}},
+		{name: "keep-tag", history: tagged(), policies: []ark.ForgetPolicy{{KeepTags: [][]string{{"release"}}}}},
+		{name: "union", history: running(), policies: []ark.ForgetPolicy{{KeepDaily: 3, KeepWeekly: 3}}},
 		{
 			name: "recipe", history: thinning(),
-			policy: ark.ForgetPolicy{KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12, KeepYearly: ark.Unlimited},
+			policies: []ark.ForgetPolicy{{KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12, KeepYearly: ark.Unlimited}},
 		},
 		{
 			name: "keep-tag-and-last", history: tagged(),
-			policy: ark.ForgetPolicy{KeepLast: 3, KeepTags: [][]string{{"release"}}},
+			policies: []ark.ForgetPolicy{{KeepLast: 3, KeepTags: [][]string{{"release"}}}},
 		},
 		{
-			name: "daily-vs-within-daily", history: running(), policy: ark.ForgetPolicy{KeepDaily: 7},
-			versus: &ark.ForgetPolicy{KeepWithinDaily: ark.Within{Days: 7}},
+			name: "daily-vs-within-daily", history: running(), policies: []ark.ForgetPolicy{
+				{KeepDaily: 7},
+				{KeepWithinDaily: ark.Within{Days: 7}},
+			},
 		},
 		{
-			name: "last-vs-within", history: running(), policy: ark.ForgetPolicy{KeepLast: 7},
-			versus: &ark.ForgetPolicy{KeepWithin: ark.Within{Days: 7}},
+			name: "last-vs-within", history: running(), policies: []ark.ForgetPolicy{
+				{KeepLast: 7},
+				{KeepWithin: ark.Within{Days: 7}},
+			},
 		},
 		{
-			name: "daily-vs-hourly", history: busy(), policy: ark.ForgetPolicy{KeepDaily: 4},
-			versus: &ark.ForgetPolicy{KeepHourly: 4},
+			name: "daily-vs-hourly", history: busy(), policies: []ark.ForgetPolicy{
+				{KeepDaily: 4},
+				{KeepHourly: 4},
+			},
 		},
 	}
 }

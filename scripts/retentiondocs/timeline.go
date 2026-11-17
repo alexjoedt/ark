@@ -270,8 +270,7 @@ type axis struct {
 	unit    period
 	bands   []time.Time // the start of every band and the end of the last
 	bx      []float64   // the x of every entry of bands
-	x0      float64
-	snapX   []float64 // per row
+	snapX   []float64   // per row
 	anchors []anchor
 }
 
@@ -303,7 +302,7 @@ func bandUnit(rows []row, own *period) period {
 }
 
 func newAxis(rows []row, unit period, x0, x1 float64) *axis {
-	a := &axis{unit: unit, x0: x0}
+	a := &axis{unit: unit}
 	for t := unit.start(rows[len(rows)-1].at); !t.After(rows[0].at); t = unit.next(t) {
 		a.bands = append(a.bands, t)
 	}
@@ -457,7 +456,7 @@ func keptClass(kept bool) string {
 // pillX returns where the pill of row r centres, inside the axis.
 func (a *axis) pillX(r int, text string) float64 {
 	w := textWidth(text) + 10
-	return min(max(a.snapX[r], a.x0+w/2), a.anchors[len(a.anchors)-1].x-w/2)
+	return min(max(a.snapX[r], a.bx[0]+w/2), a.anchors[len(a.anchors)-1].x-w/2)
 }
 
 func (s *svg) pill(x, y float64, text string) {
@@ -553,9 +552,10 @@ func (s *svg) fadeUsedUp(a *axis, m ruleMark, rows []row, y, h float64) {
 	if m.cut {
 		end = a.x(m.period.start(rows[m.oldest].at))
 	}
-	s.rect(a.x0, y, end-a.x0, h, "fade")
-	if label := "count used up"; end-a.x0 >= textWidth(label)+12 {
-		s.text((a.x0+end)/2, y+14, label, "muted", "middle")
+	x0 := a.bx[0]
+	s.rect(x0, y, end-x0, h, "fade")
+	if label := "count used up"; end-x0 >= textWidth(label)+12 {
+		s.text((x0+end)/2, y+14, label, "muted", "middle")
 	}
 }
 
@@ -576,6 +576,9 @@ func (s *svg) legend(items []legendItem, x0, y float64) float64 {
 		case "fade":
 			s.circle(cx, cy, "removed")
 			s.rect(x, cy-6, 14, 12, "fade")
+		case "lane-fade":
+			s.rect(x, cy-6, 14, 12, "lane")
+			s.rect(x, cy-6, 7, 12, "fade")
 		case "pill":
 			s.addf(`<rect x="%s" y="%s" width="14" height="12" rx="6" class="pill"/>`, num(x), num(cy-6))
 		default:
@@ -817,6 +820,12 @@ func timelineLanes(s *svg, marks []ruleMark, rows []row, union bool) float64 {
 		// Without the lane of what the policy keeps, no snapshot is drawn
 		// as removed.
 		items = slices.DeleteFunc(items, func(it legendItem) bool { return it.symbol == "removed" })
+	}
+	// A lane draws no snapshot under its fade, only the lane, lighter.
+	for i := range items {
+		if items[i].symbol == "fade" {
+			items[i].symbol = "lane-fade"
+		}
 	}
 	return s.legend(items, 12, y+18) + 6
 }

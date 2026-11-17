@@ -99,7 +99,7 @@ text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 <text x="100.8" y="201.0" class="" text-anchor="start">count used, from the newest</text>
 <rect x="315.2" y="191.0" width="14.0" height="12.0" class="hatch"/>
 <text x="335.2" y="201.0" class="" text-anchor="start">no snapshot, uses no count</text>
-<circle cx="549.4" cy="197.0" r="4.0" class="removed"/>
-<rect x="542.4" y="191.0" width="14.0" height="12.0" class="fade"/>
+<rect x="542.4" y="191.0" width="14.0" height="12.0" class="lane"/>
+<rect x="542.4" y="191.0" width="7.0" height="12.0" class="fade"/>
 <text x="562.4" y="201.0" class="" text-anchor="start">count used up</text>
 </svg>

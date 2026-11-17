@@ -180,7 +180,7 @@ text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 <text x="191.2" y="235.0" class="" text-anchor="start">count used, from the newest</text>
 <rect x="405.6" y="225.0" width="14.0" height="12.0" class="hatch"/>
 <text x="425.6" y="235.0" class="" text-anchor="start">no snapshot, uses no count</text>
-<circle cx="19.0" cy="251.0" r="4.0" class="removed"/>
-<rect x="12.0" y="245.0" width="14.0" height="12.0" class="fade"/>
+<rect x="12.0" y="245.0" width="14.0" height="12.0" class="lane"/>
+<rect x="12.0" y="245.0" width="7.0" height="12.0" class="fade"/>
 <text x="32.0" y="255.0" class="" text-anchor="start">count used up</text>
 </svg>

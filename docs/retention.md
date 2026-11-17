@@ -443,7 +443,7 @@ A policy of several rules keeps a snapshot when any of its rules keeps it and re
 
 ### A long-horizon recipe
 
-`--keep-daily 7 --keep-weekly 4 --keep-monthly 12 --keep-yearly unlimited` keeps the newest snapshot of each of the 7 most recent days, 4 most recent weeks and 12 most recent months that have one, and of every year. The history reaches back more than a year and a half, with backups that thin out with age: one a month at first, then one a week, then one a day.
+`--keep-daily 7 --keep-weekly 4 --keep-monthly 12 --keep-yearly unlimited` keeps the newest snapshot of each of the 7 most recent days, 4 most recent weeks, 12 most recent months and all years that have one. The history reaches back more than a year and a half, with backups that thin out with age: one a month at first, then one a week, then one a day.
 
 ![Timeline of --keep-daily 7 --keep-weekly 4 --keep-monthly 12 --keep-yearly unlimited](retention/recipe.svg)
 
@@ -564,7 +564,7 @@ Rules that sound alike can keep different snapshots. Each timeline below runs tw
 
 ### Keep daily or keep hourly
 
-With several backups a day, `--keep-hourly 4` keeps the newest snapshot of each of the 4 most recent hours that have one, which may all fall on the newest day, while `--keep-daily 4` keeps one snapshot from each of 4 days. The history is four days with three backups each.
+With several backups a day, `--keep-hourly 4` keeps the newest snapshot of each of the 4 most recent hours that have one, while `--keep-daily 4` keeps one snapshot from each of 4 days. The history is four days with three backups each.
 
 ![Timeline of --keep-daily 4 and --keep-hourly 4](retention/daily-vs-hourly.svg)
 

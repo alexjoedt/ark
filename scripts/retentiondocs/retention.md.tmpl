@@ -121,19 +121,19 @@ Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keep
 
 A policy of several rules keeps a snapshot when any of its rules keeps it and removes only what none of them keeps. Each rule counts on its own over the whole history: a snapshot two rules keep uses a count of each, and `--json` gives a reason for each. In a timeline of several rules each rule has a lane, and the bottom lane shows what the policy keeps.
 {{with scenario "union"}}
-{{template "example" .}}{{range .Rules}} `{{.Flag}}` keeps {{list .Kept}}.{{end}}{{with .Shared}} {{list .}} {{if eq (len .) 1}}is{{else}}are{{end}} kept by both rules and {{if eq (len .) 1}}uses{{else}}use{{end}} a count of each.{{end}}
+{{template "example" .}}{{range .Rules}} `{{.Flag}}` keeps {{list .Kept}}.{{end}}{{$both := eq (len .Rules) 2}}{{with .Shared}} {{list .}} {{if eq (len .) 1}}is{{else}}are{{end}} kept by {{if $both}}both rules{{else}}more than one rule{{end}} and {{if eq (len .) 1}}uses{{else}}use{{end}} a count of each.{{end}}
 {{- end}}
 
 ### Keep tag with a counted rule
 
 `--keep-tag` adds the snapshots it keeps to what the other rules keep and takes nothing out of their counts. A tagged snapshot that a counted rule reaches still uses a count of it, so a tagged snapshot among the newest leaves `--keep-last` a slot fewer for the others.
 {{with scenario "keep-tag-and-last"}}
-{{template "example" .}}{{$last := (index .Rules 1).Flag}}{{with .Shared}} {{list .}} {{if eq (len .) 1}}carries{{else}}carry{{end}} the tag and still {{if eq (len .) 1}}uses a slot{{else}}use a slot each{{end}} of `{{$last}}`.{{end}}
+{{template "example" .}}{{$last := ""}}{{range .Rules}}{{if .Counted}}{{$last = .Flag}}{{end}}{{end}}{{with .Shared}} {{list .}} {{if eq (len .) 1}}carries{{else}}carry{{end}} the tag and still {{if eq (len .) 1}}uses a slot{{else}}use a slot each{{end}} of `{{$last}}`.{{end}}
 {{- end}}
 
 ### A long-horizon recipe
 {{with scenario "recipe"}}
-`{{.Policy}}` keeps the newest snapshot of each of the 7 most recent days, 4 most recent weeks and 12 most recent months that have one, and of every year. The history reaches back more than a year and a half, with backups that thin out with age: one a month at first, then one a week, then one a day.
+`{{.Policy}}` keeps the newest snapshot of each of the {{list .Reach}} that have one. The history reaches back more than a year and a half, with backups that thin out with age: one a month at first, then one a week, then one a day.
 
 {{template "example" .}}
 
@@ -162,7 +162,7 @@ Rules that sound alike can keep different snapshots. Each timeline below runs tw
 
 ### Keep daily or keep hourly
 
-With several backups a day, `--keep-hourly 4` keeps the newest snapshot of each of the 4 most recent hours that have one, which may all fall on the newest day, while `--keep-daily 4` keeps one snapshot from each of 4 days. The history is four days with three backups each.
+With several backups a day, `--keep-hourly 4` keeps the newest snapshot of each of the 4 most recent hours that have one, while `--keep-daily 4` keeps one snapshot from each of 4 days. The history is four days with three backups each.
 {{with scenario "daily-vs-hourly"}}
 {{template "comparison" .}}
 {{end -}}

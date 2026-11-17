@@ -100,7 +100,7 @@ text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 <text x="100.8" y="211.0" class="" text-anchor="start">removed</text>
 <rect x="171.2" y="201.0" width="14" height="12" rx="6" class="pill"/>
 <text x="191.2" y="211.0" class="" text-anchor="start">count used, from the newest</text>
-<circle cx="412.6" cy="207.0" r="4.0" class="removed"/>
-<rect x="405.6" y="201.0" width="14.0" height="12.0" class="fade"/>
+<rect x="405.6" y="201.0" width="14.0" height="12.0" class="lane"/>
+<rect x="405.6" y="201.0" width="7.0" height="12.0" class="fade"/>
 <text x="425.6" y="211.0" class="" text-anchor="start">count used up</text>
 </svg>
