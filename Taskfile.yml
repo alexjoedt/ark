@@ -59,6 +59,11 @@ tasks:
       - go build -ldflags "{{.LDFLAGS}}" -o bin/ark ./cmd/ark
       - go run ./scripts/bench run -dir "{{.DIR}}" {{.CLI_ARGS}}
 
+  forget:fixtures:
+    desc: 'Let restic decide the forget fixtures in testdata/forget again, never in CI, ~40 min; task forget:fixtures DIR=/empty/dir [-- -restic BIN] (flags after --)'
+    cmds:
+      - go run ./scripts/forgetfixtures -dir "{{.DIR}}" {{.CLI_ARGS}}
+
   build:
     desc: Build bin/ark
     cmds:
