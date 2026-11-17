@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/alexjoedt/ark"
@@ -282,4 +283,41 @@ func ids(snaps []*ark.Snapshot) []string {
 		out[i] = s.ID
 	}
 	return out
+}
+
+// TestEveryForgetRuleIsCarriedAndChecked holds each keep count and keep-within
+// window of Forget, found by reflection, to the ForgetPolicy field of its name
+// and to Validate, so a rule added to Forget cannot miss either.
+func TestEveryForgetRuleIsCarriedAndChecked(t *testing.T) {
+	samples := map[reflect.Type][2]any{
+		reflect.TypeFor[ark.KeepCount](): {ark.KeepCount(3), ark.KeepCount(-2)},
+		reflect.TypeFor[ark.Within]():    {ark.Within{Days: 3}, ark.Within{Days: -1}},
+	}
+	ft := reflect.TypeFor[arkprofile.Forget]()
+	rules := 0
+	for i := range ft.NumField() {
+		f := ft.Field(i)
+		s, ok := samples[f.Type]
+		if !ok {
+			continue
+		}
+		rules++
+		key := "forget." + f.Tag.Get("yaml")
+		for j, v := range s {
+			p := arkprofile.Profile{Name: "docs", Repo: "/srv/ark", PasswordEnv: "DOCS_PW"}
+			reflect.ValueOf(&p.Forget).Elem().Field(i).Set(reflect.ValueOf(v))
+			err := p.Validate()
+			if j == 0 {
+				pf := reflect.ValueOf(p.ForgetPolicy()).FieldByName(f.Name)
+				if err != nil || !pf.IsValid() || !pf.Equal(reflect.ValueOf(v)) {
+					t.Errorf("%s = %v: Validate %v, policy field %v", key, v, err, pf)
+				}
+			} else if !errors.Is(err, arkprofile.ErrInvalid) || !strings.Contains(err.Error(), key) {
+				t.Errorf("%s = %v: Validate %v, want ErrInvalid naming the key", key, v, err)
+			}
+		}
+	}
+	if rules != 12 {
+		t.Errorf("found %d rules in Forget, want 12", rules)
+	}
 }

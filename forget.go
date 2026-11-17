@@ -314,7 +314,8 @@ type countedRule struct {
 	n    KeepCount
 }
 
-// counted lists the counted rules of p.
+// counted lists the counted rules of p, KeepLast first, then the period
+// rules in the order of periods, which forget_impl.go pairs them by.
 func (p ForgetPolicy) counted() [6]countedRule {
 	return [6]countedRule{
 		{"KeepLast", p.KeepLast},
@@ -332,7 +333,8 @@ type windowRule struct {
 	w    Within
 }
 
-// windows lists the keep-within rules of p.
+// windows lists the keep-within rules of p, KeepWithin first, then the
+// period rules in the order of periods, which forget_impl.go pairs them by.
 func (p ForgetPolicy) windows() [6]windowRule {
 	return [6]windowRule{
 		{"KeepWithin", p.KeepWithin},

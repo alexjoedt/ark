@@ -16,8 +16,9 @@ var (
 	ErrEmptyPolicy = errors.New("ark: forget policy keeps nothing and no ids given")
 
 	// ErrInvalidPolicy is returned by Forget, before it reads anything, for
-	// a policy with a negative count other than Unlimited, a KeepTags list
-	// without a tag, or one with the empty tag next to others.
+	// a policy with a negative count other than Unlimited, a keep-within
+	// window (KeepWithin to KeepWithinYearly) outside the bounds of [Within],
+	// a KeepTags list without a tag, or one with the empty tag next to others.
 	ErrInvalidPolicy = errors.New("ark: invalid forget policy")
 
 	// ErrNoSnapshotKept is returned by Forget when the policy keeps no

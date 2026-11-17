@@ -106,19 +106,13 @@ func applyForgetPolicyToGroup(
 
 	// The rules in the order their reasons are listed, restic's: KeepWithin,
 	// KeepLast, the counted period rules, the keep-within period rules.
-	counts := [len(periods)]KeepCount{
-		policy.KeepHourly, policy.KeepDaily, policy.KeepWeekly, policy.KeepMonthly, policy.KeepYearly,
-	}
-	windows := [len(periods)]Within{
-		policy.KeepWithinHourly, policy.KeepWithinDaily, policy.KeepWithinWeekly,
-		policy.KeepWithinMonthly, policy.KeepWithinYearly,
-	}
+	counted, windows := policy.counted(), policy.windows()
 	var buckets [2 + 2*len(periods)]keepBucket
-	buckets[0] = window("within ", policy.KeepWithin, nil)
-	buckets[1] = keepBucket{reason: "last snapshot", left: policy.KeepLast}
+	buckets[0] = window("within ", windows[0].w, nil)
+	buckets[1] = keepBucket{reason: "last snapshot", left: counted[0].n}
 	for i, p := range periods {
-		buckets[2+i] = keepBucket{reason: p.name + " snapshot", left: counts[i], key: p.key}
-		buckets[2+len(periods)+i] = window(p.name+" within ", windows[i], p.key)
+		buckets[2+i] = keepBucket{reason: p.name + " snapshot", left: counted[1+i].n, key: p.key}
+		buckets[2+len(periods)+i] = window(p.name+" within ", windows[1+i].w, p.key)
 	}
 
 	for nr, s := range snapshots {
