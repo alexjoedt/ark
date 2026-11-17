@@ -5,11 +5,15 @@ import (
 	"context"
 	"encoding/xml"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -75,6 +79,59 @@ func staleScenarios(page string, outcomes map[string]*outcome) string {
 		return "the template text"
 	}
 	return strings.Join(stale, ", ")
+}
+
+// TestEveryKeepFlagIsShown reads the keep flags from the definitions of
+// ark forget's flags and looks for each in a scenario the page shows.
+func TestEveryKeepFlagIsShown(t *testing.T) {
+	files, outcomes := generatedFiles(t)
+	page := string(files[0].content)
+	shown := map[string]bool{}
+	for _, s := range scenarios() {
+		if !strings.Contains(page, "]("+outcomes[s.name].Image+")") {
+			continue
+		}
+		for _, r := range rules(s.policy) {
+			flag, _, _ := strings.Cut(r.flag, " ")
+			shown[flag] = true
+		}
+	}
+	flags := forgetKeepFlags(t)
+	if len(flags) == 0 {
+		t.Fatal("found no keep flag in cmd/ark/forget.go")
+	}
+	for _, f := range flags {
+		if !shown["--"+f] {
+			t.Errorf("--%s of ark forget appears in no scenario of %s", f, pagePath)
+		}
+	}
+}
+
+// forgetKeepFlags returns the names of the flags cmd/ark/forget.go defines
+// that start with keep-.
+func forgetKeepFlags(t *testing.T) []string {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, "cmd", "ark", "forget.go"), nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var flags []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		kv, ok := n.(*ast.KeyValueExpr)
+		if !ok {
+			return true
+		}
+		key, ok := kv.Key.(*ast.Ident)
+		lit, isLit := kv.Value.(*ast.BasicLit)
+		if !ok || key.Name != "Name" || !isLit || lit.Kind != token.STRING {
+			return true
+		}
+		if name, err := strconv.Unquote(lit.Value); err == nil && strings.HasPrefix(name, "keep-") {
+			flags = append(flags, name)
+		}
+		return true
+	})
+	return flags
 }
 
 func TestTimelinesAreWellFormed(t *testing.T) {

@@ -43,6 +43,7 @@ export default defineConfig({
           { text: 'Getting started', link: '/getting-started' },
           { text: 'Series', link: '/SERIES' },
           { text: 'Labels', link: '/LABELS' },
+          { text: 'Retention policies', link: '/retention' },
           { text: 'Mount', link: '/MOUNT' },
         ],
       },

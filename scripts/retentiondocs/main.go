@@ -62,6 +62,8 @@ type row struct {
 // outcome is what the template sees of a scenario.
 type outcome struct {
 	Name string
+	// Policy is the policy as ark forget flags, "--keep-daily 5".
+	Policy string
 	// Table lists every snapshot of the history, newest first, with its
 	// result and the reasons ark forget --json gives a kept one.
 	Table string
@@ -69,9 +71,15 @@ type outcome struct {
 	// table's format.
 	Kept    []string
 	Removed []string
-	// EmptyDays are the days between the oldest and the newest kept
-	// snapshot that have no snapshot, newest first.
-	EmptyDays []string
+	// Gaps are the periods the first counted period rule counts across
+	// without a snapshot, newest first: "11:00", "Sat 21 Mar", "May", "2013";
+	// a week by the day it starts.
+	Gaps []string
+	// Oldest is the snapshot a rule keeps as the oldest of the history,
+	// although its period is taken; empty when none is.
+	Oldest string
+	// WindowStart is where the first within rule's window starts.
+	WindowStart string
 	// Image is the timeline's path relative to the page.
 	Image string
 }
@@ -128,7 +136,10 @@ func generate(ctx context.Context, list []scenario) ([]file, map[string]*outcome
 		if err != nil {
 			return nil, nil, fmt.Errorf("drawing scenario %s: %w", s.name, err)
 		}
-		o := describe(s.name, rows)
+		o, err := describe(s, rows)
+		if err != nil {
+			return nil, nil, fmt.Errorf("scenario %s: %w", s.name, err)
+		}
 		files = append(files, file{path: path.Join(imageDir, s.name+".svg"), content: image})
 		o.Image = path.Join(imageLink, s.name+".svg")
 		outcomes[s.name] = o
@@ -234,10 +245,27 @@ func layouts(rows []row) (timeLayout, dayLayout string) {
 	return "Mon 02 Jan 15:04", "Mon 02 Jan"
 }
 
-func describe(name string, rows []row) *outcome {
-	layout, dayLayout := layouts(rows)
-	o := &outcome{Name: name}
-	o.EmptyDays = emptyDays(rows, dayLayout)
+func describe(s scenario, rows []row) (*outcome, error) {
+	marks, err := mark(s.policy, rows)
+	if err != nil {
+		return nil, err
+	}
+	layout, _ := layouts(rows)
+	o := &outcome{Name: s.name}
+	var flags []string
+	for _, m := range marks {
+		flags = append(flags, m.flag)
+		if m.window != (ark.Within{}) && o.WindowStart == "" {
+			o.WindowStart = m.winStart.Format(layout)
+		}
+		if m.count != 0 && m.cut && o.Gaps == nil {
+			o.Gaps = []string{}
+			for _, p := range slices.Backward(m.noCount) {
+				o.Gaps = append(o.Gaps, m.period.name(p, rows))
+			}
+		}
+	}
+	o.Policy = strings.Join(flags, " ")
 	var t strings.Builder
 	t.WriteString("| Snapshot | Result | Reason |\n|---|---|---|\n")
 	for _, r := range rows {
@@ -251,16 +279,25 @@ func describe(name string, rows []row) *outcome {
 		reasons := make([]string, len(r.reasons))
 		for i, reason := range r.reasons {
 			reasons[i] = "`" + reason + "`"
+			if strings.HasPrefix(reason, "oldest ") {
+				o.Oldest = when
+			}
 		}
 		fmt.Fprintf(&t, "| %s | kept | %s |\n", when, strings.Join(reasons, ", "))
 	}
 	o.Table = strings.TrimSuffix(t.String(), "\n")
-	return o
+	return o, nil
 }
 
 func render(outcomes map[string]*outcome) ([]byte, error) {
 	funcs := template.FuncMap{
 		"join": strings.Join,
+		"list": func(items []string) string {
+			if len(items) < 2 {
+				return strings.Join(items, "")
+			}
+			return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
+		},
 		"plural": func(n int, noun string) string {
 			if n == 1 {
 				return "1 " + noun
@@ -285,29 +322,4 @@ func render(outcomes map[string]*outcome) ([]byte, error) {
 		return nil, fmt.Errorf("executing the template: %w", err)
 	}
 	return page.Bytes(), nil
-}
-
-// emptyDays returns the days without a snapshot between the oldest and the
-// newest kept one, newest first. rows are newest first.
-func emptyDays(rows []row, layout string) []string {
-	day := func(t time.Time) time.Time { return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location()) }
-	taken := make(map[time.Time]bool, len(rows))
-	var newest, oldest time.Time
-	for _, r := range rows {
-		d := day(r.at)
-		taken[d] = true
-		if r.kept {
-			if newest.IsZero() {
-				newest = d
-			}
-			oldest = d
-		}
-	}
-	var empty []string
-	for d := newest; d.After(oldest); d = d.AddDate(0, 0, -1) {
-		if !taken[d] {
-			empty = append(empty, d.Format(layout))
-		}
-	}
-	return empty
 }

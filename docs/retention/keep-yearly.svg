@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720.0 181.0" width="720.0" height="181.0" role="img">
+<title>--keep-yearly 4 keeps 4 of 10 snapshots</title>
+<style>
+text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; fill: #2c3743; }
+.muted { fill: #55626f; }
+.bg { fill: #fbfcfd; stroke: #dde3ea; }
+.band, .lane { fill: #f3f6f9; }
+.band2 { fill: #e9eef3; }
+.fade { fill: #fbfcfd; opacity: 0.65; }
+.axis, .sep { stroke: #dde3ea; stroke-width: 1.5; }
+.kept { fill: #0b6fa8; stroke: #0b6fa8; stroke-width: 1.5; }
+.removed { fill: #fbfcfd; stroke: #8794a1; stroke-width: 1.5; }
+.snap { fill: #8794a1; }
+.pill { fill: #0b6fa8; }
+.on-pill { fill: #ffffff; }
+.lead { stroke: #0b6fa8; stroke-width: 1; }
+.arrow { stroke: #55626f; fill: none; }
+.win { fill: #0b6fa8; fill-opacity: 0.1; stroke: #0b6fa8; stroke-width: 1.5; stroke-dasharray: 5 4; }
+.hatch { fill: url(#hatch); }
+.hatch-line { stroke: #c3ccd6; stroke-width: 1.5; }
+@media (prefers-color-scheme: dark) {
+  text { fill: #b4c0cd; }
+  .muted { fill: #93a0ae; }
+  .bg { fill: #0a0e13; stroke: #232b35; }
+  .band, .lane { fill: #10161c; }
+  .band2 { fill: #161d25; }
+  .fade { fill: #0a0e13; }
+  .axis, .sep { stroke: #232b35; }
+  .kept { fill: #8be4f5; stroke: #8be4f5; }
+  .removed { fill: #0a0e13; stroke: #6b7785; }
+  .snap { fill: #6b7785; }
+  .pill { fill: #8be4f5; }
+  .on-pill { fill: #0a0e13; }
+  .lead { stroke: #8be4f5; }
+  .arrow { stroke: #93a0ae; }
+  .win { fill: #8be4f5; stroke: #8be4f5; }
+  .hatch-line { stroke: #3a4552; }
+}
+</style>
+<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" class="hatch-line"/></pattern></defs>
+<rect x="0.5" y="0.5" width="719.0" height="180.0" rx="8" class="bg"/>
+<text x="16.0" y="24.0" class="" text-anchor="start">--keep-yearly 4</text>
+<text x="704.0" y="24.0" class="muted" text-anchor="end">counted from the newest year</text>
+<path d="M 609.6 38 H 228.3 m 7 -4 l -7 4 l 7 4" class="arrow"/>
+<rect x="16.0" y="52.0" width="114.7" height="56.0" class="band"/>
+<rect x="130.7" y="52.0" width="114.7" height="56.0" class="band2"/>
+<rect x="245.3" y="52.0" width="114.7" height="56.0" class="band"/>
+<rect x="360.0" y="52.0" width="114.7" height="56.0" class="band2"/>
+<rect x="474.7" y="52.0" width="114.7" height="56.0" class="band"/>
+<rect x="589.3" y="52.0" width="114.7" height="56.0" class="band2"/>
+<rect x="361.0" y="52.0" width="112.7" height="56.0" class="hatch"/>
+<line x1="16.0" y1="94.0" x2="704.0" y2="94.0" class="axis"/>
+<circle cx="609.6" cy="94.0" r="4.0" class="kept"/>
+<circle cx="599.6" cy="94.0" r="4.0" class="removed"/>
+<circle cx="564.4" cy="94.0" r="4.0" class="kept"/>
+<circle cx="505.1" cy="94.0" r="4.0" class="removed"/>
+<circle cx="351.1" cy="94.0" r="4.0" class="kept"/>
+<circle cx="289.7" cy="94.0" r="4.0" class="removed"/>
+<circle cx="228.3" cy="94.0" r="4.0" class="kept"/>
+<circle cx="144.7" cy="94.0" r="4.0" class="removed"/>
+<circle cx="94.1" cy="94.0" r="4.0" class="removed"/>
+<circle cx="34.8" cy="94.0" r="4.0" class="removed"/>
+<rect x="16.0" y="52.0" width="114.7" height="56.0" class="fade"/>
+<text x="73.3" y="66.0" class="muted" text-anchor="middle">count used up</text>
+<line x1="609.6" y1="76.0" x2="609.6" y2="90.0" class="lead"/>
+<rect x="593.8" y="67.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="609.6" y="80.0" class="on-pill" text-anchor="middle">1/4</text>
+<line x1="564.4" y1="76.0" x2="564.4" y2="90.0" class="lead"/>
+<rect x="548.6" y="67.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="564.4" y="80.0" class="on-pill" text-anchor="middle">2/4</text>
+<line x1="351.1" y1="76.0" x2="351.1" y2="90.0" class="lead"/>
+<rect x="335.3" y="67.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="351.1" y="80.0" class="on-pill" text-anchor="middle">3/4</text>
+<line x1="228.3" y1="76.0" x2="228.3" y2="90.0" class="lead"/>
+<rect x="212.5" y="67.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="228.3" y="80.0" class="on-pill" text-anchor="middle">4/4</text>
+<text x="73.3" y="121.0" class="muted" text-anchor="middle">2010</text>
+<text x="188.0" y="121.0" class="muted" text-anchor="middle">2011</text>
+<text x="302.7" y="121.0" class="muted" text-anchor="middle">2012</text>
+<text x="417.3" y="121.0" class="muted" text-anchor="middle">2013</text>
+<text x="532.0" y="121.0" class="muted" text-anchor="middle">2014</text>
+<text x="646.7" y="121.0" class="muted" text-anchor="middle">2015</text>
+<circle cx="23.0" cy="141.0" r="4.0" class="kept"/>
+<text x="36.0" y="145.0" class="" text-anchor="start">kept</text>
+<circle cx="91.8" cy="141.0" r="4.0" class="removed"/>
+<text x="104.8" y="145.0" class="" text-anchor="start">removed</text>
+<rect x="175.2" y="135.0" width="14" height="12" rx="6" class="pill"/>
+<text x="195.2" y="145.0" class="" text-anchor="start">count used, from the newest</text>
+<rect x="409.6" y="135.0" width="14.0" height="12.0" class="hatch"/>
+<text x="429.6" y="145.0" class="" text-anchor="start">no snapshot, uses no count</text>
+<circle cx="23.0" cy="161.0" r="4.0" class="removed"/>
+<rect x="16.0" y="155.0" width="14.0" height="12.0" class="fade"/>
+<text x="36.0" y="165.0" class="" text-anchor="start">count used up</text>
+</svg>

@@ -91,6 +91,26 @@ func (p period) labels(t time.Time) (lines []string, coarse string) {
 	panic(fmt.Sprint("no period ", int(p)))
 }
 
+// name returns how the page names the period that starts at t in a history
+// of rows: a week by the day it starts.
+func (p period) name(t time.Time, rows []row) string {
+	_, dayLayout := layouts(rows)
+	switch p {
+	case hour:
+		return t.Format("15:04")
+	case day, week:
+		return t.Format(dayLayout)
+	case month:
+		if rows[0].at.Year() != rows[len(rows)-1].at.Year() {
+			return t.Format("January 2006")
+		}
+		return t.Format("January")
+	case year:
+		return strconv.Itoa(t.Year())
+	}
+	panic(fmt.Sprint("no period ", int(p)))
+}
+
 // rule is one rule of a policy as the timeline draws it.
 type rule struct {
 	flag   string        // as on the command line, "--keep-daily 3"
@@ -625,15 +645,18 @@ func timelineAxis(s *svg, m ruleMark, rows []row) float64 {
 	}
 	s.addf(`<line x1="%s" y1="%s" x2="%s" y2="%s" class="axis"/>`, num(x0), num(axisY), num(x1), num(axisY))
 	for r, row := range rows {
-		x := a.snapX[r]
+		s.circle(a.snapX[r], axisY, keptClass(row.kept))
+	}
+	// The fade covers the removed snapshots, never a pill: a pill may reach
+	// past the end of the fade over the snapshot it belongs to.
+	s.fadeUsedUp(a, m, rows, bandTop, bandBot-bandTop)
+	for r := range rows {
 		if text, ok := m.pills[r]; ok {
-			py := axisY - 18 - rowStep*float64(rowOf[r])
-			s.addf(`<line x1="%s" y1="%s" x2="%s" y2="%s" class="lead"/>`, num(x), num(py), num(x), num(axisY))
+			x, py := a.snapX[r], axisY-18-rowStep*float64(rowOf[r])
+			s.addf(`<line x1="%s" y1="%s" x2="%s" y2="%s" class="lead"/>`, num(x), num(py), num(x), num(axisY-dot))
 			s.pill(a.pillX(r, text), py, text)
 		}
-		s.circle(x, axisY, keptClass(row.kept))
 	}
-	s.fadeUsedUp(a, m, rows, bandTop, bandBot-bandTop)
 	y := s.bandLabels(a, bandBot)
 	return s.legend(legendFor([]ruleMark{m}), x0, y+18) + 6
 }

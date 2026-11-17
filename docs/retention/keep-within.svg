@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720.0 167.0" width="720.0" height="167.0" role="img">
+<title>--keep-within 5d keeps 6 of 21 snapshots</title>
+<style>
+text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; fill: #2c3743; }
+.muted { fill: #55626f; }
+.bg { fill: #fbfcfd; stroke: #dde3ea; }
+.band, .lane { fill: #f3f6f9; }
+.band2 { fill: #e9eef3; }
+.fade { fill: #fbfcfd; opacity: 0.65; }
+.axis, .sep { stroke: #dde3ea; stroke-width: 1.5; }
+.kept { fill: #0b6fa8; stroke: #0b6fa8; stroke-width: 1.5; }
+.removed { fill: #fbfcfd; stroke: #8794a1; stroke-width: 1.5; }
+.snap { fill: #8794a1; }
+.pill { fill: #0b6fa8; }
+.on-pill { fill: #ffffff; }
+.lead { stroke: #0b6fa8; stroke-width: 1; }
+.arrow { stroke: #55626f; fill: none; }
+.win { fill: #0b6fa8; fill-opacity: 0.1; stroke: #0b6fa8; stroke-width: 1.5; stroke-dasharray: 5 4; }
+.hatch { fill: url(#hatch); }
+.hatch-line { stroke: #c3ccd6; stroke-width: 1.5; }
+@media (prefers-color-scheme: dark) {
+  text { fill: #b4c0cd; }
+  .muted { fill: #93a0ae; }
+  .bg { fill: #0a0e13; stroke: #232b35; }
+  .band, .lane { fill: #10161c; }
+  .band2 { fill: #161d25; }
+  .fade { fill: #0a0e13; }
+  .axis, .sep { stroke: #232b35; }
+  .kept { fill: #8be4f5; stroke: #8be4f5; }
+  .removed { fill: #0a0e13; stroke: #6b7785; }
+  .snap { fill: #6b7785; }
+  .pill { fill: #8be4f5; }
+  .on-pill { fill: #0a0e13; }
+  .lead { stroke: #8be4f5; }
+  .arrow { stroke: #93a0ae; }
+  .win { fill: #8be4f5; stroke: #8be4f5; }
+  .hatch-line { stroke: #3a4552; }
+}
+</style>
+<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" class="hatch-line"/></pattern></defs>
+<rect x="0.5" y="0.5" width="719.0" height="166.0" rx="8" class="bg"/>
+<text x="16.0" y="24.0" class="" text-anchor="start">--keep-within 5d</text>
+<text x="704.0" y="24.0" class="muted" text-anchor="end">5d window from Tue 17 Mar 18:00</text>
+<rect x="16.0" y="52.0" width="32.8" height="36.0" class="band"/>
+<rect x="48.8" y="52.0" width="32.8" height="36.0" class="band2"/>
+<rect x="81.5" y="52.0" width="32.8" height="36.0" class="band"/>
+<rect x="114.3" y="52.0" width="32.8" height="36.0" class="band2"/>
+<rect x="147.0" y="52.0" width="32.8" height="36.0" class="band"/>
+<rect x="179.8" y="52.0" width="32.8" height="36.0" class="band2"/>
+<rect x="212.6" y="52.0" width="32.8" height="36.0" class="band"/>
+<rect x="245.3" y="52.0" width="32.8" height="36.0" class="band2"/>
+<rect x="278.1" y="52.0" width="32.8" height="36.0" class="band"/>
+<rect x="310.9" y="52.0" width="32.8" height="36.0" class="band2"/>
+<rect x="343.6" y="52.0" width="32.8" height="36.0" class="band"/>
+<rect x="376.4" y="52.0" width="32.8" height="36.0" class="band2"/>
+<rect x="409.1" y="52.0" width="32.8" height="36.0" class="band"/>
+<rect x="441.9" y="52.0" width="32.8" height="36.0" class="band2"/>
+<rect x="474.7" y="52.0" width="32.8" height="36.0" class="band"/>
+<rect x="507.4" y="52.0" width="32.8" height="36.0" class="band2"/>
+<rect x="540.2" y="52.0" width="32.8" height="36.0" class="band"/>
+<rect x="573.0" y="52.0" width="32.8" height="36.0" class="band2"/>
+<rect x="605.7" y="52.0" width="32.8" height="36.0" class="band"/>
+<rect x="638.5" y="52.0" width="32.8" height="36.0" class="band2"/>
+<rect x="671.2" y="52.0" width="32.8" height="36.0" class="band"/>
+<rect x="532.0" y="48.0" width="163.8" height="44.0" class="win"/>
+<line x1="16.0" y1="74.0" x2="704.0" y2="74.0" class="axis"/>
+<circle cx="695.8" cy="74.0" r="4.0" class="kept"/>
+<circle cx="630.3" cy="74.0" r="4.0" class="kept"/>
+<circle cx="597.5" cy="74.0" r="4.0" class="kept"/>
+<circle cx="568.5" cy="74.0" r="4.0" class="kept"/>
+<circle cx="558.5" cy="74.0" r="4.0" class="kept"/>
+<circle cx="548.5" cy="74.0" r="4.0" class="kept"/>
+<circle cx="499.2" cy="74.0" r="4.0" class="removed"/>
+<circle cx="401.0" cy="74.0" r="4.0" class="removed"/>
+<circle cx="368.2" cy="74.0" r="4.0" class="removed"/>
+<circle cx="355.9" cy="74.0" r="4.0" class="removed"/>
+<circle cx="302.7" cy="74.0" r="4.0" class="removed"/>
+<circle cx="269.9" cy="74.0" r="4.0" class="removed"/>
+<circle cx="204.4" cy="74.0" r="4.0" class="removed"/>
+<circle cx="175.3" cy="74.0" r="4.0" class="removed"/>
+<circle cx="165.3" cy="74.0" r="4.0" class="removed"/>
+<circle cx="155.3" cy="74.0" r="4.0" class="removed"/>
+<circle cx="106.1" cy="74.0" r="4.0" class="removed"/>
+<circle cx="73.3" cy="74.0" r="4.0" class="removed"/>
+<circle cx="61.0" cy="74.0" r="4.0" class="removed"/>
+<circle cx="40.6" cy="74.0" r="4.0" class="removed"/>
+<circle cx="28.3" cy="74.0" r="4.0" class="removed"/>
+<text x="32.4" y="101.0" class="muted" text-anchor="middle">Mon</text>
+<text x="32.4" y="114.0" class="muted" text-anchor="middle">02</text>
+<text x="18.0" y="127.0" class="" text-anchor="start">Mar 2015</text>
+<text x="65.1" y="101.0" class="muted" text-anchor="middle">Tue</text>
+<text x="65.1" y="114.0" class="muted" text-anchor="middle">03</text>
+<text x="97.9" y="101.0" class="muted" text-anchor="middle">Wed</text>
+<text x="97.9" y="114.0" class="muted" text-anchor="middle">04</text>
+<text x="130.7" y="101.0" class="muted" text-anchor="middle">Thu</text>
+<text x="130.7" y="114.0" class="muted" text-anchor="middle">05</text>
+<text x="163.4" y="101.0" class="muted" text-anchor="middle">Fri</text>
+<text x="163.4" y="114.0" class="muted" text-anchor="middle">06</text>
+<text x="196.2" y="101.0" class="muted" text-anchor="middle">Sat</text>
+<text x="196.2" y="114.0" class="muted" text-anchor="middle">07</text>
+<text x="229.0" y="101.0" class="muted" text-anchor="middle">Sun</text>
+<text x="229.0" y="114.0" class="muted" text-anchor="middle">08</text>
+<text x="261.7" y="101.0" class="muted" text-anchor="middle">Mon</text>
+<text x="261.7" y="114.0" class="muted" text-anchor="middle">09</text>
+<text x="294.5" y="101.0" class="muted" text-anchor="middle">Tue</text>
+<text x="294.5" y="114.0" class="muted" text-anchor="middle">10</text>
+<text x="327.2" y="101.0" class="muted" text-anchor="middle">Wed</text>
+<text x="327.2" y="114.0" class="muted" text-anchor="middle">11</text>
+<text x="360.0" y="101.0" class="muted" text-anchor="middle">Thu</text>
+<text x="360.0" y="114.0" class="muted" text-anchor="middle">12</text>
+<text x="392.8" y="101.0" class="muted" text-anchor="middle">Fri</text>
+<text x="392.8" y="114.0" class="muted" text-anchor="middle">13</text>
+<text x="425.5" y="101.0" class="muted" text-anchor="middle">Sat</text>
+<text x="425.5" y="114.0" class="muted" text-anchor="middle">14</text>
+<text x="458.3" y="101.0" class="muted" text-anchor="middle">Sun</text>
+<text x="458.3" y="114.0" class="muted" text-anchor="middle">15</text>
+<text x="491.0" y="101.0" class="muted" text-anchor="middle">Mon</text>
+<text x="491.0" y="114.0" class="muted" text-anchor="middle">16</text>
+<text x="523.8" y="101.0" class="muted" text-anchor="middle">Tue</text>
+<text x="523.8" y="114.0" class="muted" text-anchor="middle">17</text>
+<text x="556.6" y="101.0" class="muted" text-anchor="middle">Wed</text>
+<text x="556.6" y="114.0" class="muted" text-anchor="middle">18</text>
+<text x="589.3" y="101.0" class="muted" text-anchor="middle">Thu</text>
+<text x="589.3" y="114.0" class="muted" text-anchor="middle">19</text>
+<text x="622.1" y="101.0" class="muted" text-anchor="middle">Fri</text>
+<text x="622.1" y="114.0" class="muted" text-anchor="middle">20</text>
+<text x="654.9" y="101.0" class="muted" text-anchor="middle">Sat</text>
+<text x="654.9" y="114.0" class="muted" text-anchor="middle">21</text>
+<text x="687.6" y="101.0" class="muted" text-anchor="middle">Sun</text>
+<text x="687.6" y="114.0" class="muted" text-anchor="middle">22</text>
+<circle cx="23.0" cy="147.0" r="4.0" class="kept"/>
+<text x="36.0" y="151.0" class="" text-anchor="start">kept</text>
+<circle cx="91.8" cy="147.0" r="4.0" class="removed"/>
+<text x="104.8" y="151.0" class="" text-anchor="start">removed</text>
+<rect x="175.2" y="141.0" width="14.0" height="12.0" class="win"/>
+<text x="195.2" y="151.0" class="" text-anchor="start">window back from the newest snapshot</text>
+</svg>

@@ -1,0 +1,157 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720.0 207.0" width="720.0" height="207.0" role="img">
+<title>--keep-last 5 keeps 5 of 21 snapshots</title>
+<style>
+text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; fill: #2c3743; }
+.muted { fill: #55626f; }
+.bg { fill: #fbfcfd; stroke: #dde3ea; }
+.band, .lane { fill: #f3f6f9; }
+.band2 { fill: #e9eef3; }
+.fade { fill: #fbfcfd; opacity: 0.65; }
+.axis, .sep { stroke: #dde3ea; stroke-width: 1.5; }
+.kept { fill: #0b6fa8; stroke: #0b6fa8; stroke-width: 1.5; }
+.removed { fill: #fbfcfd; stroke: #8794a1; stroke-width: 1.5; }
+.snap { fill: #8794a1; }
+.pill { fill: #0b6fa8; }
+.on-pill { fill: #ffffff; }
+.lead { stroke: #0b6fa8; stroke-width: 1; }
+.arrow { stroke: #55626f; fill: none; }
+.win { fill: #0b6fa8; fill-opacity: 0.1; stroke: #0b6fa8; stroke-width: 1.5; stroke-dasharray: 5 4; }
+.hatch { fill: url(#hatch); }
+.hatch-line { stroke: #c3ccd6; stroke-width: 1.5; }
+@media (prefers-color-scheme: dark) {
+  text { fill: #b4c0cd; }
+  .muted { fill: #93a0ae; }
+  .bg { fill: #0a0e13; stroke: #232b35; }
+  .band, .lane { fill: #10161c; }
+  .band2 { fill: #161d25; }
+  .fade { fill: #0a0e13; }
+  .axis, .sep { stroke: #232b35; }
+  .kept { fill: #8be4f5; stroke: #8be4f5; }
+  .removed { fill: #0a0e13; stroke: #6b7785; }
+  .snap { fill: #6b7785; }
+  .pill { fill: #8be4f5; }
+  .on-pill { fill: #0a0e13; }
+  .lead { stroke: #8be4f5; }
+  .arrow { stroke: #93a0ae; }
+  .win { fill: #8be4f5; stroke: #8be4f5; }
+  .hatch-line { stroke: #3a4552; }
+}
+</style>
+<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" class="hatch-line"/></pattern></defs>
+<rect x="0.5" y="0.5" width="719.0" height="206.0" rx="8" class="bg"/>
+<text x="16.0" y="24.0" class="" text-anchor="start">--keep-last 5</text>
+<text x="704.0" y="24.0" class="muted" text-anchor="end">counted from the newest snapshot</text>
+<path d="M 695.8 38 H 558.5 m 7 -4 l -7 4 l 7 4" class="arrow"/>
+<rect x="16.0" y="52.0" width="32.8" height="76.0" class="band"/>
+<rect x="48.8" y="52.0" width="32.8" height="76.0" class="band2"/>
+<rect x="81.5" y="52.0" width="32.8" height="76.0" class="band"/>
+<rect x="114.3" y="52.0" width="32.8" height="76.0" class="band2"/>
+<rect x="147.0" y="52.0" width="32.8" height="76.0" class="band"/>
+<rect x="179.8" y="52.0" width="32.8" height="76.0" class="band2"/>
+<rect x="212.6" y="52.0" width="32.8" height="76.0" class="band"/>
+<rect x="245.3" y="52.0" width="32.8" height="76.0" class="band2"/>
+<rect x="278.1" y="52.0" width="32.8" height="76.0" class="band"/>
+<rect x="310.9" y="52.0" width="32.8" height="76.0" class="band2"/>
+<rect x="343.6" y="52.0" width="32.8" height="76.0" class="band"/>
+<rect x="376.4" y="52.0" width="32.8" height="76.0" class="band2"/>
+<rect x="409.1" y="52.0" width="32.8" height="76.0" class="band"/>
+<rect x="441.9" y="52.0" width="32.8" height="76.0" class="band2"/>
+<rect x="474.7" y="52.0" width="32.8" height="76.0" class="band"/>
+<rect x="507.4" y="52.0" width="32.8" height="76.0" class="band2"/>
+<rect x="540.2" y="52.0" width="32.8" height="76.0" class="band"/>
+<rect x="573.0" y="52.0" width="32.8" height="76.0" class="band2"/>
+<rect x="605.7" y="52.0" width="32.8" height="76.0" class="band"/>
+<rect x="638.5" y="52.0" width="32.8" height="76.0" class="band2"/>
+<rect x="671.2" y="52.0" width="32.8" height="76.0" class="band"/>
+<line x1="16.0" y1="114.0" x2="704.0" y2="114.0" class="axis"/>
+<circle cx="695.8" cy="114.0" r="4.0" class="kept"/>
+<circle cx="630.3" cy="114.0" r="4.0" class="kept"/>
+<circle cx="597.5" cy="114.0" r="4.0" class="kept"/>
+<circle cx="568.5" cy="114.0" r="4.0" class="kept"/>
+<circle cx="558.5" cy="114.0" r="4.0" class="kept"/>
+<circle cx="548.5" cy="114.0" r="4.0" class="removed"/>
+<circle cx="499.2" cy="114.0" r="4.0" class="removed"/>
+<circle cx="401.0" cy="114.0" r="4.0" class="removed"/>
+<circle cx="368.2" cy="114.0" r="4.0" class="removed"/>
+<circle cx="355.9" cy="114.0" r="4.0" class="removed"/>
+<circle cx="302.7" cy="114.0" r="4.0" class="removed"/>
+<circle cx="269.9" cy="114.0" r="4.0" class="removed"/>
+<circle cx="204.4" cy="114.0" r="4.0" class="removed"/>
+<circle cx="175.3" cy="114.0" r="4.0" class="removed"/>
+<circle cx="165.3" cy="114.0" r="4.0" class="removed"/>
+<circle cx="155.3" cy="114.0" r="4.0" class="removed"/>
+<circle cx="106.1" cy="114.0" r="4.0" class="removed"/>
+<circle cx="73.3" cy="114.0" r="4.0" class="removed"/>
+<circle cx="61.0" cy="114.0" r="4.0" class="removed"/>
+<circle cx="40.6" cy="114.0" r="4.0" class="removed"/>
+<circle cx="28.3" cy="114.0" r="4.0" class="removed"/>
+<rect x="16.0" y="52.0" width="537.5" height="76.0" class="fade"/>
+<text x="284.7" y="66.0" class="muted" text-anchor="middle">count used up</text>
+<line x1="695.8" y1="96.0" x2="695.8" y2="110.0" class="lead"/>
+<rect x="672.4" y="87.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="688.2" y="100.0" class="on-pill" text-anchor="middle">1/5</text>
+<line x1="630.3" y1="76.0" x2="630.3" y2="110.0" class="lead"/>
+<rect x="614.5" y="67.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="630.3" y="80.0" class="on-pill" text-anchor="middle">2/5</text>
+<line x1="597.5" y1="96.0" x2="597.5" y2="110.0" class="lead"/>
+<rect x="581.7" y="87.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="597.5" y="100.0" class="on-pill" text-anchor="middle">3/5</text>
+<line x1="568.5" y1="76.0" x2="568.5" y2="110.0" class="lead"/>
+<rect x="552.7" y="67.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="568.5" y="80.0" class="on-pill" text-anchor="middle">4/5</text>
+<line x1="558.5" y1="96.0" x2="558.5" y2="110.0" class="lead"/>
+<rect x="542.7" y="87.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="558.5" y="100.0" class="on-pill" text-anchor="middle">5/5</text>
+<text x="32.4" y="141.0" class="muted" text-anchor="middle">Mon</text>
+<text x="32.4" y="154.0" class="muted" text-anchor="middle">02</text>
+<text x="18.0" y="167.0" class="" text-anchor="start">Mar 2015</text>
+<text x="65.1" y="141.0" class="muted" text-anchor="middle">Tue</text>
+<text x="65.1" y="154.0" class="muted" text-anchor="middle">03</text>
+<text x="97.9" y="141.0" class="muted" text-anchor="middle">Wed</text>
+<text x="97.9" y="154.0" class="muted" text-anchor="middle">04</text>
+<text x="130.7" y="141.0" class="muted" text-anchor="middle">Thu</text>
+<text x="130.7" y="154.0" class="muted" text-anchor="middle">05</text>
+<text x="163.4" y="141.0" class="muted" text-anchor="middle">Fri</text>
+<text x="163.4" y="154.0" class="muted" text-anchor="middle">06</text>
+<text x="196.2" y="141.0" class="muted" text-anchor="middle">Sat</text>
+<text x="196.2" y="154.0" class="muted" text-anchor="middle">07</text>
+<text x="229.0" y="141.0" class="muted" text-anchor="middle">Sun</text>
+<text x="229.0" y="154.0" class="muted" text-anchor="middle">08</text>
+<text x="261.7" y="141.0" class="muted" text-anchor="middle">Mon</text>
+<text x="261.7" y="154.0" class="muted" text-anchor="middle">09</text>
+<text x="294.5" y="141.0" class="muted" text-anchor="middle">Tue</text>
+<text x="294.5" y="154.0" class="muted" text-anchor="middle">10</text>
+<text x="327.2" y="141.0" class="muted" text-anchor="middle">Wed</text>
+<text x="327.2" y="154.0" class="muted" text-anchor="middle">11</text>
+<text x="360.0" y="141.0" class="muted" text-anchor="middle">Thu</text>
+<text x="360.0" y="154.0" class="muted" text-anchor="middle">12</text>
+<text x="392.8" y="141.0" class="muted" text-anchor="middle">Fri</text>
+<text x="392.8" y="154.0" class="muted" text-anchor="middle">13</text>
+<text x="425.5" y="141.0" class="muted" text-anchor="middle">Sat</text>
+<text x="425.5" y="154.0" class="muted" text-anchor="middle">14</text>
+<text x="458.3" y="141.0" class="muted" text-anchor="middle">Sun</text>
+<text x="458.3" y="154.0" class="muted" text-anchor="middle">15</text>
+<text x="491.0" y="141.0" class="muted" text-anchor="middle">Mon</text>
+<text x="491.0" y="154.0" class="muted" text-anchor="middle">16</text>
+<text x="523.8" y="141.0" class="muted" text-anchor="middle">Tue</text>
+<text x="523.8" y="154.0" class="muted" text-anchor="middle">17</text>
+<text x="556.6" y="141.0" class="muted" text-anchor="middle">Wed</text>
+<text x="556.6" y="154.0" class="muted" text-anchor="middle">18</text>
+<text x="589.3" y="141.0" class="muted" text-anchor="middle">Thu</text>
+<text x="589.3" y="154.0" class="muted" text-anchor="middle">19</text>
+<text x="622.1" y="141.0" class="muted" text-anchor="middle">Fri</text>
+<text x="622.1" y="154.0" class="muted" text-anchor="middle">20</text>
+<text x="654.9" y="141.0" class="muted" text-anchor="middle">Sat</text>
+<text x="654.9" y="154.0" class="muted" text-anchor="middle">21</text>
+<text x="687.6" y="141.0" class="muted" text-anchor="middle">Sun</text>
+<text x="687.6" y="154.0" class="muted" text-anchor="middle">22</text>
+<circle cx="23.0" cy="187.0" r="4.0" class="kept"/>
+<text x="36.0" y="191.0" class="" text-anchor="start">kept</text>
+<circle cx="91.8" cy="187.0" r="4.0" class="removed"/>
+<text x="104.8" y="191.0" class="" text-anchor="start">removed</text>
+<rect x="175.2" y="181.0" width="14" height="12" rx="6" class="pill"/>
+<text x="195.2" y="191.0" class="" text-anchor="start">count used, from the newest</text>
+<circle cx="416.6" cy="187.0" r="4.0" class="removed"/>
+<rect x="409.6" y="181.0" width="14.0" height="12.0" class="fade"/>
+<text x="429.6" y="191.0" class="" text-anchor="start">count used up</text>
+</svg>
