@@ -98,6 +98,7 @@ func Of(err error) (int, string) {
 		errors.Is(err, ark.ErrCorruptConfig):
 		return VerifyFailed, KindVerifyFailed
 	case errors.Is(err, ark.ErrEmptyPolicy),
+		errors.Is(err, ark.ErrInvalidPolicy),
 		errors.Is(err, ark.ErrPasswordRequired),
 		errors.Is(err, ark.ErrNotPasswordProtected):
 		return Usage, KindUsage

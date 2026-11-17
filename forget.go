@@ -3,6 +3,7 @@ package ark
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -118,9 +119,11 @@ type ForgetPolicy struct {
 	// KeepTags keeps every snapshot that carries all tags of at least one
 	// of its lists: {{"a", "b"}, {"c"}} keeps what is tagged a and b, and
 	// what is tagged c. The empty tag stands for no tag, so {{""}} keeps the
-	// untagged snapshots. The rule has no count and takes none from the
+	// untagged snapshots. Blanks around a tag do not count, in the list or
+	// on the snapshot. The rule has no count and takes none from the
 	// others: a snapshot it keeps still uses a KeepLast slot. A list
-	// without a tag is refused with [ErrInvalidPolicy].
+	// without a tag, and one with the empty tag next to others, which no
+	// snapshot could match, are refused with [ErrInvalidPolicy].
 	//
 	// Every other rule keeps at least the newest snapshot of a series, this
 	// one may keep none. Forget then removes nothing at all and returns
@@ -131,7 +134,8 @@ type ForgetPolicy struct {
 // ParseTagList reads one list of KeepTags from its text form, the one a
 // profile and the command line take: tags separated by commas, the blanks
 // around a tag dropped. The empty text is the list of the empty tag, which
-// matches untagged snapshots. This is restic's --keep-tag syntax.
+// matches untagged snapshots. This is restic's --keep-tag syntax. A stray
+// comma leaves an empty tag in the list, as in "a,"; Forget refuses it.
 func ParseTagList(s string) []string {
 	tags := strings.Split(s, ",")
 	for i, tag := range tags {
@@ -158,8 +162,10 @@ func (p ForgetPolicy) counted() [6]countedRule {
 	}
 }
 
-// validate refuses a negative count other than Unlimited, and a KeepTags
-// list without a tag, which every snapshot would match.
+// validate refuses a negative count other than Unlimited, a KeepTags list
+// without a tag, which every snapshot would match, and one with the empty
+// tag next to others, which none would: a stray comma must not turn a keep
+// rule into one that silently keeps nothing.
 func (p ForgetPolicy) validate() error {
 	for _, c := range p.counted() {
 		if c.n < Unlimited {
@@ -170,14 +176,25 @@ func (p ForgetPolicy) validate() error {
 		if len(list) == 0 {
 			return fmt.Errorf(`%w: KeepTags[%d] names no tag, want a tag, or "" for untagged`, ErrInvalidPolicy, i)
 		}
+		blank := func(tag string) bool { return strings.TrimSpace(tag) == "" }
+		if len(list) > 1 && slices.ContainsFunc(list, blank) {
+			return fmt.Errorf(
+				`%w: KeepTags[%d] %q has an empty tag next to others, drop the stray comma; "" stands alone, for untagged`,
+				ErrInvalidPolicy,
+				i,
+				strings.Join(list, ","),
+			)
+		}
 	}
 	return nil
 }
 
-// keepsNothing reports whether a valid p has no rule that keeps a snapshot.
-// An unlimited count is a rule, and so is a tag list, although it may match
-// nothing; a negative window keeps nothing, the same as a zero one.
-func (p ForgetPolicy) keepsNothing() bool {
+// Empty reports whether p has no rule that keeps a snapshot. Forget takes
+// such a policy only with snapshot IDs to remove, and refuses it with
+// [ErrEmptyPolicy] otherwise. An unlimited count is a rule, and so is a tag
+// list, although it may match nothing; a negative window keeps nothing, the
+// same as a zero one.
+func (p ForgetPolicy) Empty() bool {
 	for _, c := range p.counted() {
 		if c.n != 0 {
 			return false

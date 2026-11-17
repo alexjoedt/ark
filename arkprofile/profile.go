@@ -54,6 +54,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -139,8 +140,9 @@ var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 // Validate reports a name outside [a-z0-9][a-z0-9._-]*, conflicting
 // password sources, a negative concurrency or lock-wait, a negative keep
 // count other than [ark.Unlimited], a backup label that
-// [ark.ValidateLabels] refuses and a keep-within that is not a positive
-// duration. Every error matches [ErrInvalid].
+// [ark.ValidateLabels] refuses, a keep-within that is not a positive
+// duration and a keep-tag list with an empty tag next to others, as a stray
+// comma leaves one. Every error matches [ErrInvalid].
 func (p *Profile) Validate() error {
 	if !validName.MatchString(p.Name) {
 		return invalidf(
@@ -179,6 +181,14 @@ func (p *Profile) Validate() error {
 	if f.KeepWithin != "" {
 		if _, err := parseWithin(f.KeepWithin); err != nil {
 			return invalidf("forget.keep-within: %v", err)
+		}
+	}
+	for _, list := range f.KeepTags {
+		if tags := ark.ParseTagList(list); len(tags) > 1 && slices.Contains(tags, "") {
+			return invalidf(
+				`forget.keep-tag %q: an empty tag next to others, drop the stray comma; "" alone keeps the untagged`,
+				list,
+			)
 		}
 	}
 	return nil

@@ -227,6 +227,7 @@ func TestValidate(t *testing.T) {
 	ok.Backup.Path = "/data"
 	ok.Forget.KeepWithin = "30d"
 	ok.Forget.KeepYearly = ark.Unlimited
+	ok.Forget.KeepTags = []string{"pinned", "db, prod", ""}
 	if err := ok.Validate(); err != nil {
 		t.Fatalf("profile built in code: %v", err)
 	}
@@ -250,6 +251,9 @@ func TestValidate(t *testing.T) {
 		{"negative keep-yearly", func(p *arkprofile.Profile) { p.Forget.KeepYearly = -7 }},
 		{"bad keep-within", func(p *arkprofile.Profile) { p.Forget.KeepWithin = "30x" }},
 		{"zero keep-within", func(p *arkprofile.Profile) { p.Forget.KeepWithin = "0d" }},
+		{"keep-tag trailing comma", func(p *arkprofile.Profile) { p.Forget.KeepTags = []string{"", "pinned,"} }},
+		{"keep-tag doubled comma", func(p *arkprofile.Profile) { p.Forget.KeepTags = []string{"db,,prod"} }},
+		{"keep-tag only commas", func(p *arkprofile.Profile) { p.Forget.KeepTags = []string{" , "} }},
 		{"bad label key", func(p *arkprofile.Profile) { p.Backup.Labels = map[string]string{"-app": "x"} }},
 		{"reserved label", func(p *arkprofile.Profile) { p.Backup.Labels = map[string]string{"ark/path": "/x"} }},
 	}

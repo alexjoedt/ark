@@ -237,7 +237,8 @@ no such rule. restic selects the same way.
 snapshot has to carry all of them; give the flag again for another list, and a snapshot that matches
 any of the lists stays: `--keep-tag db,prod --keep-tag pinned` keeps what is tagged `db` and `prod`,
 and what is tagged `pinned`. Blanks around a tag are dropped, and `--keep-tag ''` keeps the
-snapshots without a tag. The rule has no count and takes none from the other rules: a tagged
+snapshots without a tag. A list with a stray comma, such as `pinned,`, would match no snapshot and
+is a usage error. The rule has no count and takes none from the other rules: a tagged
 snapshot among the three newest still uses one of the three slots of `--keep-last 3`. `--json`
 lists the reason as `has tags [db, prod]`. Over a profile the flag replaces the profile's
 `keep-tag` lists.

@@ -533,6 +533,23 @@ func TestWeekKeyIsDistinctPerISOWeek(t *testing.T) {
 	}
 }
 
+// A tag the user names keeps its snapshot whatever blanks either side has:
+// backup stores a tag as given, ParseTagList trims.
+func TestHasTagsIgnoresBlanks(t *testing.T) {
+	for _, tc := range []struct{ tags, list []string }{
+		{[]string{" pinned"}, []string{"pinned"}},
+		{[]string{"pinned"}, []string{" pinned "}},
+		{[]string{"db", " prod"}, []string{"db", "prod"}},
+	} {
+		if !hasTags(tc.tags, tc.list) {
+			t.Errorf("hasTags(%q, %q) = false", tc.tags, tc.list)
+		}
+	}
+	if hasTags([]string{"pinned x"}, []string{"pinned"}) {
+		t.Error("a tag matched a longer one")
+	}
+}
+
 // taggedFixture is one series, newest first, one snapshot a day:
 //
 //	s0  a, b

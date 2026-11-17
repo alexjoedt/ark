@@ -45,7 +45,8 @@ A keep count is a whole number or `unlimited`, as on the command line: `keep-yea
 keeps the newest snapshot of every year. A negative count fails the load.
 `keep-tag` is a list with one entry per tag list, each written as `--keep-tag` takes it:
 `keep-tag: [pinned, "db,prod"]` keeps what is tagged `pinned`, and what is tagged `db` and `prod`;
-the entry `""` keeps the untagged snapshots.
+the entry `""` keeps the untagged snapshots. An entry with a stray comma, such as `"pinned,"`, fails
+the load.
 
 ## Rules
 

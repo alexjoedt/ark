@@ -404,7 +404,7 @@ func (r *Repository) Forget(
 	if err := policy.validate(); err != nil {
 		return nil, err
 	}
-	if policy.keepsNothing() && len(filter.IDs) == 0 {
+	if policy.Empty() && len(filter.IDs) == 0 {
 		return nil, ErrEmptyPolicy
 	}
 
@@ -422,7 +422,7 @@ func (r *Repository) Forget(
 	defer lock.release(ctx)
 
 	var result *ForgetResult
-	if policy.keepsNothing() {
+	if policy.Empty() {
 		result, err = r.forgetNamed(ctx, filter)
 	} else {
 		var snapshots []*Snapshot

@@ -209,6 +209,19 @@ func TestForgetKeepTag(t *testing.T) {
 		t.Errorf("%d snapshots after the refused runs, want 4", len(list))
 	}
 
+	// a stray comma would make a list no snapshot matches: refused, not run
+	for _, args := range [][]string{
+		{"-r", repo, "forget", "--keep-last", "1", "--keep-tag", "a,", "--yes"},
+		{"-r", repo, "forget", "--keep-last", "1", "--keep-tag", "a,,b", "--dry-run"},
+	} {
+		if code, _, stderr := runCaptureAll(t, args...); code != 2 || !strings.Contains(stderr, "stray comma") {
+			t.Errorf("%v: exit %d, stderr %q, want exit 2 naming the stray comma", args, code, stderr)
+		}
+	}
+	if list := snapshotsJSON(t, "-r", repo); len(list) != 4 {
+		t.Errorf("%d snapshots after the refused lists, want 4", len(list))
+	}
+
 	// a tag list is a policy, so it does not go with ids
 	if code, _ := runCapture(t, "-r", repo, "forget", "--keep-tag", "a", "0123abcd"); code != 2 {
 		t.Errorf("forget --keep-tag with an id: exit %d, want 2", code)

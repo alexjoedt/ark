@@ -129,13 +129,16 @@ func applyForgetPolicyToGroup(result *ForgetResult, snapshots []*Snapshot, polic
 
 // hasTags reports whether a snapshot with tags matches one KeepTags list: it
 // carries every tag of the list. As in restic, the empty tag matches a
-// snapshot without tags, whatever the list names after it.
+// snapshot without tags, whatever the list names after it. Blanks around a
+// tag count on neither side: ParseTagList drops them, a backup stores a tag
+// as given, and a tag the user named must not miss its snapshot over them.
 func hasTags(tags, list []string) bool {
-	for _, tag := range list {
-		if tag == "" && len(tags) == 0 {
+	for _, want := range list {
+		want = strings.TrimSpace(want)
+		if want == "" && len(tags) == 0 {
 			return true
 		}
-		if !slices.Contains(tags, tag) {
+		if !slices.ContainsFunc(tags, func(tag string) bool { return strings.TrimSpace(tag) == want }) {
 			return false
 		}
 	}

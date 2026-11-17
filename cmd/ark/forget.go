@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"reflect"
 
 	ark "github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
@@ -94,7 +93,7 @@ func forgetCommand() *cli.Command {
 			if lp != nil && !cmd.IsSet("prune") {
 				prune = lp.Forget.Prune
 			}
-			hasPolicy := !reflect.ValueOf(policy).IsZero()
+			hasPolicy := !policy.Empty()
 			switch {
 			case len(ids) > 0 && hasPolicy:
 				return exitcode.Usagef("give snapshot ids or a policy, not both")

@@ -113,6 +113,10 @@ func TestForgetTakesUnlimitedAndRefusesOtherNegativeCounts(t *testing.T) {
 		{KeepLast: -2},
 		{KeepDaily: 7, KeepYearly: -5},
 		{KeepLast: ark.Unlimited, KeepWeekly: -2},
+		// a stray comma: a list no snapshot can match must not pass as a keep rule
+		{KeepLast: 5, KeepTags: [][]string{ark.ParseTagList("pinned,")}},
+		{KeepLast: 5, KeepTags: [][]string{{"", "pinned"}}},
+		{KeepLast: 5, KeepTags: [][]string{{"pinned"}, {"db", " ", "prod"}}},
 	} {
 		if _, err := repo.Forget(ctx, policy, ark.SnapshotFilter{}); !errors.Is(err, ark.ErrInvalidPolicy) {
 			t.Errorf("Forget(%+v) = %v, want ErrInvalidPolicy", policy, err)
