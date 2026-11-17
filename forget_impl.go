@@ -74,8 +74,7 @@ func applyForgetPolicyToGroup(result *ForgetResult, snapshots []*Snapshot, polic
 			return periodKey{t.Year(), int(t.Month()), t.Day()}
 		}},
 		{reason: "weekly snapshot", left: policy.KeepWeekly, period: func(t time.Time, _ int) periodKey {
-			week := weekKey(t)
-			return periodKey{week[0], week[1]}
+			return weekKey(t)
 		}},
 		{reason: "monthly snapshot", left: policy.KeepMonthly, period: func(t time.Time, _ int) periodKey {
 			return periodKey{t.Year(), int(t.Month())}
@@ -123,9 +122,9 @@ func applyForgetPolicyToGroup(result *ForgetResult, snapshots []*Snapshot, polic
 
 // weekKey names the ISO week of t. The year is the ISO year, which differs
 // from t.Year() in the days around a year turn.
-func weekKey(t time.Time) [2]int {
+func weekKey(t time.Time) periodKey {
 	year, week := t.ISOWeek()
-	return [2]int{year, week}
+	return periodKey{year, week}
 }
 
 // withinString writes d the way restic writes a keep-within duration, in

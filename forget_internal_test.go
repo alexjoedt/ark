@@ -519,7 +519,7 @@ func TestPeriodsIgnoreTheZoneASnapshotCarries(t *testing.T) {
 }
 
 func TestWeekKeyIsDistinctPerISOWeek(t *testing.T) {
-	seen := make(map[[2]int]time.Time)
+	seen := make(map[periodKey]time.Time)
 	// 2000-01-03 is the Monday of week 1 of 2000.
 	for monday := time.Date(2000, 1, 3, 0, 0, 0, 0, time.UTC); monday.Year() <= 2040; monday = monday.AddDate(0, 0, 7) {
 		key := weekKey(monday)
