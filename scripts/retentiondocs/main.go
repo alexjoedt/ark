@@ -71,17 +71,25 @@ type outcome struct {
 	// table's format.
 	Kept    []string
 	Removed []string
-	// Gaps are the periods the first counted period rule counts across
-	// without a snapshot, newest first: "11:00", "Sat 21 Mar", "May", "2013";
-	// a week by the day it starts.
-	Gaps []string
-	// Oldest is the snapshot a rule keeps as the oldest of the history,
-	// although its period is taken; empty when none is.
-	Oldest string
-	// WindowStart is where the first within rule's window starts.
-	WindowStart string
+	// Rules are the policy's rules, in the order ark forget lists their
+	// reasons.
+	Rules []ruleOutcome
 	// Image is the timeline's path relative to the page.
 	Image string
+}
+
+// ruleOutcome is what the template sees of one rule of a scenario.
+type ruleOutcome struct {
+	Flag string
+	// Gaps are the periods a counted period rule counts across without a
+	// snapshot, newest first: "Mon 02 Mar 11:00", "Sat 21 Mar", "May",
+	// "2013"; a week by the day it starts.
+	Gaps []string
+	// Oldest is the snapshot the rule keeps as the oldest of the history,
+	// although its period is taken; empty when it keeps none.
+	Oldest string
+	// WindowStart is where the window of a within rule starts.
+	WindowStart string
 }
 
 // file is one generated file.
@@ -132,14 +140,15 @@ func generate(ctx context.Context, list []scenario) ([]file, map[string]*outcome
 		if err != nil {
 			return nil, nil, fmt.Errorf("scenario %s: %w", s.name, err)
 		}
-		image, err := timeline(s.policy, rows)
-		if err != nil {
-			return nil, nil, fmt.Errorf("drawing scenario %s: %w", s.name, err)
-		}
-		o, err := describe(s, rows)
+		marks, err := mark(s.policy, rows)
 		if err != nil {
 			return nil, nil, fmt.Errorf("scenario %s: %w", s.name, err)
 		}
+		image, err := timeline(marks, rows)
+		if err != nil {
+			return nil, nil, fmt.Errorf("drawing scenario %s: %w", s.name, err)
+		}
+		o := describe(s.name, marks, rows)
 		files = append(files, file{path: path.Join(imageDir, s.name+".svg"), content: image})
 		o.Image = path.Join(imageLink, s.name+".svg")
 		outcomes[s.name] = o
@@ -239,31 +248,34 @@ func dryRun(ctx context.Context, b ark.Backend, policy ark.ForgetPolicy) (result
 // layouts returns the formats of a snapshot time and of a day for rows,
 // newest first: with the year only when the history crosses a year turn.
 func layouts(rows []row) (timeLayout, dayLayout string) {
-	if rows[0].at.Year() != rows[len(rows)-1].at.Year() {
+	if crossesYear(rows) {
 		return "Mon 02 Jan 2006 15:04", "Mon 02 Jan 2006"
 	}
 	return "Mon 02 Jan 15:04", "Mon 02 Jan"
 }
 
-func describe(s scenario, rows []row) (*outcome, error) {
-	marks, err := mark(s.policy, rows)
-	if err != nil {
-		return nil, err
-	}
+// crossesYear reports whether rows, newest first, cross a year turn.
+func crossesYear(rows []row) bool {
+	return rows[0].at.Year() != rows[len(rows)-1].at.Year()
+}
+
+func describe(name string, marks []ruleMark, rows []row) *outcome {
 	layout, _ := layouts(rows)
-	o := &outcome{Name: s.name}
+	o := &outcome{Name: name}
 	var flags []string
 	for _, m := range marks {
 		flags = append(flags, m.flag)
-		if m.window != (ark.Within{}) && o.WindowStart == "" {
-			o.WindowStart = m.winStart.Format(layout)
+		r := ruleOutcome{Flag: m.flag}
+		if m.window != (ark.Within{}) {
+			r.WindowStart = m.winStart.Format(layout)
 		}
-		if m.count != 0 && m.cut && o.Gaps == nil {
-			o.Gaps = []string{}
-			for _, p := range slices.Backward(m.noCount) {
-				o.Gaps = append(o.Gaps, m.period.name(p, rows))
-			}
+		for _, p := range slices.Backward(m.noCount) {
+			r.Gaps = append(r.Gaps, m.period.name(p, rows))
 		}
+		if m.byOldest >= 0 {
+			r.Oldest = rows[m.byOldest].at.Format(layout)
+		}
+		o.Rules = append(o.Rules, r)
 	}
 	o.Policy = strings.Join(flags, " ")
 	var t strings.Builder
@@ -279,19 +291,15 @@ func describe(s scenario, rows []row) (*outcome, error) {
 		reasons := make([]string, len(r.reasons))
 		for i, reason := range r.reasons {
 			reasons[i] = "`" + reason + "`"
-			if strings.HasPrefix(reason, "oldest ") {
-				o.Oldest = when
-			}
 		}
 		fmt.Fprintf(&t, "| %s | kept | %s |\n", when, strings.Join(reasons, ", "))
 	}
 	o.Table = strings.TrimSuffix(t.String(), "\n")
-	return o, nil
+	return o
 }
 
 func render(outcomes map[string]*outcome) ([]byte, error) {
 	funcs := template.FuncMap{
-		"join": strings.Join,
 		"list": func(items []string) string {
 			if len(items) < 2 {
 				return strings.Join(items, "")

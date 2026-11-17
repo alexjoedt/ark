@@ -94,14 +94,14 @@ func (p period) labels(t time.Time) (lines []string, coarse string) {
 // name returns how the page names the period that starts at t in a history
 // of rows: a week by the day it starts.
 func (p period) name(t time.Time, rows []row) string {
-	_, dayLayout := layouts(rows)
+	timeLayout, dayLayout := layouts(rows)
 	switch p {
 	case hour:
-		return t.Format("15:04")
+		return t.Format(timeLayout)
 	case day, week:
 		return t.Format(dayLayout)
 	case month:
-		if rows[0].at.Year() != rows[len(rows)-1].at.Year() {
+		if crossesYear(rows) {
 			return t.Format("January 2006")
 		}
 		return t.Format("January")
@@ -180,6 +180,7 @@ type ruleMark struct {
 	pills    map[int]string // row index to the count used, for a counted rule
 	newest   int            // row index of the newest snapshot it keeps
 	oldest   int            // row index of the oldest
+	byOldest int            // row index it keeps for an "oldest " reason, -1 for none
 	usedUp   bool           // a counted rule ran out of count
 	noCount  []time.Time    // periods it counted across without a snapshot
 	winStart time.Time      // of a window rule, whether or not it keeps a snapshot
@@ -192,7 +193,9 @@ func mark(policy ark.ForgetPolicy, rows []row) ([]ruleMark, error) {
 	list := rules(policy)
 	marks := make([]ruleMark, len(list))
 	for i, r := range list {
-		marks[i] = ruleMark{rule: r, keeps: map[int]bool{}, pills: map[int]string{}, newest: -1, oldest: -1}
+		marks[i] = ruleMark{
+			rule: r, keeps: map[int]bool{}, pills: map[int]string{}, newest: -1, oldest: -1, byOldest: -1,
+		}
 	}
 	for ri, row := range rows {
 		for _, reason := range row.reasons {
@@ -208,6 +211,9 @@ func mark(policy ark.ForgetPolicy, rows []row) ([]ruleMark, error) {
 			}
 			m.oldest = ri
 			m.keeps[ri] = true
+			if strings.HasPrefix(reason, "oldest ") {
+				m.byOldest = ri
+			}
 			if m.count != 0 {
 				limit := countText(m.count)
 				if m.count == ark.Unlimited {
@@ -551,12 +557,8 @@ func legendFor(marks []ruleMark) []legendItem {
 	return items
 }
 
-// timeline draws what policy did to rows, newest first.
-func timeline(policy ark.ForgetPolicy, rows []row) ([]byte, error) {
-	marks, err := mark(policy, rows)
-	if err != nil {
-		return nil, err
-	}
+// timeline draws what the rules of marks did to rows, newest first.
+func timeline(marks []ruleMark, rows []row) ([]byte, error) {
 	if len(marks) == 0 {
 		return nil, errors.New("the policy has no rule")
 	}

@@ -162,7 +162,7 @@ func TestTimelineLanes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	img, err := timeline(s.policy, rows)
+	img, err := draw(s.policy, rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestTimelineLanes(t *testing.T) {
 
 func TestTimelineRefusesAnUnknownReason(t *testing.T) {
 	rows := []row{{at: running()[0].at, kept: true, reasons: []string{"weekly snapshot"}}}
-	if _, err := timeline(ark.ForgetPolicy{KeepDaily: 1}, rows); err == nil {
+	if _, err := draw(ark.ForgetPolicy{KeepDaily: 1}, rows); err == nil {
 		t.Error("a reason of no rule of the policy drew a timeline")
 	}
 }
@@ -244,7 +244,7 @@ func TestBandLabelsNameAMonthThatStartsUnderTheLabelBefore(t *testing.T) {
 // snapshot a day, on an axis of weeks.
 func TestTimelineHatchesAGapOfFinerPeriodsOnce(t *testing.T) {
 	rows := daily(time.Date(2015, 5, 8, 12, 0, 0, 0, time.UTC), 90, "hourly snapshot")
-	img, err := timeline(ark.ForgetPolicy{KeepHourly: ark.Unlimited}, rows)
+	img, err := draw(ark.ForgetPolicy{KeepHourly: ark.Unlimited}, rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func TestTimelineHatchesAGapOfFinerPeriodsOnce(t *testing.T) {
 
 func TestTimelineDrawsTheWindowOfARuleThatKeepsNothing(t *testing.T) {
 	rows := []row{{at: time.Date(2015, 3, 22, 18, 0, 0, 0, time.UTC)}}
-	img, err := timeline(ark.ForgetPolicy{KeepWithin: ark.Within{Days: 5}}, rows)
+	img, err := draw(ark.ForgetPolicy{KeepWithin: ark.Within{Days: 5}}, rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,5 +295,37 @@ func checkXML(t *testing.T, name string, content []byte) {
 			t.Errorf("%s is no well-formed XML: %v", name, err)
 			return
 		}
+	}
+}
+
+func draw(policy ark.ForgetPolicy, rows []row) ([]byte, error) {
+	marks, err := mark(policy, rows)
+	if err != nil {
+		return nil, err
+	}
+	return timeline(marks, rows)
+}
+
+// Each rule of a scenario reports its own gaps and oldest snapshot.
+func TestDescribeKeepsEachRuleApart(t *testing.T) {
+	s := scenario{name: "two", history: running(), policy: ark.ForgetPolicy{KeepDaily: 30, KeepWeekly: 2}}
+	rows, err := forget(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marks, err := mark(s.policy, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := describe(s.name, marks, rows)
+	daily, weekly := o.Rules[0], o.Rules[1]
+	if daily.Flag != "--keep-daily 30" || weekly.Flag != "--keep-weekly 2" {
+		t.Fatalf("rules %q and %q, want daily then weekly", daily.Flag, weekly.Flag)
+	}
+	if daily.Oldest == "" || len(daily.Gaps) == 0 {
+		t.Errorf("the daily rule reports oldest %q and gaps %q, want both", daily.Oldest, daily.Gaps)
+	}
+	if weekly.Oldest != "" || weekly.Gaps != nil {
+		t.Errorf("the weekly rule reports oldest %q and gaps %q, want none", weekly.Oldest, weekly.Gaps)
 	}
 }

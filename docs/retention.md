@@ -9,7 +9,7 @@ The examples count hours, days, weeks, months and years in UTC; ark counts them 
 In short:
 
 - A counted rule such as `--keep-daily N` counts periods, not snapshots: it keeps the newest snapshot of each of the N most recent days that have one. A day without a snapshot uses no count, and of a day with several only the newest counts.
-- When a counted rule reaches the oldest snapshot of the history with count left, it keeps that snapshot too.
+- When a counted rule reaches the oldest snapshot of the history with count left, it keeps that snapshot too, and so does a rule such as `--keep-within-daily 30d` whose window holds it.
 - A within rule such as `--keep-within 7d` measures its window back from the newest snapshot, not from the time forget runs.
 - A snapshot that any rule keeps stays.
 
@@ -103,7 +103,7 @@ These rules count periods. Each keeps the newest snapshot of a period, newest pe
 | Mon 02 Mar 08:40 | removed | |
 | Mon 02 Mar 08:10 | removed | |
 
-`--keep-hourly 4` keeps Mon 02 Mar 13:50, Mon 02 Mar 12:45, Mon 02 Mar 10:20 and Mon 02 Mar 09:55 and removes 7 other snapshots. No snapshot falls in the hour from 11:00; it uses no count.
+`--keep-hourly 4` keeps Mon 02 Mar 13:50, Mon 02 Mar 12:45, Mon 02 Mar 10:20 and Mon 02 Mar 09:55 and removes 7 other snapshots. No snapshot falls in the hour starting Mon 02 Mar 11:00; an hour without one uses no count.
 
 ### Keep weekly
 
@@ -251,7 +251,7 @@ Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keep
 
 ### Keep the newest of every period within a duration
 
-`--keep-within-hourly`, `--keep-within-daily`, `--keep-within-weekly`, `--keep-within-monthly` and `--keep-within-yearly` take a duration in place of a count: they keep the newest snapshot of every period that has one inside the window, however many periods that is.
+`--keep-within-hourly`, `--keep-within-daily`, `--keep-within-weekly`, `--keep-within-monthly` and `--keep-within-yearly` take a duration in place of a count: they keep the newest snapshot of every period that has one inside the window, however many periods that is. When the oldest snapshot of the history lies inside the window and shares its period with a newer one, they keep it too, for an `oldest` reason such as `oldest daily within 30d`.
 
 ![Timeline of --keep-within-hourly 3h](retention/keep-within-hourly.svg)
 

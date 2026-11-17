@@ -15,7 +15,7 @@ The examples count hours, days, weeks, months and years in UTC; ark counts them 
 In short:
 
 - A counted rule such as `--keep-daily N` counts periods, not snapshots: it keeps the newest snapshot of each of the N most recent days that have one. A day without a snapshot uses no count, and of a day with several only the newest counts.
-- When a counted rule reaches the oldest snapshot of the history with count left, it keeps that snapshot too.
+- When a counted rule reaches the oldest snapshot of the history with count left, it keeps that snapshot too, and so does a rule such as `--keep-within-daily 30d` whose window holds it.
 - A within rule such as `--keep-within 7d` measures its window back from the newest snapshot, not from the time forget runs.
 - A snapshot that any rule keeps stays.
 
@@ -35,42 +35,42 @@ These rules count periods. Each keeps the newest snapshot of a period, newest pe
 
 `--keep-daily N` keeps the newest snapshot of each of the N most recent days that have a snapshot. It is not one snapshot a day for N days: days without a backup are skipped, so the rule reaches back as far as it takes to find N days.
 {{with scenario "keep-daily"}}
-{{template "example" .}}{{with .Gaps}} No snapshot falls on {{list .}}; a day without one uses no count.{{end}}
+{{template "example" .}}{{with (index .Rules 0).Gaps}} No snapshot falls on {{list .}}; a day without one uses no count.{{end}}
 {{- end}}
 
 ### Keep hourly
 
 `--keep-hourly N` keeps the newest snapshot of each of the N most recent hours that have one.
 {{with scenario "keep-hourly"}}
-{{template "example" .}}{{with .Gaps}} No snapshot falls in the hour from {{list .}}; it uses no count.{{end}}
+{{template "example" .}}{{with (index .Rules 0).Gaps}} No snapshot falls in the {{if eq (len .) 1}}hour{{else}}hours{{end}} starting {{list .}}; an hour without one uses no count.{{end}}
 {{- end}}
 
 ### Keep weekly
 
 `--keep-weekly N` keeps the newest snapshot of each of the N most recent weeks that have one.
 {{with scenario "keep-weekly"}}
-{{template "example" .}}{{with .Oldest}} The history ends before the count is used up, so the rule also keeps the oldest snapshot, {{.}}, although its week is taken; `--json` gives it an `oldest` reason.{{end}}
+{{template "example" .}}{{with (index .Rules 0)}}{{with .Gaps}} No snapshot falls in the {{if eq (len .) 1}}week{{else}}weeks{{end}} starting {{list .}}; a week without one uses no count.{{end}}{{with .Oldest}} The history ends before the count is used up, so the rule also keeps the oldest snapshot, {{.}}, although its week is taken; `--json` gives it an `oldest` reason.{{end}}{{end}}
 {{- end}}
 
 ### Keep monthly
 
 `--keep-monthly N` keeps the newest snapshot of each of the N most recent months that have one.
 {{with scenario "keep-monthly"}}
-{{template "example" .}}{{with .Gaps}} No snapshot falls in {{list .}}; a month without one uses no count.{{end}}
+{{template "example" .}}{{with (index .Rules 0).Gaps}} No snapshot falls in {{list .}}; a month without one uses no count.{{end}}
 {{- end}}
 
 ### Keep yearly
 
 `--keep-yearly N` keeps the newest snapshot of each of the N most recent years that have one.
 {{with scenario "keep-yearly"}}
-{{template "example" .}}{{with .Gaps}} No snapshot falls in {{list .}}; a year without one uses no count.{{end}}
+{{template "example" .}}{{with (index .Rules 0).Gaps}} No snapshot falls in {{list .}}; a year without one uses no count.{{end}}
 {{- end}}
 
 ### Unlimited
 
 Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keeps the newest snapshot of every day that has one, and the oldest snapshot of the history always stays.
 {{with scenario "keep-unlimited"}}
-{{template "example" .}}{{with .Oldest}} The oldest snapshot, {{.}}, stays although its day is taken.{{end}}
+{{template "example" .}}{{with (index .Rules 0).Oldest}} The oldest snapshot, {{.}}, stays although its day is taken.{{end}}
 {{- end}}
 
 ## Keep within
@@ -79,26 +79,26 @@ Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keep
 
 `--keep-within DURATION` keeps every snapshot younger than the duration, however many there are. The window ends at the newest snapshot, so a history that stopped receiving backups keeps its last ones. A snapshot exactly the duration old is outside.
 {{with scenario "keep-within"}}
-{{template "example" .}} The window starts at {{.WindowStart}}.
+{{template "example" .}} The window starts at {{(index .Rules 0).WindowStart}}.
 {{- end}}
 
 ### Keep the newest of every period within a duration
 
-`--keep-within-hourly`, `--keep-within-daily`, `--keep-within-weekly`, `--keep-within-monthly` and `--keep-within-yearly` take a duration in place of a count: they keep the newest snapshot of every period that has one inside the window, however many periods that is.
+`--keep-within-hourly`, `--keep-within-daily`, `--keep-within-weekly`, `--keep-within-monthly` and `--keep-within-yearly` take a duration in place of a count: they keep the newest snapshot of every period that has one inside the window, however many periods that is. When the oldest snapshot of the history lies inside the window and shares its period with a newer one, they keep it too, for an `oldest` reason such as `oldest daily within 30d`.
 {{with scenario "keep-within-hourly"}}
-{{template "example" .}} The window starts at {{.WindowStart}}.
+{{template "example" .}}{{with index .Rules 0}} The window starts at {{.WindowStart}}.{{with .Oldest}} The oldest snapshot, {{.}}, lies inside it, so the rule keeps it although its period is taken.{{end}}{{end}}
 {{- end}}
 {{with scenario "keep-within-daily"}}
-{{template "example" .}} The window starts at {{.WindowStart}}.
+{{template "example" .}}{{with index .Rules 0}} The window starts at {{.WindowStart}}.{{with .Oldest}} The oldest snapshot, {{.}}, lies inside it, so the rule keeps it although its period is taken.{{end}}{{end}}
 {{- end}}
 {{with scenario "keep-within-weekly"}}
-{{template "example" .}} The window starts at {{.WindowStart}}.
+{{template "example" .}}{{with index .Rules 0}} The window starts at {{.WindowStart}}.{{with .Oldest}} The oldest snapshot, {{.}}, lies inside it, so the rule keeps it although its period is taken.{{end}}{{end}}
 {{- end}}
 {{with scenario "keep-within-monthly"}}
-{{template "example" .}} The window starts at {{.WindowStart}}.
+{{template "example" .}}{{with index .Rules 0}} The window starts at {{.WindowStart}}.{{with .Oldest}} The oldest snapshot, {{.}}, lies inside it, so the rule keeps it although its period is taken.{{end}}{{end}}
 {{- end}}
 {{with scenario "keep-within-yearly"}}
-{{template "example" .}} The window starts at {{.WindowStart}}.
+{{template "example" .}}{{with index .Rules 0}} The window starts at {{.WindowStart}}.{{with .Oldest}} The oldest snapshot, {{.}}, lies inside it, so the rule keeps it although its period is taken.{{end}}{{end}}
 {{- end}}
 
 ## Keep tag
