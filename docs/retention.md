@@ -31,5 +31,4 @@
 | Tue 03 Mar 09:00 | removed | |
 | Mon 02 Mar 18:00 | removed | |
 
-Saturday the 21st has no snapshot and uses no count, so the policy keeps Sun 22 Mar 18:00, Fri 20 Mar 18:00, Thu 19 Mar 18:00 and removes the other 17.
-
+No snapshot falls on Sat 21 Mar; a day without one uses no count. The policy keeps Sun 22 Mar 18:00, Fri 20 Mar 18:00, Thu 19 Mar 18:00 and removes 17 other snapshots.

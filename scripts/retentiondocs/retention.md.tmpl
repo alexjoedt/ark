@@ -8,5 +8,5 @@
 {{with scenario "keep-daily"}}
 {{.Table}}
 
-Saturday the 21st has no snapshot and uses no count, so the policy keeps {{join .Kept ", "}} and removes the other {{len .Removed}}.
-{{end}}
+{{with .EmptyDays}}No snapshot falls on {{join . ", "}}; a day without one uses no count. {{end}}The policy keeps {{join .Kept ", "}}{{with .Removed}} and removes {{plural (len .) "other snapshot"}}{{end}}.
+{{end -}}

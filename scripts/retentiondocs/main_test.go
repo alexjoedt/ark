@@ -26,10 +26,7 @@ func TestGeneratedFilesAreCurrent(t *testing.T) {
 		if bytes.Equal(committed, f.content) {
 			continue
 		}
-		where := f.scenario
-		if where == "" {
-			where = staleScenarios(string(committed), outcomes)
-		}
+		where := staleScenarios(string(committed), outcomes)
 		t.Errorf("%s differs from what scripts/retentiondocs generates (%s); "+
 			"edit scripts/retentiondocs/retention.md.tmpl or the scenarios, never the file, and run task docs:gen",
 			f.path, where)
