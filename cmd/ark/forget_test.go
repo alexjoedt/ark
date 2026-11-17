@@ -227,3 +227,93 @@ func TestForgetKeepTag(t *testing.T) {
 		t.Errorf("forget --keep-tag with an id: exit %d, want 2", code)
 	}
 }
+
+// --keep-within-hourly to --keep-within-yearly keep the newest snapshot of
+// every period inside their window, from flags and from a profile, each with
+// a reason of its own. The snapshots are taken at noon UTC in the middle of
+// a week and of a month, so every zone sees the same periods.
+func TestForgetKeepWithinPeriods(t *testing.T) {
+	repo := initRepo(t)
+	for _, day := range []string{"2025-06-12", "2025-06-11", "2025-05-15", "2025-05-14", "2024-06-13", "2024-01-11"} {
+		importEmptySnapshot(t, repo, day+"T12:00:00Z")
+	}
+	// the imported snapshots carry no host, the profile would ask for this machine's
+	profile := writeProfile(t, t.TempDir(), "app", "repo: "+repo+"\nforget:\n  keep-within-monthly: 1y\n")
+	fromProfile := []string{"forget", "-f", profile, "--host", ""}
+
+	monthly := map[string][]string{
+		"2025-06-12": {"monthly within 1y"}, "2025-05-15": {"monthly within 1y"}, "2024-06-13": {"monthly within 1y"},
+	}
+	daily := map[string][]string{"2025-06-12": {"daily within 2d"}, "2025-06-11": {"daily within 2d"}}
+	tests := []struct {
+		args []string
+		want map[string][]string // day -> reasons
+	}{
+		{[]string{"-r", repo, "forget", "--keep-within-hourly", "36h"}, map[string][]string{
+			"2025-06-12": {"hourly within 36h"}, "2025-06-11": {"hourly within 36h"},
+		}},
+		{[]string{"-r", repo, "forget", "--keep-within-daily", "2d"}, daily},
+		{[]string{"-r", repo, "forget", "--keep-within-weekly", "1m"}, map[string][]string{
+			"2025-06-12": {"weekly within 1m"}, "2025-05-15": {"weekly within 1m"},
+		}},
+		{[]string{"-r", repo, "forget", "--keep-within-monthly", "1y"}, monthly},
+		{[]string{"-r", repo, "forget", "--keep-within-yearly", "2y"}, map[string][]string{
+			"2025-06-12": {"yearly within 2y"}, "2024-06-13": {"yearly within 2y"},
+			"2024-01-11": {"oldest yearly within 2y"},
+		}},
+		{
+			[]string{"-r", repo, "forget", "--keep-within", "36h", "--keep-last", "1", "--keep-within-yearly", "2y"},
+			map[string][]string{
+				"2025-06-12": {"within 36h", "last snapshot", "yearly within 2y"},
+				"2025-06-11": {"within 36h"},
+				"2024-06-13": {"yearly within 2y"},
+				"2024-01-11": {"oldest yearly within 2y"},
+			},
+		},
+		{fromProfile, monthly},
+		// a flag replaces the profile's window, an empty one drops it
+		{append(slices.Clone(fromProfile), "--keep-within-monthly", "1m"), map[string][]string{
+			"2025-06-12": {"monthly within 1m"}, "2025-05-15": {"monthly within 1m"},
+		}},
+		{append(slices.Clone(fromProfile), "--keep-within-monthly", "", "--keep-within-daily", "2d"), daily},
+	}
+	for _, tc := range tests {
+		code, out := runCapture(t, append([]string{"--json"}, append(tc.args, "--dry-run")...)...)
+		var res struct {
+			Keep []struct {
+				CreatedAt string `json:"created_at"`
+				Reasons   []string
+			}
+			Remove []struct{ ID string }
+		}
+		if err := json.Unmarshal([]byte(out), &res); code != 0 || err != nil {
+			t.Fatalf("%v: exit %d, %v: %s", tc.args, code, err, out)
+		}
+		got := map[string][]string{}
+		for _, k := range res.Keep {
+			got[k.CreatedAt[:len("2025-06-12")]] = k.Reasons
+		}
+		if !maps.EqualFunc(got, tc.want, slices.Equal) || len(res.Keep)+len(res.Remove) != 6 {
+			t.Errorf("%v keeps %v and removes %d, want %v", tc.args, got, len(res.Remove), tc.want)
+		}
+	}
+
+	if code, out := runCapture(t, "profile", "show", "-f", profile); code != 0 ||
+		!regexp.MustCompile(`forget\.keep-within-monthly\s+1y\s+profile`).MatchString(out) {
+		t.Errorf("profile show: exit %d, no keep-within-monthly: %s", code, out)
+	}
+
+	// the duration is the one of --keep-within: m counts months, a bad one is a usage error
+	for _, period := range []string{"hourly", "daily", "weekly", "monthly", "yearly"} {
+		flag := "--keep-within-" + period
+		code, _, stderr := runCaptureAll(t, "-r", repo, "forget", flag, "90m", "--dry-run")
+		if code != 2 || !strings.Contains(stderr, flag+":") || !strings.Contains(stderr, "no minutes") {
+			t.Errorf("%s 90m: exit %d, stderr %q, want exit 2 naming the flag and the units", flag, code, stderr)
+		}
+	}
+	bad := writeProfile(t, t.TempDir(), "bad", "repo: "+repo+"\nforget:\n  keep-within-weekly: 2w\n")
+	if code, _, stderr := runCaptureAll(t, "forget", "-f", bad, "--dry-run"); code != 2 ||
+		!strings.Contains(stderr, "forget.keep-within-weekly") {
+		t.Errorf("profile with keep-within-weekly 2w: exit %d, stderr %q, want exit 2 naming the key", code, stderr)
+	}
+}

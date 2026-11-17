@@ -27,7 +27,9 @@ period of its own is kept for the plain reason, as before.
 
 A count of `Unlimited` always has count left, so such a rule always keeps the oldest snapshot.
 `KeepLast` counts every snapshot as its own period and `KeepWithin` has no count; neither has the
-rule.
+rule. The keep-within period rules, `KeepWithinHourly` to `KeepWithinYearly`, have no count either
+but walk the same way and have the rule inside their window: an oldest snapshot younger than the
+window is kept, for the reason `oldest daily within 30d`, as restic does.
 
 - Not the old selection with a note about the difference, because the check against restic's
   decisions would then need an exception for every history shorter than its policy.

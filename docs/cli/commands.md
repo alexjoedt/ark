@@ -206,6 +206,7 @@ series among the snapshots the filters match. Chunks stay in the repository unti
 | `--keep-last N` | keep the N newest; `unlimited` keeps all |
 | `--keep-hourly N`, `--keep-daily N`, `--keep-weekly N`, `--keep-monthly N`, `--keep-yearly N` | keep the newest of N hours, days, weeks, months, years; `unlimited` keeps the newest of every one |
 | `--keep-within DURATION` | keep everything younger than DURATION, counted in years, months, days and hours, e.g. `30d`, `72h`, `1y6m` |
+| `--keep-within-hourly DURATION`, `--keep-within-daily DURATION`, `--keep-within-weekly DURATION`, `--keep-within-monthly DURATION`, `--keep-within-yearly DURATION` | keep the newest of every hour, day, week, month, year younger than DURATION |
 | `--keep-tag TAG[,TAG...]` | keep every snapshot that carries all tags of the list, `''` for the untagged ones; repeatable, a match of any list keeps |
 | `--all` | remove every matching snapshot; a policy that keeps nothing is refused without it |
 | `--source`, `--type`, `--tag`, `--host`, `--label` | filters, as for `ark snapshots` |
@@ -217,6 +218,7 @@ series among the snapshots the filters match. Chunks stay in the repository unti
 ark forget --keep-last 3 --source /etc --prune
 ark forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6
 ark forget --keep-within 30d
+ark forget --keep-within-daily 14d --keep-within-monthly 1y
 ark forget --keep-daily 7 --keep-yearly unlimited
 ark forget --keep-last 5 --keep-tag pinned
 ```
@@ -256,6 +258,18 @@ not kept. `--json` lists the reason with the duration unit by unit, `within 72h`
 `within 3d`, the numbers written plainly: `030d` reads `within 30d`. restic counts and writes the
 same way.
 
+`--keep-within-hourly`, `--keep-within-daily`, `--keep-within-weekly`, `--keep-within-monthly` and
+`--keep-within-yearly` are the period rules with a duration in place of the count:
+`--keep-within-daily 14d` keeps the newest snapshot of every day of the last 14 days, however many
+days of them have one. The duration is written and measured as for `--keep-within`: back from the
+newest snapshot of the series that is not in the future, and a snapshot exactly the duration old
+is outside. The periods are those of the counted rules, cut in the local time zone. Each rule has
+its own duration and decides by itself, next to every other rule: a snapshot that any rule keeps
+stays. When the oldest snapshot of a series lies inside the window, the rule keeps it too,
+although its period is taken, as a counted rule with count left does. `--json` lists the reasons
+as `daily within 14d` and `oldest daily within 14d`. An empty value, `--keep-within-daily ''`,
+switches off a rule a profile sets. restic selects the same way.
+
 `--keep-tag` keeps by tag instead of by age. One value is a list of tags separated by commas, and a
 snapshot has to carry all of them; give the flag again for another list, and a snapshot that matches
 any of the lists stays: `--keep-tag db,prod --keep-tag pinned` keeps what is tagged `db` and `prod`,
@@ -274,8 +288,8 @@ filter. restic refuses the same way.
 
 Hours, days, weeks, months and years are those of the local time zone of the machine `ark forget`
 runs on, so a backup at 00:30 belongs to the new day; set `TZ` to count in another zone. A week is
-an ISO week and starts on Monday. `--keep-last` does not depend on the zone, and of `--keep-within`
-only the hours do not.
+an ISO week and starts on Monday. `--keep-last` does not depend on the zone, and of a `--keep-within`
+duration only the hours do not.
 Builds before this rule counted the periods in UTC, so the first run after an upgrade can keep
 another snapshot of a period than the last one did: run it once with `--dry-run`.
 

@@ -218,6 +218,11 @@ func effectiveValues(root *cli.Command, lp *loadedProfile) []profileValue {
 		profileCount("forget.keep-monthly", f.KeepMonthly),
 		profileCount("forget.keep-yearly", f.KeepYearly),
 		profileOnly("forget.keep-within", f.KeepWithin.String(), ""),
+		profileOnly("forget.keep-within-hourly", f.KeepWithinHourly.String(), ""),
+		profileOnly("forget.keep-within-daily", f.KeepWithinDaily.String(), ""),
+		profileOnly("forget.keep-within-weekly", f.KeepWithinWeekly.String(), ""),
+		profileOnly("forget.keep-within-monthly", f.KeepWithinMonthly.String(), ""),
+		profileOnly("forget.keep-within-yearly", f.KeepWithinYearly.String(), ""),
 		profileOnly("forget.keep-tag", quotedList(f.KeepTags), ""),
 		profileBool("forget.prune", f.Prune),
 	)

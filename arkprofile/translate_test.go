@@ -215,13 +215,23 @@ func TestForgetPolicy(t *testing.T) {
 	p := arkprofile.Profile{Forget: arkprofile.Forget{
 		KeepLast: 1, KeepHourly: 2, KeepDaily: 3, KeepWeekly: 4, KeepMonthly: 5, KeepYearly: ark.Unlimited,
 		KeepWithin: ark.Within{Days: 2},
-		KeepTags:   []string{"pinned", "db, prod", ""},
+
+		KeepWithinHourly: ark.Within{Hours: 3}, KeepWithinDaily: ark.Within{Days: 4},
+		KeepWithinWeekly: ark.Within{Days: 35}, KeepWithinMonthly: ark.Within{Months: 6},
+		KeepWithinYearly: ark.Within{Years: 7},
+
+		KeepTags: []string{"pinned", "db, prod", ""},
 	}}
 	got := p.ForgetPolicy()
 	want := ark.ForgetPolicy{
 		KeepLast: 1, KeepHourly: 2, KeepDaily: 3, KeepWeekly: 4, KeepMonthly: 5, KeepYearly: ark.Unlimited,
 		KeepWithin: ark.Within{Days: 2},
-		KeepTags:   [][]string{{"pinned"}, {"db", "prod"}, {""}},
+
+		KeepWithinHourly: ark.Within{Hours: 3}, KeepWithinDaily: ark.Within{Days: 4},
+		KeepWithinWeekly: ark.Within{Days: 35}, KeepWithinMonthly: ark.Within{Months: 6},
+		KeepWithinYearly: ark.Within{Years: 7},
+
+		KeepTags: [][]string{{"pinned"}, {"db", "prod"}, {""}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("policy = %+v, want %+v", got, want)

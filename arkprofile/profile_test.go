@@ -35,6 +35,11 @@ forget:
   keep-daily: 7
   keep-yearly: unlimited
   keep-within: 30d
+  keep-within-hourly: 48h
+  keep-within-daily: 14d
+  keep-within-weekly: 2m
+  keep-within-monthly: 1y
+  keep-within-yearly: 10y
   keep-tag: [pinned, "db, prod", ""]
   prune: true
   run-after-fail: echo failed
@@ -66,9 +71,16 @@ func TestDecodeFillsEveryField(t *testing.T) {
 			KeepDaily:  7,
 			KeepYearly: ark.Unlimited,
 			KeepWithin: ark.Within{Days: 30},
-			KeepTags:   []string{"pinned", "db, prod", ""},
-			Prune:      true,
-			Hooks:      arkprofile.Hooks{RunAfterFail: "echo failed"},
+
+			KeepWithinHourly:  ark.Within{Hours: 48},
+			KeepWithinDaily:   ark.Within{Days: 14},
+			KeepWithinWeekly:  ark.Within{Months: 2},
+			KeepWithinMonthly: ark.Within{Years: 1},
+			KeepWithinYearly:  ark.Within{Years: 10},
+
+			KeepTags: []string{"pinned", "db, prod", ""},
+			Prune:    true,
+			Hooks:    arkprofile.Hooks{RunAfterFail: "echo failed"},
 		},
 	}
 	if !reflect.DeepEqual(p, want) {
@@ -217,6 +229,12 @@ func TestDecodeRejects(t *testing.T) {
 				"d (days) and h (hours) in that order, as in 30d, 72h or 1y6m",
 		},
 		{
+			"keep-within-daily in minutes",
+			"forget:\n  keep-within-daily: 90m\n",
+			`line 2: forget.keep-within-daily: "90m": m counts months, up to 11, there are no minutes: write whole ` +
+				`numbers of y (years), m (months), d (days) and h (hours) in that order, as in 30d, 72h or 1y6m`,
+		},
+		{
 			"zero keep-within",
 			"forget:\n  keep-within: 0d\n",
 			`line 2: forget.keep-within: duration "0d" is zero: write whole numbers of y (years), m (months), ` +
@@ -261,6 +279,7 @@ func TestValidate(t *testing.T) {
 	ok := arkprofile.Profile{Name: "docs", Repo: "/srv/ark", PasswordEnv: "DOCS_PW"}
 	ok.Backup.Path = "/data"
 	ok.Forget.KeepWithin = ark.Within{Days: 30}
+	ok.Forget.KeepWithinWeekly = ark.Within{Months: 2}
 	ok.Forget.KeepYearly = ark.Unlimited
 	ok.Forget.KeepTags = []string{"pinned", "db, prod", ""}
 	if err := ok.Validate(); err != nil {
@@ -286,6 +305,11 @@ func TestValidate(t *testing.T) {
 		{"negative keep-yearly", func(p *arkprofile.Profile) { p.Forget.KeepYearly = -7 }},
 		{"negative keep-within", func(p *arkprofile.Profile) { p.Forget.KeepWithin = ark.Within{Days: -1} }},
 		{"keep-within of 90 months", func(p *arkprofile.Profile) { p.Forget.KeepWithin = ark.Within{Months: 90} }},
+		{"keep-within-hourly", func(p *arkprofile.Profile) { p.Forget.KeepWithinHourly = ark.Within{Hours: -1} }},
+		{"keep-within-daily", func(p *arkprofile.Profile) { p.Forget.KeepWithinDaily = ark.Within{Days: -1} }},
+		{"keep-within-weekly", func(p *arkprofile.Profile) { p.Forget.KeepWithinWeekly = ark.Within{Months: 90} }},
+		{"keep-within-monthly", func(p *arkprofile.Profile) { p.Forget.KeepWithinMonthly = ark.Within{Years: -1} }},
+		{"keep-within-yearly", func(p *arkprofile.Profile) { p.Forget.KeepWithinYearly = ark.Within{Years: -1} }},
 		{"keep-tag trailing comma", func(p *arkprofile.Profile) { p.Forget.KeepTags = []string{"", "pinned,"} }},
 		{"keep-tag doubled comma", func(p *arkprofile.Profile) { p.Forget.KeepTags = []string{"db,,prod"} }},
 		{"keep-tag only commas", func(p *arkprofile.Profile) { p.Forget.KeepTags = []string{" , "} }},

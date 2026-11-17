@@ -36,7 +36,7 @@ ark profile show docs           # each effective value and its source: cli, prof
 |---|---|
 | top level | `repo`, `password-file`, `password-env`, `insecure-no-password`, `lock-wait`, `concurrency` |
 | `backup` | `path`, `source`, `host`, `tag`, `comment`, `label`, `exclude`, `exclude-file`, `exclude-cloud-files`, hooks |
-| `forget` | `keep-last`, `keep-hourly`, `keep-daily`, `keep-weekly`, `keep-monthly`, `keep-yearly`, `keep-within`, `keep-tag`, `prune`, hooks |
+| `forget` | `keep-last`, `keep-hourly`, `keep-daily`, `keep-weekly`, `keep-monthly`, `keep-yearly`, `keep-within`, `keep-within-hourly`, `keep-within-daily`, `keep-within-weekly`, `keep-within-monthly`, `keep-within-yearly`, `keep-tag`, `prune`, hooks |
 
 Each key means what the flag of the same name means, see [CLI](index.md#global-flags) and
 [Commands](commands.md). `password-env` names the environment variable that holds the password.
@@ -44,7 +44,8 @@ Each key means what the flag of the same name means, see [CLI](index.md#global-f
 A keep count is a whole number or `unlimited`, as on the command line: `keep-yearly: unlimited`
 keeps the newest snapshot of every year. A negative count fails the load.
 `keep-within` is a duration as `--keep-within` takes it, `30d`, `72h` or `1y6m`, where `m` counts
-months; one that flag would refuse fails the load. A profile written when `m` counted minutes
+months; one that flag would refuse fails the load. `keep-within-hourly` to `keep-within-yearly`
+take the same durations. A profile written when `m` counted minutes
 still loads with `1m` to `11m` and then keeps months: see
 [`ark forget`](commands.md#forget).
 `keep-tag` is a list with one entry per tag list, each written as `--keep-tag` takes it:

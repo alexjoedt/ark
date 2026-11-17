@@ -33,6 +33,8 @@
 //	  keep-monthly: 12
 //	  keep-yearly: unlimited         # a count, or unlimited for every period
 //	  keep-within: 30d               # years, months, days, hours: 72h, 1y6m
+//	  keep-within-daily: 14d         # the newest of every day in the window,
+//	  keep-within-monthly: 1y        # also -hourly, -weekly and -yearly
 //	  keep-tag: [pinned, "db,prod"]  # keep what is tagged pinned, or db and prod
 //	  prune: true                    # prune after the forget
 //	  run-after: echo forgotten      # the same four hooks as backup
@@ -118,6 +120,12 @@ type Forget struct {
 	// KeepWithin is written as [ark.ParseWithin] reads it, such as 30d, 72h
 	// or 1y6m; m counts months.
 	KeepWithin ark.Within `yaml:"keep-within"`
+	// KeepWithinHourly to KeepWithinYearly are windows in the same form.
+	KeepWithinHourly  ark.Within `yaml:"keep-within-hourly"`
+	KeepWithinDaily   ark.Within `yaml:"keep-within-daily"`
+	KeepWithinWeekly  ark.Within `yaml:"keep-within-weekly"`
+	KeepWithinMonthly ark.Within `yaml:"keep-within-monthly"`
+	KeepWithinYearly  ark.Within `yaml:"keep-within-yearly"`
 	// KeepTags holds one tag list per entry, each as the CLI takes it and
 	// [ark.ParseTagList] reads it: "db,prod" keeps what carries both tags,
 	// "" what carries none.
@@ -140,7 +148,7 @@ var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 // Validate reports a name outside [a-z0-9][a-z0-9._-]*, conflicting
 // password sources, a negative concurrency or lock-wait, a negative keep
 // count other than [ark.Unlimited], a backup label that
-// [ark.ValidateLabels] refuses, a keep-within that [ark.ParseWithin]
+// [ark.ValidateLabels] refuses, a keep-within window that [ark.ParseWithin]
 // refuses and a keep-tag list with an empty tag next to others, as a stray
 // comma leaves one. Every error matches [ErrInvalid].
 func (p *Profile) Validate() error {
@@ -178,11 +186,24 @@ func (p *Profile) Validate() error {
 			return invalidf("%s %d: want 0 or more, or unlimited", n.key, int(n.v))
 		}
 	}
-	// The key is parsed when the profile is read; a window set in code has
-	// to be one the key can hold.
-	if w := f.KeepWithin; w != (ark.Within{}) {
-		if _, err := ark.ParseWithin(w.String()); err != nil {
-			return invalidf("forget.keep-within: %v", err)
+	// The keys are parsed when the profile is read; a window set in code
+	// has to be one the key can hold.
+	for _, w := range []struct {
+		key string
+		v   ark.Within
+	}{
+		{"forget.keep-within", f.KeepWithin},
+		{"forget.keep-within-hourly", f.KeepWithinHourly},
+		{"forget.keep-within-daily", f.KeepWithinDaily},
+		{"forget.keep-within-weekly", f.KeepWithinWeekly},
+		{"forget.keep-within-monthly", f.KeepWithinMonthly},
+		{"forget.keep-within-yearly", f.KeepWithinYearly},
+	} {
+		if w.v == (ark.Within{}) {
+			continue
+		}
+		if _, err := ark.ParseWithin(w.v.String()); err != nil {
+			return invalidf("%s: %v", w.key, err)
 		}
 	}
 	for _, list := range f.KeepTags {

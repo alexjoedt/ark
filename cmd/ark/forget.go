@@ -19,6 +19,7 @@ func forgetCommand() *cli.Command {
    ark forget --keep-last N [--source NAME] [--prune]
    ark forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6
    ark forget --keep-within 30d
+   ark forget --keep-within-daily 14d --keep-within-monthly 1y
    ark forget --keep-daily 7 --keep-yearly unlimited
    ark forget --keep-last 5 --keep-tag pinned
 
@@ -29,6 +30,8 @@ func forgetCommand() *cli.Command {
    nothing of a series: the run then fails and removes nothing.
    Hours, days, weeks, months and years count in local time (TZ).
    A period rule with count left at the end of a series keeps its oldest snapshot too.
+   --keep-within-hourly to --keep-within-yearly are the period rules bounded by a
+   DURATION instead of a count: the newest of every period younger than it.
    Chunks stay until prune.`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "keep-last", Usage: "keep the `N` newest, unlimited for all"},
@@ -41,6 +44,11 @@ func forgetCommand() *cli.Command {
 				Name:  "keep-within",
 				Usage: "keep everything younger than `DURATION` in years, months, days and hours, e.g. 30d, 72h, 1y6m",
 			},
+			&cli.StringFlag{Name: "keep-within-hourly", Usage: "keep the newest of every hour within `DURATION`"},
+			&cli.StringFlag{Name: "keep-within-daily", Usage: "keep the newest of every day within `DURATION`"},
+			&cli.StringFlag{Name: "keep-within-weekly", Usage: "keep the newest of every week within `DURATION`"},
+			&cli.StringFlag{Name: "keep-within-monthly", Usage: "keep the newest of every month within `DURATION`"},
+			&cli.StringFlag{Name: "keep-within-yearly", Usage: "keep the newest of every year within `DURATION`"},
 			&listFlag{
 				Name:  "keep-tag",
 				Usage: "keep what carries all of `TAG[,TAG...]`, '' for untagged, repeatable: any list keeps",
@@ -198,15 +206,28 @@ func forgetPolicy(cmd *cli.Command, lp *loadedProfile) (ark.ForgetPolicy, error)
 			*f.dst = n
 		}
 	}
-	if cmd.IsSet("keep-within") {
+	for _, f := range []struct {
+		name string
+		dst  *ark.Within
+	}{
+		{"keep-within", &policy.KeepWithin},
+		{"keep-within-hourly", &policy.KeepWithinHourly},
+		{"keep-within-daily", &policy.KeepWithinDaily},
+		{"keep-within-weekly", &policy.KeepWithinWeekly},
+		{"keep-within-monthly", &policy.KeepWithinMonthly},
+		{"keep-within-yearly", &policy.KeepWithinYearly},
+	} {
+		if !cmd.IsSet(f.name) {
+			continue
+		}
 		// an empty value drops the profile's rule
-		policy.KeepWithin = ark.Within{}
-		if s := cmd.String("keep-within"); s != "" {
+		*f.dst = ark.Within{}
+		if s := cmd.String(f.name); s != "" {
 			w, err := ark.ParseWithin(s)
 			if err != nil {
-				return policy, exitcode.Usagef("--keep-within: %v", err)
+				return policy, exitcode.Usagef("--%s: %v", f.name, err)
 			}
-			policy.KeepWithin = w
+			*f.dst = w
 		}
 	}
 	if cmd.IsSet("keep-tag") {

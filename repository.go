@@ -381,15 +381,15 @@ func (r *Repository) deleteSnapshot(ctx context.Context, id string) error {
 // says of every series in the repository.
 //
 // The period rules count hours, days, weeks, months and years in the local
-// time zone, or in the one WithForgetLocation names, and KeepWithin steps its
-// years, months and days back there.
+// time zone, or in the one WithForgetLocation names, and a keep-within window
+// steps its years, months and days back there.
 //
 // A policy without a rule removes every match, so it is only accepted
 // together with filter.IDs; otherwise Forget returns ErrEmptyPolicy and
 // deletes nothing. A count of Unlimited is a rule; any other negative count
-// fails with ErrInvalidPolicy, and so does a KeepWithin with a number
-// outside the bounds of [Within]: below zero, above 11 months or above a
-// million.
+// fails with ErrInvalidPolicy, and so does a keep-within window with a
+// number outside the bounds of [Within]: below zero, above 11 months or above
+// a million.
 //
 // A policy that keeps no snapshot of one of the series, as KeepTags alone
 // can, removes nothing of any series, in a dry run too: Forget returns

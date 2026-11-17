@@ -133,6 +133,51 @@ func TestForgetTakesUnlimitedAndRefusesOtherNegativeCounts(t *testing.T) {
 	}
 }
 
+// Each keep-within period rule is a rule of its own: a policy of it alone is
+// not empty and runs through Forget, and a window out of bounds is refused
+// under the name of its field.
+func TestKeepWithinPeriodRulesAreRulesOfTheirOwn(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+	for _, year := range []int{2023, 2024, 2025} {
+		importAt(t, repo, time.Date(year, 3, 1, 12, 0, 0, 0, time.UTC))
+		importAt(t, repo, time.Date(year, 6, 1, 12, 0, 0, 0, time.UTC))
+	}
+	fields := map[string]func(*ark.ForgetPolicy) *ark.Within{
+		"KeepWithinHourly":  func(p *ark.ForgetPolicy) *ark.Within { return &p.KeepWithinHourly },
+		"KeepWithinDaily":   func(p *ark.ForgetPolicy) *ark.Within { return &p.KeepWithinDaily },
+		"KeepWithinWeekly":  func(p *ark.ForgetPolicy) *ark.Within { return &p.KeepWithinWeekly },
+		"KeepWithinMonthly": func(p *ark.ForgetPolicy) *ark.Within { return &p.KeepWithinMonthly },
+		"KeepWithinYearly":  func(p *ark.ForgetPolicy) *ark.Within { return &p.KeepWithinYearly },
+	}
+	for name, field := range fields {
+		var policy ark.ForgetPolicy
+		*field(&policy) = ark.Within{Years: 5}
+		if policy.Empty() {
+			t.Errorf("a policy of %s alone is empty", name)
+		}
+		res, err := repo.Forget(ctx, policy, ark.SnapshotFilter{},
+			ark.WithForgetDryRun(), ark.WithForgetLocation(time.UTC))
+		// the newest of each of three years and the oldest; no other period holds two
+		want := 6
+		if name == "KeepWithinYearly" {
+			want = 4
+		}
+		if err != nil || len(res.Keep) != want {
+			t.Errorf("%s of 5 years: %v, want %d kept, got %+v", name, err, want, res)
+		}
+
+		*field(&policy) = ark.Within{Days: -1}
+		_, err = repo.Forget(ctx, policy, ark.SnapshotFilter{})
+		if !errors.Is(err, ark.ErrInvalidPolicy) || !strings.Contains(err.Error(), name+".Days") {
+			t.Errorf("%s of -1 days: %v, want ErrInvalidPolicy naming %s.Days", name, err, name)
+		}
+	}
+	if snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{}); err != nil || len(snaps) != 6 {
+		t.Errorf("after dry runs and refused policies: %d snapshots, %v, want 6", len(snaps), err)
+	}
+}
+
 func TestParseWithin(t *testing.T) {
 	for in, want := range map[string]ark.Within{
 		"1y2m3d4h": {Years: 1, Months: 2, Days: 3, Hours: 4},

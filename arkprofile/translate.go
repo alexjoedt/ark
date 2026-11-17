@@ -93,6 +93,12 @@ func (p *Profile) ForgetPolicy() ark.ForgetPolicy {
 		KeepMonthly: f.KeepMonthly,
 		KeepYearly:  f.KeepYearly,
 		KeepWithin:  f.KeepWithin,
+
+		KeepWithinHourly:  f.KeepWithinHourly,
+		KeepWithinDaily:   f.KeepWithinDaily,
+		KeepWithinWeekly:  f.KeepWithinWeekly,
+		KeepWithinMonthly: f.KeepWithinMonthly,
+		KeepWithinYearly:  f.KeepWithinYearly,
 	}
 	for _, list := range f.KeepTags {
 		policy.KeepTags = append(policy.KeepTags, ark.ParseTagList(list))

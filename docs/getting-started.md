@@ -86,7 +86,7 @@ The destination is created if missing and existing files are overwritten. `--pat
 ark forget --keep-daily 7 --keep-weekly 4 --prune
 ```
 
-`forget` removes snapshots by id or by a retention policy (`--keep-last`, `--keep-hourly`, `--keep-daily`, `--keep-weekly`, `--keep-monthly`, `--keep-yearly`, `--keep-within`, `--keep-tag`). A policy applies per [series](SERIES.md), so each source keeps its own recent snapshots. Days, weeks and the other periods count in local time. The chunks stay in the repository until `prune` frees them; `--prune` runs it straight after.
+`forget` removes snapshots by id or by a retention policy (`--keep-last`, `--keep-hourly`, `--keep-daily`, `--keep-weekly`, `--keep-monthly`, `--keep-yearly`, `--keep-within`, `--keep-within-hourly` to `--keep-within-yearly`, `--keep-tag`). A policy applies per [series](SERIES.md), so each source keeps its own recent snapshots. Days, weeks and the other periods count in local time. The chunks stay in the repository until `prune` frees them; `--prune` runs it straight after.
 
 Try `--dry-run` first to see which snapshots would be kept and which removed. Destructive commands ask for confirmation on a terminal and fail without one unless `--yes` is set.
 

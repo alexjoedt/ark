@@ -224,8 +224,9 @@ func (w Within) before(t time.Time) time.Time {
 // from its first snapshot on; the reason then reads "oldest daily snapshot".
 // This is restic's rule.
 //
-// The hours, days, weeks, months and years of KeepHourly to KeepYearly are
-// those of the local time zone, not of UTC; see WithForgetLocation.
+// The hours, days, weeks, months and years of KeepHourly to KeepYearly and
+// of KeepWithinHourly to KeepWithinYearly are those of the local time zone,
+// not of UTC; see WithForgetLocation.
 type ForgetPolicy struct {
 	// KeepLast keeps the most recent n snapshots regardless of age.
 	KeepLast KeepCount
@@ -254,6 +255,30 @@ type ForgetPolicy struct {
 	// does, and when all are in the future the rule keeps them all. The
 	// years, months and days are counted in the zone of WithForgetLocation.
 	KeepWithin Within
+
+	// KeepWithinHourly keeps the newest snapshot of every hour inside this
+	// window. It is KeepHourly bounded by a time instead of a count, on the
+	// window of KeepWithin: a snapshot exactly the window old or older is
+	// never kept, and the oldest snapshot of the series is kept in addition
+	// when it lies inside, for the reason "oldest hourly within 30d". This
+	// is restic's rule, and so are the four that follow.
+	KeepWithinHourly Within
+
+	// KeepWithinDaily keeps the newest snapshot of every day inside this
+	// window, as KeepWithinHourly does for hours.
+	KeepWithinDaily Within
+
+	// KeepWithinWeekly keeps the newest snapshot of every ISO week inside
+	// this window.
+	KeepWithinWeekly Within
+
+	// KeepWithinMonthly keeps the newest snapshot of every month inside
+	// this window.
+	KeepWithinMonthly Within
+
+	// KeepWithinYearly keeps the newest snapshot of every year inside this
+	// window.
+	KeepWithinYearly Within
 
 	// KeepTags keeps every snapshot that carries all tags of at least one
 	// of its lists: {{"a", "b"}, {"c"}} keeps what is tagged a and b, and
@@ -301,8 +326,26 @@ func (p ForgetPolicy) counted() [6]countedRule {
 	}
 }
 
-// validate refuses a negative count other than Unlimited, a KeepWithin with
-// a number below zero or above its bound, a KeepTags list without
+// windowRule is one keep-within rule of a policy: its field name and window.
+type windowRule struct {
+	name string
+	w    Within
+}
+
+// windows lists the keep-within rules of p.
+func (p ForgetPolicy) windows() [6]windowRule {
+	return [6]windowRule{
+		{"KeepWithin", p.KeepWithin},
+		{"KeepWithinHourly", p.KeepWithinHourly},
+		{"KeepWithinDaily", p.KeepWithinDaily},
+		{"KeepWithinWeekly", p.KeepWithinWeekly},
+		{"KeepWithinMonthly", p.KeepWithinMonthly},
+		{"KeepWithinYearly", p.KeepWithinYearly},
+	}
+}
+
+// validate refuses a negative count other than Unlimited, a keep-within
+// window with a number below zero or above its bound, a KeepTags list without
 // a tag, which every snapshot would match, and one with the empty tag next
 // to others, which none would: a stray comma must not turn a keep rule into
 // one that silently keeps nothing.
@@ -312,8 +355,10 @@ func (p ForgetPolicy) validate() error {
 			return fmt.Errorf("%w: %s is %d, want 0 or more, or Unlimited", ErrInvalidPolicy, c.name, int(c.n))
 		}
 	}
-	if err := p.KeepWithin.validate(); err != nil {
-		return fmt.Errorf("%w: KeepWithin.%w", ErrInvalidPolicy, err)
+	for _, r := range p.windows() {
+		if err := r.w.validate(); err != nil {
+			return fmt.Errorf("%w: %s.%w", ErrInvalidPolicy, r.name, err)
+		}
 	}
 	for i, list := range p.KeepTags {
 		if len(list) == 0 {
@@ -342,7 +387,12 @@ func (p ForgetPolicy) Empty() bool {
 			return false
 		}
 	}
-	return p.KeepWithin == Within{} && len(p.KeepTags) == 0
+	for _, r := range p.windows() {
+		if r.w != (Within{}) {
+			return false
+		}
+	}
+	return len(p.KeepTags) == 0
 }
 
 // ForgetResult is returned by Repository.Forget.
@@ -353,8 +403,9 @@ type ForgetResult struct {
 
 	// KeepReasons names, per kept snapshot ID, every rule that selected it,
 	// in the order the rules are applied and in restic's wording, such as
-	// "has tags [a, b]", "within 30d", "last snapshot" or "daily snapshot". A snapshot that is
-	// not kept has no entry; when nothing is kept the map may be nil or empty.
+	// "has tags [a, b]", "within 30d", "last snapshot", "daily snapshot" or
+	// "daily within 30d". A snapshot that is not kept has no entry; when
+	// nothing is kept the map may be nil or empty.
 	KeepReasons map[string][]string
 }
 
@@ -371,14 +422,15 @@ type ForgetOption func(*forgetConfig)
 func WithForgetDryRun() ForgetOption { return func(c *forgetConfig) { c.dryRun = true } }
 
 // WithForgetLocation sets the time zone the period rules (KeepHourly to
-// KeepYearly) count in: a snapshot belongs to the hour, day, week, month or
-// year its time falls in on a clock in loc. The years, months and days of
-// KeepWithin are stepped back on the same clock, so a day back across a
-// summer time change is 23 or 25 hours. Without the option, and for a nil
+// KeepYearly and KeepWithinHourly to KeepWithinYearly) count in: a snapshot
+// belongs to the hour, day, week, month or year its time falls in on a clock
+// in loc. The years, months and days of a keep-within window are stepped
+// back on the same clock, so a day back across a summer time change is 23 or
+// 25 hours. Without the option, and for a nil
 // loc, Forget counts in [time.Local], so the same policy can keep different
 // snapshots on machines in different zones; a program that must not depend on
 // the machine passes a fixed zone such as [time.UTC]. KeepLast and the hours
-// of KeepWithin do not depend on it.
+// of a window do not depend on it.
 func WithForgetLocation(loc *time.Location) ForgetOption {
 	return func(c *forgetConfig) {
 		if loc != nil {

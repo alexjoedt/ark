@@ -63,6 +63,19 @@ func TestForgetPolicyFieldsSelectTheirPeriod(t *testing.T) {
 		{"KeepMonthly", ForgetPolicy{KeepMonthly: 2}, []string{"s0", "s6"}},
 		{"KeepYearly", ForgetPolicy{KeepYearly: 2}, []string{"s0", "s8"}},
 		{"KeepWithin", ForgetPolicy{KeepWithin: Within{Days: 1, Hours: 1}}, []string{"s0", "s1", "s2", "s3"}},
+		// Every window ends on a snapshot, which is exactly the window old
+		// and so outside it: s2, s4, s5, s7 and s9.
+		{"KeepWithinHourly", ForgetPolicy{KeepWithinHourly: Within{Hours: 2}}, []string{"s0", "s1"}},
+		{"KeepWithinDaily", ForgetPolicy{KeepWithinDaily: Within{Days: 2}}, []string{"s0", "s3"}},
+		{"KeepWithinWeekly", ForgetPolicy{KeepWithinWeekly: Within{Days: 9}}, []string{"s0"}},
+		{"KeepWithinWeekly a day longer", ForgetPolicy{KeepWithinWeekly: Within{Days: 10}}, []string{"s0", "s5"}},
+		{"KeepWithinMonthly", ForgetPolicy{KeepWithinMonthly: Within{Months: 2}}, []string{"s0", "s6"}},
+		{"KeepWithinYearly", ForgetPolicy{KeepWithinYearly: Within{Years: 2}}, []string{"s0", "s8"}},
+		{
+			"a window rule with a counted rule and KeepWithin",
+			ForgetPolicy{KeepWithin: Within{Hours: 2}, KeepMonthly: 2, KeepWithinDaily: Within{Days: 2}},
+			[]string{"s0", "s1", "s3", "s6"},
+		},
 		{
 			"fields combine",
 			ForgetPolicy{KeepLast: 1, KeepYearly: 3},
@@ -142,6 +155,41 @@ func TestForgetReasonsNameEveryRule(t *testing.T) {
 		{"KeepWithin", ForgetPolicy{KeepWithin: Within{Days: 1, Hours: 1}}, map[string][]string{
 			"s0": {"within 1d1h"}, "s1": {"within 1d1h"}, "s2": {"within 1d1h"}, "s3": {"within 1d1h"},
 		}},
+		{"KeepWithinHourly", ForgetPolicy{KeepWithinHourly: Within{Hours: 2}}, map[string][]string{
+			"s0": {"hourly within 2h"}, "s1": {"hourly within 2h"},
+		}},
+		{"KeepWithinDaily", ForgetPolicy{KeepWithinDaily: Within{Days: 2}}, map[string][]string{
+			"s0": {"daily within 2d"}, "s3": {"daily within 2d"},
+		}},
+		{"KeepWithinWeekly", ForgetPolicy{KeepWithinWeekly: Within{Days: 10}}, map[string][]string{
+			"s0": {"weekly within 10d"}, "s5": {"weekly within 10d"},
+		}},
+		{"KeepWithinMonthly", ForgetPolicy{KeepWithinMonthly: Within{Months: 2}}, map[string][]string{
+			"s0": {"monthly within 2m"}, "s6": {"monthly within 2m"},
+		}},
+		{"KeepWithinYearly", ForgetPolicy{KeepWithinYearly: Within{Years: 2}}, map[string][]string{
+			"s0": {"yearly within 2y"}, "s8": {"yearly within 2y"},
+		}},
+		{
+			"window rules come last, each with its own window",
+			ForgetPolicy{
+				KeepWithin: Within{Hours: 2}, KeepLast: 1, KeepMonthly: 2,
+				KeepWithinHourly: Within{Hours: 1}, KeepWithinDaily: Within{Days: 2},
+				KeepWithinWeekly: Within{Days: 10}, KeepWithinMonthly: Within{Months: 1, Days: 1},
+				KeepWithinYearly: Within{Years: 1, Days: 1},
+			},
+			map[string][]string{
+				"s0": {
+					"within 2h", "last snapshot", "monthly snapshot", "hourly within 1h", "daily within 2d",
+					"weekly within 10d", "monthly within 1m1d", "yearly within 1y1d",
+				},
+				"s1": {"within 2h"},
+				"s3": {"daily within 2d"},
+				"s5": {"weekly within 10d"},
+				"s6": {"monthly snapshot", "monthly within 1m1d"},
+				"s8": {"yearly within 1y1d"},
+			},
+		},
 		{
 			"rules combine",
 			ForgetPolicy{KeepWithin: Within{Hours: 2}, KeepLast: 1, KeepDaily: 1, KeepYearly: 2},
@@ -173,7 +221,8 @@ func TestForgetReasonsNameEveryRule(t *testing.T) {
 //	2  2026-01-02 08:00  the oldest, in the day, week, month and year of s1
 //
 // A counted period rule that reaches the oldest snapshot with count left
-// keeps it for the reason "oldest ...", although its period is taken.
+// keeps it for the reason "oldest ...", although its period is taken. A
+// keep-within period rule does when the oldest snapshot is inside its window.
 func TestForgetKeepsTheOldestWhileARuleHasCountLeft(t *testing.T) {
 	series := func(source string) []*Snapshot {
 		return []*Snapshot{
@@ -219,6 +268,40 @@ func TestForgetKeepsTheOldestWhileARuleHasCountLeft(t *testing.T) {
 		{"KeepWithin has no oldest", ForgetPolicy{KeepWithin: Within{Hours: 1}}, map[string][]string{
 			"s0": {"within 1h"},
 		}},
+		{"a window with the oldest inside", ForgetPolicy{KeepWithinDaily: Within{Days: 10}}, map[string][]string{
+			"s0": {"daily within 10d"}, "s1": {"daily within 10d"}, "s2": {"oldest daily within 10d"},
+		}},
+		// 2026-01-02 10:00 on: s1 is inside, the oldest is not
+		{"a window ending before the oldest", ForgetPolicy{KeepWithinDaily: Within{Days: 1}}, map[string][]string{
+			"s0": {"daily within 1d"}, "s1": {"daily within 1d"},
+		}},
+		{"a window ending on the oldest", ForgetPolicy{KeepWithinDaily: Within{Days: 1, Hours: 2}}, map[string][]string{
+			"s0": {"daily within 1d2h"}, "s1": {"daily within 1d2h"},
+		}},
+		{"a window whose oldest starts a period", ForgetPolicy{KeepWithinHourly: Within{Days: 10}}, map[string][]string{
+			"s0": {"hourly within 10d"}, "s1": {"hourly within 10d"}, "s2": {"hourly within 10d"},
+		}},
+		{
+			"every window rule for itself",
+			ForgetPolicy{
+				KeepWithinWeekly: Within{Days: 10}, KeepWithinMonthly: Within{Days: 1},
+				KeepWithinYearly: Within{Years: 1},
+			},
+			map[string][]string{
+				"s0": {"weekly within 10d", "monthly within 1d", "yearly within 1y"},
+				"s2": {"oldest weekly within 10d", "oldest yearly within 1y"},
+			},
+		},
+		// restic 0.18 gives these reasons for --keep-daily 5 --keep-within-daily 10d --keep-last 1
+		{
+			"counted and window rule side by side",
+			ForgetPolicy{KeepDaily: 5, KeepWithinDaily: Within{Days: 10}, KeepLast: 1},
+			map[string][]string{
+				"s0": {"last snapshot", "daily snapshot", "daily within 10d"},
+				"s1": {"daily snapshot", "daily within 10d"},
+				"s2": {"oldest daily snapshot", "oldest daily within 10d"},
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -351,6 +434,73 @@ func TestKeepWithinIsACalendarWindowFromTheNewestSnapshotNotInTheFuture(t *testi
 	}
 }
 
+// A keep-within period rule cuts its periods exactly as the counted rule of
+// the same period does: with a window longer than the series it keeps what
+// the unlimited count keeps, for the matching reasons, in any zone. The
+// series has two snapshots in one hour, an hour the Berlin clock shows twice,
+// days and a week that start at another instant in Berlin than in UTC, and
+// the ISO week 53 of 2026, which ends in 2027.
+func TestKeepWithinPeriodsAreThoseOfTheCountedRules(t *testing.T) {
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	utc := func(y int, m time.Month, d, h, minute int) *Snapshot {
+		at := time.Date(y, m, d, h, minute, 0, 0, time.UTC)
+		return &Snapshot{ID: at.Format("2006-01-02T15:04"), CreatedAt: at}
+	}
+	snaps := []*Snapshot{
+		utc(2027, 1, 6, 12, 0),
+		utc(2027, 1, 3, 23, 30), // Monday 01-04 00:30 CET, week 1
+		utc(2027, 1, 3, 12, 0),  // Sunday, week 53 of 2026
+		utc(2026, 12, 31, 23, 30),
+		utc(2026, 12, 30, 12, 0),
+		utc(2026, 10, 25, 1, 30),  // 02:30 CET
+		utc(2026, 10, 25, 0, 30),  // 02:30 CEST
+		utc(2026, 10, 24, 23, 30), // 01:30 CEST
+		utc(2026, 10, 24, 21, 59),
+		utc(2026, 6, 30, 22, 30),
+		utc(2026, 6, 30, 22, 10),
+		utc(2025, 3, 1, 12, 0),
+		utc(2025, 3, 1, 8, 0),
+	}
+	forever := Within{Years: 100}
+	rules := []struct {
+		name    string
+		counted ForgetPolicy
+		window  ForgetPolicy
+	}{
+		{"hourly", ForgetPolicy{KeepHourly: Unlimited}, ForgetPolicy{KeepWithinHourly: forever}},
+		{"daily", ForgetPolicy{KeepDaily: Unlimited}, ForgetPolicy{KeepWithinDaily: forever}},
+		{"weekly", ForgetPolicy{KeepWeekly: Unlimited}, ForgetPolicy{KeepWithinWeekly: forever}},
+		{"monthly", ForgetPolicy{KeepMonthly: Unlimited}, ForgetPolicy{KeepWithinMonthly: forever}},
+		{"yearly", ForgetPolicy{KeepYearly: Unlimited}, ForgetPolicy{KeepWithinYearly: forever}},
+	}
+	seen := make(map[string]string)
+	for _, loc := range []*time.Location{berlin, time.UTC} {
+		for _, rule := range rules {
+			name := rule.name + " in " + loc.String()
+			want := applyForgetPolicy(snaps, rule.counted, loc, afterAll).KeepReasons
+			for id, reasons := range want {
+				for i, reason := range reasons {
+					reasons[i] = strings.Replace(reason, rule.name+" snapshot", rule.name+" within 100y", 1)
+				}
+				want[id] = reasons
+			}
+			got := applyForgetPolicy(snaps, rule.window, loc, afterAll).KeepReasons
+			if !maps.EqualFunc(got, want, slices.Equal) {
+				t.Errorf("%s: reasons %v, want those of the counted rule: %v", name, got, want)
+			}
+			// the fixture tells every period and both zones apart
+			kept := strings.Join(slices.Sorted(maps.Keys(got)), " ")
+			if other, dup := seen[kept]; dup {
+				t.Errorf("%s keeps what %s keeps: %s", name, other, kept)
+			}
+			seen[kept] = name
+		}
+	}
+}
+
 func ids(snaps []*Snapshot) []string {
 	if len(snaps) == 0 {
 		return nil
@@ -441,7 +591,7 @@ func TestKeepWeeklyAcrossYearTurns(t *testing.T) {
 // Two times in one period share it even when each carries its own
 // [time.Location], as timestamps decoded with a foreign offset do. The
 // conversion to the one location of the run is what makes this hold; a
-// time.Time key taken from the times as they come would compare the Location
+// [time.Time] key taken from the times as they come would compare the Location
 // pointers. The offset is +05:30 because the time package shares one Location
 // per unnamed whole-hour offset.
 func TestPeriodKeysIgnoreLocationIdentity(t *testing.T) {
