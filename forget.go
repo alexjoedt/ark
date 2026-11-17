@@ -7,13 +7,14 @@ import "time"
 // source name and host. A busy series never pushes another's snapshots out of
 // the window, and two hosts backing up the same source each keep their own.
 // Zero value keeps everything.
+//
+// The hours, days, weeks, months and years of KeepHourly to KeepYearly are
+// those of the local time zone, not of UTC; see WithForgetLocation.
 type ForgetPolicy struct {
 	// KeepLast keeps the most recent n snapshots regardless of age.
 	KeepLast int
 
 	// KeepHourly keeps one snapshot per hour for the most recent n hours.
-	// Hours, days, weeks, months and years are those of the local time zone,
-	// see WithForgetLocation.
 	KeepHourly int
 
 	// KeepDaily keeps one snapshot per day for the most recent n days.
@@ -63,7 +64,10 @@ func WithForgetDryRun() ForgetOption { return func(c *forgetConfig) { c.dryRun =
 // WithForgetLocation sets the time zone the period rules (KeepHourly to
 // KeepYearly) count in: a snapshot belongs to the hour, day, week, month or
 // year its time falls in on a clock in loc. Without it, and for a nil loc,
-// Forget counts in [time.Local]. KeepLast and KeepWithin do not depend on it.
+// Forget counts in [time.Local], so the same policy can keep different
+// snapshots on machines in different zones; a program that must not depend on
+// the machine passes a fixed zone such as [time.UTC]. KeepLast and KeepWithin
+// do not depend on it.
 func WithForgetLocation(loc *time.Location) ForgetOption {
 	return func(c *forgetConfig) {
 		if loc != nil {

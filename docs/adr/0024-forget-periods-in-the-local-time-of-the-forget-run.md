@@ -46,6 +46,11 @@ not depend on the machine sets `TZ` or passes `WithForgetLocation`. ark and rest
 snapshots when backups and forget run under one zone, and can differ when a backup was taken under
 another zone than the forget run.
 
+This changes what an existing policy keeps, for the CLI and for every caller of
+`Repository.Forget` that passes no location: the first run after the change can keep another
+snapshot of a period than the UTC rule did and remove the one that rule kept. A dry run shows the
+difference; `WithForgetLocation(time.UTC)` or `TZ=UTC` counts in UTC as before.
+
 `TestPeriodsAreCutInTheGivenLocation` pins the boundaries and both summer time shifts in
 Europe/Berlin against UTC, `TestPeriodsIgnoreTheZoneASnapshotCarries` that a snapshot's own zone
 does not count, `TestForgetCountsPeriodsInTheGivenLocation` the option and

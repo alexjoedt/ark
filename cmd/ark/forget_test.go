@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	_ "time/tzdata" // the child resolves TZ on a machine without a zone database too
 )
 
 // Half an hour either side of midnight in Berlin is two days there and one
@@ -22,9 +24,11 @@ func TestForgetCutsPeriodsInTheZoneOfTZ(t *testing.T) {
 		cmd := exec.CommandContext(t.Context(), os.Args[0],
 			"--json", "-r", repo, "forget", "--keep-daily", "2", "--dry-run")
 		cmd.Env = append(os.Environ(), envCLIChild+"=1", "TZ="+tz)
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
 		out, err := cmd.Output()
 		if err != nil {
-			t.Fatalf("TZ=%s forget: %v: %s", tz, err, out)
+			t.Fatalf("TZ=%s forget: %v: %s%s", tz, err, out, &stderr)
 		}
 		var res struct {
 			Keep   []struct{ ID string } `json:"keep"`

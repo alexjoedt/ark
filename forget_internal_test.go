@@ -174,10 +174,12 @@ func TestKeepWeeklyAcrossYearTurns(t *testing.T) {
 	}
 }
 
-// Two times in one period must share a key even when each carries its own
-// [time.Location], as timestamps decoded with a foreign offset do. The offset
-// is +05:30 because the time package shares one Location per unnamed
-// whole-hour offset.
+// Two times in one period share it even when each carries its own
+// [time.Location], as timestamps decoded with a foreign offset do. The
+// conversion to the one location of the run is what makes this hold; a
+// time.Time key taken from the times as they come would compare the Location
+// pointers. The offset is +05:30 because the time package shares one Location
+// per unnamed whole-hour offset.
 func TestPeriodKeysIgnoreLocationIdentity(t *testing.T) {
 	zone := func() *time.Location { return time.FixedZone("", 5*60*60+30*60) }
 	at := func(y int, m time.Month, d, h, minute int) time.Time {

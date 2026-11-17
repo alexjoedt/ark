@@ -214,6 +214,8 @@ ark forget --keep-within 30d
 Hours, days, weeks, months and years are those of the local time zone of the machine `ark forget`
 runs on, so a backup at 00:30 belongs to the new day; set `TZ` to count in another zone. A week is
 an ISO week and starts on Monday. `--keep-last` and `--keep-within` do not depend on the zone.
+Builds before this rule counted the periods in UTC, so the first run after an upgrade can keep
+another snapshot of a period than the last one did: run it once with `--dry-run`.
 
 `ark forget --keep-last 1` without a filter keeps the newest snapshot of every series, see
 [Series](../SERIES.md). With `-P` the profile's `forget` section is the policy, see
