@@ -81,10 +81,9 @@ func (p *Profile) BackupOptions() []ark.BackupOption {
 	return opts
 }
 
-// ForgetPolicy returns the keep-* rules of the forget section. It fails only
-// on a keep-within that [ark.ParseWithin] refuses, which [Profile.Validate]
-// reports too. Whether to prune afterwards is forget.prune, read by the caller.
-func (p *Profile) ForgetPolicy() (ark.ForgetPolicy, error) {
+// ForgetPolicy returns the keep-* rules of the forget section. Whether to
+// prune afterwards is forget.prune, read by the caller.
+func (p *Profile) ForgetPolicy() ark.ForgetPolicy {
 	f := p.Forget
 	policy := ark.ForgetPolicy{
 		KeepLast:    f.KeepLast,
@@ -93,18 +92,12 @@ func (p *Profile) ForgetPolicy() (ark.ForgetPolicy, error) {
 		KeepWeekly:  f.KeepWeekly,
 		KeepMonthly: f.KeepMonthly,
 		KeepYearly:  f.KeepYearly,
-	}
-	if f.KeepWithin != "" {
-		w, err := ark.ParseWithin(f.KeepWithin)
-		if err != nil {
-			return ark.ForgetPolicy{}, invalidf("forget.keep-within: %v", err)
-		}
-		policy.KeepWithin = w
+		KeepWithin:  f.KeepWithin,
 	}
 	for _, list := range f.KeepTags {
 		policy.KeepTags = append(policy.KeepTags, ark.ParseTagList(list))
 	}
-	return policy, nil
+	return policy
 }
 
 // Filter selects the snapshots [Profile.Source] names from the host

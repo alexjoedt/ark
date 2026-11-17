@@ -235,15 +235,11 @@ if err != nil {
 if _, err := repo.Backup(ctx, src, p.BackupOptions()...); err != nil {
 	return err
 }
-policy, err := p.ForgetPolicy()
-if err != nil {
-	return err
-}
 filter, err := p.Filter()
 if err != nil {
 	return err
 }
-if _, err := repo.Forget(ctx, policy, filter); err != nil {
+if _, err := repo.Forget(ctx, p.ForgetPolicy(), filter); err != nil {
 	return err
 }
 if p.Forget.Prune {
@@ -253,7 +249,7 @@ if p.Forget.Prune {
 
 The counted rules of an `ark.ForgetPolicy`, `KeepLast` to `KeepYearly`, are of type `ark.KeepCount`: a number, or `ark.Unlimited` to keep every snapshot (`KeepLast`) or the newest of every period. `Forget` refuses any other negative count with `ark.ErrInvalidPolicy`. `ark.ParseKeepCount` reads the text form a profile and the CLI use, a whole number or `unlimited`. In JSON a count is a number and `ark.Unlimited` the string `"unlimited"`.
 
-`KeepWithin` is an `ark.Within`, a window of calendar `Years`, `Months` and `Days` plus `Hours`: `ark.Within{Days: 30}` keeps every snapshot of a series less than 30 days older than its newest one that is not dated in the future. Years, months and days are stepped back on the calendar of the forget zone, hours are elapsed time. `ark.ParseWithin` reads the text form a profile and the CLI use, `30d`, `72h` or `1y6m`, where `m` counts months; earlier versions took a `time.Duration`. `Forget` refuses a negative number with `ark.ErrInvalidPolicy`.
+`KeepWithin` is an `ark.Within`, a window of calendar `Years`, `Months` and `Days` plus `Hours`: `ark.Within{Days: 30}` keeps every snapshot of a series less than 30 days older than its newest one that is not dated in the future. Years, months and days are stepped back on the calendar of the forget zone, hours are elapsed time. `ark.ParseWithin` reads the text form a profile and the CLI use, `30d`, `72h` or `1y6m`, where `m` counts months; earlier versions took a `time.Duration`. `Forget` refuses a negative number, more than 11 months (18 months are `ark.Within{Years: 1, Months: 6}`) and a number above a million with `ark.ErrInvalidPolicy`, the bounds of the text form. In JSON a window is that text, `"30d"`.
 
 `KeepTags` keeps by tag: it holds lists of tags, and a snapshot that carries all tags of one of the lists is kept; the empty tag stands for no tag, so `[][]string{{""}}` keeps the untagged snapshots. `ark.ParseTagList` reads the text form of one list, `db,prod`. Blanks around a tag do not count. A list with the empty tag next to others, as a stray comma leaves one, matches no snapshot, and `Forget` refuses it with `ark.ErrInvalidPolicy`. The rule has no count and can match nothing: when a policy keeps no snapshot of one of the series, `Forget` removes nothing at all and returns `ark.ErrNoSnapshotKept`. With this field a `ForgetPolicy` holds a slice, so two policies compare with `reflect.DeepEqual`, not with `==`; `policy.Empty()` tells whether a policy has a rule that keeps a snapshot.
 

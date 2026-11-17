@@ -25,16 +25,19 @@ difference: a snapshot taken at the very instant of the run counts as not in the
 
 The text form, read by `ParseWithin` for `--keep-within` and the profile key `keep-within`, is
 whole numbers followed by `y`, `m`, `d` or `h`, such as `30d`, `72h` or `1y2m3d4h`. The reason in
-`ForgetResult.KeepReasons` writes the window as it was given, `within 72h`, as restic does.
+`ForgetResult.KeepReasons` writes the window unit by unit, `within 72h`, as restic does; it writes
+the numbers, not the text that was typed, so `030d` reads `within 30d`. `Within` marshals as this
+text, so a profile key is parsed once, when the profile is read, and JSON holds `"30d"`.
 
 - Not Go durations next to the calendar units, because `m` cannot be a month and a minute, and a
   policy that reads the same in both tools should keep the same snapshots.
 - Not restic's free form, where the units come in any order and a repeated unit replaces the
   earlier one (`1d1d2d` is two days): each unit at most once, from years to hours. What ark takes
   restic reads the same way.
-- Not any number of months: `m` goes up to 11 in the text form. `90m` and `1h30m` are what someone
-  used to Go durations writes, and 90 months of retention is not what they meant; 18 months are
-  `1y6m`. The `Within` type itself takes any number of months.
+- Not any number of months: `m` goes up to 11. `90m` and `1h30m` are what someone used to Go
+  durations writes, and 90 months of retention is not what they meant; 18 months are `1y6m`, the
+  same window. `Repository.Forget` refuses `Within{Months: 18}` with `ErrInvalidPolicy` too:
+  otherwise its reason would read `within 18m`, which the text form cannot read back.
 - Not a normalised reason such as `within 3d` for 72 hours: across a summer time change three days
   and 72 hours are different windows.
 - Not a window of zero or a negative number: the text form refuses both, `Repository.Forget`
@@ -45,12 +48,15 @@ whole numbers followed by `y`, `m`, `d` or `h`, such as `30d`, `72h` or `1y2m3d4
 ## Consequences
 
 A policy written for the old syntax has to be rewritten: `90m`, `1h30m` and `1.5d` are usage
-errors, and `1m` to `11m` are read without complaint and now mean months. Code that set
+errors, and `1m` to `11m` are read without complaint and now mean months. No check can tell an old
+`5m` from a new one, so the CLI documentation carries the warning. Code that set
 `KeepWithin` to a `time.Duration` no longer compiles and names the units instead,
 `ark.Within{Days: 30}`.
 
 A window with years, months or days depends on the zone of the forget run, as the period rules do:
-a day back across the start of summer time is 23 hours. This supersedes the part of 0024 that says
+a day back across the start of summer time is 23 hours. A step that lands on a time the clocks
+skip that night starts the window an hour before or after it, whichever `AddDate` picks; restic
+has the same arithmetic. This supersedes the part of 0024 that says
 `KeepWithin` compares instants and does not depend on the zone; that holds for its hours only.
 
 `TestParseWithin` pins the text form, `TestKeepWithinIsACalendarWindowFromTheNewestSnapshotNotInTheFuture`

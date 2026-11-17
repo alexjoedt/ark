@@ -177,10 +177,7 @@ func runForget(
 func forgetPolicy(cmd *cli.Command, lp *loadedProfile) (ark.ForgetPolicy, error) {
 	var policy ark.ForgetPolicy
 	if lp != nil {
-		var err error
-		if policy, err = lp.ForgetPolicy(); err != nil {
-			return policy, exitcode.Usagef("profile %s: %w", lp.Name, err)
-		}
+		policy = lp.ForgetPolicy()
 	}
 	for _, f := range []struct {
 		name string

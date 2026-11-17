@@ -115,9 +115,9 @@ type Forget struct {
 	KeepWeekly  ark.KeepCount `yaml:"keep-weekly"`
 	KeepMonthly ark.KeepCount `yaml:"keep-monthly"`
 	KeepYearly  ark.KeepCount `yaml:"keep-yearly"`
-	// KeepWithin is a window as [ark.ParseWithin] reads it, such as 30d,
-	// 72h or 1y6m; m counts months.
-	KeepWithin string `yaml:"keep-within"`
+	// KeepWithin is written as [ark.ParseWithin] reads it, such as 30d, 72h
+	// or 1y6m; m counts months.
+	KeepWithin ark.Within `yaml:"keep-within"`
 	// KeepTags holds one tag list per entry, each as the CLI takes it and
 	// [ark.ParseTagList] reads it: "db,prod" keeps what carries both tags,
 	// "" what carries none.
@@ -178,8 +178,10 @@ func (p *Profile) Validate() error {
 			return invalidf("%s %d: want 0 or more, or unlimited", n.key, int(n.v))
 		}
 	}
-	if f.KeepWithin != "" {
-		if _, err := ark.ParseWithin(f.KeepWithin); err != nil {
+	// The key is parsed when the profile is read; a window set in code has
+	// to be one the key can hold.
+	if w := f.KeepWithin; w != (ark.Within{}) {
+		if _, err := ark.ParseWithin(w.String()); err != nil {
 			return invalidf("forget.keep-within: %v", err)
 		}
 	}

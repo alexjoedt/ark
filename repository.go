@@ -387,7 +387,9 @@ func (r *Repository) deleteSnapshot(ctx context.Context, id string) error {
 // A policy without a rule removes every match, so it is only accepted
 // together with filter.IDs; otherwise Forget returns ErrEmptyPolicy and
 // deletes nothing. A count of Unlimited is a rule; any other negative count
-// fails with ErrInvalidPolicy, and so does a negative number in KeepWithin.
+// fails with ErrInvalidPolicy, and so does a KeepWithin with a number
+// outside the bounds of [Within]: below zero, above 11 months or above a
+// million.
 //
 // A policy that keeps no snapshot of one of the series, as KeepTags alone
 // can, removes nothing of any series, in a dry run too: Forget returns

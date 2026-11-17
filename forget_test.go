@@ -117,6 +117,8 @@ func TestForgetTakesUnlimitedAndRefusesOtherNegativeCounts(t *testing.T) {
 		{KeepLast: 5, KeepWithin: ark.Within{Years: 1, Hours: -1}},
 		// more hours than a time.Duration holds would put the window in the future
 		{KeepLast: 5, KeepWithin: ark.Within{Hours: 3_000_000}},
+		// 18 months are Years: 1, Months: 6; "18m" is no text ParseWithin reads
+		{KeepLast: 5, KeepWithin: ark.Within{Months: 18}},
 		// a stray comma: a list no snapshot can match must not pass as a keep rule
 		{KeepLast: 5, KeepTags: [][]string{ark.ParseTagList("pinned,")}},
 		{KeepLast: 5, KeepTags: [][]string{{"", "pinned"}}},
@@ -155,6 +157,24 @@ func TestParseWithin(t *testing.T) {
 	}
 	if got := (ark.Within{}).String(); got != "" {
 		t.Errorf("the zero window writes itself as %q, want nothing", got)
+	}
+
+	// As JSON a policy holds the window as its text, and reads it back.
+	policy := ark.ForgetPolicy{KeepWithin: ark.Within{Years: 1, Months: 6}}
+	data, err := json.Marshal(policy)
+	if err != nil || !strings.Contains(string(data), `"KeepWithin":"1y6m"`) {
+		t.Errorf("policy as JSON: %s, %v, want the window as 1y6m", data, err)
+	}
+	var back ark.ForgetPolicy
+	if err := json.Unmarshal(data, &back); err != nil || back.KeepWithin != policy.KeepWithin {
+		t.Errorf("policy read back: %+v, %v", back.KeepWithin, err)
+	}
+	stale := ark.Within{Days: 3}
+	if err := stale.UnmarshalText(nil); err != nil || stale != (ark.Within{}) {
+		t.Errorf("the empty text reads as %+v, %v, want no window", stale, err)
+	}
+	if err := stale.UnmarshalText([]byte("90m")); err == nil {
+		t.Error("UnmarshalText takes 90m")
 	}
 	for _, in := range []string{
 		"", "d", "30", "soon",

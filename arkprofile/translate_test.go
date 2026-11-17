@@ -73,10 +73,7 @@ func TestBackupAndForgetThroughAProfile(t *testing.T) {
 		t.Fatalf("FileCount = %d, want 1 (skip.tmp excluded)", first.Stats.FileCount)
 	}
 
-	policy, err := docs.ForgetPolicy()
-	if err != nil {
-		t.Fatal(err)
-	}
+	policy := docs.ForgetPolicy()
 	filter, err := docs.Filter()
 	if err != nil {
 		t.Fatal(err)
@@ -194,10 +191,7 @@ func TestHostDefaultsToTheHostname(t *testing.T) {
 	if f.Host != hostname {
 		t.Fatalf("filter host = %q, want %q", f.Host, hostname)
 	}
-	policy, err := mine.ForgetPolicy()
-	if err != nil {
-		t.Fatal(err)
-	}
+	policy := mine.ForgetPolicy()
 	res, err := repo.Forget(ctx, policy, f)
 	if err != nil {
 		t.Fatal(err)
@@ -219,13 +213,11 @@ func TestSourceWithoutAPath(t *testing.T) {
 
 func TestForgetPolicy(t *testing.T) {
 	p := arkprofile.Profile{Forget: arkprofile.Forget{
-		KeepLast: 1, KeepHourly: 2, KeepDaily: 3, KeepWeekly: 4, KeepMonthly: 5, KeepYearly: ark.Unlimited, KeepWithin: "2d",
-		KeepTags: []string{"pinned", "db, prod", ""},
+		KeepLast: 1, KeepHourly: 2, KeepDaily: 3, KeepWeekly: 4, KeepMonthly: 5, KeepYearly: ark.Unlimited,
+		KeepWithin: ark.Within{Days: 2},
+		KeepTags:   []string{"pinned", "db, prod", ""},
 	}}
-	got, err := p.ForgetPolicy()
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := p.ForgetPolicy()
 	want := ark.ForgetPolicy{
 		KeepLast: 1, KeepHourly: 2, KeepDaily: 3, KeepWeekly: 4, KeepMonthly: 5, KeepYearly: ark.Unlimited,
 		KeepWithin: ark.Within{Days: 2},
@@ -233,11 +225,6 @@ func TestForgetPolicy(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("policy = %+v, want %+v", got, want)
-	}
-
-	p.Forget.KeepWithin = "soon"
-	if _, err := p.ForgetPolicy(); !errors.Is(err, arkprofile.ErrInvalid) {
-		t.Fatalf("err = %v, want ErrInvalid", err)
 	}
 }
 

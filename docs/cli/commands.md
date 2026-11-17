@@ -237,8 +237,12 @@ no such rule. restic selects the same way.
 (months), `d` (days) or `h` (hours), each unit at most once and in that order, as in `30d`, `72h` or
 `1y2m3d4h`. There are no minutes, seconds or weeks, and no fractions. `m` counts months and goes up
 to 11, so `90m` is a usage error, exit 2, and not seven and a half years; write `1y6m` for 18
-months. Builds before this rule read Go durations, where `1m` was a minute: a policy written for
-them has to be rewritten.
+months.
+
+Builds before this rule read Go durations, where `m` was a minute. A policy written for them has
+to be rewritten, and not every old value fails: `1m` to `11m` are still read, without an error,
+and now keep months of snapshots instead of minutes. Check every `--keep-within` in a script and
+every `keep-within` in a profile after the upgrade.
 
 The window ends at the newest snapshot of the series, not at the time of the run, so a series that
 stopped receiving backups keeps its last ones. A snapshot dated in the future, as a machine with a
@@ -246,8 +250,11 @@ wrong clock leaves it, is kept and does not move the window: the newest snapshot
 future does. Years, months and days are steps on the calendar of the local time zone, hours are
 elapsed time: `1m` back from 15 March is 15 February, and `1d` back across the start of summer time
 is 23 hours where `24h` is 24. A step onto a day the month lacks runs over into the next month, so
-`1m` back from 31 March is 3 March. A snapshot exactly the duration old is not kept. `--json` lists
-the reason with the duration as it was given, `within 72h`. restic counts the same way.
+`1m` back from 31 March is 3 March, or 2 March in a leap year. A step onto a time the clocks skip
+when summer time starts lands an hour before or after it. A snapshot exactly the duration old is
+not kept. `--json` lists the reason with the duration unit by unit, `within 72h` and not
+`within 3d`, the numbers written plainly: `030d` reads `within 30d`. restic counts and writes the
+same way.
 
 `--keep-tag` keeps by tag instead of by age. One value is a list of tags separated by commas, and a
 snapshot has to carry all of them; give the flag again for another list, and a snapshot that matches

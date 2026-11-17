@@ -81,15 +81,24 @@ func (c *KeepCount) UnmarshalJSON(data []byte) error {
 // hours, which are elapsed time. A month back from 15 March is 15 February,
 // however long February is; a step onto a day the month lacks runs over into
 // the next, so a month back from 31 March is 3 March, or 2 March in a leap
-// year. The zero value is no window. Forget refuses a negative number, and
-// one above a million, with [ErrInvalidPolicy].
+// year. The zero value is no window. Forget refuses a negative number, more
+// than 11 months and any number above a million with [ErrInvalidPolicy]; 18
+// months are a year and 6 months. These are the bounds of [ParseWithin], so
+// String writes every window Forget takes in a form ParseWithin reads.
+//
+// As text, in a profile, on the command line and in JSON, a window is that
+// form, such as "30d"; the zero value is the empty text.
 type Within struct {
 	Years, Months, Days, Hours int
 }
 
-// maxWithin bounds every number of a Within, so the start of the window
-// stays inside what [time.Time] and [time.Duration] hold.
+// maxWithin bounds the years, days and hours of a Within, so the start of
+// the window stays inside what [time.Time] and [time.Duration] hold.
 const maxWithin = 1_000_000
+
+// maxWithinMonths bounds the months: twelve are a year, and in the text
+// form a larger number is more likely meant as minutes.
+const maxWithinMonths = 11
 
 var withinText = regexp.MustCompile(`^(?:(\d+)y)?(?:(\d+)m)?(?:(\d+)d)?(?:(\d+)h)?$`)
 
@@ -108,22 +117,22 @@ func ParseWithin(s string) (Within, error) {
 	if m == nil {
 		return Within{}, fmt.Errorf("%q is not a duration: %s", s, form)
 	}
-	var w Within
-	for i, part := range withinParts(&w) {
+	var n [4]int
+	for i := range n {
 		if m[i+1] == "" {
 			continue
 		}
-		n, err := strconv.Atoi(m[i+1])
-		if err != nil {
+		var err error
+		if n[i], err = strconv.Atoi(m[i+1]); err != nil {
 			return Within{}, fmt.Errorf("%q: a number above %d: %s", s, maxWithin, form)
 		}
-		*part.n = n
 	}
+	w := Within{Years: n[0], Months: n[1], Days: n[2], Hours: n[3]}
 	switch {
 	case w == Within{}:
 		return Within{}, fmt.Errorf("duration %q is zero: %s", s, form)
-	case w.Months > 11:
-		return Within{}, fmt.Errorf("%q: m counts months, up to 11, there are no minutes: %s", s, form)
+	case w.Months > maxWithinMonths:
+		return Within{}, fmt.Errorf("%q: m counts months, up to %d, there are no minutes: %s", s, maxWithinMonths, form)
 	}
 	if err := w.validate(); err != nil {
 		return Within{}, fmt.Errorf("%q: %w: %s", s, err, form)
@@ -131,42 +140,62 @@ func ParseWithin(s string) (Within, error) {
 	return w, nil
 }
 
-// withinPart is one number of a Within: its field, field name and unit.
+// withinPart is one number of a Within: its value, field name, unit and the
+// largest value Forget takes.
 type withinPart struct {
-	n    *int
-	name string
-	unit string
+	n     int
+	name  string
+	unit  string
+	limit int
 }
 
-// withinParts lists the numbers of w from years to hours.
-func withinParts(w *Within) [4]withinPart {
+// parts lists the numbers of w from years to hours.
+func (w Within) parts() [4]withinPart {
 	return [4]withinPart{
-		{&w.Years, "Years", "y"},
-		{&w.Months, "Months", "m"},
-		{&w.Days, "Days", "d"},
-		{&w.Hours, "Hours", "h"},
+		{w.Years, "Years", "y", maxWithin},
+		{w.Months, "Months", "m", maxWithinMonths},
+		{w.Days, "Days", "d", maxWithin},
+		{w.Hours, "Hours", "h", maxWithin},
 	}
 }
 
 // String returns the window as restic writes it, from years to hours with
-// the zero parts left out, such as "1y6m" or "72h". The numbers stay as they
-// were given: 72 hours are not turned into 3 days, which can be a different
-// span of time. The zero value is the empty string.
+// the zero parts left out, such as "1y6m" or "72h". No unit is turned into
+// another: 72 hours are not written as 3 days, which can be a different span
+// of time. The zero value is the empty string.
 func (w Within) String() string {
 	var b strings.Builder
-	for _, part := range withinParts(&w) {
-		if *part.n != 0 {
-			b.WriteString(strconv.Itoa(*part.n))
+	for _, part := range w.parts() {
+		if part.n != 0 {
+			b.WriteString(strconv.Itoa(part.n))
 			b.WriteString(part.unit)
 		}
 	}
 	return b.String()
 }
 
+// MarshalText implements [encoding.TextMarshaler] with String.
+func (w Within) MarshalText() ([]byte, error) { return []byte(w.String()), nil }
+
+// UnmarshalText implements [encoding.TextUnmarshaler] with ParseWithin. The
+// empty text is the zero value, no window.
+func (w *Within) UnmarshalText(text []byte) error {
+	*w = Within{}
+	if len(bytes.TrimSpace(text)) == 0 {
+		return nil
+	}
+	parsed, err := ParseWithin(string(text))
+	if err != nil {
+		return err
+	}
+	*w = parsed
+	return nil
+}
+
 func (w Within) validate() error {
-	for _, part := range withinParts(&w) {
-		if *part.n < 0 || *part.n > maxWithin {
-			return fmt.Errorf("%s is %d, want 0 to %d", part.name, *part.n, maxWithin)
+	for _, part := range w.parts() {
+		if part.n < 0 || part.n > part.limit {
+			return fmt.Errorf("%s is %d, want 0 to %d", part.name, part.n, part.limit)
 		}
 	}
 	return nil
@@ -174,6 +203,8 @@ func (w Within) validate() error {
 
 // before returns the start of the window that ends at t. Years, months and
 // days are stepped on the calendar of t's location, hours are elapsed time.
+// A step onto a time the clocks of the location skip, at the start of summer
+// time, lands an hour before or after it, as [time.Time.AddDate] decides.
 func (w Within) before(t time.Time) time.Time {
 	return t.AddDate(-w.Years, -w.Months, -w.Days).Add(-time.Duration(w.Hours) * time.Hour)
 }
@@ -271,7 +302,7 @@ func (p ForgetPolicy) counted() [6]countedRule {
 }
 
 // validate refuses a negative count other than Unlimited, a KeepWithin with
-// a number below zero or too large to step back by, a KeepTags list without
+// a number below zero or above its bound, a KeepTags list without
 // a tag, which every snapshot would match, and one with the empty tag next
 // to others, which none would: a stray comma must not turn a keep rule into
 // one that silently keeps nothing.
