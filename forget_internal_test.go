@@ -386,6 +386,13 @@ func TestKeepWithinIsACalendarWindowFromTheNewestSnapshotNotInTheFuture(t *testi
 			[]string{"2026-09-10T12:00:00Z", "2025-07-07T08:00:01Z", "2025-07-07T08:00:00Z"},
 			[]string{"s0", "s1"},
 		},
+		{
+			"hours come off after the calendar step",
+			// the other way round the month would be taken off 28 February
+			Within{Months: 1, Hours: 2}, time.UTC, afterAll,
+			[]string{"2026-03-01T01:00:00Z", "2026-01-31T23:00:01Z", "2026-01-31T23:00:00Z"},
+			[]string{"s0", "s1"},
+		},
 		{"a day is a calendar day in the forget zone", Within{Days: 1}, berlin, afterAll, dst, []string{"s0"}},
 		{"which is 24 hours in UTC", Within{Days: 1}, time.UTC, afterAll, dst, []string{"s0", "s1", "s2"}},
 		{"hours are elapsed time in any zone", Within{Hours: 24}, berlin, afterAll, dst, []string{"s0", "s1", "s2"}},
@@ -794,6 +801,9 @@ func TestHasTagsIgnoresBlanks(t *testing.T) {
 	}
 	if hasTags([]string{"pinned x"}, []string{"pinned"}) {
 		t.Error("a tag matched a longer one")
+	}
+	if hasTags([]string{"Pinned"}, []string{"pinned"}) {
+		t.Error("a tag matched one in another case")
 	}
 }
 

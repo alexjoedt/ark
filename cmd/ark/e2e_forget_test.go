@@ -53,6 +53,8 @@ var forgetCases = []struct {
 	keep string
 }{
 	{"last", []string{"--keep-last", "3"}, "a7 a8 a9 b0 b1 b2"},
+	// a5 loses its hour to a6, which leaves the fifth to a4
+	{"hourly", []string{"--keep-hourly", "5"}, "a4 a6 a7 a8 a9 b0 b1 b2"},
 	// in UTC the day of 11 June would be a8's
 	{"daily", []string{"--keep-daily", "3"}, "a4 a7 a9 b0 b1 b2"},
 	// a1 is in the week a2 took; the fourth week is a0's
