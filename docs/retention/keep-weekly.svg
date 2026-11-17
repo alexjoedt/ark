@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720.0 187.0" width="720.0" height="187.0" role="img">
-<title>--keep-weekly 4 keeps 4 of 21 snapshots</title>
+<title>--keep-weekly 4 keeps 4 of 22 snapshots</title>
 <style>
 text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; fill: #2c3743; }
 .muted { fill: #55626f; }
@@ -48,6 +48,7 @@ text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 <line x1="16.0" y1="94.0" x2="704.0" y2="94.0" class="axis"/>
 <circle cx="695.8" cy="94.0" r="4.0" class="kept"/>
 <circle cx="630.3" cy="94.0" r="4.0" class="removed"/>
+<circle cx="618.0" cy="94.0" r="4.0" class="removed"/>
 <circle cx="597.5" cy="94.0" r="4.0" class="removed"/>
 <circle cx="571.1" cy="94.0" r="4.0" class="removed"/>
 <circle cx="561.1" cy="94.0" r="4.0" class="removed"/>

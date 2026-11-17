@@ -45,6 +45,17 @@ type scenario struct {
 	name    string
 	history []snap
 	policy  ark.ForgetPolicy
+	// versus is a policy of one rule to compare with policy, itself of one
+	// rule, on the same history; nil for a scenario of one policy.
+	versus *ark.ForgetPolicy
+}
+
+// policies returns the policies the scenario runs on its history.
+func (s scenario) policies() []ark.ForgetPolicy {
+	if s.versus == nil {
+		return []ark.ForgetPolicy{s.policy}
+	}
+	return []ark.ForgetPolicy{s.policy, *s.versus}
 }
 
 type snap struct {
@@ -71,6 +82,13 @@ type outcome struct {
 	// table's format.
 	Kept    []string
 	Removed []string
+	// Shared are the kept snapshots more than one rule keeps, newest first.
+	Shared []string
+	// Only are the snapshots this side of a comparison keeps and the other
+	// does not, newest first.
+	Only []string
+	// Versus are the two sides of a comparison, each described alone.
+	Versus []*outcome
 	// Rules are the policy's rules, in the order ark forget lists their
 	// reasons.
 	Rules []ruleOutcome
@@ -81,6 +99,8 @@ type outcome struct {
 // ruleOutcome is what the template sees of one rule of a scenario.
 type ruleOutcome struct {
 	Flag string
+	// Kept are the snapshots the rule keeps, newest first.
+	Kept []string
 	// Gaps are the periods a counted period rule counts across without a
 	// snapshot, newest first: "Mon 02 Mar 11:00", "Sat 21 Mar", "May",
 	// "2013"; a week by the day it starts.
@@ -136,19 +156,14 @@ func generate(ctx context.Context, list []scenario) ([]file, map[string]*outcome
 		if len(s.history) == 0 {
 			return nil, nil, fmt.Errorf("scenario %s has no snapshot", s.name)
 		}
-		rows, err := forget(ctx, s)
+		sets, err := forget(ctx, s.history, s.policies()...)
 		if err != nil {
 			return nil, nil, fmt.Errorf("scenario %s: %w", s.name, err)
 		}
-		marks, err := mark(s.policy, rows)
+		o, image, err := outcomeOf(s, sets)
 		if err != nil {
 			return nil, nil, fmt.Errorf("scenario %s: %w", s.name, err)
 		}
-		image, err := timeline(marks, rows)
-		if err != nil {
-			return nil, nil, fmt.Errorf("drawing scenario %s: %w", s.name, err)
-		}
-		o := describe(s.name, marks, rows)
 		files = append(files, file{path: path.Join(imageDir, s.name+".svg"), content: image})
 		o.Image = path.Join(imageLink, s.name+".svg")
 		outcomes[s.name] = o
@@ -160,13 +175,91 @@ func generate(ctx context.Context, list []scenario) ([]file, map[string]*outcome
 	return append([]file{{path: pagePath, content: page}}, files...), outcomes, nil
 }
 
+// outcomeOf describes and draws what the policies of s did to its history,
+// one set of rows per policy.
+func outcomeOf(s scenario, sets [][]row) (*outcome, []byte, error) {
+	if s.versus == nil {
+		marks, err := mark(s.policy, sets[0])
+		if err != nil {
+			return nil, nil, err
+		}
+		image, err := timeline(marks, sets[0])
+		if err != nil {
+			return nil, nil, fmt.Errorf("drawing: %w", err)
+		}
+		return describe(s.name, marks, sets[0]), image, nil
+	}
+	o := &outcome{Name: s.name}
+	var marks []ruleMark
+	var flags []string
+	for i, p := range s.policies() {
+		m, err := mark(p, sets[i])
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(m) != 1 {
+			return nil, nil, fmt.Errorf("a compared policy has %d rules, want 1", len(m))
+		}
+		marks = append(marks, m...)
+		side := describe(s.name, m, sets[i])
+		o.Versus = append(o.Versus, side)
+		flags = append(flags, side.Policy)
+	}
+	for i, side := range o.Versus {
+		other := o.Versus[1-i]
+		for _, k := range side.Kept {
+			if !slices.Contains(other.Kept, k) {
+				side.Only = append(side.Only, k)
+			}
+		}
+	}
+	o.Policy = strings.Join(flags, " and ")
+	o.Table = compareTable(flags, sets)
+	image, err := comparison(marks, sets[0])
+	if err != nil {
+		return nil, nil, fmt.Errorf("drawing: %w", err)
+	}
+	return o, image, nil
+}
+
+// compareTable lists every snapshot with what each policy does to it.
+func compareTable(flags []string, sets [][]row) string {
+	layout, _ := layouts(sets[0])
+	var t strings.Builder
+	t.WriteString("| Snapshot |")
+	for _, f := range flags {
+		t.WriteString(" `" + f + "` |")
+	}
+	t.WriteString("\n|---|" + strings.Repeat("---|", len(flags)) + "\n")
+	for i, r := range sets[0] {
+		t.WriteString("| " + r.at.Format(layout) + " |")
+		for _, rows := range sets {
+			t.WriteString(" " + result(rows[i]) + " |")
+		}
+		t.WriteString("\n")
+	}
+	return strings.TrimSuffix(t.String(), "\n")
+}
+
+// result is a snapshot's reasons in backticks, or removed.
+func result(r row) string {
+	if !r.kept {
+		return "removed"
+	}
+	reasons := make([]string, len(r.reasons))
+	for i, reason := range r.reasons {
+		reasons[i] = "`" + reason + "`"
+	}
+	return strings.Join(reasons, ", ")
+}
+
 // zone is where the dry run cuts its periods and where the page and the
 // timelines show and cut every time.
 var zone = time.UTC
 
-// forget backs the history up and returns every snapshot with what a dry
-// run of the policy does to it, newest first and in zone.
-func forget(ctx context.Context, s scenario) ([]row, error) {
+// forget backs the history up and returns, for each policy, every snapshot
+// with what a dry run of the policy does to it, newest first and in zone.
+func forget(ctx context.Context, history []snap, policies ...ark.ForgetPolicy) ([][]row, error) {
 	b := arkmem.New()
 	if err := ark.Init(ctx, b, ark.WithoutPassword()); err != nil {
 		return nil, fmt.Errorf("initializing the repository: %w", err)
@@ -174,12 +267,12 @@ func forget(ctx context.Context, s scenario) ([]row, error) {
 
 	// Every backup waits out the lock settle delay, so the backups run side
 	// by side, each through its own Repository like separate processes.
-	// Closing one must not empty the shared arkmem backend; dryRun closes
-	// it at the end.
-	ids := make([]string, len(s.history))
-	errs := make([]error, len(s.history))
+	// Closing one must not empty the shared arkmem backend, nor may a dry
+	// run; it is closed after the last.
+	ids := make([]string, len(history))
+	errs := make([]error, len(history))
 	var wg sync.WaitGroup
-	for i, h := range s.history {
+	for i, h := range history {
 		wg.Go(func() { ids[i], errs[i] = backup(ctx, keepOpen{b}, h) })
 	}
 	wg.Wait()
@@ -187,21 +280,27 @@ func forget(ctx context.Context, s scenario) ([]row, error) {
 		return nil, err
 	}
 
-	result, err := dryRun(ctx, b, s.policy)
-	if err != nil {
-		return nil, err
+	sets := make([][]row, len(policies))
+	for p, policy := range policies {
+		result, err := dryRun(ctx, keepOpen{b}, policy)
+		if err != nil {
+			return nil, err
+		}
+		kept := make(map[string]bool, len(result.Keep))
+		for _, k := range result.Keep {
+			kept[k.ID] = true
+		}
+		rows := make([]row, len(history))
+		for i, h := range history {
+			rows[i] = row{at: h.at.In(zone), kept: kept[ids[i]], reasons: result.KeepReasons[ids[i]]}
+		}
+		slices.SortStableFunc(rows, func(a, b row) int { return b.at.Compare(a.at) })
+		sets[p] = rows
 	}
-	kept := make(map[string]bool, len(result.Keep))
-	for _, k := range result.Keep {
-		kept[k.ID] = true
+	if err := b.Close(); err != nil {
+		return nil, fmt.Errorf("closing the repository: %w", err)
 	}
-
-	rows := make([]row, len(s.history))
-	for i, h := range s.history {
-		rows[i] = row{at: h.at.In(zone), kept: kept[ids[i]], reasons: result.KeepReasons[ids[i]]}
-	}
-	slices.SortStableFunc(rows, func(a, b row) int { return b.at.Compare(a.at) })
-	return rows, nil
+	return sets, nil
 }
 
 // keepOpen is a Backend whose Close leaves the backend as it is.
@@ -275,6 +374,11 @@ func describe(name string, marks []ruleMark, rows []row) *outcome {
 		if m.byOldest >= 0 {
 			r.Oldest = rows[m.byOldest].at.Format(layout)
 		}
+		for i := range rows {
+			if m.keeps[i] {
+				r.Kept = append(r.Kept, rows[i].at.Format(layout))
+			}
+		}
 		o.Rules = append(o.Rules, r)
 	}
 	o.Policy = strings.Join(flags, " ")
@@ -288,11 +392,10 @@ func describe(name string, marks []ruleMark, rows []row) *outcome {
 			continue
 		}
 		o.Kept = append(o.Kept, when)
-		reasons := make([]string, len(r.reasons))
-		for i, reason := range r.reasons {
-			reasons[i] = "`" + reason + "`"
+		if len(r.reasons) > 1 {
+			o.Shared = append(o.Shared, when)
 		}
-		fmt.Fprintf(&t, "| %s | kept | %s |\n", when, strings.Join(reasons, ", "))
+		fmt.Fprintf(&t, "| %s | kept | %s |\n", when, result(r))
 	}
 	o.Table = strings.TrimSuffix(t.String(), "\n")
 	return o

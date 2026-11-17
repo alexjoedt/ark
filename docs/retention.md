@@ -13,7 +13,7 @@ In short:
 - A within rule such as `--keep-within 7d` measures its window back from the newest snapshot, not from the time forget runs.
 - A snapshot that any rule keeps stays.
 
-Most examples share one history of three weeks, with days without a backup and days with several. Hourly, monthly and yearly rules and `--keep-tag` get histories of their own.
+Most examples share one history of three weeks, with days without a backup and days with several. Hourly, monthly and yearly rules, `--keep-tag`, the long-horizon recipe and the comparison of daily with hourly get histories of their own.
 
 ## Keep last
 
@@ -25,9 +25,10 @@ Most examples share one history of three weeks, with days without a backup and d
 |---|---|---|
 | Sun 22 Mar 18:00 | kept | `last snapshot` |
 | Fri 20 Mar 18:00 | kept | `last snapshot` |
+| Fri 20 Mar 09:00 | kept | `last snapshot` |
 | Thu 19 Mar 18:00 | kept | `last snapshot` |
 | Wed 18 Mar 18:00 | kept | `last snapshot` |
-| Wed 18 Mar 13:00 | kept | `last snapshot` |
+| Wed 18 Mar 13:00 | removed | |
 | Wed 18 Mar 08:00 | removed | |
 | Mon 16 Mar 18:00 | removed | |
 | Fri 13 Mar 18:00 | removed | |
@@ -45,7 +46,7 @@ Most examples share one history of three weeks, with days without a backup and d
 | Mon 02 Mar 18:00 | removed | |
 | Mon 02 Mar 09:00 | removed | |
 
-`--keep-last 5` keeps Sun 22 Mar 18:00, Fri 20 Mar 18:00, Thu 19 Mar 18:00, Wed 18 Mar 18:00 and Wed 18 Mar 13:00 and removes 16 other snapshots.
+`--keep-last 5` keeps Sun 22 Mar 18:00, Fri 20 Mar 18:00, Fri 20 Mar 09:00, Thu 19 Mar 18:00 and Wed 18 Mar 18:00 and removes 17 other snapshots.
 
 ## Keep hourly, daily, weekly, monthly, yearly
 
@@ -61,6 +62,7 @@ These rules count periods. Each keeps the newest snapshot of a period, newest pe
 |---|---|---|
 | Sun 22 Mar 18:00 | kept | `daily snapshot` |
 | Fri 20 Mar 18:00 | kept | `daily snapshot` |
+| Fri 20 Mar 09:00 | removed | |
 | Thu 19 Mar 18:00 | kept | `daily snapshot` |
 | Wed 18 Mar 18:00 | kept | `daily snapshot` |
 | Wed 18 Mar 13:00 | removed | |
@@ -81,7 +83,7 @@ These rules count periods. Each keeps the newest snapshot of a period, newest pe
 | Mon 02 Mar 18:00 | removed | |
 | Mon 02 Mar 09:00 | removed | |
 
-`--keep-daily 5` keeps Sun 22 Mar 18:00, Fri 20 Mar 18:00, Thu 19 Mar 18:00, Wed 18 Mar 18:00 and Mon 16 Mar 18:00 and removes 16 other snapshots. No snapshot falls on Sat 21 Mar and Tue 17 Mar; a day without one uses no count.
+`--keep-daily 5` keeps Sun 22 Mar 18:00, Fri 20 Mar 18:00, Thu 19 Mar 18:00, Wed 18 Mar 18:00 and Mon 16 Mar 18:00 and removes 17 other snapshots. No snapshot falls on Sat 21 Mar and Tue 17 Mar; a day without one uses no count.
 
 ### Keep hourly
 
@@ -115,6 +117,7 @@ These rules count periods. Each keeps the newest snapshot of a period, newest pe
 |---|---|---|
 | Sun 22 Mar 18:00 | kept | `weekly snapshot` |
 | Fri 20 Mar 18:00 | removed | |
+| Fri 20 Mar 09:00 | removed | |
 | Thu 19 Mar 18:00 | removed | |
 | Wed 18 Mar 18:00 | removed | |
 | Wed 18 Mar 13:00 | removed | |
@@ -135,7 +138,7 @@ These rules count periods. Each keeps the newest snapshot of a period, newest pe
 | Mon 02 Mar 18:00 | removed | |
 | Mon 02 Mar 09:00 | kept | `oldest weekly snapshot` |
 
-`--keep-weekly 4` keeps Sun 22 Mar 18:00, Fri 13 Mar 18:00, Sat 07 Mar 18:00 and Mon 02 Mar 09:00 and removes 17 other snapshots. The history ends before the count is used up, so the rule also keeps the oldest snapshot, Mon 02 Mar 09:00, although its week is taken; `--json` gives it an `oldest` reason.
+`--keep-weekly 4` keeps Sun 22 Mar 18:00, Fri 13 Mar 18:00, Sat 07 Mar 18:00 and Mon 02 Mar 09:00 and removes 18 other snapshots. The history ends before the count is used up, so the rule also keeps the oldest snapshot, Mon 02 Mar 09:00, although its week is taken; `--json` gives it an `oldest` reason.
 
 ### Keep monthly
 
@@ -193,6 +196,7 @@ Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keep
 |---|---|---|
 | Sun 22 Mar 18:00 | kept | `daily snapshot` |
 | Fri 20 Mar 18:00 | kept | `daily snapshot` |
+| Fri 20 Mar 09:00 | removed | |
 | Thu 19 Mar 18:00 | kept | `daily snapshot` |
 | Wed 18 Mar 18:00 | kept | `daily snapshot` |
 | Wed 18 Mar 13:00 | removed | |
@@ -213,7 +217,7 @@ Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keep
 | Mon 02 Mar 18:00 | kept | `daily snapshot` |
 | Mon 02 Mar 09:00 | kept | `oldest daily snapshot` |
 
-`--keep-daily unlimited` keeps Sun 22 Mar 18:00, Fri 20 Mar 18:00, Thu 19 Mar 18:00, Wed 18 Mar 18:00, Mon 16 Mar 18:00, Fri 13 Mar 18:00, Thu 12 Mar 18:00, Tue 10 Mar 18:00, Mon 09 Mar 18:00, Sat 07 Mar 18:00, Fri 06 Mar 23:00, Wed 04 Mar 18:00, Tue 03 Mar 18:00, Mon 02 Mar 18:00 and Mon 02 Mar 09:00 and removes 6 other snapshots. The oldest snapshot, Mon 02 Mar 09:00, stays although its day is taken.
+`--keep-daily unlimited` keeps Sun 22 Mar 18:00, Fri 20 Mar 18:00, Thu 19 Mar 18:00, Wed 18 Mar 18:00, Mon 16 Mar 18:00, Fri 13 Mar 18:00, Thu 12 Mar 18:00, Tue 10 Mar 18:00, Mon 09 Mar 18:00, Sat 07 Mar 18:00, Fri 06 Mar 23:00, Wed 04 Mar 18:00, Tue 03 Mar 18:00, Mon 02 Mar 18:00 and Mon 02 Mar 09:00 and removes 7 other snapshots. The oldest snapshot, Mon 02 Mar 09:00, stays although its day is taken.
 
 ## Keep within
 
@@ -227,6 +231,7 @@ Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keep
 |---|---|---|
 | Sun 22 Mar 18:00 | kept | `within 5d` |
 | Fri 20 Mar 18:00 | kept | `within 5d` |
+| Fri 20 Mar 09:00 | kept | `within 5d` |
 | Thu 19 Mar 18:00 | kept | `within 5d` |
 | Wed 18 Mar 18:00 | kept | `within 5d` |
 | Wed 18 Mar 13:00 | kept | `within 5d` |
@@ -247,7 +252,7 @@ Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keep
 | Mon 02 Mar 18:00 | removed | |
 | Mon 02 Mar 09:00 | removed | |
 
-`--keep-within 5d` keeps Sun 22 Mar 18:00, Fri 20 Mar 18:00, Thu 19 Mar 18:00, Wed 18 Mar 18:00, Wed 18 Mar 13:00 and Wed 18 Mar 08:00 and removes 15 other snapshots. The window starts at Tue 17 Mar 18:00.
+`--keep-within 5d` keeps Sun 22 Mar 18:00, Fri 20 Mar 18:00, Fri 20 Mar 09:00, Thu 19 Mar 18:00, Wed 18 Mar 18:00, Wed 18 Mar 13:00 and Wed 18 Mar 08:00 and removes 15 other snapshots. The window starts at Tue 17 Mar 18:00.
 
 ### Keep the newest of every period within a duration
 
@@ -277,6 +282,7 @@ Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keep
 |---|---|---|
 | Sun 22 Mar 18:00 | kept | `daily within 7d` |
 | Fri 20 Mar 18:00 | kept | `daily within 7d` |
+| Fri 20 Mar 09:00 | removed | |
 | Thu 19 Mar 18:00 | kept | `daily within 7d` |
 | Wed 18 Mar 18:00 | kept | `daily within 7d` |
 | Wed 18 Mar 13:00 | removed | |
@@ -297,7 +303,7 @@ Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keep
 | Mon 02 Mar 18:00 | removed | |
 | Mon 02 Mar 09:00 | removed | |
 
-`--keep-within-daily 7d` keeps Sun 22 Mar 18:00, Fri 20 Mar 18:00, Thu 19 Mar 18:00, Wed 18 Mar 18:00 and Mon 16 Mar 18:00 and removes 16 other snapshots. The window starts at Sun 15 Mar 18:00.
+`--keep-within-daily 7d` keeps Sun 22 Mar 18:00, Fri 20 Mar 18:00, Thu 19 Mar 18:00, Wed 18 Mar 18:00 and Mon 16 Mar 18:00 and removes 17 other snapshots. The window starts at Sun 15 Mar 18:00.
 
 ![Timeline of --keep-within-weekly 14d](retention/keep-within-weekly.svg)
 
@@ -305,6 +311,7 @@ Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keep
 |---|---|---|
 | Sun 22 Mar 18:00 | kept | `weekly within 14d` |
 | Fri 20 Mar 18:00 | removed | |
+| Fri 20 Mar 09:00 | removed | |
 | Thu 19 Mar 18:00 | removed | |
 | Wed 18 Mar 18:00 | removed | |
 | Wed 18 Mar 13:00 | removed | |
@@ -325,7 +332,7 @@ Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keep
 | Mon 02 Mar 18:00 | removed | |
 | Mon 02 Mar 09:00 | removed | |
 
-`--keep-within-weekly 14d` keeps Sun 22 Mar 18:00 and Fri 13 Mar 18:00 and removes 19 other snapshots. The window starts at Sun 08 Mar 18:00.
+`--keep-within-weekly 14d` keeps Sun 22 Mar 18:00 and Fri 13 Mar 18:00 and removes 20 other snapshots. The window starts at Sun 08 Mar 18:00.
 
 ![Timeline of --keep-within-monthly 3m](retention/keep-within-monthly.svg)
 
@@ -382,3 +389,198 @@ Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keep
 | Mon 02 Mar 18:00 | removed | |
 
 `--keep-tag release` keeps Fri 06 Mar 18:00 and Tue 03 Mar 18:00 and removes 5 other snapshots.
+
+## Combining rules
+
+A policy of several rules keeps a snapshot when any of its rules keeps it and removes only what none of them keeps. Each rule counts on its own over the whole history: a snapshot two rules keep uses a count of each, and `--json` gives a reason for each. In a timeline of several rules each rule has a lane, and the bottom lane shows what the policy keeps.
+
+![Timeline of --keep-daily 3 --keep-weekly 3](retention/union.svg)
+
+| Snapshot | Result | Reason |
+|---|---|---|
+| Sun 22 Mar 18:00 | kept | `daily snapshot`, `weekly snapshot` |
+| Fri 20 Mar 18:00 | kept | `daily snapshot` |
+| Fri 20 Mar 09:00 | removed | |
+| Thu 19 Mar 18:00 | kept | `daily snapshot` |
+| Wed 18 Mar 18:00 | removed | |
+| Wed 18 Mar 13:00 | removed | |
+| Wed 18 Mar 08:00 | removed | |
+| Mon 16 Mar 18:00 | removed | |
+| Fri 13 Mar 18:00 | kept | `weekly snapshot` |
+| Thu 12 Mar 18:00 | removed | |
+| Thu 12 Mar 09:00 | removed | |
+| Tue 10 Mar 18:00 | removed | |
+| Mon 09 Mar 18:00 | removed | |
+| Sat 07 Mar 18:00 | kept | `weekly snapshot` |
+| Fri 06 Mar 23:00 | removed | |
+| Fri 06 Mar 18:00 | removed | |
+| Fri 06 Mar 12:00 | removed | |
+| Wed 04 Mar 18:00 | removed | |
+| Tue 03 Mar 18:00 | removed | |
+| Tue 03 Mar 09:00 | removed | |
+| Mon 02 Mar 18:00 | removed | |
+| Mon 02 Mar 09:00 | removed | |
+
+`--keep-daily 3 --keep-weekly 3` keeps Sun 22 Mar 18:00, Fri 20 Mar 18:00, Thu 19 Mar 18:00, Fri 13 Mar 18:00 and Sat 07 Mar 18:00 and removes 17 other snapshots. `--keep-daily 3` keeps Sun 22 Mar 18:00, Fri 20 Mar 18:00 and Thu 19 Mar 18:00. `--keep-weekly 3` keeps Sun 22 Mar 18:00, Fri 13 Mar 18:00 and Sat 07 Mar 18:00. Sun 22 Mar 18:00 is kept by both rules and uses a count of each.
+
+### Keep tag with a counted rule
+
+`--keep-tag` adds the snapshots it keeps to what the other rules keep and takes nothing out of their counts. A tagged snapshot that a counted rule reaches still uses a count of it, so a tagged snapshot among the newest leaves `--keep-last` a slot fewer for the others.
+
+![Timeline of --keep-tag release --keep-last 3](retention/keep-tag-and-last.svg)
+
+| Snapshot | Result | Reason |
+|---|---|---|
+| Sun 08 Mar 18:00 | kept | `last snapshot` |
+| Sat 07 Mar 18:00 | kept | `last snapshot` |
+| Fri 06 Mar 18:00 | kept | `has tags [release]`, `last snapshot` |
+| Thu 05 Mar 18:00 | removed | |
+| Wed 04 Mar 18:00 | removed | |
+| Tue 03 Mar 18:00 | kept | `has tags [release]` |
+| Mon 02 Mar 18:00 | removed | |
+
+`--keep-tag release --keep-last 3` keeps Sun 08 Mar 18:00, Sat 07 Mar 18:00, Fri 06 Mar 18:00 and Tue 03 Mar 18:00 and removes 3 other snapshots. Fri 06 Mar 18:00 carries the tag and still uses a slot of `--keep-last 3`.
+
+### A long-horizon recipe
+
+`--keep-daily 7 --keep-weekly 4 --keep-monthly 12 --keep-yearly unlimited` keeps the newest snapshot of each of the 7 most recent days, 4 most recent weeks and 12 most recent months that have one, and of every year. The history reaches back more than a year and a half, with backups that thin out with age: one a month at first, then one a week, then one a day.
+
+![Timeline of --keep-daily 7 --keep-weekly 4 --keep-monthly 12 --keep-yearly unlimited](retention/recipe.svg)
+
+| Snapshot | Result | Reason |
+|---|---|---|
+| Sun 23 Aug 2015 18:00 | kept | `daily snapshot`, `weekly snapshot`, `monthly snapshot`, `yearly snapshot` |
+| Sat 22 Aug 2015 18:00 | kept | `daily snapshot` |
+| Fri 21 Aug 2015 18:00 | kept | `daily snapshot` |
+| Thu 20 Aug 2015 18:00 | kept | `daily snapshot` |
+| Wed 19 Aug 2015 18:00 | kept | `daily snapshot` |
+| Tue 18 Aug 2015 18:00 | kept | `daily snapshot` |
+| Mon 17 Aug 2015 18:00 | kept | `daily snapshot` |
+| Sun 16 Aug 2015 18:00 | kept | `weekly snapshot` |
+| Sat 15 Aug 2015 18:00 | removed | |
+| Fri 14 Aug 2015 18:00 | removed | |
+| Mon 10 Aug 2015 18:00 | removed | |
+| Mon 03 Aug 2015 18:00 | kept | `weekly snapshot` |
+| Mon 27 Jul 2015 18:00 | kept | `weekly snapshot`, `monthly snapshot` |
+| Mon 20 Jul 2015 18:00 | removed | |
+| Mon 13 Jul 2015 18:00 | removed | |
+| Mon 06 Jul 2015 18:00 | removed | |
+| Mon 01 Jun 2015 18:00 | kept | `monthly snapshot` |
+| Mon 04 May 2015 18:00 | kept | `monthly snapshot` |
+| Mon 06 Apr 2015 18:00 | kept | `monthly snapshot` |
+| Mon 02 Mar 2015 18:00 | kept | `monthly snapshot` |
+| Mon 02 Feb 2015 18:00 | kept | `monthly snapshot` |
+| Mon 05 Jan 2015 18:00 | kept | `monthly snapshot` |
+| Mon 01 Dec 2014 18:00 | kept | `monthly snapshot`, `yearly snapshot` |
+| Mon 03 Nov 2014 18:00 | kept | `monthly snapshot` |
+| Mon 06 Oct 2014 18:00 | kept | `monthly snapshot` |
+| Mon 01 Sep 2014 18:00 | kept | `monthly snapshot` |
+| Mon 04 Aug 2014 18:00 | removed | |
+| Mon 07 Jul 2014 18:00 | removed | |
+| Mon 02 Jun 2014 18:00 | removed | |
+| Mon 05 May 2014 18:00 | removed | |
+| Mon 07 Apr 2014 18:00 | removed | |
+| Mon 03 Mar 2014 18:00 | removed | |
+| Mon 03 Feb 2014 18:00 | removed | |
+| Mon 06 Jan 2014 18:00 | kept | `oldest yearly snapshot` |
+
+`--keep-daily 7 --keep-weekly 4 --keep-monthly 12 --keep-yearly unlimited` keeps Sun 23 Aug 2015 18:00, Sat 22 Aug 2015 18:00, Fri 21 Aug 2015 18:00, Thu 20 Aug 2015 18:00, Wed 19 Aug 2015 18:00, Tue 18 Aug 2015 18:00, Mon 17 Aug 2015 18:00, Sun 16 Aug 2015 18:00, Mon 03 Aug 2015 18:00, Mon 27 Jul 2015 18:00, Mon 01 Jun 2015 18:00, Mon 04 May 2015 18:00, Mon 06 Apr 2015 18:00, Mon 02 Mar 2015 18:00, Mon 02 Feb 2015 18:00, Mon 05 Jan 2015 18:00, Mon 01 Dec 2014 18:00, Mon 03 Nov 2014 18:00, Mon 06 Oct 2014 18:00, Mon 01 Sep 2014 18:00 and Mon 06 Jan 2014 18:00 and removes 13 other snapshots.
+
+
+- `--keep-daily 7` keeps Sun 23 Aug 2015 18:00, Sat 22 Aug 2015 18:00, Fri 21 Aug 2015 18:00, Thu 20 Aug 2015 18:00, Wed 19 Aug 2015 18:00, Tue 18 Aug 2015 18:00 and Mon 17 Aug 2015 18:00.
+- `--keep-weekly 4` keeps Sun 23 Aug 2015 18:00, Sun 16 Aug 2015 18:00, Mon 03 Aug 2015 18:00 and Mon 27 Jul 2015 18:00.
+- `--keep-monthly 12` keeps Sun 23 Aug 2015 18:00, Mon 27 Jul 2015 18:00, Mon 01 Jun 2015 18:00, Mon 04 May 2015 18:00, Mon 06 Apr 2015 18:00, Mon 02 Mar 2015 18:00, Mon 02 Feb 2015 18:00, Mon 05 Jan 2015 18:00, Mon 01 Dec 2014 18:00, Mon 03 Nov 2014 18:00, Mon 06 Oct 2014 18:00 and Mon 01 Sep 2014 18:00.
+- `--keep-yearly unlimited` keeps Sun 23 Aug 2015 18:00, Mon 01 Dec 2014 18:00 and Mon 06 Jan 2014 18:00, the last for an `oldest` reason.
+
+## Comparisons
+
+Rules that sound alike can keep different snapshots. Each timeline below runs two policies on the same history, one lane each; the table shows what each keeps.
+
+### Keep daily or keep within daily
+
+`--keep-daily 7` and `--keep-within-daily 7d` both keep one snapshot a day. `--keep-daily 7` counts days that have a snapshot, so it reaches back past days without one until it has found 7; `--keep-within-daily 7d` looks only at the 7 days before the newest snapshot, whatever they hold.
+
+![Timeline of --keep-daily 7 and --keep-within-daily 7d](retention/daily-vs-within-daily.svg)
+
+| Snapshot | `--keep-daily 7` | `--keep-within-daily 7d` |
+|---|---|---|
+| Sun 22 Mar 18:00 | `daily snapshot` | `daily within 7d` |
+| Fri 20 Mar 18:00 | `daily snapshot` | `daily within 7d` |
+| Fri 20 Mar 09:00 | removed | removed |
+| Thu 19 Mar 18:00 | `daily snapshot` | `daily within 7d` |
+| Wed 18 Mar 18:00 | `daily snapshot` | `daily within 7d` |
+| Wed 18 Mar 13:00 | removed | removed |
+| Wed 18 Mar 08:00 | removed | removed |
+| Mon 16 Mar 18:00 | `daily snapshot` | `daily within 7d` |
+| Fri 13 Mar 18:00 | `daily snapshot` | removed |
+| Thu 12 Mar 18:00 | `daily snapshot` | removed |
+| Thu 12 Mar 09:00 | removed | removed |
+| Tue 10 Mar 18:00 | removed | removed |
+| Mon 09 Mar 18:00 | removed | removed |
+| Sat 07 Mar 18:00 | removed | removed |
+| Fri 06 Mar 23:00 | removed | removed |
+| Fri 06 Mar 18:00 | removed | removed |
+| Fri 06 Mar 12:00 | removed | removed |
+| Wed 04 Mar 18:00 | removed | removed |
+| Tue 03 Mar 18:00 | removed | removed |
+| Tue 03 Mar 09:00 | removed | removed |
+| Mon 02 Mar 18:00 | removed | removed |
+| Mon 02 Mar 09:00 | removed | removed |
+
+`--keep-daily 7` keeps 7 snapshots, among them Fri 13 Mar 18:00 and Thu 12 Mar 18:00, which `--keep-within-daily 7d` does not keep. `--keep-within-daily 7d` keeps 5 snapshots. No snapshot falls on Sat 21 Mar, Tue 17 Mar, Sun 15 Mar and Sat 14 Mar: `--keep-daily 7` uses no count for them, while those inside the window of `--keep-within-daily 7d` take up part of it. The window starts at Sun 15 Mar 18:00.
+
+### Keep last or keep within
+
+`--keep-last 7` counts snapshots, `--keep-within 7d` measures time. Where backups are frequent, the last 7 snapshots span less than 7 days; where they are sparse, more.
+
+![Timeline of --keep-last 7 and --keep-within 7d](retention/last-vs-within.svg)
+
+| Snapshot | `--keep-last 7` | `--keep-within 7d` |
+|---|---|---|
+| Sun 22 Mar 18:00 | `last snapshot` | `within 7d` |
+| Fri 20 Mar 18:00 | `last snapshot` | `within 7d` |
+| Fri 20 Mar 09:00 | `last snapshot` | `within 7d` |
+| Thu 19 Mar 18:00 | `last snapshot` | `within 7d` |
+| Wed 18 Mar 18:00 | `last snapshot` | `within 7d` |
+| Wed 18 Mar 13:00 | `last snapshot` | `within 7d` |
+| Wed 18 Mar 08:00 | `last snapshot` | `within 7d` |
+| Mon 16 Mar 18:00 | removed | `within 7d` |
+| Fri 13 Mar 18:00 | removed | removed |
+| Thu 12 Mar 18:00 | removed | removed |
+| Thu 12 Mar 09:00 | removed | removed |
+| Tue 10 Mar 18:00 | removed | removed |
+| Mon 09 Mar 18:00 | removed | removed |
+| Sat 07 Mar 18:00 | removed | removed |
+| Fri 06 Mar 23:00 | removed | removed |
+| Fri 06 Mar 18:00 | removed | removed |
+| Fri 06 Mar 12:00 | removed | removed |
+| Wed 04 Mar 18:00 | removed | removed |
+| Tue 03 Mar 18:00 | removed | removed |
+| Tue 03 Mar 09:00 | removed | removed |
+| Mon 02 Mar 18:00 | removed | removed |
+| Mon 02 Mar 09:00 | removed | removed |
+
+`--keep-last 7` keeps 7 snapshots. `--keep-within 7d` keeps 8 snapshots, among them Mon 16 Mar 18:00, which `--keep-last 7` does not keep. The window starts at Sun 15 Mar 18:00.
+
+### Keep daily or keep hourly
+
+With several backups a day, `--keep-hourly 4` keeps the newest snapshot of each of the 4 most recent hours that have one, which may all fall on the newest day, while `--keep-daily 4` keeps one snapshot from each of 4 days. The history is four days with three backups each.
+
+![Timeline of --keep-daily 4 and --keep-hourly 4](retention/daily-vs-hourly.svg)
+
+| Snapshot | `--keep-daily 4` | `--keep-hourly 4` |
+|---|---|---|
+| Thu 05 Mar 18:00 | `daily snapshot` | `hourly snapshot` |
+| Thu 05 Mar 12:00 | removed | `hourly snapshot` |
+| Thu 05 Mar 08:00 | removed | `hourly snapshot` |
+| Wed 04 Mar 18:00 | `daily snapshot` | `hourly snapshot` |
+| Wed 04 Mar 12:00 | removed | removed |
+| Wed 04 Mar 08:00 | removed | removed |
+| Tue 03 Mar 18:00 | `daily snapshot` | removed |
+| Tue 03 Mar 12:00 | removed | removed |
+| Tue 03 Mar 08:00 | removed | removed |
+| Mon 02 Mar 18:00 | `daily snapshot` | removed |
+| Mon 02 Mar 12:00 | removed | removed |
+| Mon 02 Mar 08:00 | removed | removed |
+
+`--keep-daily 4` keeps 4 snapshots, among them Tue 03 Mar 18:00 and Mon 02 Mar 18:00, which `--keep-hourly 4` does not keep. `--keep-hourly 4` keeps 4 snapshots, among them Thu 05 Mar 12:00 and Thu 05 Mar 08:00, which `--keep-daily 4` does not keep.

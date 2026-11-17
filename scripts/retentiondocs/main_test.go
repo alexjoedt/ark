@@ -9,6 +9,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -91,9 +92,11 @@ func TestEveryKeepFlagIsShown(t *testing.T) {
 		if !strings.Contains(page, "]("+outcomes[s.name].Image+")") {
 			continue
 		}
-		for _, r := range rules(s.policy) {
-			flag, _, _ := strings.Cut(r.flag, " ")
-			shown[flag] = true
+		for _, p := range s.policies() {
+			for _, r := range rules(p) {
+				flag, _, _ := strings.Cut(r.flag, " ")
+				shown[flag] = true
+			}
 		}
 	}
 	flags := forgetKeepFlags(t)
@@ -150,15 +153,15 @@ func TestTimelinesAreWellFormed(t *testing.T) {
 	}
 }
 
-// TestTimelineLanes draws a policy of several rules, which no scenario of
-// the page may show yet, as one lane per rule.
+// TestTimelineLanes draws a policy of four rules, more than any scenario of
+// the page, as one lane per rule.
 func TestTimelineLanes(t *testing.T) {
 	history := running()
 	history[3].tags = []string{"monthly"}
 	s := scenario{name: "lanes", history: history, policy: ark.ForgetPolicy{
 		KeepDaily: 3, KeepWeekly: 2, KeepWithin: ark.Within{Days: 5}, KeepTags: [][]string{{"monthly"}},
 	}}
-	rows, err := forget(context.Background(), s)
+	rows, err := forgetOne(s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +193,7 @@ func TestForgetRefusesASnapshotInTheFuture(t *testing.T) {
 		history: []snap{{at: time.Now().Add(time.Hour)}},
 		policy:  ark.ForgetPolicy{KeepLast: 1},
 	}
-	if _, err := forget(context.Background(), s); !errors.Is(err, ark.ErrInvalidTime) {
+	if _, err := forgetOne(s); !errors.Is(err, ark.ErrInvalidTime) {
 		t.Errorf("a history with a snapshot in the future: %v, want ErrInvalidTime", err)
 	}
 }
@@ -202,7 +205,7 @@ func TestForgetReturnsRowsInTheZoneItCutsIn(t *testing.T) {
 		history: []snap{{at: time.Date(2015, 3, 3, 2, 0, 0, 0, east)}},
 		policy:  ark.ForgetPolicy{KeepDaily: 1},
 	}
-	rows, err := forget(context.Background(), s)
+	rows, err := forgetOne(s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,6 +301,15 @@ func checkXML(t *testing.T, name string, content []byte) {
 	}
 }
 
+// forgetOne runs the one policy of s on its history.
+func forgetOne(s scenario) ([]row, error) {
+	sets, err := forget(context.Background(), s.history, s.policy)
+	if err != nil {
+		return nil, err
+	}
+	return sets[0], nil
+}
+
 func draw(policy ark.ForgetPolicy, rows []row) ([]byte, error) {
 	marks, err := mark(policy, rows)
 	if err != nil {
@@ -309,7 +321,7 @@ func draw(policy ark.ForgetPolicy, rows []row) ([]byte, error) {
 // Each rule of a scenario reports its own gaps and oldest snapshot.
 func TestDescribeKeepsEachRuleApart(t *testing.T) {
 	s := scenario{name: "two", history: running(), policy: ark.ForgetPolicy{KeepDaily: 30, KeepWeekly: 2}}
-	rows, err := forget(context.Background(), s)
+	rows, err := forgetOne(s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,5 +339,30 @@ func TestDescribeKeepsEachRuleApart(t *testing.T) {
 	}
 	if weekly.Oldest != "" || weekly.Gaps != nil {
 		t.Errorf("the weekly rule reports oldest %q and gaps %q, want none", weekly.Oldest, weekly.Gaps)
+	}
+}
+
+// A band too narrow for its snapshots widens at the others' expense, and
+// the bands still fill the axis.
+func TestBandWidthsWidenACrowdedBand(t *testing.T) {
+	w := bandWidths([][]int{{0}, {1, 2, 3, 4, 5, 6}, {}, {7}}, 100)
+	if need := 5*gap + 2*(dot+0.5); w[1] != need {
+		t.Errorf("the crowded band is %v wide, want %v", w[1], need)
+	}
+	if w[0] != w[2] || w[2] != w[3] {
+		t.Errorf("the other bands are %v, want them equal", w)
+	}
+	if sum := w[0] + w[1] + w[2] + w[3]; math.Abs(sum-100) > 1e-9 {
+		t.Errorf("the bands add up to %v, want 100", sum)
+	}
+}
+
+func TestComparisonRefusesAPolicyOfSeveralRules(t *testing.T) {
+	s := scenario{
+		name: "vs", history: running(), policy: ark.ForgetPolicy{KeepDaily: 3, KeepWeekly: 2},
+		versus: &ark.ForgetPolicy{KeepLast: 3},
+	}
+	if _, _, err := generate(context.Background(), []scenario{s}); err == nil {
+		t.Error("a compared policy of two rules was drawn")
 	}
 }

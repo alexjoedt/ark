@@ -262,13 +262,15 @@ const (
 	maxBands = 40
 )
 
-// axis maps times onto x. Bands of one period have equal width; inside a
-// band the snapshots sit at their time, spread apart where they would
-// overlap, and other times fall between their neighbours.
+// axis maps times onto x. Bands of one period have equal width unless one
+// holds more snapshots than fit, which widens it at the others' expense;
+// inside a band the snapshots sit at their time, spread apart where they
+// would overlap, and other times fall between their neighbours.
 type axis struct {
 	unit    period
 	bands   []time.Time // the start of every band and the end of the last
-	x0, bw  float64
+	bx      []float64   // the x of every entry of bands
+	x0      float64
 	snapX   []float64 // per row
 	anchors []anchor
 }
@@ -306,31 +308,83 @@ func newAxis(rows []row, unit period, x0, x1 float64) *axis {
 		a.bands = append(a.bands, t)
 	}
 	a.bands = append(a.bands, unit.next(a.bands[len(a.bands)-1]))
-	a.bw = (x1 - x0) / float64(len(a.bands)-1)
+	in := make([][]int, len(a.bands)-1) // row indexes per band, oldest first
+	for r, row := range slices.Backward(rows) {
+		i, _ := slices.BinarySearchFunc(a.bands, row.at, func(b, t time.Time) int {
+			return cmp.Or(b.Compare(t), -1) // the band that starts at t holds t
+		})
+		in[i-1] = append(in[i-1], r)
+	}
+	a.bx = []float64{x0}
+	for _, w := range bandWidths(in, x1-x0) {
+		a.bx = append(a.bx, a.bx[len(a.bx)-1]+w)
+	}
 	a.snapX = make([]float64, len(rows))
 	for i := range len(a.bands) - 1 {
 		lo, hi := a.bands[i], a.bands[i+1]
-		bx := x0 + float64(i)*a.bw
+		bx, bw := a.bx[i], a.bx[i+1]-a.bx[i]
 		a.anchors = append(a.anchors, anchor{lo, bx})
-		var in []int // row indexes, oldest first
-		for r, row := range slices.Backward(rows) {
-			if !row.at.Before(lo) && row.at.Before(hi) {
-				in = append(in, r)
-			}
+		xs := make([]float64, len(in[i]))
+		for j, r := range in[i] {
+			xs[j] = bx + bw*float64(rows[r].at.Sub(lo))/float64(hi.Sub(lo))
 		}
-		xs := make([]float64, len(in))
-		for j, r := range in {
-			xs[j] = bx + a.bw*float64(rows[r].at.Sub(lo))/float64(hi.Sub(lo))
-		}
-		pad := min(dot+0.5, a.bw/4)
-		spread(xs, bx+pad, bx+a.bw-pad)
-		for j, r := range in {
+		pad := min(dot+0.5, bw/4)
+		spread(xs, bx+pad, bx+bw-pad)
+		for j, r := range in[i] {
 			a.snapX[r] = xs[j]
 			a.anchors = append(a.anchors, anchor{rows[r].at, xs[j]})
 		}
 	}
 	a.anchors = append(a.anchors, anchor{a.bands[len(a.bands)-1], x1})
 	return a
+}
+
+// bandWidths shares total among bands of the given snapshots: equally, but
+// a band too narrow for its snapshots gets the width they need and the
+// others share the rest. When nothing fits the bands stay equal.
+func bandWidths(in [][]int, total float64) []float64 {
+	need := make([]float64, len(in))
+	for i, rs := range in {
+		if len(rs) > 0 {
+			need[i] = float64(len(rs)-1)*gap + 2*(dot+0.5)
+		}
+	}
+	wide := make([]bool, len(in))
+	for {
+		rest, n := total, 0
+		for i := range in {
+			if wide[i] {
+				rest -= need[i]
+			} else {
+				n++
+			}
+		}
+		if n == 0 {
+			break
+		}
+		u, grew := rest/float64(n), false
+		for i := range in {
+			if !wide[i] && need[i] > u {
+				wide[i], grew = true, true
+			}
+		}
+		if grew {
+			continue
+		}
+		w := make([]float64, len(in))
+		for i := range in {
+			w[i] = u
+			if wide[i] {
+				w[i] = need[i]
+			}
+		}
+		return w
+	}
+	w := make([]float64, len(in))
+	for i := range w {
+		w[i] = total / float64(len(in))
+	}
+	return w
 }
 
 // spread moves xs, ascending, apart to gap inside [lo, hi], or spaces them
@@ -452,15 +506,15 @@ func (s *svg) bandLabels(a *axis, y float64) float64 {
 			widest = max(widest, textWidth(l))
 		}
 	}
-	step := max(1, int(math.Ceil((widest+4)/a.bw)))
-	coarseEnd, prev := math.Inf(-1), ""
+	labelEnd, coarseEnd, prev := math.Inf(-1), math.Inf(-1), ""
 	for i, t := range a.bands[:n] {
-		bx := a.x0 + float64(i)*a.bw
+		bx := a.bx[i]
 		ls, coarse := a.unit.labels(t)
-		if i%step == 0 {
+		if cx := (bx + a.bx[i+1]) / 2; cx-widest/2 >= labelEnd {
 			for j, l := range ls {
-				s.text(bx+a.bw/2, y+13*float64(j+1), l, "muted", "middle")
+				s.text(cx, y+13*float64(j+1), l, "muted", "middle")
 			}
+			labelEnd = cx + widest/2 + 4
 		}
 		if coarse != "" && coarse != prev && bx >= coarseEnd {
 			s.text(bx+2, y+13*float64(lines+1), coarse, "", "start")
@@ -567,7 +621,7 @@ func timeline(marks []ruleMark, rows []row) ([]byte, error) {
 	if len(marks) == 1 {
 		height = timelineAxis(&body, marks[0], rows)
 	} else {
-		height = timelineLanes(&body, marks, rows)
+		height = timelineLanes(&body, marks, rows, true)
 	}
 	kept := 0
 	for _, r := range rows {
@@ -579,6 +633,28 @@ func timeline(marks []ruleMark, rows []row) ([]byte, error) {
 	for i, m := range marks {
 		flags[i] = m.flag
 	}
+	title := fmt.Sprintf("%s keeps %d of %d snapshots", strings.Join(flags, " "), kept, len(rows))
+	return frame(title, &body, height), nil
+}
+
+// comparison draws one lane per policy, each of the one rule in marks, and
+// no lane of what they keep together: each keeps alone.
+func comparison(marks []ruleMark, rows []row) ([]byte, error) {
+	if len(marks) < 2 {
+		return nil, errors.New("a comparison needs two policies")
+	}
+	var body svg
+	height := timelineLanes(&body, marks, rows, false)
+	parts := make([]string, len(marks))
+	for i, m := range marks {
+		parts[i] = fmt.Sprintf("%s keeps %d", m.flag, len(m.keeps))
+	}
+	title := fmt.Sprintf("%s of %d snapshots", strings.Join(parts, ", "), len(rows))
+	return frame(title, &body, height), nil
+}
+
+// frame wraps body in the image's svg element, title, style and background.
+func frame(title string, body *svg, height float64) []byte {
 	var out strings.Builder
 	fmt.Fprintf(
 		&out,
@@ -588,13 +664,7 @@ func timeline(marks []ruleMark, rows []row) ([]byte, error) {
 		num(width),
 		num(height),
 	)
-	fmt.Fprintf(
-		&out,
-		"<title>%s keeps %d of %d snapshots</title>\n",
-		html.EscapeString(strings.Join(flags, " ")),
-		kept,
-		len(rows),
-	)
+	fmt.Fprintf(&out, "<title>%s</title>\n", html.EscapeString(title))
 	out.WriteString(style)
 	fmt.Fprintf(
 		&out,
@@ -604,7 +674,7 @@ func timeline(marks []ruleMark, rows []row) ([]byte, error) {
 	)
 	out.WriteString(body.b.String())
 	out.WriteString("</svg>\n")
-	return []byte(out.String()), nil
+	return []byte(out.String())
 }
 
 // timelineAxis draws one rule on a time axis and returns the height.
@@ -636,7 +706,7 @@ func timelineAxis(s *svg, m ruleMark, rows []row) float64 {
 		}
 	}
 	for i := range len(a.bands) - 1 {
-		s.rect(x0+float64(i)*a.bw, bandTop, a.bw, bandBot-bandTop, []string{"band", "band2"}[i%2])
+		s.rect(a.bx[i], bandTop, a.bx[i+1]-a.bx[i], bandBot-bandTop, []string{"band", "band2"}[i%2])
 	}
 	if m.cut {
 		s.hatchPeriods(a, m, bandTop, bandBot-bandTop)
@@ -663,9 +733,9 @@ func timelineAxis(s *svg, m ruleMark, rows []row) float64 {
 	return s.legend(legendFor([]ruleMark{m}), x0, y+18) + 6
 }
 
-// timelineLanes draws a lane of snapshots, one lane per rule and a lane of
-// what the policy keeps, and returns the height.
-func timelineLanes(s *svg, marks []ruleMark, rows []row) float64 {
+// timelineLanes draws a lane of snapshots, one lane per rule and, with
+// union, a lane of what the policy keeps, and returns the height.
+func timelineLanes(s *svg, marks []ruleMark, rows []row, union bool) float64 {
 	const labelW, x1 = 160.0, width - 12
 	const laneH, laneGap = 28.0, 6.0
 	a := newAxis(rows, bandUnit(rows, nil), labelW, x1)
@@ -686,7 +756,9 @@ func timelineLanes(s *svg, marks []ruleMark, rows []row) float64 {
 			lane{label: []string{flag, value}, h: max(laneH, 12+rowStep*float64(n)), mark: m, rowOf: rowOf},
 		)
 	}
-	lanes = append(lanes, lane{label: []string{"kept"}, h: laneH})
+	if union {
+		lanes = append(lanes, lane{label: []string{"kept"}, h: laneH})
+	}
 	y := 14.0
 	for i := range lanes {
 		lanes[i].top = y
@@ -705,7 +777,7 @@ func timelineLanes(s *svg, marks []ruleMark, rows []row) float64 {
 		}
 	}
 	for i := 1; i < len(a.bands)-1; i++ {
-		x := labelW + float64(i)*a.bw
+		x := a.bx[i]
 		s.addf(`<line x1="%s" y1="%s" x2="%s" y2="%s" class="sep"/>`, num(x), num(lanes[0].top), num(x), num(bottom))
 	}
 	for _, l := range lanes {
@@ -740,7 +812,13 @@ func timelineLanes(s *svg, marks []ruleMark, rows []row) float64 {
 		}
 	}
 	y = s.bandLabels(a, bottom)
-	return s.legend(legendFor(marks), 12, y+18) + 6
+	items := legendFor(marks)
+	if !union {
+		// Without the lane of what the policy keeps, no snapshot is drawn
+		// as removed.
+		items = slices.DeleteFunc(items, func(it legendItem) bool { return it.symbol == "removed" })
+	}
+	return s.legend(items, 12, y+18) + 6
 }
 
 // style holds the colours of the docs theme, docs/.vitepress/theme/vault.css,

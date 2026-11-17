@@ -39,6 +39,27 @@ func scenarios() []scenario {
 			policy: ark.ForgetPolicy{KeepWithinYearly: ark.Within{Years: 3}},
 		},
 		{name: "keep-tag", history: tagged(), policy: ark.ForgetPolicy{KeepTags: [][]string{{"release"}}}},
+		{name: "union", history: running(), policy: ark.ForgetPolicy{KeepDaily: 3, KeepWeekly: 3}},
+		{
+			name: "recipe", history: thinning(),
+			policy: ark.ForgetPolicy{KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12, KeepYearly: ark.Unlimited},
+		},
+		{
+			name: "keep-tag-and-last", history: tagged(),
+			policy: ark.ForgetPolicy{KeepLast: 3, KeepTags: [][]string{{"release"}}},
+		},
+		{
+			name: "daily-vs-within-daily", history: running(), policy: ark.ForgetPolicy{KeepDaily: 7},
+			versus: &ark.ForgetPolicy{KeepWithinDaily: ark.Within{Days: 7}},
+		},
+		{
+			name: "last-vs-within", history: running(), policy: ark.ForgetPolicy{KeepLast: 7},
+			versus: &ark.ForgetPolicy{KeepWithin: ark.Within{Days: 7}},
+		},
+		{
+			name: "daily-vs-hourly", history: busy(), policy: ark.ForgetPolicy{KeepDaily: 4},
+			versus: &ark.ForgetPolicy{KeepHourly: 4},
+		},
 	}
 }
 
@@ -65,6 +86,7 @@ func running() []snap {
 		at("2015-03-18 13:00"),
 		at("2015-03-18 18:00"),
 		at("2015-03-19 18:00"),
+		at("2015-03-20 09:00"),
 		at("2015-03-20 18:00"),
 		at("2015-03-22 18:00"),
 	}
@@ -122,6 +144,39 @@ func years() []snap {
 		at("2015-02-02 18:00"),
 		at("2015-03-02 18:00"),
 	}
+}
+
+// busy is four days from Monday 2 March 2015 with three backups each.
+func busy() []snap {
+	var h []snap
+	for d := range 4 {
+		for _, hour := range []int{8, 12, 18} {
+			h = append(h, snap{at: time.Date(2015, 3, 2+d, hour, 0, 0, 0, time.UTC)})
+		}
+	}
+	return h
+}
+
+// thinning is a history of 20 months whose backups thin out with age, as
+// they do under a long-horizon policy: one on the first Monday of every
+// month from January 2014 to June 2015, one every Monday from 6 July to
+// 10 August 2015 and one a day from 14 to 23 August 2015.
+func thinning() []snap {
+	var h []snap
+	for m := range 18 {
+		d := time.Date(2014, time.January+time.Month(m), 1, 18, 0, 0, 0, time.UTC)
+		for d.Weekday() != time.Monday {
+			d = d.AddDate(0, 0, 1)
+		}
+		h = append(h, snap{at: d})
+	}
+	for d := time.Date(2015, 7, 6, 18, 0, 0, 0, time.UTC); d.Day() != 17; d = d.AddDate(0, 0, 7) {
+		h = append(h, snap{at: d})
+	}
+	for d := range 10 {
+		h = append(h, snap{at: time.Date(2015, 8, 14+d, 18, 0, 0, 0, time.UTC)})
+	}
+	return h
 }
 
 // tagged is a week of daily backups, two of them tagged release.
