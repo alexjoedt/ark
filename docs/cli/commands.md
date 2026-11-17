@@ -64,6 +64,7 @@ Backs up the directory at `<path>` as one snapshot.
 | `--host NAME` | the host, default the machine's hostname |
 | `--label KEY=VALUE` | record a label, repeatable, the value may hold commas |
 | `--parent ID` | an explicit parent snapshot |
+| `--time TIME` | the time of the snapshot instead of now, as `"2006-01-02 15:04:05"` in local time |
 | `--exclude PATTERN`, `-e` | leave out paths matching PATTERN, repeatable |
 | `--exclude-file FILE` | read exclude patterns from FILE, repeatable |
 | `--exclude-cloud-files` | leave out files that exist only in the cloud |
@@ -71,6 +72,11 @@ Backs up the directory at `<path>` as one snapshot.
 A backup is one series per source type, source and host; its parent is the newest snapshot of that
 series unless `--parent` names one. `ark snapshots`, `ark find` and `ark forget` filter on labels,
 and all given labels must match. See [Series](../SERIES.md) and [Labels](../LABELS.md).
+
+`--time` dates a backup of data as it was at an earlier time: `ark snapshots` shows that time and
+`ark forget` counts the snapshot in its hour, day, week, month and year. The parent is still the
+newest snapshot of the series by time, so a backup may be dated before its parent. A time in the
+future is refused, exit 2.
 
 ### Excludes
 
@@ -287,9 +293,9 @@ Docker volumes live under `ark docker`. The daemon comes from `--docker-host ADD
 | `ark docker backup [options] <volume>` | stop the containers using the volume, back it up, restart them |
 | `ark docker restore [options] <id> [volume]` | restore into `volume`, default the snapshot's source name; creates it if missing, replaces its contents if present |
 
-`docker backup` takes `--tag`, `--comment`, `--label`, `--host` and `--parent` like `ark backup`, plus
-`--no-stop` (leave the containers running) and `--stop-timeout DURATION` (graceful stop, default
-30s). `docker restore` takes `--path`, `--dry-run` (show the affected containers and whether data is
+`docker backup` takes `--tag`, `--comment`, `--label`, `--host`, `--parent` and `--time` like
+`ark backup`, plus `--no-stop` (leave the containers running) and `--stop-timeout DURATION`
+(graceful stop, default 30s). `docker restore` takes `--path`, `--dry-run` (show the affected containers and whether data is
 replaced), `--yes`, `--no-stop` and `--stop-timeout`, and refuses snapshots whose source type is not
 `docker-volume`.
 

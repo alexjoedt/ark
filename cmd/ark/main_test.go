@@ -1266,3 +1266,47 @@ func TestInitRefusesNonEmptyDir(t *testing.T) {
 		t.Fatalf("init into a missing dir: exit %d", code)
 	}
 }
+
+// --time dates the snapshot in local time. ark snapshots shows that time,
+// and the next backup still takes the newest snapshot by time as its parent.
+func TestBackupTime(t *testing.T) {
+	repo := initRepo(t)
+	t.Setenv("ARK_REPOSITORY", "")
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	type snapshot struct {
+		ID        string    `json:"id"`
+		ParentID  string    `json:"parent_id"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+	backup := func(args ...string) snapshot {
+		t.Helper()
+		code, out := runCapture(t, append([]string{"--json", "-r", repo, "backup"}, args...)...)
+		var s snapshot
+		if err := json.Unmarshal([]byte(out), &s); code != 0 || err != nil {
+			t.Fatalf("backup %v: exit %d, %v: %s", args, code, err, out)
+		}
+		return s
+	}
+
+	first := backup(src)
+	dated := backup("--time", "2015-06-01 12:30:15", src)
+	if want := time.Date(2015, 6, 1, 12, 30, 15, 0, time.Local); !dated.CreatedAt.Equal(want) {
+		t.Errorf("--time stored %s, want %s", dated.CreatedAt, want)
+	}
+	if next := backup(src); next.ParentID != first.ID {
+		t.Errorf("parent after a dated backup = %q, want the newest by time %q", next.ParentID, first.ID)
+	}
+
+	for _, bad := range []string{"", "yesterday", "2015-06-01T12:30:15Z", "2999-01-01 00:00:00"} {
+		if code, out := runCapture(t, "--json", "-r", repo, "backup", "--time", bad, src); code != 2 {
+			t.Errorf("--time %q: exit %d, want 2: %s", bad, code, out)
+		}
+	}
+	code, out := runCapture(t, "-r", repo, "snapshots")
+	if code != 0 || strings.Count(out, "2015-06-01 12:30:15") != 1 || strings.Count(out, "\n") != 4 {
+		t.Errorf("snapshots: exit %d, want a header and three rows, one at 2015-06-01 12:30:15: %s", code, out)
+	}
+}

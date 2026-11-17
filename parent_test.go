@@ -3,12 +3,14 @@ package ark_test
 import (
 	"cmp"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arklocal"
@@ -211,5 +213,60 @@ func TestBackendHoldsNoLatestNamespace(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, gone)); !os.IsNotExist(err) {
 			t.Errorf("stat %s/: %v, want not exist", gone, err)
 		}
+	}
+}
+
+// WithTime dates the snapshot and nothing else: the parent of the next
+// backup stays the newest snapshot of the series by time, not the one
+// written last.
+func TestBackupWithTimeSetsCreatedAt(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+	src := stubSource{name: "app", content: "one"}
+
+	newest, err := repo.Backup(ctx, src)
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	at := time.Date(2015, 6, 1, 12, 30, 15, 0, time.FixedZone("east", 2*60*60))
+	dated, err := repo.Backup(ctx, src, ark.WithTime(at))
+	if err != nil {
+		t.Fatalf("Backup WithTime: %v", err)
+	}
+	if !dated.CreatedAt.Equal(at) || dated.CreatedAt.Location() != time.UTC {
+		t.Errorf("CreatedAt = %s, want %s in UTC", dated.CreatedAt, at.UTC())
+	}
+	if dated.ParentID != newest.ID {
+		t.Errorf("a backup dated before its parent has parent %q, want %q", dated.ParentID, newest.ID)
+	}
+	stored, err := repo.Snapshot(ctx, dated.ID)
+	if err != nil || !stored.CreatedAt.Equal(at) {
+		t.Errorf("stored CreatedAt = %v, %v, want %s", stored, err, at.UTC())
+	}
+
+	next, err := repo.Backup(ctx, src)
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	if next.ParentID != newest.ID {
+		t.Errorf("parent = %q, want the newest by time %q, not the one written last", next.ParentID, newest.ID)
+	}
+}
+
+func TestBackupRefusesAZeroOrFutureTime(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+
+	for name, at := range map[string]time.Time{"zero": {}, "future": time.Now().Add(time.Hour)} {
+		if err := ark.ValidateBackupOptions(ark.WithTime(at)); !errors.Is(err, ark.ErrInvalidTime) {
+			t.Errorf("%s time: ValidateBackupOptions = %v, want ErrInvalidTime", name, err)
+		}
+		_, err := repo.Backup(ctx, stubSource{name: "app", content: "one"}, ark.WithTime(at))
+		if !errors.Is(err, ark.ErrInvalidTime) {
+			t.Errorf("%s time: Backup = %v, want ErrInvalidTime", name, err)
+		}
+	}
+	if snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{}); err != nil || len(snaps) != 0 {
+		t.Errorf("a refused backup left %d snapshots, %v", len(snaps), err)
 	}
 }

@@ -209,6 +209,7 @@ func dockerBackupCommand() *cli.Command {
 		Flags: append([]cli.Flag{
 			hostFlag(),
 			&cli.StringFlag{Name: "parent", Usage: "explicit parent snapshot `ID`"},
+			timeFlag(),
 			&cli.StringSliceFlag{Name: "tag", Aliases: []string{"t"}, Usage: "add a `TAG`, repeatable"},
 			&cli.StringFlag{Name: "comment", Aliases: []string{"c"}, Usage: "free `TEXT` stored with the snapshot"},
 			labelFlag("record the label `KEY=VALUE`, repeatable, the value may hold commas"),
@@ -219,6 +220,10 @@ func dockerBackupCommand() *cli.Command {
 			}
 			volume := cmd.Args().First()
 			labels, err := labelValue(cmd, false)
+			if err != nil {
+				return err
+			}
+			at, err := timeOption(cmd)
 			if err != nil {
 				return err
 			}
@@ -236,13 +241,13 @@ func dockerBackupCommand() *cli.Command {
 			}
 			p := printer(cmd)
 			pr := startProgress(p, "backup volume "+volume)
-			snap, err := e.BackupVolume(ctx, volume,
+			snap, err := e.BackupVolume(ctx, volume, append(at,
 				ark.WithTags(cmd.StringSlice("tag")...),
 				ark.WithComment(cmd.String("comment")),
 				ark.WithHost(host),
 				ark.WithParent(cmd.String("parent")),
 				ark.WithLabels(labels),
-			)
+			)...)
 			if err != nil {
 				pr.Fail()
 				return fmt.Errorf("docker backup %s: %w", volume, err)

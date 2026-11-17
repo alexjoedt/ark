@@ -230,6 +230,9 @@ func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOptio
 	// Nobody would see the totals, so the second walk is not paid for.
 	o.scan = o.scan && (o.progress != nil || r.progress != nil)
 	o.progress = r.observer(OperationBackup, o.progress)
+	if err := o.checkTime(); err != nil {
+		return nil, err
+	}
 	meta := src.Meta()
 	if err := checkBackupLabels(meta.Labels, o.labels); err != nil {
 		return nil, err

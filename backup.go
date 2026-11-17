@@ -35,12 +35,15 @@ func (r *Repository) runBackup(
 			"parent", parentID, "error", err)
 	}
 
-	now := time.Now().UTC()
+	createdAt := time.Now()
+	if opts.timeSet {
+		createdAt = opts.time
+	}
 	m := &manifest{
 		Version:    manifestVersion3,
 		ID:         newSnapshotID(),
 		ParentID:   parentID,
-		CreatedAt:  now,
+		CreatedAt:  createdAt.UTC(),
 		SourceName: meta.Name,
 		SourceType: meta.Type,
 		Labels:     mergeLabels(meta.Labels, opts.labels),

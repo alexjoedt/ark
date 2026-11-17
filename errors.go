@@ -24,6 +24,10 @@ var (
 	// key the source sets as well.
 	ErrInvalidLabel = errors.New("ark: invalid label")
 
+	// ErrInvalidTime is returned by Backup and ValidateBackupOptions for a
+	// WithTime that is the zero time or lies in the future.
+	ErrInvalidTime = errors.New("ark: invalid snapshot time")
+
 	// ErrIncompatibleSourceType is returned when restoring a snapshot into a
 	// Sink type that is incompatible with the snapshot's SourceType.
 	ErrIncompatibleSourceType = errors.New("ark: incompatible source type")
