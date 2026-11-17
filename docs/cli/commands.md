@@ -199,16 +199,15 @@ was taken with. `--json` adds the labels.
 `ark forget [options] [<id>...]`
 
 Removes snapshots, either the named ids or those a policy does not keep. The policy applies per
-series among the snapshots the filters match. Chunks stay in the repository until a prune. This
-section is the flag reference; [Retention policies](../retention.md) explains with timelines what
-each rule keeps and how they combine.
+series among the snapshots the filters match. Chunks stay in the repository until a prune. See
+[Retention policies](../retention.md) for what each rule keeps, with timelines.
 
 | Flag | Meaning |
 |---|---|
 | `--keep-last N` | keep the N newest; `unlimited` keeps all |
-| `--keep-hourly N`, `--keep-daily N`, `--keep-weekly N`, `--keep-monthly N`, `--keep-yearly N` | keep the newest snapshot of each of the N most recent hours, days, weeks, months, years that have a snapshot; a period without one uses no count; `unlimited` keeps the newest of every one |
+| `--keep-hourly N`, `--keep-daily N`, `--keep-weekly N`, `--keep-monthly N`, `--keep-yearly N` | keep the newest snapshot of each of the N most recent hours, days, weeks, months, years that have a snapshot, and the series' oldest snapshot while count is left; a period without a snapshot uses no count; `unlimited` keeps the newest of every one |
 | `--keep-within DURATION` | keep everything younger than DURATION, counted in years, months, days and hours, e.g. `30d`, `72h`, `1y6m` |
-| `--keep-within-hourly DURATION`, `--keep-within-daily DURATION`, `--keep-within-weekly DURATION`, `--keep-within-monthly DURATION`, `--keep-within-yearly DURATION` | keep the newest of every hour, day, week, month, year younger than DURATION |
+| `--keep-within-hourly DURATION`, `--keep-within-daily DURATION`, `--keep-within-weekly DURATION`, `--keep-within-monthly DURATION`, `--keep-within-yearly DURATION` | keep the newest snapshot of every hour, day, week, month, year younger than DURATION that has a snapshot, and the series' oldest snapshot if it lies inside |
 | `--keep-tag TAG[,TAG...]` | keep every snapshot that carries all tags of the list, `''` for the untagged ones; repeatable, a match of any list keeps |
 | `--all` | remove every matching snapshot; a policy that keeps nothing is refused without it |
 | `--source`, `--type`, `--tag`, `--host`, `--label` | filters, as for `ark snapshots` |
@@ -294,13 +293,20 @@ duration only the hours do not.
 
 ### Upgrading from older builds
 
-Builds before the current `--keep-within` read Go durations, where `m` was a minute. A policy
-written for them has to be rewritten, and not every old value fails: `1m` to `11m` are still read,
-without an error, and now keep months of snapshots instead of minutes. Check every `--keep-within`
-in a script and every `keep-within` in a profile after the upgrade.
+Each of these changed after v0.3.0. Builds up to v0.3.0:
 
-Builds before the current period rules counted the periods in UTC, so the first run after an
-upgrade can keep another snapshot of a period than the last one did: run it once with `--dry-run`.
+- Read `--keep-within` as a Go duration, where `m` was a minute. A policy written for them has to be
+  rewritten, and not every old value fails: `1m` to `11m` are still read, without an error, and now
+  keep months of snapshots instead of minutes. Check every `--keep-within` in a script and every
+  `keep-within` in a profile after the upgrade.
+- Counted the hours, days, weeks, months and years of the period rules in UTC, not in the local
+  time zone. Setting `TZ=UTC` counts them the old way again.
+- Kept only the newest snapshot of each period. A period rule with count left now also keeps the
+  oldest snapshot of the series, with the reason `oldest daily snapshot`, so a short series keeps
+  one more snapshot per rule than before.
+
+The first `ark forget` after an upgrade can keep other snapshots than the last one did: run it once
+with `--dry-run`.
 
 ## prune
 
