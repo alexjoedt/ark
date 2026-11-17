@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	_ "time/tzdata" // the child resolves TZ on a machine without a zone database too
@@ -32,16 +33,24 @@ func TestForgetCutsPeriodsInTheZoneOfTZ(t *testing.T) {
 			t.Fatalf("TZ=%s forget: %v: %s%s", tz, err, out, &stderr)
 		}
 		var res struct {
-			Keep   []struct{ ID string } `json:"keep"`
-			Remove []struct{ ID string } `json:"remove"`
+			Keep   []struct{ Reasons []string } `json:"keep"`
+			Remove []struct{ ID string }        `json:"remove"`
 		}
 		if err := json.Unmarshal(out, &res); err != nil || len(res.Keep)+len(res.Remove) != 2 {
 			t.Fatalf("TZ=%s forget: not two snapshots: %v: %q", tz, err, out)
 		}
-		return len(res.Keep)
+		// the older snapshot is kept either way, as the newest of its day
+		// or as the oldest of the series: the reason tells them apart
+		days := 0
+		for _, k := range res.Keep {
+			if slices.Contains(k.Reasons, "daily snapshot") {
+				days++
+			}
+		}
+		return days
 	}
 	if berlin, utc := kept("Europe/Berlin"), kept("UTC"); berlin != 2 || utc != 1 {
-		t.Errorf("--keep-daily 2 keeps %d under TZ=Europe/Berlin and %d under TZ=UTC, want 2 and 1", berlin, utc)
+		t.Errorf("--keep-daily 2 sees %d days under TZ=Europe/Berlin and %d under TZ=UTC, want 2 and 1", berlin, utc)
 	}
 }
 
@@ -76,12 +85,13 @@ func importEmptySnapshot(t *testing.T, repo, createdAt string) {
 	}
 }
 
-// A count of unlimited keeps the newest snapshot of every period, from a
-// flag and from a profile; a negative count is a usage error naming the word.
+// A count of unlimited keeps the newest snapshot of every period and the
+// oldest of the series, from a flag and from a profile; a negative count is a usage error naming the word.
 func TestForgetTakesUnlimitedCounts(t *testing.T) {
 	repo := initRepo(t)
 	for _, at := range []string{
-		"2023-03-01T12:00:00Z", "2023-06-01T12:00:00Z", "2024-06-01T12:00:00Z", "2025-06-01T12:00:00Z",
+		"2023-03-01T12:00:00Z", "2023-06-01T12:00:00Z", "2024-03-01T12:00:00Z", "2024-06-01T12:00:00Z",
+		"2025-06-01T12:00:00Z",
 	} {
 		importEmptySnapshot(t, repo, at)
 	}
@@ -102,8 +112,9 @@ func TestForgetTakesUnlimitedCounts(t *testing.T) {
 		if err := json.Unmarshal([]byte(out), &res); code != 0 || err != nil {
 			t.Fatalf("%v: exit %d, %v: %s", args, code, err, out)
 		}
-		if len(res.Keep) != 3 || len(res.Remove) != 1 || !strings.HasPrefix(res.Remove[0].CreatedAt, "2023-03-01") {
-			t.Errorf("%v keeps %v and removes %v, want all but the older snapshot of 2023", args, res.Keep, res.Remove)
+		// the newest of every year and the oldest of the series stay
+		if len(res.Keep) != 4 || len(res.Remove) != 1 || !strings.HasPrefix(res.Remove[0].CreatedAt, "2024-03-01") {
+			t.Errorf("%v keeps %v and removes %v, want all but the older snapshot of 2024", args, res.Keep, res.Remove)
 		}
 	}
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -158,6 +159,87 @@ func TestForgetReasonsNameEveryRule(t *testing.T) {
 				t.Errorf("%d reasons for %d kept snapshots", len(res.KeepReasons), len(res.Keep))
 			}
 		})
+	}
+}
+
+// TestForgetKeepsTheOldestWhileARuleHasCountLeft pins restic's keep-oldest
+// rule on a series shorter than its policy, three snapshots over two days:
+//
+//	0  2026-01-03 10:00  Saturday
+//	1  2026-01-02 12:00
+//	2  2026-01-02 08:00  the oldest, in the day, week, month and year of s1
+//
+// A counted period rule that reaches the oldest snapshot with count left
+// keeps it for the reason "oldest ...", although its period is taken.
+func TestForgetKeepsTheOldestWhileARuleHasCountLeft(t *testing.T) {
+	series := func(source string) []*Snapshot {
+		return []*Snapshot{
+			{ID: source + "0", SourceName: source, CreatedAt: time.Date(2026, 1, 3, 10, 0, 0, 0, time.UTC)},
+			{ID: source + "1", SourceName: source, CreatedAt: time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)},
+			{ID: source + "2", SourceName: source, CreatedAt: time.Date(2026, 1, 2, 8, 0, 0, 0, time.UTC)},
+		}
+	}
+	tests := []struct {
+		name   string
+		policy ForgetPolicy
+		want   map[string][]string
+	}{
+		{"count left", ForgetPolicy{KeepDaily: 7}, map[string][]string{
+			"s0": {"daily snapshot"}, "s1": {"daily snapshot"}, "s2": {"oldest daily snapshot"},
+		}},
+		{"the last count", ForgetPolicy{KeepDaily: 3}, map[string][]string{
+			"s0": {"daily snapshot"}, "s1": {"daily snapshot"}, "s2": {"oldest daily snapshot"},
+		}},
+		{"count used up", ForgetPolicy{KeepDaily: 2}, map[string][]string{
+			"s0": {"daily snapshot"}, "s1": {"daily snapshot"},
+		}},
+		{"unlimited", ForgetPolicy{KeepDaily: Unlimited}, map[string][]string{
+			"s0": {"daily snapshot"}, "s1": {"daily snapshot"}, "s2": {"oldest daily snapshot"},
+		}},
+		{"with another rule", ForgetPolicy{KeepLast: 1, KeepDaily: 5}, map[string][]string{
+			"s0": {"last snapshot", "daily snapshot"}, "s1": {"daily snapshot"}, "s2": {"oldest daily snapshot"},
+		}},
+		{
+			"every rule for itself",
+			ForgetPolicy{KeepWeekly: 2, KeepMonthly: 1, KeepYearly: Unlimited},
+			map[string][]string{
+				"s0": {"weekly snapshot", "monthly snapshot", "yearly snapshot"},
+				"s2": {"oldest weekly snapshot", "oldest yearly snapshot"},
+			},
+		},
+		{"an oldest that starts a period", ForgetPolicy{KeepHourly: 7}, map[string][]string{
+			"s0": {"hourly snapshot"}, "s1": {"hourly snapshot"}, "s2": {"hourly snapshot"},
+		}},
+		{"KeepLast has no oldest", ForgetPolicy{KeepLast: 7}, map[string][]string{
+			"s0": {"last snapshot"}, "s1": {"last snapshot"}, "s2": {"last snapshot"},
+		}},
+		{"KeepWithin has no oldest", ForgetPolicy{KeepWithin: time.Hour}, map[string][]string{
+			"s0": {"within 1h"},
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res := applyForgetPolicy(series("s"), tc.policy, time.UTC)
+			if !maps.EqualFunc(res.KeepReasons, tc.want, slices.Equal) {
+				t.Errorf("reasons %v, want %v", res.KeepReasons, tc.want)
+			}
+			if got := ids(res.Keep); !slices.Equal(got, slices.Sorted(maps.Keys(tc.want))) {
+				t.Errorf("keeps %v, want the snapshots of %v", got, tc.want)
+			}
+		})
+	}
+
+	// The oldest is that of each series: a series of one snapshot older
+	// than all of another does not take the rule from it.
+	both := append(series("s"), &Snapshot{
+		ID: "t0", SourceName: "t", CreatedAt: time.Date(2025, 12, 1, 8, 0, 0, 0, time.UTC),
+	})
+	res := applyForgetPolicy(both, ForgetPolicy{KeepDaily: 7}, time.UTC)
+	want := map[string][]string{
+		"s0": {"daily snapshot"}, "s1": {"daily snapshot"}, "s2": {"oldest daily snapshot"}, "t0": {"daily snapshot"},
+	}
+	if !maps.EqualFunc(res.KeepReasons, want, slices.Equal) {
+		t.Errorf("two series: reasons %v, want %v", res.KeepReasons, want)
 	}
 }
 
@@ -396,14 +478,28 @@ func TestPeriodsAreCutInTheGivenLocation(t *testing.T) {
 			for i, ts := range tc.times {
 				snaps[i] = &Snapshot{ID: fmt.Sprintf("s%d", i), CreatedAt: ts}
 			}
-			if got := ids(applyForgetPolicy(snaps, tc.policy, berlin).Keep); !slices.Equal(got, tc.inBerlin) {
+			if got := newestOfPeriods(applyForgetPolicy(snaps, tc.policy, berlin)); !slices.Equal(got, tc.inBerlin) {
 				t.Errorf("in Berlin keeps %v, want %v", got, tc.inBerlin)
 			}
-			if got := ids(applyForgetPolicy(snaps, tc.policy, time.UTC).Keep); !slices.Equal(got, tc.inUTC) {
+			if got := newestOfPeriods(applyForgetPolicy(snaps, tc.policy, time.UTC)); !slices.Equal(got, tc.inUTC) {
 				t.Errorf("in UTC keeps %v, want %v", got, tc.inUTC)
 			}
 		})
 	}
+}
+
+// newestOfPeriods lists the snapshots a rule keeps as the newest of a period,
+// leaving out one kept only as the oldest of its series, which says nothing
+// about where a period starts.
+func newestOfPeriods(result *ForgetResult) []string {
+	var out []string
+	for _, s := range result.Keep {
+		plain := func(reason string) bool { return !strings.HasPrefix(reason, "oldest ") }
+		if slices.ContainsFunc(result.KeepReasons[s.ID], plain) {
+			out = append(out, s.ID)
+		}
+	}
+	return out
 }
 
 // Two snapshots whose own zones show the same wall clock are still a day

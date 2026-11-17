@@ -20,7 +20,7 @@ and cuts periods on that stored clock, so each snapshot is counted in the zone i
 
 Periods are cut on one clock for all snapshots of a run: the time zone of the forget run.
 `Repository.Forget` converts every snapshot time to that zone before it reads the period
-(`markPeriod` in `forget_impl.go`). The zone is `time.Local` unless the caller passes the
+(`applyForgetPolicyToGroup` in `forget_impl.go`). The zone is `time.Local` unless the caller passes the
 `ForgetOption` `WithForgetLocation`. `ark forget` passes nothing, so the machine's zone, or `TZ`,
 decides. Snapshots keep their time in UTC; nothing in the repository format changes.
 

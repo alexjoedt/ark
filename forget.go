@@ -61,6 +61,13 @@ func (c *KeepCount) UnmarshalText(text []byte) error {
 //
 // A counted rule, KeepLast to KeepYearly, takes a number or [Unlimited].
 //
+// A period rule, KeepHourly to KeepYearly, keeps the newest snapshot of each
+// period, newest period first, until its count is used up. When it reaches
+// the oldest snapshot of the series with count left, it keeps that one too,
+// although its period is taken, so a series shorter than the policy is kept
+// from its first snapshot on; the reason then reads "oldest daily snapshot".
+// This is restic's rule.
+//
 // The hours, days, weeks, months and years of KeepHourly to KeepYearly are
 // those of the local time zone, not of UTC; see WithForgetLocation.
 type ForgetPolicy struct {

@@ -40,3 +40,4 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0023 | [A VitePress docs site with Node only in docs/](0023-vitepress-docs-site.md) | accepted | 2026-11-16 |
 | 0024 | [Forget periods count in the local time of the forget run](0024-forget-periods-in-the-local-time-of-the-forget-run.md) | accepted | 2026-11-17 |
 | 0025 | [A typed keep count with a named unlimited value](0025-typed-keep-count-with-unlimited.md) | accepted | 2026-11-17 |
+| 0026 | [Forget keeps the oldest snapshot while a rule has count left](0026-forget-keeps-the-oldest-snapshot-while-a-rule-has-count-left.md) | accepted | 2026-11-17 |

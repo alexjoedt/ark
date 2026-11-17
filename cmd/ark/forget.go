@@ -25,6 +25,7 @@ func forgetCommand() *cli.Command {
    the policy is applied per series (source type, source name and host). A policy that
    keeps nothing is refused, use --all to remove every matching snapshot on purpose.
    Hours, days, weeks, months and years count in local time (TZ).
+   A period rule with count left at the end of a series keeps its oldest snapshot too.
    Chunks stay until prune.`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "keep-last", Usage: "keep the `N` newest, unlimited for all"},

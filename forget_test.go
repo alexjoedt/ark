@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -55,7 +56,7 @@ func TestForgetCountsPeriodsInTheGivenLocation(t *testing.T) {
 	tests := []struct {
 		name string
 		loc  *time.Location
-		keep int
+		keep int // snapshots that are the newest of their day
 	}{
 		{"Berlin", berlin, 2},
 		{"UTC", time.UTC, 1},
@@ -67,8 +68,16 @@ func TestForgetCountsPeriodsInTheGivenLocation(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Forget: %v", err)
 			}
-			if len(res.Keep) != tc.keep || len(res.Keep)+len(res.Remove) != 2 {
-				t.Errorf("keeps %d and removes %d, want %d kept of 2", len(res.Keep), len(res.Remove), tc.keep)
+			// the older snapshot is kept either way, as the newest of its
+			// day or as the oldest of the series: the reason tells them apart
+			days := 0
+			for _, reasons := range res.KeepReasons {
+				if slices.Contains(reasons, "daily snapshot") {
+					days++
+				}
+			}
+			if days != tc.keep || len(res.Keep)+len(res.Remove) != 2 {
+				t.Errorf("%d snapshots are the newest of a day, want %d of 2: %v", days, tc.keep, res.KeepReasons)
 			}
 		})
 	}
@@ -89,12 +98,12 @@ func TestForgetTakesUnlimitedAndRefusesOtherNegativeCounts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Forget with an unlimited count: %v", err)
 	}
-	if len(res.Keep) != 3 || len(res.Remove) != 3 {
-		t.Fatalf("keeps %d and removes %d, want the newest of each of 3 years", len(res.Keep), len(res.Remove))
+	if len(res.Keep) != 4 || len(res.Remove) != 2 {
+		t.Fatalf("keeps %d and removes %d, want the newest of 3 years and the oldest", len(res.Keep), len(res.Remove))
 	}
-	for _, s := range res.Keep {
-		if s.CreatedAt.Month() != time.June {
-			t.Errorf("kept %s, want the June snapshot of its year", s.CreatedAt)
+	for _, s := range res.Remove {
+		if s.CreatedAt.Month() != time.March || s.CreatedAt.Year() == 2023 {
+			t.Errorf("removed %s, want the March snapshots of 2024 and 2025", s.CreatedAt)
 		}
 	}
 
@@ -107,8 +116,8 @@ func TestForgetTakesUnlimitedAndRefusesOtherNegativeCounts(t *testing.T) {
 			t.Errorf("Forget(%+v) = %v, want ErrInvalidPolicy", policy, err)
 		}
 	}
-	if snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{}); err != nil || len(snaps) != 3 {
-		t.Errorf("after the refused policies: %d snapshots, %v, want 3", len(snaps), err)
+	if snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{}); err != nil || len(snaps) != 4 {
+		t.Errorf("after the refused policies: %d snapshots, %v, want 4", len(snaps), err)
 	}
 }
 

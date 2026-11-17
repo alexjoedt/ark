@@ -222,6 +222,14 @@ A count is a whole number or the word `unlimited`: `--keep-yearly unlimited` kee
 snapshot of every year there is. A negative number is a usage error, exit 2; `0` switches a rule
 off, which matters over a profile that sets it.
 
+A period rule keeps the newest snapshot of each period, newest period first, until its count is
+used up. When it reaches the oldest snapshot of a series and still has count left, it keeps that
+snapshot too, although its period is already taken: `--keep-daily 7` on a series that spans two
+days keeps the newest of each day and the oldest snapshot, which `--json` lists with the reason
+`oldest daily snapshot`. A series shorter than its policy so keeps its first snapshot until the
+policy is filled; with `unlimited` the oldest always stays. `--keep-last` and `--keep-within` have
+no such rule. restic selects the same way.
+
 Hours, days, weeks, months and years are those of the local time zone of the machine `ark forget`
 runs on, so a backup at 00:30 belongs to the new day; set `TZ` to count in another zone. A week is
 an ISO week and starts on Monday. `--keep-last` and `--keep-within` do not depend on the zone.

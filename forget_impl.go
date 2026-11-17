@@ -33,75 +33,90 @@ func sortNewestFirst(snaps []*Snapshot) {
 	sort.SliceStable(snaps, func(i, j int) bool { return snaps[i].CreatedAt.After(snaps[j].CreatedAt) })
 }
 
+// periodKey names the period of one counted rule a snapshot falls in: the
+// numbers a clock shows, down to the rule's unit, zero beyond it.
+type periodKey [4]int
+
+// keepBucket is one counted rule on its walk through a series.
+type keepBucket struct {
+	reason string
+	// left is the count the rule still has, Unlimited for no limit.
+	left KeepCount
+	// period names the period of the snapshot at index nr, taken at t.
+	period func(t time.Time, nr int) periodKey
+	// last is the period of the snapshot the rule kept last.
+	last periodKey
+}
+
 // applyForgetPolicyToGroup adds the keep and remove picks and the keep
-// reasons for one series, which is not empty, to result.
+// reasons for one series, which is not empty and sorted newest first, to
+// result. It is restic's walk: one pass from the newest snapshot to the
+// oldest, every rule deciding on each snapshot by itself.
 func applyForgetPolicyToGroup(result *ForgetResult, snapshots []*Snapshot, policy ForgetPolicy, loc *time.Location) {
 	reasons := result.KeepReasons
-	keep := func(s *Snapshot, reason string) { reasons[s.ID] = append(reasons[s.ID], reason) }
 
 	// KeepWithin: everything younger than the window, measured from the
 	// newest snapshot.
-	if policy.KeepWithin > 0 {
-		cutoff := snapshots[0].CreatedAt.Add(-policy.KeepWithin)
-		reason := "within " + withinString(policy.KeepWithin)
-		for _, s := range snapshots {
-			if s.CreatedAt.After(cutoff) {
-				keep(s, reason)
-			}
-		}
-	}
-
-	// KeepLast: keep the most recent N.
-	for i, s := range snapshots {
-		if policy.KeepLast != Unlimited && i >= int(policy.KeepLast) {
-			break
-		}
-		keep(s, "last snapshot")
-	}
+	cutoff := snapshots[0].CreatedAt.Add(-policy.KeepWithin)
+	within := "within " + withinString(policy.KeepWithin)
 
 	// Period keys are the numbers on a clock in loc. The hour a clock shows
 	// twice when summer time ends is one period, as it is for restic.
-	markPeriod(snapshots, keep, "hourly snapshot", policy.KeepHourly, loc, func(t time.Time) [4]int {
-		return [4]int{t.Year(), int(t.Month()), t.Day(), t.Hour()}
-	})
-	markPeriod(snapshots, keep, "daily snapshot", policy.KeepDaily, loc, func(t time.Time) [3]int {
-		return [3]int{t.Year(), int(t.Month()), t.Day()}
-	})
-	markPeriod(snapshots, keep, "weekly snapshot", policy.KeepWeekly, loc, weekKey)
-	markPeriod(snapshots, keep, "monthly snapshot", policy.KeepMonthly, loc, func(t time.Time) [2]int {
-		return [2]int{t.Year(), int(t.Month())}
-	})
-	markPeriod(snapshots, keep, "yearly snapshot", policy.KeepYearly, loc, time.Time.Year)
+	// KeepLast counts every snapshot as a period of its own.
+	buckets := []keepBucket{
+		{reason: "last snapshot", left: policy.KeepLast, period: func(_ time.Time, nr int) periodKey {
+			return periodKey{nr}
+		}},
+		{reason: "hourly snapshot", left: policy.KeepHourly, period: func(t time.Time, _ int) periodKey {
+			return periodKey{t.Year(), int(t.Month()), t.Day(), t.Hour()}
+		}},
+		{reason: "daily snapshot", left: policy.KeepDaily, period: func(t time.Time, _ int) periodKey {
+			return periodKey{t.Year(), int(t.Month()), t.Day()}
+		}},
+		{reason: "weekly snapshot", left: policy.KeepWeekly, period: func(t time.Time, _ int) periodKey {
+			week := weekKey(t)
+			return periodKey{week[0], week[1]}
+		}},
+		{reason: "monthly snapshot", left: policy.KeepMonthly, period: func(t time.Time, _ int) periodKey {
+			return periodKey{t.Year(), int(t.Month())}
+		}},
+		{reason: "yearly snapshot", left: policy.KeepYearly, period: func(t time.Time, _ int) periodKey {
+			return periodKey{t.Year()}
+		}},
+	}
 
-	for _, s := range snapshots {
+	for nr, s := range snapshots {
+		if policy.KeepWithin > 0 && s.CreatedAt.After(cutoff) {
+			reasons[s.ID] = append(reasons[s.ID], within)
+		}
+		t := s.CreatedAt.In(loc)
+		for i := range buckets {
+			b := &buckets[i]
+			if b.left == 0 {
+				continue
+			}
+			// A rule keeps the newest snapshot of each period, and with
+			// count left at the end of the series its oldest snapshot too,
+			// so a series shorter than the policy is kept whole.
+			period := b.period(t, nr)
+			reason := b.reason
+			if nr > 0 && period == b.last {
+				if nr < len(snapshots)-1 {
+					continue
+				}
+				reason = "oldest " + reason
+			}
+			b.last = period
+			if b.left != Unlimited {
+				b.left--
+			}
+			reasons[s.ID] = append(reasons[s.ID], reason)
+		}
+
 		if _, ok := reasons[s.ID]; ok {
 			result.Keep = append(result.Keep, s)
 		} else {
 			result.Remove = append(result.Remove, s)
-		}
-	}
-}
-
-// markPeriod keeps the newest snapshot of each of the n newest periods, of
-// every period when n is Unlimited, for reason; key names the period a time
-// in loc falls in.
-func markPeriod[K comparable](
-	snapshots []*Snapshot,
-	keep func(*Snapshot, string),
-	reason string,
-	n KeepCount,
-	loc *time.Location,
-	key func(time.Time) K,
-) {
-	periods := make(map[K]struct{})
-	for _, s := range snapshots {
-		if n != Unlimited && len(periods) >= int(n) {
-			break
-		}
-		p := key(s.CreatedAt.In(loc))
-		if _, seen := periods[p]; !seen {
-			periods[p] = struct{}{}
-			keep(s, reason)
 		}
 	}
 }
