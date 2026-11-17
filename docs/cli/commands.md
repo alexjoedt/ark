@@ -196,8 +196,8 @@ series among the snapshots the filters match. Chunks stay in the repository unti
 
 | Flag | Meaning |
 |---|---|
-| `--keep-last N` | keep the N newest |
-| `--keep-hourly N`, `--keep-daily N`, `--keep-weekly N`, `--keep-monthly N`, `--keep-yearly N` | keep the newest of N hours, days, weeks, months, years |
+| `--keep-last N` | keep the N newest; `unlimited` keeps all |
+| `--keep-hourly N`, `--keep-daily N`, `--keep-weekly N`, `--keep-monthly N`, `--keep-yearly N` | keep the newest of N hours, days, weeks, months, years; `unlimited` keeps the newest of every one |
 | `--keep-within DURATION` | keep everything younger than DURATION, e.g. `72h`, `30d` |
 | `--all` | remove every matching snapshot; a policy that keeps nothing is refused without it |
 | `--source`, `--type`, `--tag`, `--host`, `--label` | filters, as for `ark snapshots` |
@@ -209,7 +209,12 @@ series among the snapshots the filters match. Chunks stay in the repository unti
 ark forget --keep-last 3 --source /etc --prune
 ark forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6
 ark forget --keep-within 30d
+ark forget --keep-daily 7 --keep-yearly unlimited
 ```
+
+A count is a whole number or the word `unlimited`: `--keep-yearly unlimited` keeps the newest
+snapshot of every year there is. A negative number is a usage error, exit 2; `0` switches a rule
+off, which matters over a profile that sets it.
 
 Hours, days, weeks, months and years are those of the local time zone of the machine `ark forget`
 runs on, so a backup at 00:30 belongs to the new day; set `TZ` to count in another zone. A week is

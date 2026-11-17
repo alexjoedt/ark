@@ -52,10 +52,11 @@ func applyForgetPolicyToGroup(result *ForgetResult, snapshots []*Snapshot, polic
 	}
 
 	// KeepLast: keep the most recent N.
-	if policy.KeepLast > 0 {
-		for i := 0; i < policy.KeepLast && i < len(snapshots); i++ {
-			keep(snapshots[i], "last snapshot")
+	for i, s := range snapshots {
+		if policy.KeepLast != Unlimited && i >= int(policy.KeepLast) {
+			break
 		}
+		keep(s, "last snapshot")
 	}
 
 	// Period keys are the numbers on a clock in loc. The hour a clock shows
@@ -81,22 +82,20 @@ func applyForgetPolicyToGroup(result *ForgetResult, snapshots []*Snapshot, polic
 	}
 }
 
-// markPeriod keeps the newest snapshot of each of the n newest periods for
-// reason; key names the period a time in loc falls in.
+// markPeriod keeps the newest snapshot of each of the n newest periods, of
+// every period when n is Unlimited, for reason; key names the period a time
+// in loc falls in.
 func markPeriod[K comparable](
 	snapshots []*Snapshot,
 	keep func(*Snapshot, string),
 	reason string,
-	n int,
+	n KeepCount,
 	loc *time.Location,
 	key func(time.Time) K,
 ) {
-	if n <= 0 {
-		return
-	}
 	periods := make(map[K]struct{})
 	for _, s := range snapshots {
-		if len(periods) >= n {
+		if n != Unlimited && len(periods) >= int(n) {
 			break
 		}
 		p := key(s.CreatedAt.In(loc))

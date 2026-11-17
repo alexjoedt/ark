@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	ark "github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkprofile"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
 	"github.com/urfave/cli/v3"
@@ -160,11 +161,11 @@ func profileOnly(key, value, def string) profileValue {
 	return profileValue{key, value, "profile"}
 }
 
-func profileInt(key string, n int) profileValue {
+func profileCount(key string, n ark.KeepCount) profileValue {
 	if n == 0 {
 		return profileValue{key, "0", "default"}
 	}
-	return profileValue{key, strconv.Itoa(n), "profile"}
+	return profileValue{key, n.String(), "profile"}
 }
 
 func profileBool(key string, b bool) profileValue {
@@ -200,12 +201,12 @@ func effectiveValues(root *cli.Command, lp *loadedProfile) []profileValue {
 	}
 	values = append(values, hookValues("backup", b.Hooks)...)
 	values = append(values,
-		profileInt("forget.keep-last", f.KeepLast),
-		profileInt("forget.keep-hourly", f.KeepHourly),
-		profileInt("forget.keep-daily", f.KeepDaily),
-		profileInt("forget.keep-weekly", f.KeepWeekly),
-		profileInt("forget.keep-monthly", f.KeepMonthly),
-		profileInt("forget.keep-yearly", f.KeepYearly),
+		profileCount("forget.keep-last", f.KeepLast),
+		profileCount("forget.keep-hourly", f.KeepHourly),
+		profileCount("forget.keep-daily", f.KeepDaily),
+		profileCount("forget.keep-weekly", f.KeepWeekly),
+		profileCount("forget.keep-monthly", f.KeepMonthly),
+		profileCount("forget.keep-yearly", f.KeepYearly),
 		profileOnly("forget.keep-within", f.KeepWithin, ""),
 		profileBool("forget.prune", f.Prune),
 	)

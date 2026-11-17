@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -70,5 +71,60 @@ func TestForgetCountsPeriodsInTheGivenLocation(t *testing.T) {
 				t.Errorf("keeps %d and removes %d, want %d kept of 2", len(res.Keep), len(res.Remove), tc.keep)
 			}
 		})
+	}
+}
+
+// An unlimited count is a rule of its own, any other negative count is
+// refused before anything is read or removed.
+func TestForgetTakesUnlimitedAndRefusesOtherNegativeCounts(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+	for _, year := range []int{2023, 2024, 2025} {
+		importAt(t, repo, time.Date(year, 3, 1, 12, 0, 0, 0, time.UTC))
+		importAt(t, repo, time.Date(year, 6, 1, 12, 0, 0, 0, time.UTC))
+	}
+
+	res, err := repo.Forget(ctx, ark.ForgetPolicy{KeepYearly: ark.Unlimited}, ark.SnapshotFilter{},
+		ark.WithForgetLocation(time.UTC))
+	if err != nil {
+		t.Fatalf("Forget with an unlimited count: %v", err)
+	}
+	if len(res.Keep) != 3 || len(res.Remove) != 3 {
+		t.Fatalf("keeps %d and removes %d, want the newest of each of 3 years", len(res.Keep), len(res.Remove))
+	}
+	for _, s := range res.Keep {
+		if s.CreatedAt.Month() != time.June {
+			t.Errorf("kept %s, want the June snapshot of its year", s.CreatedAt)
+		}
+	}
+
+	for _, policy := range []ark.ForgetPolicy{
+		{KeepLast: -2},
+		{KeepDaily: 7, KeepYearly: -5},
+		{KeepLast: ark.Unlimited, KeepWeekly: -2},
+	} {
+		if _, err := repo.Forget(ctx, policy, ark.SnapshotFilter{}); !errors.Is(err, ark.ErrInvalidPolicy) {
+			t.Errorf("Forget(%+v) = %v, want ErrInvalidPolicy", policy, err)
+		}
+	}
+	if snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{}); err != nil || len(snaps) != 3 {
+		t.Errorf("after the refused policies: %d snapshots, %v, want 3", len(snaps), err)
+	}
+}
+
+func TestParseKeepCount(t *testing.T) {
+	for in, want := range map[string]ark.KeepCount{"0": 0, "7": 7, "unlimited": ark.Unlimited} {
+		got, err := ark.ParseKeepCount(in)
+		if err != nil || got != want {
+			t.Errorf("ParseKeepCount(%q) = %d, %v, want %d", in, got, err, want)
+		}
+		if got.String() != in {
+			t.Errorf("KeepCount(%d).String() = %q, want %q", got, got.String(), in)
+		}
+	}
+	for _, in := range []string{"", "-1", "-3", "1.5", "all", "Unlimited", " 3"} {
+		if got, err := ark.ParseKeepCount(in); err == nil {
+			t.Errorf("ParseKeepCount(%q) = %d, want an error", in, got)
+		}
 	}
 }

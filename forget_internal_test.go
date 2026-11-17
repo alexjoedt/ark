@@ -64,6 +64,26 @@ func TestForgetPolicyFieldsSelectTheirPeriod(t *testing.T) {
 			ForgetPolicy{KeepLast: 1, KeepYearly: 3},
 			[]string{"s0", "s8", "s9"},
 		},
+		{
+			"KeepLast unlimited",
+			ForgetPolicy{KeepLast: Unlimited},
+			[]string{"s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"},
+		},
+		{"KeepHourly unlimited", ForgetPolicy{KeepHourly: Unlimited}, []string{
+			"s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9",
+		}},
+		{
+			"KeepDaily unlimited",
+			ForgetPolicy{KeepDaily: Unlimited},
+			[]string{"s0", "s3", "s4", "s5", "s6", "s7", "s8", "s9"},
+		},
+		{
+			"KeepWeekly unlimited",
+			ForgetPolicy{KeepWeekly: Unlimited},
+			[]string{"s0", "s5", "s6", "s7", "s8", "s9"},
+		},
+		{"KeepMonthly unlimited", ForgetPolicy{KeepMonthly: Unlimited}, []string{"s0", "s6", "s7", "s8", "s9"}},
+		{"KeepYearly unlimited", ForgetPolicy{KeepYearly: Unlimited}, []string{"s0", "s8", "s9"}},
 	}
 
 	snapshots := forgetFixture()

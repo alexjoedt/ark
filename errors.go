@@ -15,6 +15,10 @@ var (
 	// the filter names no ids, which would remove every matching snapshot.
 	ErrEmptyPolicy = errors.New("ark: forget policy keeps nothing and no ids given")
 
+	// ErrInvalidPolicy is returned by Forget, before it reads anything, for
+	// a policy with a negative count other than Unlimited.
+	ErrInvalidPolicy = errors.New("ark: invalid forget policy")
+
 	// ErrInvalidLabel is returned by ValidateLabels, and by Backup before it
 	// writes anything, for a label key or value a caller may not set, or a
 	// key the source sets as well.

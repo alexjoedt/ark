@@ -251,6 +251,8 @@ if p.Forget.Prune {
 }
 ```
 
+The counted rules of an `ark.ForgetPolicy`, `KeepLast` to `KeepYearly`, are of type `ark.KeepCount`: a number, or `ark.Unlimited` to keep every snapshot (`KeepLast`) or the newest of every period. `Forget` refuses any other negative count with `ark.ErrInvalidPolicy`. `ark.ParseKeepCount` reads the text form a profile and the CLI use, a whole number or `unlimited`.
+
 `Forget` counts the hours, days, weeks, months and years of a policy in `time.Local`; `ark.WithForgetLocation` names another zone. Earlier versions counted in UTC. The result depends on the zone of the machine, so a program that has to keep the same snapshots wherever it runs passes a fixed zone, for example `ark.WithForgetLocation(time.UTC)`.
 
 These calls apply neither the profile's hooks nor `forget.prune` on their own. Read `p.Forget.Prune` as above, and run each step inside `p.Backup.Hooks.Run` or `p.Forget.Hooks.Run` with an `arkprofile.HookEnv`, as the CLI does; a profile with `run-before` or `run-after` hooks otherwise behaves differently in your program than under `ark`.

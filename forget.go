@@ -1,6 +1,57 @@
 package ark
 
-import "time"
+import (
+	"fmt"
+	"strconv"
+	"time"
+)
+
+// KeepCount is the count of a counted keep rule: zero keeps nothing,
+// [Unlimited] keeps without a limit. Forget refuses any other negative count
+// with [ErrInvalidPolicy]. As text, in a profile or on the command line, a
+// count is a whole number or the word unlimited.
+type KeepCount int
+
+// Unlimited makes a counted rule keep all it can: KeepLast every snapshot,
+// a period rule the newest snapshot of every period.
+const Unlimited KeepCount = -1
+
+// ParseKeepCount reads a whole number of zero or more, or the word
+// unlimited. A negative number is refused, so a typo cannot keep everything.
+func ParseKeepCount(s string) (KeepCount, error) {
+	if s == "unlimited" {
+		return Unlimited, nil
+	}
+	n, err := strconv.Atoi(s)
+	switch {
+	case err != nil:
+		return 0, fmt.Errorf("%q is not a whole number or unlimited", s)
+	case n < 0:
+		return 0, fmt.Errorf("negative count %d: write unlimited to keep all", n)
+	}
+	return KeepCount(n), nil
+}
+
+// String returns the count as ParseKeepCount reads it.
+func (c KeepCount) String() string {
+	if c == Unlimited {
+		return "unlimited"
+	}
+	return strconv.Itoa(int(c))
+}
+
+// MarshalText implements [encoding.TextMarshaler].
+func (c KeepCount) MarshalText() ([]byte, error) { return []byte(c.String()), nil }
+
+// UnmarshalText implements [encoding.TextUnmarshaler] with ParseKeepCount.
+func (c *KeepCount) UnmarshalText(text []byte) error {
+	n, err := ParseKeepCount(string(text))
+	if err != nil {
+		return err
+	}
+	*c = n
+	return nil
+}
 
 // ForgetPolicy defines the retention rules applied by Repository.Forget.
 // The policy is applied per series: the snapshots that share source type,
@@ -8,26 +59,28 @@ import "time"
 // the window, and two hosts backing up the same source each keep their own.
 // Zero value keeps everything.
 //
+// A counted rule, KeepLast to KeepYearly, takes a number or [Unlimited].
+//
 // The hours, days, weeks, months and years of KeepHourly to KeepYearly are
 // those of the local time zone, not of UTC; see WithForgetLocation.
 type ForgetPolicy struct {
 	// KeepLast keeps the most recent n snapshots regardless of age.
-	KeepLast int
+	KeepLast KeepCount
 
 	// KeepHourly keeps one snapshot per hour for the most recent n hours.
-	KeepHourly int
+	KeepHourly KeepCount
 
 	// KeepDaily keeps one snapshot per day for the most recent n days.
-	KeepDaily int
+	KeepDaily KeepCount
 
 	// KeepWeekly keeps one snapshot per ISO week for the most recent n weeks.
-	KeepWeekly int
+	KeepWeekly KeepCount
 
 	// KeepMonthly keeps one snapshot per month for the most recent n months.
-	KeepMonthly int
+	KeepMonthly KeepCount
 
 	// KeepYearly keeps one snapshot per year for the most recent n years.
-	KeepYearly int
+	KeepYearly KeepCount
 
 	// KeepWithin keeps every snapshot younger than this, measured from the
 	// newest snapshot of the group rather than from the wall clock, so a
@@ -35,11 +88,44 @@ type ForgetPolicy struct {
 	KeepWithin time.Duration
 }
 
-// keepsNothing reports whether no rule of p keeps a snapshot. A negative
-// count or window keeps nothing, the same as a zero one.
+// counted lists the counted rules of p by field name.
+func (p ForgetPolicy) counted() [6]struct {
+	name string
+	n    KeepCount
+} {
+	return [6]struct {
+		name string
+		n    KeepCount
+	}{
+		{"KeepLast", p.KeepLast},
+		{"KeepHourly", p.KeepHourly},
+		{"KeepDaily", p.KeepDaily},
+		{"KeepWeekly", p.KeepWeekly},
+		{"KeepMonthly", p.KeepMonthly},
+		{"KeepYearly", p.KeepYearly},
+	}
+}
+
+// validate refuses a negative count other than Unlimited.
+func (p ForgetPolicy) validate() error {
+	for _, c := range p.counted() {
+		if c.n < Unlimited {
+			return fmt.Errorf("%w: %s is %d, want 0 or more, or Unlimited", ErrInvalidPolicy, c.name, int(c.n))
+		}
+	}
+	return nil
+}
+
+// keepsNothing reports whether no rule of a valid p keeps a snapshot. An
+// unlimited count is a rule; a negative window keeps nothing, the same as a
+// zero one.
 func (p ForgetPolicy) keepsNothing() bool {
-	return p.KeepLast <= 0 && p.KeepHourly <= 0 && p.KeepDaily <= 0 && p.KeepWeekly <= 0 &&
-		p.KeepMonthly <= 0 && p.KeepYearly <= 0 && p.KeepWithin <= 0
+	for _, c := range p.counted() {
+		if c.n != 0 {
+			return false
+		}
+	}
+	return p.KeepWithin <= 0
 }
 
 // ForgetResult is returned by Repository.Forget.

@@ -33,6 +33,7 @@ backup:
 forget:
   keep-last: 3
   keep-daily: 7
+  keep-yearly: unlimited
   keep-within: 30d
   prune: true
   run-after-fail: echo failed
@@ -62,6 +63,7 @@ func TestDecodeFillsEveryField(t *testing.T) {
 		Forget: arkprofile.Forget{
 			KeepLast:   3,
 			KeepDaily:  7,
+			KeepYearly: ark.Unlimited,
 			KeepWithin: "30d",
 			Prune:      true,
 			Hooks:      arkprofile.Hooks{RunAfterFail: "echo failed"},
@@ -159,7 +161,17 @@ func TestDecodeRejects(t *testing.T) {
 		{"null document", "~\n", "empty profile"},
 		{"not a mapping", "- repo\n", "line 1: profile: want a mapping of keys"},
 		{"section not a mapping", "backup: /data\n", "line 1: backup: want a mapping of keys"},
-		{"wrong kind", "forget:\n  keep-last: three\n", "line 2: forget.keep-last: want a whole number"},
+		{"wrong kind", "concurrency: three\n", "line 1: concurrency: want a whole number"},
+		{
+			"keep count not a number",
+			"forget:\n  keep-last: three\n",
+			`line 2: forget.keep-last: "three" is not a whole number or unlimited`,
+		},
+		{
+			"negative keep count",
+			"forget:\n  keep-yearly: -1\n",
+			"line 2: forget.keep-yearly: negative count -1: write unlimited to keep all",
+		},
 		{"scalar for a list", "backup:\n  tag: docs\n", "line 2: backup.tag: want a list of strings"},
 		{"bare number as duration", "lock-wait: 30\n", "line 1: lock-wait: want a duration such as 30s or 5m"},
 		{"bad bool", "insecure-no-password: maybe\n", "line 1: insecure-no-password: want true or false"},
@@ -199,6 +211,7 @@ func TestValidate(t *testing.T) {
 	ok := arkprofile.Profile{Name: "docs", Repo: "/srv/ark", PasswordEnv: "DOCS_PW"}
 	ok.Backup.Path = "/data"
 	ok.Forget.KeepWithin = "30d"
+	ok.Forget.KeepYearly = ark.Unlimited
 	if err := ok.Validate(); err != nil {
 		t.Fatalf("profile built in code: %v", err)
 	}
@@ -218,8 +231,8 @@ func TestValidate(t *testing.T) {
 		{"slash", func(p *arkprofile.Profile) { p.Name = "a/b" }},
 		{"negative concurrency", func(p *arkprofile.Profile) { p.Concurrency = -4 }},
 		{"negative lock-wait", func(p *arkprofile.Profile) { p.LockWait = -time.Second }},
-		{"negative keep-daily", func(p *arkprofile.Profile) { p.Forget.KeepDaily = -1 }},
-		{"negative keep-yearly", func(p *arkprofile.Profile) { p.Forget.KeepYearly = -1 }},
+		{"negative keep-daily", func(p *arkprofile.Profile) { p.Forget.KeepDaily = -2 }},
+		{"negative keep-yearly", func(p *arkprofile.Profile) { p.Forget.KeepYearly = -7 }},
 		{"bad keep-within", func(p *arkprofile.Profile) { p.Forget.KeepWithin = "30x" }},
 		{"zero keep-within", func(p *arkprofile.Profile) { p.Forget.KeepWithin = "0d" }},
 		{"bad label key", func(p *arkprofile.Profile) { p.Backup.Labels = map[string]string{"-app": "x"} }},
@@ -232,6 +245,10 @@ func TestValidate(t *testing.T) {
 			err := p.Validate()
 			if !errors.Is(err, arkprofile.ErrInvalid) {
 				t.Fatalf("Validate = %v, want ErrInvalid", err)
+			}
+			if key, ok := strings.CutPrefix(tt.name, "negative keep-"); ok &&
+				!strings.Contains(err.Error(), "forget.keep-"+key) {
+				t.Errorf("Validate = %v, want the key forget.keep-%s named", err, key)
 			}
 			if strings.Contains(tt.name, "label") && !errors.Is(err, ark.ErrInvalidLabel) {
 				t.Errorf("Validate = %v, want ark.ErrInvalidLabel too", err)

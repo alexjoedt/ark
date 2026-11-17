@@ -19,6 +19,7 @@ func forgetCommand() *cli.Command {
    ark forget --keep-last N [--source NAME] [--prune]
    ark forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6
    ark forget --keep-within 30d
+   ark forget --keep-daily 7 --keep-yearly unlimited
 
    Removes snapshots. Either name ids, or give a policy that says what to keep;
    the policy is applied per series (source type, source name and host). A policy that
@@ -26,12 +27,12 @@ func forgetCommand() *cli.Command {
    Hours, days, weeks, months and years count in local time (TZ).
    Chunks stay until prune.`,
 		Flags: []cli.Flag{
-			&cli.IntFlag{Name: "keep-last", Usage: "keep the `N` newest"},
-			&cli.IntFlag{Name: "keep-hourly", Usage: "keep the newest of `N` hours"},
-			&cli.IntFlag{Name: "keep-daily", Usage: "keep the newest of `N` days"},
-			&cli.IntFlag{Name: "keep-weekly", Usage: "keep the newest of `N` weeks"},
-			&cli.IntFlag{Name: "keep-monthly", Usage: "keep the newest of `N` months"},
-			&cli.IntFlag{Name: "keep-yearly", Usage: "keep the newest of `N` years"},
+			&cli.StringFlag{Name: "keep-last", Usage: "keep the `N` newest, unlimited for all"},
+			&cli.StringFlag{Name: "keep-hourly", Usage: "keep the newest of `N` hours, unlimited for all"},
+			&cli.StringFlag{Name: "keep-daily", Usage: "keep the newest of `N` days, unlimited for all"},
+			&cli.StringFlag{Name: "keep-weekly", Usage: "keep the newest of `N` weeks, unlimited for all"},
+			&cli.StringFlag{Name: "keep-monthly", Usage: "keep the newest of `N` months, unlimited for all"},
+			&cli.StringFlag{Name: "keep-yearly", Usage: "keep the newest of `N` years, unlimited for all"},
 			&cli.StringFlag{Name: "keep-within", Usage: "keep everything younger than `DURATION`, e.g. 72h, 30d"},
 			&cli.BoolFlag{Name: "all", Usage: "remove every snapshot matching the filter"},
 			&cli.StringFlag{Name: "source", Aliases: []string{"s"}, Usage: "filter by source `NAME`"},
@@ -160,7 +161,8 @@ func runForget(
 }
 
 // forgetPolicy is the profile's forget policy with every --keep-* flag given
-// on the command line put over its rule. A bad duration is a usage error.
+// on the command line put over its rule. A bad count or duration is a usage
+// error.
 func forgetPolicy(cmd *cli.Command, lp *loadedProfile) (ark.ForgetPolicy, error) {
 	var policy ark.ForgetPolicy
 	if lp != nil {
@@ -171,7 +173,7 @@ func forgetPolicy(cmd *cli.Command, lp *loadedProfile) (ark.ForgetPolicy, error)
 	}
 	for _, f := range []struct {
 		name string
-		dst  *int
+		dst  *ark.KeepCount
 	}{
 		{"keep-last", &policy.KeepLast},
 		{"keep-hourly", &policy.KeepHourly},
@@ -181,7 +183,11 @@ func forgetPolicy(cmd *cli.Command, lp *loadedProfile) (ark.ForgetPolicy, error)
 		{"keep-yearly", &policy.KeepYearly},
 	} {
 		if cmd.IsSet(f.name) {
-			*f.dst = cmd.Int(f.name)
+			n, err := ark.ParseKeepCount(cmd.String(f.name))
+			if err != nil {
+				return policy, exitcode.Usagef("--%s: %v", f.name, err)
+			}
+			*f.dst = n
 		}
 	}
 	if cmd.IsSet("keep-within") {

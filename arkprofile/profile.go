@@ -31,7 +31,7 @@
 //	  keep-daily: 7
 //	  keep-weekly: 4
 //	  keep-monthly: 12
-//	  keep-yearly: 2
+//	  keep-yearly: unlimited         # a count, or unlimited for every period
 //	  keep-within: 30d               # a duration such as 72h or 30d
 //	  prune: true                    # prune after the forget
 //	  run-after: echo forgotten      # the same four hooks as backup
@@ -105,14 +105,15 @@ type Backup struct {
 	Hooks `yaml:",inline"`
 }
 
-// Forget holds the policy of a forget.
+// Forget holds the policy of a forget. A keep count is a whole number or
+// the word unlimited, in code [ark.Unlimited].
 type Forget struct {
-	KeepLast    int `yaml:"keep-last"`
-	KeepHourly  int `yaml:"keep-hourly"`
-	KeepDaily   int `yaml:"keep-daily"`
-	KeepWeekly  int `yaml:"keep-weekly"`
-	KeepMonthly int `yaml:"keep-monthly"`
-	KeepYearly  int `yaml:"keep-yearly"`
+	KeepLast    ark.KeepCount `yaml:"keep-last"`
+	KeepHourly  ark.KeepCount `yaml:"keep-hourly"`
+	KeepDaily   ark.KeepCount `yaml:"keep-daily"`
+	KeepWeekly  ark.KeepCount `yaml:"keep-weekly"`
+	KeepMonthly ark.KeepCount `yaml:"keep-monthly"`
+	KeepYearly  ark.KeepCount `yaml:"keep-yearly"`
 	// KeepWithin is a duration as the CLI takes it, such as 72h or 30d.
 	KeepWithin string `yaml:"keep-within"`
 	Prune      bool   `yaml:"prune"`
@@ -131,7 +132,8 @@ type Hooks struct {
 var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 // Validate reports a name outside [a-z0-9][a-z0-9._-]*, conflicting
-// password sources, a negative number or lock-wait, a backup label that
+// password sources, a negative concurrency or lock-wait, a negative keep
+// count other than [ark.Unlimited], a backup label that
 // [ark.ValidateLabels] refuses and a keep-within that is not a positive
 // duration. Every error matches [ErrInvalid].
 func (p *Profile) Validate() error {
@@ -150,12 +152,14 @@ func (p *Profile) Validate() error {
 	if err := ark.ValidateLabels(p.Backup.Labels); err != nil {
 		return invalidf("backup.label: %w", err)
 	}
+	if p.Concurrency < 0 {
+		return invalidf("concurrency %d: want 0 or more", p.Concurrency)
+	}
 	f := p.Forget
 	for _, n := range []struct {
 		key string
-		v   int
+		v   ark.KeepCount
 	}{
-		{"concurrency", p.Concurrency},
 		{"forget.keep-last", f.KeepLast},
 		{"forget.keep-hourly", f.KeepHourly},
 		{"forget.keep-daily", f.KeepDaily},
@@ -163,8 +167,8 @@ func (p *Profile) Validate() error {
 		{"forget.keep-monthly", f.KeepMonthly},
 		{"forget.keep-yearly", f.KeepYearly},
 	} {
-		if n.v < 0 {
-			return invalidf("%s %d: want 0 or more", n.key, n.v)
+		if n.v < ark.Unlimited {
+			return invalidf("%s %d: want 0 or more, or unlimited", n.key, int(n.v))
 		}
 	}
 	if f.KeepWithin != "" {

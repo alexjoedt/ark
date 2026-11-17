@@ -41,6 +41,8 @@ ark profile show docs           # each effective value and its source: cli, prof
 Each key means what the flag of the same name means, see [CLI](index.md#global-flags) and
 [Commands](commands.md). `password-env` names the environment variable that holds the password.
 `backup.path` is the directory `ark backup -P` backs up when no path is given.
+A keep count is a whole number or `unlimited`, as on the command line: `keep-yearly: unlimited`
+keeps the newest snapshot of every year. A negative count fails the load.
 
 ## Rules
 

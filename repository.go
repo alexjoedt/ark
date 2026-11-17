@@ -380,9 +380,10 @@ func (r *Repository) deleteSnapshot(ctx context.Context, id string) error {
 // The period rules count hours, days, weeks, months and years in the local
 // time zone, or in the one WithForgetLocation names.
 //
-// A policy without a positive rule removes every match, so it is only
-// accepted together with filter.IDs; otherwise Forget returns ErrEmptyPolicy
-// and deletes nothing.
+// A policy without a rule removes every match, so it is only accepted
+// together with filter.IDs; otherwise Forget returns ErrEmptyPolicy and
+// deletes nothing. A count of Unlimited is a rule; any other negative count
+// fails with ErrInvalidPolicy.
 //
 // Removing named ids without a policy reads only those manifests, and one
 // that fails with ErrCorruptManifest is still removed, reported with its ID
@@ -393,6 +394,9 @@ func (r *Repository) Forget(
 	filter SnapshotFilter,
 	opts ...ForgetOption,
 ) (*ForgetResult, error) {
+	if err := policy.validate(); err != nil {
+		return nil, err
+	}
 	if policy.keepsNothing() && len(filter.IDs) == 0 {
 		return nil, ErrEmptyPolicy
 	}
