@@ -205,7 +205,7 @@ series among the snapshots the filters match. Chunks stay in the repository unti
 |---|---|
 | `--keep-last N` | keep the N newest; `unlimited` keeps all |
 | `--keep-hourly N`, `--keep-daily N`, `--keep-weekly N`, `--keep-monthly N`, `--keep-yearly N` | keep the newest of N hours, days, weeks, months, years; `unlimited` keeps the newest of every one |
-| `--keep-within DURATION` | keep everything younger than DURATION, e.g. `72h`, `30d` |
+| `--keep-within DURATION` | keep everything younger than DURATION, counted in years, months, days and hours, e.g. `30d`, `72h`, `1y6m` |
 | `--keep-tag TAG[,TAG...]` | keep every snapshot that carries all tags of the list, `''` for the untagged ones; repeatable, a match of any list keeps |
 | `--all` | remove every matching snapshot; a policy that keeps nothing is refused without it |
 | `--source`, `--type`, `--tag`, `--host`, `--label` | filters, as for `ark snapshots` |
@@ -233,6 +233,22 @@ days keeps the newest of each day and the oldest snapshot, which `--json` lists 
 policy is filled; with `unlimited` the oldest always stays. `--keep-last` and `--keep-within` have
 no such rule. restic selects the same way.
 
+`--keep-within` takes a duration in restic's units: whole numbers followed by `y` (years), `m`
+(months), `d` (days) or `h` (hours), each unit at most once and in that order, as in `30d`, `72h` or
+`1y2m3d4h`. There are no minutes, seconds or weeks, and no fractions. `m` counts months and goes up
+to 11, so `90m` is a usage error, exit 2, and not seven and a half years; write `1y6m` for 18
+months. Builds before this rule read Go durations, where `1m` was a minute: a policy written for
+them has to be rewritten.
+
+The window ends at the newest snapshot of the series, not at the time of the run, so a series that
+stopped receiving backups keeps its last ones. A snapshot dated in the future, as a machine with a
+wrong clock leaves it, is kept and does not move the window: the newest snapshot that is not in the
+future does. Years, months and days are steps on the calendar of the local time zone, hours are
+elapsed time: `1m` back from 15 March is 15 February, and `1d` back across the start of summer time
+is 23 hours where `24h` is 24. A step onto a day the month lacks runs over into the next month, so
+`1m` back from 31 March is 3 March. A snapshot exactly the duration old is not kept. `--json` lists
+the reason with the duration as it was given, `within 72h`. restic counts the same way.
+
 `--keep-tag` keeps by tag instead of by age. One value is a list of tags separated by commas, and a
 snapshot has to carry all of them; give the flag again for another list, and a snapshot that matches
 any of the lists stays: `--keep-tag db,prod --keep-tag pinned` keeps what is tagged `db` and `prod`,
@@ -251,7 +267,8 @@ filter. restic refuses the same way.
 
 Hours, days, weeks, months and years are those of the local time zone of the machine `ark forget`
 runs on, so a backup at 00:30 belongs to the new day; set `TZ` to count in another zone. A week is
-an ISO week and starts on Monday. `--keep-last` and `--keep-within` do not depend on the zone.
+an ISO week and starts on Monday. `--keep-last` does not depend on the zone, and of `--keep-within`
+only the hours do not.
 Builds before this rule counted the periods in UTC, so the first run after an upgrade can keep
 another snapshot of a period than the last one did: run it once with `--dry-run`.
 

@@ -37,7 +37,10 @@ func forgetCommand() *cli.Command {
 			&cli.StringFlag{Name: "keep-weekly", Usage: "keep the newest of `N` weeks, unlimited for all"},
 			&cli.StringFlag{Name: "keep-monthly", Usage: "keep the newest of `N` months, unlimited for all"},
 			&cli.StringFlag{Name: "keep-yearly", Usage: "keep the newest of `N` years, unlimited for all"},
-			&cli.StringFlag{Name: "keep-within", Usage: "keep everything younger than `DURATION`, e.g. 72h, 30d"},
+			&cli.StringFlag{
+				Name:  "keep-within",
+				Usage: "keep everything younger than `DURATION` in years, months, days and hours, e.g. 30d, 72h, 1y6m",
+			},
 			&listFlag{
 				Name:  "keep-tag",
 				Usage: "keep what carries all of `TAG[,TAG...]`, '' for untagged, repeatable: any list keeps",
@@ -200,13 +203,13 @@ func forgetPolicy(cmd *cli.Command, lp *loadedProfile) (ark.ForgetPolicy, error)
 	}
 	if cmd.IsSet("keep-within") {
 		// an empty value drops the profile's rule
-		policy.KeepWithin = 0
+		policy.KeepWithin = ark.Within{}
 		if s := cmd.String("keep-within"); s != "" {
-			d, err := out.ParseDuration(s)
+			w, err := ark.ParseWithin(s)
 			if err != nil {
 				return policy, exitcode.Usagef("--keep-within: %v", err)
 			}
-			policy.KeepWithin = d
+			policy.KeepWithin = w
 		}
 	}
 	if cmd.IsSet("keep-tag") {

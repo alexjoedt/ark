@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// afterAll is a now that leaves no fixture snapshot in the future.
+var afterAll = time.Date(3000, 1, 1, 0, 0, 0, 0, time.UTC)
+
 // forgetFixture is one snapshot per index, newest first, spread far enough
 // apart that every policy period has a distinct group to select from.
 //
@@ -59,7 +62,7 @@ func TestForgetPolicyFieldsSelectTheirPeriod(t *testing.T) {
 		{"KeepWeekly", ForgetPolicy{KeepWeekly: 2}, []string{"s0", "s5"}},
 		{"KeepMonthly", ForgetPolicy{KeepMonthly: 2}, []string{"s0", "s6"}},
 		{"KeepYearly", ForgetPolicy{KeepYearly: 2}, []string{"s0", "s8"}},
-		{"KeepWithin", ForgetPolicy{KeepWithin: 25 * time.Hour}, []string{"s0", "s1", "s2", "s3"}},
+		{"KeepWithin", ForgetPolicy{KeepWithin: Within{Days: 1, Hours: 1}}, []string{"s0", "s1", "s2", "s3"}},
 		{
 			"fields combine",
 			ForgetPolicy{KeepLast: 1, KeepYearly: 3},
@@ -90,7 +93,7 @@ func TestForgetPolicyFieldsSelectTheirPeriod(t *testing.T) {
 	snapshots := forgetFixture()
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := applyForgetPolicy(snapshots, tc.policy, time.UTC)
+			result := applyForgetPolicy(snapshots, tc.policy, time.UTC, afterAll)
 
 			got := ids(result.Keep)
 			if !slices.Equal(got, tc.keep) {
@@ -136,12 +139,12 @@ func TestForgetReasonsNameEveryRule(t *testing.T) {
 		{"KeepYearly", ForgetPolicy{KeepYearly: 2}, map[string][]string{
 			"s0": {"yearly snapshot"}, "s8": {"yearly snapshot"},
 		}},
-		{"KeepWithin", ForgetPolicy{KeepWithin: 25 * time.Hour}, map[string][]string{
+		{"KeepWithin", ForgetPolicy{KeepWithin: Within{Days: 1, Hours: 1}}, map[string][]string{
 			"s0": {"within 1d1h"}, "s1": {"within 1d1h"}, "s2": {"within 1d1h"}, "s3": {"within 1d1h"},
 		}},
 		{
 			"rules combine",
-			ForgetPolicy{KeepWithin: 2 * time.Hour, KeepLast: 1, KeepDaily: 1, KeepYearly: 2},
+			ForgetPolicy{KeepWithin: Within{Hours: 2}, KeepLast: 1, KeepDaily: 1, KeepYearly: 2},
 			map[string][]string{
 				"s0": {"within 2h", "last snapshot", "daily snapshot", "yearly snapshot"},
 				"s1": {"within 2h"},
@@ -151,7 +154,7 @@ func TestForgetReasonsNameEveryRule(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			res := applyForgetPolicy(forgetFixture(), tc.policy, time.UTC)
+			res := applyForgetPolicy(forgetFixture(), tc.policy, time.UTC, afterAll)
 			if !maps.EqualFunc(res.KeepReasons, tc.want, slices.Equal) {
 				t.Errorf("reasons %v, want %v", res.KeepReasons, tc.want)
 			}
@@ -213,13 +216,13 @@ func TestForgetKeepsTheOldestWhileARuleHasCountLeft(t *testing.T) {
 		{"KeepLast has no oldest", ForgetPolicy{KeepLast: 7}, map[string][]string{
 			"s0": {"last snapshot"}, "s1": {"last snapshot"}, "s2": {"last snapshot"},
 		}},
-		{"KeepWithin has no oldest", ForgetPolicy{KeepWithin: time.Hour}, map[string][]string{
+		{"KeepWithin has no oldest", ForgetPolicy{KeepWithin: Within{Hours: 1}}, map[string][]string{
 			"s0": {"within 1h"},
 		}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			res := applyForgetPolicy(series("s"), tc.policy, time.UTC)
+			res := applyForgetPolicy(series("s"), tc.policy, time.UTC, afterAll)
 			if !maps.EqualFunc(res.KeepReasons, tc.want, slices.Equal) {
 				t.Errorf("reasons %v, want %v", res.KeepReasons, tc.want)
 			}
@@ -234,7 +237,7 @@ func TestForgetKeepsTheOldestWhileARuleHasCountLeft(t *testing.T) {
 	both := append(series("s"), &Snapshot{
 		ID: "t0", SourceName: "t", CreatedAt: time.Date(2025, 12, 1, 8, 0, 0, 0, time.UTC),
 	})
-	res := applyForgetPolicy(both, ForgetPolicy{KeepDaily: 7}, time.UTC)
+	res := applyForgetPolicy(both, ForgetPolicy{KeepDaily: 7}, time.UTC, afterAll)
 	want := map[string][]string{
 		"s0": {"daily snapshot"}, "s1": {"daily snapshot"}, "s2": {"oldest daily snapshot"}, "t0": {"daily snapshot"},
 	}
@@ -243,19 +246,108 @@ func TestForgetKeepsTheOldestWhileARuleHasCountLeft(t *testing.T) {
 	}
 }
 
-func TestWithinString(t *testing.T) {
-	for _, tc := range []struct {
-		d    time.Duration
-		want string
+// The window of KeepWithin is restic's: calendar steps for years, months and
+// days on the clock of the forget zone, elapsed time for hours, measured back
+// from the newest snapshot that is not in the future, the boundary excluded.
+// Snapshots are named s0, s1, ... in the order given, newest first.
+func TestKeepWithinIsACalendarWindowFromTheNewestSnapshotNotInTheFuture(t *testing.T) {
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Skipf("no zone data: %v", err)
+	}
+	// The day before summer time starts in Berlin: 12:00 the day after is
+	// 23 hours later.
+	dst := []string{
+		"2026-03-29T12:00:00+02:00",
+		"2026-03-28T12:00:00+01:00", // a calendar day back, 23 hours
+		"2026-03-28T11:30:00+01:00",
+		"2026-03-28T11:00:00+01:00", // 24 hours back
+	}
+	future := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name   string
+		within Within
+		loc    *time.Location
+		now    time.Time
+		times  []string
+		keep   []string
 	}{
-		{30 * 24 * time.Hour, "30d"},
-		{36 * time.Hour, "1d12h"},
-		{5 * time.Hour, "5h"},
-		{90 * time.Minute, "1h30m0s"},
-	} {
-		if got := withinString(tc.d); got != tc.want {
-			t.Errorf("withinString(%v) = %q, want %q", tc.d, got, tc.want)
-		}
+		{
+			"a snapshot exactly the window old is not kept",
+			Within{Days: 1}, time.UTC, afterAll,
+			[]string{"2026-03-10T12:00:00Z", "2026-03-09T12:00:01Z", "2026-03-09T12:00:00Z", "2026-01-01T00:00:00Z"},
+			[]string{"s0", "s1"},
+		},
+		{
+			"a month back from 31 March is 3 March",
+			Within{Months: 1}, time.UTC, afterAll,
+			[]string{"2026-03-31T12:00:00Z", "2026-03-03T12:00:01Z", "2026-03-03T12:00:00Z", "2026-03-01T12:00:00Z"},
+			[]string{"s0", "s1"},
+		},
+		{
+			"and 2 March in a leap year",
+			Within{Months: 1}, time.UTC, afterAll,
+			[]string{"2028-03-31T12:00:00Z", "2028-03-02T12:00:01Z", "2028-03-02T12:00:00Z"},
+			[]string{"s0", "s1"},
+		},
+		{
+			"a year back from 29 February is 1 March",
+			Within{Years: 1}, time.UTC, afterAll,
+			[]string{"2028-02-29T12:00:00Z", "2027-03-01T12:00:01Z", "2027-03-01T12:00:00Z"},
+			[]string{"s0", "s1"},
+		},
+		{
+			"the units add up",
+			Within{Years: 1, Months: 2, Days: 3, Hours: 4}, time.UTC, afterAll,
+			[]string{"2026-09-10T12:00:00Z", "2025-07-07T08:00:01Z", "2025-07-07T08:00:00Z"},
+			[]string{"s0", "s1"},
+		},
+		{"a day is a calendar day in the forget zone", Within{Days: 1}, berlin, afterAll, dst, []string{"s0"}},
+		{"which is 24 hours in UTC", Within{Days: 1}, time.UTC, afterAll, dst, []string{"s0", "s1", "s2"}},
+		{"hours are elapsed time in any zone", Within{Hours: 24}, berlin, afterAll, dst, []string{"s0", "s1", "s2"}},
+		{
+			"a future snapshot does not move the window, and is kept",
+			Within{Days: 7}, time.UTC, future,
+			[]string{"2027-06-01T00:00:00Z", "2026-11-10T00:00:00Z", "2026-11-05T00:00:00Z", "2026-11-01T00:00:00Z"},
+			[]string{"s0", "s1", "s2"},
+		},
+		{
+			"a snapshot taken this instant is not in the future",
+			Within{Days: 1}, time.UTC, future,
+			// measured from s1 the window would reach s2
+			[]string{"2026-11-16T00:00:00Z", "2026-11-15T12:00:00Z", "2026-11-14T18:00:00Z"},
+			[]string{"s0", "s1"},
+		},
+		{
+			"only future snapshots are all kept",
+			Within{Days: 1}, time.UTC, future,
+			[]string{"2027-06-01T00:00:00Z", "2027-01-01T00:00:00Z", "2026-12-01T00:00:00Z"},
+			[]string{"s0", "s1", "s2"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			snaps := make([]*Snapshot, len(tc.times))
+			for i, text := range tc.times {
+				at, err := time.Parse(time.RFC3339, text)
+				if err != nil {
+					t.Fatal(err)
+				}
+				snaps[i] = &Snapshot{ID: fmt.Sprintf("s%d", i), CreatedAt: at}
+			}
+			res := applyForgetPolicy(snaps, ForgetPolicy{KeepWithin: tc.within}, tc.loc, tc.now)
+			if got := ids(res.Keep); !slices.Equal(got, tc.keep) {
+				t.Errorf("keeps %v, want %v", got, tc.keep)
+			}
+			if len(res.Keep)+len(res.Remove) != len(snaps) {
+				t.Errorf("keeps %d and removes %d of %d", len(res.Keep), len(res.Remove), len(snaps))
+			}
+			for _, id := range tc.keep {
+				if want := []string{"within " + tc.within.String()}; !slices.Equal(res.KeepReasons[id], want) {
+					t.Errorf("%s kept for %q, want %q", id, res.KeepReasons[id], want)
+				}
+			}
+		})
 	}
 }
 
@@ -289,7 +381,7 @@ func TestForgetPolicyAppliesPerSeries(t *testing.T) {
 					tc.odd(s)
 				}
 			}
-			res := applyForgetPolicy(snaps, ForgetPolicy{KeepLast: 1}, time.UTC)
+			res := applyForgetPolicy(snaps, ForgetPolicy{KeepLast: 1}, time.UTC, afterAll)
 
 			if keep := ids(res.Keep); !slices.Equal(keep, []string{"s0", "s1"}) {
 				t.Fatalf("keep = %v, want the newest of each series", keep)
@@ -338,7 +430,7 @@ func TestKeepWeeklyAcrossYearTurns(t *testing.T) {
 			for i, ts := range tc.times {
 				snaps[i] = &Snapshot{ID: fmt.Sprintf("s%d", i), CreatedAt: ts}
 			}
-			got := ids(applyForgetPolicy(snaps, ForgetPolicy{KeepWeekly: 2}, time.UTC).Keep)
+			got := ids(applyForgetPolicy(snaps, ForgetPolicy{KeepWeekly: 2}, time.UTC, afterAll).Keep)
 			if !slices.Equal(got, tc.keep) {
 				t.Errorf("keeps %v, want %v", got, tc.keep)
 			}
@@ -371,7 +463,8 @@ func TestPeriodKeysIgnoreLocationIdentity(t *testing.T) {
 	}
 	for name, policy := range policies {
 		t.Run(name, func(t *testing.T) {
-			if got := ids(applyForgetPolicy(snaps, policy, zone()).Keep); !slices.Equal(got, []string{"s0", "s2"}) {
+			got := ids(applyForgetPolicy(snaps, policy, zone(), afterAll).Keep)
+			if !slices.Equal(got, []string{"s0", "s2"}) {
 				t.Errorf("keeps %v, want [s0 s2]", got)
 			}
 		})
@@ -478,10 +571,12 @@ func TestPeriodsAreCutInTheGivenLocation(t *testing.T) {
 			for i, ts := range tc.times {
 				snaps[i] = &Snapshot{ID: fmt.Sprintf("s%d", i), CreatedAt: ts}
 			}
-			if got := newestOfPeriods(applyForgetPolicy(snaps, tc.policy, berlin)); !slices.Equal(got, tc.inBerlin) {
+			got := newestOfPeriods(applyForgetPolicy(snaps, tc.policy, berlin, afterAll))
+			if !slices.Equal(got, tc.inBerlin) {
 				t.Errorf("in Berlin keeps %v, want %v", got, tc.inBerlin)
 			}
-			if got := newestOfPeriods(applyForgetPolicy(snaps, tc.policy, time.UTC)); !slices.Equal(got, tc.inUTC) {
+			got = newestOfPeriods(applyForgetPolicy(snaps, tc.policy, time.UTC, afterAll))
+			if !slices.Equal(got, tc.inUTC) {
 				t.Errorf("in UTC keeps %v, want %v", got, tc.inUTC)
 			}
 		})
@@ -511,7 +606,8 @@ func TestPeriodsIgnoreTheZoneASnapshotCarries(t *testing.T) {
 	}
 	for name, policy := range map[string]ForgetPolicy{"hourly": {KeepHourly: 2}, "daily": {KeepDaily: 2}} {
 		t.Run(name, func(t *testing.T) {
-			if got := ids(applyForgetPolicy(snaps, policy, time.UTC).Keep); !slices.Equal(got, []string{"s0", "s1"}) {
+			got := ids(applyForgetPolicy(snaps, policy, time.UTC, afterAll).Keep)
+			if !slices.Equal(got, []string{"s0", "s1"}) {
 				t.Errorf("keeps %v, want [s0 s1]", got)
 			}
 		})
@@ -595,13 +691,13 @@ func TestForgetKeepTags(t *testing.T) {
 			map[string][]string{}},
 		{"a tagged snapshot uses a KeepLast slot", ForgetPolicy{KeepLast: 3, KeepTags: [][]string{{"a"}}},
 			map[string][]string{"s0": {a, last}, "s1": {a, last}, "s2": {last}, "s4": {a}}},
-		{"tags come before within", ForgetPolicy{KeepWithin: 36 * time.Hour, KeepTags: [][]string{{"b"}}},
-			map[string][]string{"s0": {b, "within 1d12h"}, "s1": {"within 1d12h"}, "s2": {b}, "s4": {b}}},
+		{"tags come before within", ForgetPolicy{KeepWithin: Within{Hours: 36}, KeepTags: [][]string{{"b"}}},
+			map[string][]string{"s0": {b, "within 36h"}, "s1": {"within 36h"}, "s2": {b}, "s4": {b}}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			snaps := taggedFixture()
-			res := applyForgetPolicy(snaps, tc.policy, time.UTC)
+			res := applyForgetPolicy(snaps, tc.policy, time.UTC, afterAll)
 			if !maps.EqualFunc(res.KeepReasons, tc.want, slices.Equal) {
 				t.Errorf("reasons %v, want %v", res.KeepReasons, tc.want)
 			}

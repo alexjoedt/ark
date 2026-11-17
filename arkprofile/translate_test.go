@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkmem"
@@ -229,7 +228,7 @@ func TestForgetPolicy(t *testing.T) {
 	}
 	want := ark.ForgetPolicy{
 		KeepLast: 1, KeepHourly: 2, KeepDaily: 3, KeepWeekly: 4, KeepMonthly: 5, KeepYearly: ark.Unlimited,
-		KeepWithin: 48 * time.Hour,
+		KeepWithin: ark.Within{Days: 2},
 		KeepTags:   [][]string{{"pinned"}, {"db", "prod"}, {""}},
 	}
 	if !reflect.DeepEqual(got, want) {

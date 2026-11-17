@@ -32,7 +32,7 @@
 //	  keep-weekly: 4
 //	  keep-monthly: 12
 //	  keep-yearly: unlimited         # a count, or unlimited for every period
-//	  keep-within: 30d               # a duration such as 72h or 30d
+//	  keep-within: 30d               # years, months, days, hours: 72h, 1y6m
 //	  keep-tag: [pinned, "db,prod"]  # keep what is tagged pinned, or db and prod
 //	  prune: true                    # prune after the forget
 //	  run-after: echo forgotten      # the same four hooks as backup
@@ -55,7 +55,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -116,7 +115,8 @@ type Forget struct {
 	KeepWeekly  ark.KeepCount `yaml:"keep-weekly"`
 	KeepMonthly ark.KeepCount `yaml:"keep-monthly"`
 	KeepYearly  ark.KeepCount `yaml:"keep-yearly"`
-	// KeepWithin is a duration as the CLI takes it, such as 72h or 30d.
+	// KeepWithin is a window as [ark.ParseWithin] reads it, such as 30d,
+	// 72h or 1y6m; m counts months.
 	KeepWithin string `yaml:"keep-within"`
 	// KeepTags holds one tag list per entry, each as the CLI takes it and
 	// [ark.ParseTagList] reads it: "db,prod" keeps what carries both tags,
@@ -140,8 +140,8 @@ var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 // Validate reports a name outside [a-z0-9][a-z0-9._-]*, conflicting
 // password sources, a negative concurrency or lock-wait, a negative keep
 // count other than [ark.Unlimited], a backup label that
-// [ark.ValidateLabels] refuses, a keep-within that is not a positive
-// duration and a keep-tag list with an empty tag next to others, as a stray
+// [ark.ValidateLabels] refuses, a keep-within that [ark.ParseWithin]
+// refuses and a keep-tag list with an empty tag next to others, as a stray
 // comma leaves one. Every error matches [ErrInvalid].
 func (p *Profile) Validate() error {
 	if !validName.MatchString(p.Name) {
@@ -179,7 +179,7 @@ func (p *Profile) Validate() error {
 		}
 	}
 	if f.KeepWithin != "" {
-		if _, err := parseWithin(f.KeepWithin); err != nil {
+		if _, err := ark.ParseWithin(f.KeepWithin); err != nil {
 			return invalidf("forget.keep-within: %v", err)
 		}
 	}
@@ -192,28 +192,6 @@ func (p *Profile) Validate() error {
 		}
 	}
 	return nil
-}
-
-// parseWithin reads keep-within as the CLI does: a Go duration or a day
-// count such as 30d, days being 24 hours, and positive.
-func parseWithin(s string) (time.Duration, error) {
-	s = strings.TrimSpace(s)
-	var d time.Duration
-	var err error
-	if days, ok := strings.CutSuffix(s, "d"); ok {
-		var n float64
-		n, err = strconv.ParseFloat(days, 64)
-		d = time.Duration(n * float64(24*time.Hour))
-	} else {
-		d, err = time.ParseDuration(s)
-	}
-	if err != nil {
-		return 0, fmt.Errorf("%q is not a duration such as 72h or 30d", s)
-	}
-	if d <= 0 {
-		return 0, fmt.Errorf("duration %q must be positive", s)
-	}
-	return d, nil
 }
 
 func (p *Profile) checkPassword() error {

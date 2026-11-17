@@ -82,7 +82,7 @@ func (p *Profile) BackupOptions() []ark.BackupOption {
 }
 
 // ForgetPolicy returns the keep-* rules of the forget section. It fails only
-// on a keep-within that is not a positive duration, which [Profile.Validate]
+// on a keep-within that [ark.ParseWithin] refuses, which [Profile.Validate]
 // reports too. Whether to prune afterwards is forget.prune, read by the caller.
 func (p *Profile) ForgetPolicy() (ark.ForgetPolicy, error) {
 	f := p.Forget
@@ -95,11 +95,11 @@ func (p *Profile) ForgetPolicy() (ark.ForgetPolicy, error) {
 		KeepYearly:  f.KeepYearly,
 	}
 	if f.KeepWithin != "" {
-		d, err := parseWithin(f.KeepWithin)
+		w, err := ark.ParseWithin(f.KeepWithin)
 		if err != nil {
 			return ark.ForgetPolicy{}, invalidf("forget.keep-within: %v", err)
 		}
-		policy.KeepWithin = d
+		policy.KeepWithin = w
 	}
 	for _, list := range f.KeepTags {
 		policy.KeepTags = append(policy.KeepTags, ark.ParseTagList(list))

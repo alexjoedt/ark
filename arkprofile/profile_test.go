@@ -251,6 +251,8 @@ func TestValidate(t *testing.T) {
 		{"negative keep-yearly", func(p *arkprofile.Profile) { p.Forget.KeepYearly = -7 }},
 		{"bad keep-within", func(p *arkprofile.Profile) { p.Forget.KeepWithin = "30x" }},
 		{"zero keep-within", func(p *arkprofile.Profile) { p.Forget.KeepWithin = "0d" }},
+		{"keep-within in minutes", func(p *arkprofile.Profile) { p.Forget.KeepWithin = "90m" }},
+		{"keep-within as a Go duration", func(p *arkprofile.Profile) { p.Forget.KeepWithin = "1h30m" }},
 		{"keep-tag trailing comma", func(p *arkprofile.Profile) { p.Forget.KeepTags = []string{"", "pinned,"} }},
 		{"keep-tag doubled comma", func(p *arkprofile.Profile) { p.Forget.KeepTags = []string{"db,,prod"} }},
 		{"keep-tag only commas", func(p *arkprofile.Profile) { p.Forget.KeepTags = []string{" , "} }},

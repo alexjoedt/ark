@@ -113,6 +113,10 @@ func TestForgetTakesUnlimitedAndRefusesOtherNegativeCounts(t *testing.T) {
 		{KeepLast: -2},
 		{KeepDaily: 7, KeepYearly: -5},
 		{KeepLast: ark.Unlimited, KeepWeekly: -2},
+		{KeepLast: 5, KeepWithin: ark.Within{Days: -1}},
+		{KeepLast: 5, KeepWithin: ark.Within{Years: 1, Hours: -1}},
+		// more hours than a time.Duration holds would put the window in the future
+		{KeepLast: 5, KeepWithin: ark.Within{Hours: 3_000_000}},
 		// a stray comma: a list no snapshot can match must not pass as a keep rule
 		{KeepLast: 5, KeepTags: [][]string{ark.ParseTagList("pinned,")}},
 		{KeepLast: 5, KeepTags: [][]string{{"", "pinned"}}},
@@ -124,6 +128,50 @@ func TestForgetTakesUnlimitedAndRefusesOtherNegativeCounts(t *testing.T) {
 	}
 	if snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{}); err != nil || len(snaps) != 4 {
 		t.Errorf("after the refused policies: %d snapshots, %v, want 4", len(snaps), err)
+	}
+}
+
+func TestParseWithin(t *testing.T) {
+	for in, want := range map[string]ark.Within{
+		"1y2m3d4h": {Years: 1, Months: 2, Days: 3, Hours: 4},
+		"30d":      {Days: 30},
+		"72h":      {Hours: 72},
+		"1m":       {Months: 1},
+		"11m":      {Months: 11},
+		"1y6m":     {Years: 1, Months: 6},
+		"2y12h":    {Years: 2, Hours: 12},
+		"1000000d": {Days: 1_000_000},
+	} {
+		got, err := ark.ParseWithin(in)
+		if err != nil || got != want {
+			t.Errorf("ParseWithin(%q) = %+v, %v, want %+v", in, got, err, want)
+		}
+		if got.String() != in {
+			t.Errorf("ParseWithin(%q) writes itself as %q", in, got.String())
+		}
+	}
+	if got, err := ark.ParseWithin(" 0y7d "); err != nil || got != (ark.Within{Days: 7}) || got.String() != "7d" {
+		t.Errorf(`ParseWithin(" 0y7d ") = %+v, %v, want 7 days written 7d`, got, err)
+	}
+	if got := (ark.Within{}).String(); got != "" {
+		t.Errorf("the zero window writes itself as %q, want nothing", got)
+	}
+	for _, in := range []string{
+		"", "d", "30", "soon",
+		"90m", "12m", "1h30m", "1w", "45s", "1.5d", "1D", "1 d",
+		"0d", "0y0m0d0h",
+		"-1d", "1y-2m", "+1d",
+		"3d2y", "1d1d",
+		"1000001h", "99999999999999999999d",
+	} {
+		got, err := ark.ParseWithin(in)
+		if err == nil {
+			t.Errorf("ParseWithin(%q) = %+v, want an error", in, got)
+			continue
+		}
+		if !strings.Contains(err.Error(), "y (years), m (months), d (days) and h (hours)") {
+			t.Errorf("ParseWithin(%q): %v, want the units named", in, err)
+		}
 	}
 }
 

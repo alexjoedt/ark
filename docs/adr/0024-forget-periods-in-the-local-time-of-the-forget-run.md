@@ -1,6 +1,6 @@
 # 0024: Forget periods count in the local time of the forget run
 
-Status: accepted
+Status: partly superseded by 0027
 Date: 2026-11-17
 
 ## Context

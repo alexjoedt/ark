@@ -43,6 +43,8 @@ Each key means what the flag of the same name means, see [CLI](index.md#global-f
 `backup.path` is the directory `ark backup -P` backs up when no path is given.
 A keep count is a whole number or `unlimited`, as on the command line: `keep-yearly: unlimited`
 keeps the newest snapshot of every year. A negative count fails the load.
+`keep-within` is a duration as `--keep-within` takes it, `30d`, `72h` or `1y6m`, where `m` counts
+months; one that flag would refuse fails the load.
 `keep-tag` is a list with one entry per tag list, each written as `--keep-tag` takes it:
 `keep-tag: [pinned, "db,prod"]` keeps what is tagged `pinned`, and what is tagged `db` and `prod`;
 the entry `""` keeps the untagged snapshots. An entry with a stray comma, such as `"pinned,"`, fails

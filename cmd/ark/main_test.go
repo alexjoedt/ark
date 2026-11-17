@@ -645,6 +645,9 @@ func TestForgetAndPrune(t *testing.T) {
 	// an empty policy without ids or --all is exit 2, a bad duration too
 	forget(2)
 	forget(2, "--keep-within", "soon")
+	// a Go duration is none: m counts months, and there are no minutes
+	forget(2, "--keep-within", "90m")
+	forget(2, "--keep-within", "1h30m")
 	forget(2, ids[0], "--keep-last", "1")
 	// prompt without a terminal and without --yes is exit 2 as well
 	forget(2, ids[0])
@@ -658,14 +661,17 @@ func TestForgetAndPrune(t *testing.T) {
 		t.Fatalf("dry run deleted something: %s", out)
 	}
 
-	// a 30d window keeps fresh snapshots, --all with a filter removes them
-	r = forget(0, "--keep-within", "30d", "--dry-run")
-	if len(r.Remove) != 0 {
-		t.Fatalf("keep-within removed %d", len(r.Remove))
-	}
-	for _, k := range r.Keep {
-		if !slices.Equal(k.Reasons, []string{"within 30d"}) {
-			t.Fatalf("%s kept for %q, want within 30d", k.ID, k.Reasons)
+	// a window keeps fresh snapshots and the reason names it as given,
+	// --all with a filter removes them
+	for _, within := range []string{"30d", "72h", "1y6m"} {
+		r = forget(0, "--keep-within", within, "--dry-run")
+		if len(r.Remove) != 0 {
+			t.Fatalf("keep-within %s removed %d", within, len(r.Remove))
+		}
+		for _, k := range r.Keep {
+			if !slices.Equal(k.Reasons, []string{"within " + within}) {
+				t.Fatalf("%s kept for %q, want within %s", k.ID, k.Reasons, within)
+			}
 		}
 	}
 	r = forget(0, "--all", "-s", "two", "--yes")

@@ -11,8 +11,8 @@ import (
 // applyForgetPolicy applies policy once per series (source type, source name
 // and host) and merges the groups, so one busy series cannot push another's
 // snapshots out of the window. Snapshots are expected to be sorted newest
-// first. The period rules count in loc.
-func applyForgetPolicy(snapshots []*Snapshot, policy ForgetPolicy, loc *time.Location) *ForgetResult {
+// first. The period rules count in loc; a snapshot after now is in the future.
+func applyForgetPolicy(snapshots []*Snapshot, policy ForgetPolicy, loc *time.Location, now time.Time) *ForgetResult {
 	result := &ForgetResult{KeepReasons: make(map[string][]string)}
 	groups := make(map[seriesKey][]*Snapshot)
 	var order []seriesKey
@@ -24,7 +24,7 @@ func applyForgetPolicy(snapshots []*Snapshot, policy ForgetPolicy, loc *time.Loc
 		groups[key] = append(groups[key], s)
 	}
 	for _, key := range order {
-		applyForgetPolicyToGroup(result, groups[key], policy, loc)
+		applyForgetPolicyToGroup(result, groups[key], policy, loc, now)
 	}
 	sortNewestFirst(result.Keep)
 	sortNewestFirst(result.Remove)
@@ -54,13 +54,24 @@ type keepBucket struct {
 // reasons for one series, which is not empty and sorted newest first, to
 // result. It is restic's walk: one pass from the newest snapshot to the
 // oldest, every rule deciding on each snapshot by itself.
-func applyForgetPolicyToGroup(result *ForgetResult, snapshots []*Snapshot, policy ForgetPolicy, loc *time.Location) {
+func applyForgetPolicyToGroup(
+	result *ForgetResult,
+	snapshots []*Snapshot,
+	policy ForgetPolicy,
+	loc *time.Location,
+	now time.Time,
+) {
 	reasons := result.KeepReasons
 
 	// KeepWithin: everything younger than the window, measured from the
-	// newest snapshot.
-	cutoff := snapshots[0].CreatedAt.Add(-policy.KeepWithin)
-	within := "within " + withinString(policy.KeepWithin)
+	// newest snapshot that is not in the future. When all are, latest stays
+	// the zero time and every snapshot is after the cutoff, as for restic.
+	var latest time.Time
+	if i := slices.IndexFunc(snapshots, func(s *Snapshot) bool { return !s.CreatedAt.After(now) }); i >= 0 {
+		latest = snapshots[i].CreatedAt
+	}
+	cutoff := policy.KeepWithin.before(latest.In(loc))
+	within := "within " + policy.KeepWithin.String()
 
 	// Period keys are the numbers on a clock in loc. The hour a clock shows
 	// twice when summer time ends is one period, as it is for restic.
@@ -92,7 +103,7 @@ func applyForgetPolicyToGroup(result *ForgetResult, snapshots []*Snapshot, polic
 				reasons[s.ID] = append(reasons[s.ID], "has tags ["+strings.Join(list, ", ")+"]")
 			}
 		}
-		if policy.KeepWithin > 0 && s.CreatedAt.After(cutoff) {
+		if policy.KeepWithin != (Within{}) && s.CreatedAt.After(cutoff) {
 			reasons[s.ID] = append(reasons[s.ID], within)
 		}
 		t := s.CreatedAt.In(loc)
@@ -165,22 +176,4 @@ func checkSeriesKept(snapshots, keep []*Snapshot) error {
 func weekKey(t time.Time) periodKey {
 	year, week := t.ISOWeek()
 	return periodKey{year, week}
-}
-
-// withinString writes d the way restic writes a keep-within duration, in
-// days and hours with zero parts left out, such as "30d" or "1d12h". A
-// window that is not whole hours, which restic cannot express, keeps Go's
-// form.
-func withinString(d time.Duration) string {
-	if d%time.Hour != 0 {
-		return d.String()
-	}
-	days, hours := d/(24*time.Hour), d%(24*time.Hour)/time.Hour
-	switch {
-	case hours == 0:
-		return fmt.Sprintf("%dd", days)
-	case days == 0:
-		return fmt.Sprintf("%dh", hours)
-	}
-	return fmt.Sprintf("%dd%dh", days, hours)
 }

@@ -133,25 +133,3 @@ func ParseBytes(s string) (int64, error) {
 	}
 	return n, nil
 }
-
-// ParseDuration reads a Go duration or a day count such as "30d"; days are
-// 24 hours. The result is positive.
-func ParseDuration(s string) (time.Duration, error) {
-	s = strings.TrimSpace(s)
-	var d time.Duration
-	var err error
-	if days, ok := strings.CutSuffix(s, "d"); ok {
-		var n float64
-		n, err = strconv.ParseFloat(days, 64)
-		d = time.Duration(n * float64(24*time.Hour))
-	} else {
-		d, err = time.ParseDuration(s)
-	}
-	if err != nil {
-		return 0, fmt.Errorf("invalid duration %q", s)
-	}
-	if d <= 0 {
-		return 0, fmt.Errorf("duration %q must be positive", s)
-	}
-	return d, nil
-}
