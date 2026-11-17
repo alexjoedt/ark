@@ -802,6 +802,10 @@ func TestHasTagsIgnoresBlanks(t *testing.T) {
 	if hasTags([]string{"pinned x"}, []string{"pinned"}) {
 		t.Error("a tag matched a longer one")
 	}
+}
+
+// Tags are names, not text: Pinned and pinned are two tags.
+func TestHasTagsIsCaseSensitive(t *testing.T) {
 	if hasTags([]string{"Pinned"}, []string{"pinned"}) {
 		t.Error("a tag matched one in another case")
 	}

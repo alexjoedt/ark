@@ -24,7 +24,8 @@ import (
 //
 //   - a7 and a8 lie either side of midnight in Berlin and on one day in UTC
 //   - a1 and a2 share ISO week 2025-W01 across the turn of the year
-//   - a5 and a6 share an hour
+//   - a5 and a6 share an hour (Berlin is a whole-hour offset from UTC, so
+//     hour buckets say nothing about the zone)
 //   - b2 is among the three newest of the repository, not of its host alone
 var forgetHistory = []struct {
 	name, host, at string
@@ -53,8 +54,6 @@ var forgetCases = []struct {
 	keep string
 }{
 	{"last", []string{"--keep-last", "3"}, "a7 a8 a9 b0 b1 b2"},
-	// a5 loses its hour to a6, which leaves the fifth to a4
-	{"hourly", []string{"--keep-hourly", "5"}, "a4 a6 a7 a8 a9 b0 b1 b2"},
 	// in UTC the day of 11 June would be a8's
 	{"daily", []string{"--keep-daily", "3"}, "a4 a7 a9 b0 b1 b2"},
 	// a1 is in the week a2 took; the fourth week is a0's
@@ -71,10 +70,14 @@ var forgetCases = []struct {
 	},
 	// pinned alone (a3, b1) or db alone (a8) is not a list
 	{"tag", []string{"--keep-tag", "pinned,db", "--keep-tag", "archive"}, "a0 a6 b0"},
+	// hourly adds a4 as the fifth hour of alpha; a5 loses its hour to a6
 	{
 		"combination",
-		[]string{"--keep-within", "12h", "--keep-daily", "2", "--keep-yearly", "2", "--keep-tag", "pinned"},
-		"a1 a3 a6 a7 a8 a9 b0 b1 b2",
+		[]string{
+			"--keep-within", "12h", "--keep-hourly", "5", "--keep-daily", "2",
+			"--keep-yearly", "2", "--keep-tag", "pinned",
+		},
+		"a1 a3 a4 a6 a7 a8 a9 b0 b1 b2",
 	},
 }
 
