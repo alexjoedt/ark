@@ -50,8 +50,8 @@ type ForgetResult struct {
 
 	// KeepReasons names, per kept snapshot ID, every rule that selected it,
 	// in the order the rules are applied and in restic's wording, such as
-	// "within 30d", "last snapshot" or "daily snapshot". It is nil when
-	// Forget removes named IDs, which keeps nothing.
+	// "within 30d", "last snapshot" or "daily snapshot". A snapshot that is
+	// not kept has no entry; when nothing is kept the map may be nil or empty.
 	KeepReasons map[string][]string
 }
 

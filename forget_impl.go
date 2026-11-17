@@ -2,7 +2,6 @@ package ark
 
 import (
 	"fmt"
-	"maps"
 	"sort"
 	"time"
 )
@@ -23,10 +22,7 @@ func applyForgetPolicy(snapshots []*Snapshot, policy ForgetPolicy, loc *time.Loc
 		groups[key] = append(groups[key], s)
 	}
 	for _, key := range order {
-		g := applyForgetPolicyToGroup(groups[key], policy, loc)
-		result.Keep = append(result.Keep, g.Keep...)
-		result.Remove = append(result.Remove, g.Remove...)
-		maps.Copy(result.KeepReasons, g.KeepReasons)
+		applyForgetPolicyToGroup(result, groups[key], policy, loc)
 	}
 	sortNewestFirst(result.Keep)
 	sortNewestFirst(result.Remove)
@@ -37,15 +33,10 @@ func sortNewestFirst(snaps []*Snapshot) {
 	sort.SliceStable(snaps, func(i, j int) bool { return snaps[i].CreatedAt.After(snaps[j].CreatedAt) })
 }
 
-// applyForgetPolicyToGroup selects keep and remove for one series.
-func applyForgetPolicyToGroup(snapshots []*Snapshot, policy ForgetPolicy, loc *time.Location) *ForgetResult {
-	result := &ForgetResult{}
-	if len(snapshots) == 0 {
-		return result
-	}
-
-	// reasons maps a kept snapshot ID to the rules that keep it.
-	reasons := make(map[string][]string)
+// applyForgetPolicyToGroup adds the keep and remove picks and the keep
+// reasons for one series, which is not empty, to result.
+func applyForgetPolicyToGroup(result *ForgetResult, snapshots []*Snapshot, policy ForgetPolicy, loc *time.Location) {
+	reasons := result.KeepReasons
 	keep := func(s *Snapshot, reason string) { reasons[s.ID] = append(reasons[s.ID], reason) }
 
 	// KeepWithin: everything younger than the window, measured from the
@@ -81,7 +72,6 @@ func applyForgetPolicyToGroup(snapshots []*Snapshot, policy ForgetPolicy, loc *t
 	})
 	markPeriod(snapshots, keep, "yearly snapshot", policy.KeepYearly, loc, time.Time.Year)
 
-	result.KeepReasons = reasons
 	for _, s := range snapshots {
 		if _, ok := reasons[s.ID]; ok {
 			result.Keep = append(result.Keep, s)
@@ -89,8 +79,6 @@ func applyForgetPolicyToGroup(snapshots []*Snapshot, policy ForgetPolicy, loc *t
 			result.Remove = append(result.Remove, s)
 		}
 	}
-
-	return result
 }
 
 // markPeriod keeps the newest snapshot of each of the n newest periods for
