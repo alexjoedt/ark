@@ -65,7 +65,7 @@ tasks:
       - go run ./scripts/forgetfixtures -dir "{{.DIR}}" {{.CLI_ARGS}}
 
   docs:gen:
-    desc: Generate docs/retention.md from the forget selection
+    desc: Generate docs/retention.md and its timelines from the forget selection
     cmds:
       - go run ./scripts/retentiondocs
 

@@ -1,5 +1,5 @@
-// Command retentiondocs writes the retention guide docs/retention.md from
-// ark's own forget selection. Each scenario backs its
+// Command retentiondocs writes the retention guide docs/retention.md and its
+// timelines under docs/retention/ from ark's own forget selection. Each scenario backs its
 // history up into an in-memory repository, one snapshot per time, and asks
 // Repository.Forget in a dry run what the policy keeps. The page is rendered
 // whole from retention.md.tmpl, so no outcome in it is written by hand.
@@ -18,6 +18,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -34,6 +35,7 @@ var pageTemplate string
 
 const (
 	pagePath = "docs/retention.md"
+	imageDir = "docs/retention"
 	header   = "[//]: # (Generated from scripts/retentiondocs/retention.md.tmpl by task docs:gen. Edit the template.)\n\n"
 )
 
@@ -68,6 +70,8 @@ type outcome struct {
 	// EmptyDays are the days between the oldest and the newest kept
 	// snapshot that have no snapshot, newest first.
 	EmptyDays []string
+	// Image is the timeline's path relative to the page.
+	Image string
 }
 
 // file is one generated file.
@@ -91,11 +95,11 @@ func run(ctx context.Context, root string) error {
 		return err
 	}
 	for _, f := range files {
-		path := filepath.Join(root, filepath.FromSlash(f.path))
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		dst := filepath.Join(root, filepath.FromSlash(f.path))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return fmt.Errorf("creating the directory of %s: %w", f.path, err)
 		}
-		if err := os.WriteFile(path, f.content, 0o644); err != nil { //nolint:gosec // docs are world-readable
+		if err := os.WriteFile(dst, f.content, 0o644); err != nil { //nolint:gosec // docs are world-readable
 			return fmt.Errorf("writing %s: %w", f.path, err)
 		}
 	}
@@ -106,6 +110,7 @@ func run(ctx context.Context, root string) error {
 // name.
 func generate(ctx context.Context, list []scenario) ([]file, map[string]*outcome, error) {
 	outcomes := make(map[string]*outcome, len(list))
+	var files []file
 	for _, s := range list {
 		if _, dup := outcomes[s.name]; dup {
 			return nil, nil, fmt.Errorf("scenario %q defined twice", s.name)
@@ -117,13 +122,20 @@ func generate(ctx context.Context, list []scenario) ([]file, map[string]*outcome
 		if err != nil {
 			return nil, nil, fmt.Errorf("scenario %s: %w", s.name, err)
 		}
-		outcomes[s.name] = describe(s.name, rows)
+		image, err := timeline(s.policy, rows)
+		if err != nil {
+			return nil, nil, fmt.Errorf("drawing scenario %s: %w", s.name, err)
+		}
+		o := describe(s.name, rows)
+		files = append(files, file{path: path.Join(imageDir, s.name+".svg"), content: image})
+		o.Image = path.Join(path.Base(imageDir), s.name+".svg")
+		outcomes[s.name] = o
 	}
 	page, err := render(outcomes)
 	if err != nil {
 		return nil, nil, fmt.Errorf("rendering %s: %w", pagePath, err)
 	}
-	return []file{{path: pagePath, content: page}}, outcomes, nil
+	return append([]file{{path: pagePath, content: page}}, files...), outcomes, nil
 }
 
 // forget backs the history up and returns every snapshot with what a dry
@@ -207,11 +219,17 @@ func dryRun(ctx context.Context, b ark.Backend, policy ark.ForgetPolicy) (result
 	return result, nil
 }
 
-func describe(name string, rows []row) *outcome {
-	layout, dayLayout := "Mon 02 Jan 15:04", "Mon 02 Jan"
+// layouts returns the formats of a snapshot time and of a day for rows,
+// newest first: with the year only when the history crosses a year turn.
+func layouts(rows []row) (timeLayout, dayLayout string) {
 	if rows[0].at.Year() != rows[len(rows)-1].at.Year() {
-		layout, dayLayout = "Mon 02 Jan 2006 15:04", "Mon 02 Jan 2006"
+		return "Mon 02 Jan 2006 15:04", "Mon 02 Jan 2006"
 	}
+	return "Mon 02 Jan 15:04", "Mon 02 Jan"
+}
+
+func describe(name string, rows []row) *outcome {
+	layout, dayLayout := layouts(rows)
 	o := &outcome{Name: name}
 	o.EmptyDays = emptyDays(rows, dayLayout)
 	var t strings.Builder

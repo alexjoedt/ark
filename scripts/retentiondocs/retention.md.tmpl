@@ -6,6 +6,8 @@
 
 `--keep-daily 3` keeps the newest snapshot of each of the three most recent days that have a snapshot.
 {{with scenario "keep-daily"}}
+![Timeline of --keep-daily 3]({{.Image}})
+
 {{.Table}}
 
 {{with .EmptyDays}}No snapshot falls on {{join . ", "}}; a day without one uses no count. {{end}}The policy keeps {{join .Kept ", "}}{{with .Removed}} and removes {{plural (len .) "other snapshot"}}{{end}}.

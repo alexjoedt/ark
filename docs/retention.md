@@ -8,6 +8,8 @@
 
 `--keep-daily 3` keeps the newest snapshot of each of the three most recent days that have a snapshot.
 
+![Timeline of --keep-daily 3](retention/keep-daily.svg)
+
 | Snapshot | Result | Reason |
 |---|---|---|
 | Sun 22 Mar 18:00 | kept | `daily snapshot` |
