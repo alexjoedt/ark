@@ -11,6 +11,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/arkuri"
 )
 
 // forgetHistory is the history every forget case starts from, in backup
@@ -73,37 +76,41 @@ var forgetCases = []struct {
 	},
 }
 
-// TestE2EForget takes the history into a fresh repository per case, runs
-// forget with a prune, and holds what is left against the case: the kept
-// ids, a clean check, and every kept snapshot restoring to the tree it was
-// taken from.
+// TestE2EForget backs the history up once per backend, copies it into a
+// fresh repository per case, runs forget with a prune, and holds what is left
+// against the case: the kept ids, a clean check, and every kept snapshot
+// restoring to the tree it was taken from.
 func TestE2EForget(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
-		t.Skip("over a hundred backups, skipped with -short")
+		t.Skip("over a dozen backups and a hundred CLI runs, skipped with -short")
 	}
 	cases := func(t *testing.T, newRepo func(t *testing.T) string) {
+		h := backUpForgetHistory(t, newRepo(t))
 		for _, tc := range forgetCases {
 			t.Run(tc.name, func(t *testing.T) {
-				t.Parallel() // a repository and a tree per case; most of a run is waiting on the disk
-				forgetRun(t, newRepo(t), tc.args, strings.Fields(tc.keep))
+				t.Parallel() // a repository per case; most of a run is waiting on the disk
+				repo := newRepo(t)
+				copyRepo(t, h.repo, repo)
+				forgetRun(t, h, repo, tc.args, strings.Fields(tc.keep))
 			})
 		}
 	}
 	t.Run("local", func(t *testing.T) {
+		t.Parallel() // the two serial backups of the history overlap
 		cases(t, func(t *testing.T) string { return filepath.Join(t.TempDir(), "repo") })
 	})
 	t.Run("sftp", func(t *testing.T) {
-		if os.Getenv(envSFTPTestURI) == "" {
-			t.Skipf("%s is not set", envSFTPTestURI)
-		}
+		t.Parallel()
 		cases(t, func(t *testing.T) string { return sftpTestRepo(t, "e2e-forget-") })
 	})
 }
 
-func forgetRun(t *testing.T, repo string, rule, keep []string) {
-	// The CLI is this test binary run again: it carries the zone database,
-	// so TZ decides the periods on a machine without one too.
-	ark := func(args ...string) []byte {
+// forgetCLI runs the CLI against repo and returns its stdout. The CLI is this
+// test binary run again: it carries the zone database, so TZ decides the
+// periods on a machine without one too.
+func forgetCLI(t *testing.T, repo string) func(args ...string) []byte {
+	return func(args ...string) []byte {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
 		args = append([]string{"--json", "-q", "-r", repo}, args...)
@@ -116,20 +123,36 @@ func forgetRun(t *testing.T, repo string, rule, keep []string) {
 		}
 		return stdout.Bytes()
 	}
-	type snapshot struct {
-		ID string `json:"id"`
-	}
+}
 
+type forgetSnapshot struct {
+	ID string `json:"id"`
+}
+
+// forgetBackups is the history backed up into repo, which the cases copy
+// and only read.
+type forgetBackups struct {
+	repo string
+	id   map[string]string            // name -> snapshot id
+	name map[string]string            // snapshot id -> name
+	tree map[string]map[string]string // name -> the tree it was taken from
+}
+
+func backUpForgetHistory(t *testing.T, repo string) *forgetBackups {
+	ark := forgetCLI(t, repo)
 	ark("init")
 	src := t.TempDir()
 	writeTree(t, src, map[string]string{"keep.txt": "never changes", "sub/keep.md": "# kept"})
 	if err := os.Symlink("sub/keep.md", filepath.Join(src, "link")); err != nil {
 		t.Fatal(err)
 	}
-	id := map[string]string{}              // name -> snapshot id
-	tree := map[string]map[string]string{} // name -> the tree it was taken from
-	name := map[string]string{}            // snapshot id -> name
-	for step, h := range forgetHistory {
+	h := &forgetBackups{
+		repo: repo,
+		id:   map[string]string{},
+		name: map[string]string{},
+		tree: map[string]map[string]string{},
+	}
+	for step, s := range forgetHistory {
 		// every snapshot has a file of its own, shares shared.bin with up to
 		// three neighbours, and sees a.txt change length
 		if err := os.RemoveAll(filepath.Join(src, "only")); err != nil {
@@ -137,30 +160,74 @@ func forgetRun(t *testing.T, repo string, rule, keep []string) {
 		}
 		files := map[string]string{
 			"a.txt":                   strings.Repeat("s", step+1),
-			"only/" + h.name + ".bin": randomBytes(t, 64<<10),
+			"only/" + s.name + ".bin": randomBytes(t, 64<<10),
 		}
 		if step%4 == 0 {
 			files["shared.bin"] = randomBytes(t, 256<<10)
 		}
 		writeTree(t, src, files)
 
-		args := []string{"backup", "--time", h.at, "--host", h.host}
-		for _, tag := range h.tags {
+		args := []string{"backup", "--time", s.at, "--host", s.host}
+		for _, tag := range s.tags {
 			args = append(args, "--tag", tag)
 		}
-		var s snapshot
-		if err := json.Unmarshal(ark(append(args, src)...), &s); err != nil || s.ID == "" {
-			t.Fatalf("backup %s: no snapshot id: %v", h.name, err)
+		var snap forgetSnapshot
+		if err := json.Unmarshal(ark(append(args, src)...), &snap); err != nil || snap.ID == "" {
+			t.Fatalf("backup %s: no snapshot id: %v", s.name, err)
 		}
-		id[h.name], name[s.ID], tree[h.name] = s.ID, h.name, readTree(t, src)
+		h.id[s.name], h.name[snap.ID], h.tree[s.name] = snap.ID, s.name, readTree(t, src)
 	}
+	return h
+}
+
+// copyRepo copies every object of the repository at from into the one at to.
+func copyRepo(t *testing.T, from, to string) {
+	t.Helper()
+	ctx := t.Context()
+	open := func(uri string) ark.Backend {
+		b, err := arkuri.Open(ctx, uri)
+		if err != nil {
+			t.Fatalf("open repository: %v", err)
+		}
+		t.Cleanup(func() { b.Close() })
+		return b
+	}
+	src, dst := open(from), open(to)
+	for _, typ := range repoTypes {
+		var names []string
+		if err := src.List(ctx, typ, func(info ark.BlobInfo) error {
+			names = append(names, info.Name)
+			return nil
+		}); err != nil {
+			t.Fatalf("list %s: %v", typ, err)
+		}
+		for _, name := range names {
+			h := ark.Handle{Type: typ, Name: name}
+			r, err := src.Get(ctx, h)
+			if err != nil {
+				t.Fatalf("get %s %s: %v", typ, name, err)
+			}
+			err = dst.Put(ctx, h, r)
+			r.Close()
+			if err != nil {
+				t.Fatalf("put %s %s: %v", typ, name, err)
+			}
+		}
+	}
+	if err := dst.Sync(ctx); err != nil {
+		t.Fatalf("sync copy: %v", err)
+	}
+}
+
+func forgetRun(t *testing.T, h *forgetBackups, repo string, rule, keep []string) {
+	ark := forgetCLI(t, repo)
 
 	var wantKeep, wantRemove []string
-	for _, h := range forgetHistory {
-		if slices.Contains(keep, h.name) {
-			wantKeep = append(wantKeep, h.name)
+	for _, s := range forgetHistory {
+		if slices.Contains(keep, s.name) {
+			wantKeep = append(wantKeep, s.name)
 		} else {
-			wantRemove = append(wantRemove, h.name)
+			wantRemove = append(wantRemove, s.name)
 		}
 	}
 	slices.Sort(wantKeep)
@@ -168,10 +235,10 @@ func forgetRun(t *testing.T, repo string, rule, keep []string) {
 	if len(wantKeep) != len(keep) || len(wantRemove) == 0 {
 		t.Fatalf("case keeps %v of the history, want some removed and every name known", keep)
 	}
-	names := func(snaps []snapshot) []string {
+	names := func(snaps []forgetSnapshot) []string {
 		var out []string
 		for _, s := range snaps {
-			out = append(out, cmp.Or(name[s.ID], s.ID))
+			out = append(out, cmp.Or(h.name[s.ID], s.ID))
 		}
 		slices.Sort(out)
 		return out
@@ -179,7 +246,7 @@ func forgetRun(t *testing.T, repo string, rule, keep []string) {
 
 	// forget --prune writes two values: the forget result, then the prune's
 	var forgot struct {
-		Keep, Remove []snapshot
+		Keep, Remove []forgetSnapshot
 	}
 	var pruned struct {
 		BlobsRemoved int `json:"blobs_removed"`
@@ -202,7 +269,7 @@ func forgetRun(t *testing.T, repo string, rule, keep []string) {
 		t.Errorf("prune after forget %v removed no blob", rule)
 	}
 
-	var left []snapshot
+	var left []forgetSnapshot
 	if err := json.Unmarshal(ark("snapshots"), &left); err != nil {
 		t.Fatalf("snapshots: %v", err)
 	}
@@ -210,19 +277,19 @@ func forgetRun(t *testing.T, repo string, rule, keep []string) {
 		t.Errorf("after forget %v the repository holds %v, want %v", rule, got, wantKeep)
 	}
 
+	// check exits non-zero on a problem, so ark has failed the test on one
 	var checked struct {
-		SnapshotsChecked int      `json:"snapshots_checked"`
-		Errors           []string `json:"errors"`
+		SnapshotsChecked int `json:"snapshots_checked"`
 	}
 	if err := json.Unmarshal(ark("check"), &checked); err != nil {
 		t.Fatalf("check: %v", err)
 	}
-	if checked.SnapshotsChecked != len(wantKeep) || len(checked.Errors) != 0 {
-		t.Errorf("check after forget %v: %+v, want %d snapshots and no error", rule, checked, len(wantKeep))
+	if checked.SnapshotsChecked != len(wantKeep) {
+		t.Errorf("check after forget %v checked %d snapshots, want %d", rule, checked.SnapshotsChecked, len(wantKeep))
 	}
 	for _, n := range wantKeep {
 		dest := filepath.Join(t.TempDir(), "out")
-		ark("restore", id[n], dest)
-		compareTrees(t, fmt.Sprintf("%s after forget %v", n, rule), tree[n], readTree(t, dest))
+		ark("restore", h.id[n], dest)
+		compareTrees(t, fmt.Sprintf("%s after forget %v", n, rule), h.tree[n], readTree(t, dest))
 	}
 }

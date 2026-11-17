@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"net/url"
@@ -10,6 +11,9 @@ import (
 	"path"
 	"path/filepath"
 	"testing"
+
+	"github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/arkuri"
 )
 
 // envSFTPTestURI is the sftp server the arksftp conformance run uses; the
@@ -39,7 +43,8 @@ func TestE2ELifecycle(t *testing.T) {
 }
 
 // sftpTestRepo is the URI of a new directory on the sftp test server, its name
-// starting with prefix; it skips the test when there is no server.
+// starting with prefix; it skips the test when there is no server. The
+// repository's files are deleted when the test ends; empty directories stay.
 func sftpTestRepo(t *testing.T, prefix string) string {
 	t.Helper()
 	base := os.Getenv(envSFTPTestURI)
@@ -51,7 +56,39 @@ func sftpTestRepo(t *testing.T, prefix string) string {
 		t.Fatalf("parse %s: %v", envSFTPTestURI, err)
 	}
 	u.Path = path.Join(u.Path, prefix+rand.Text())
+	t.Cleanup(func() { deleteRepo(t, u) })
 	return u.String()
+}
+
+// repoTypes is every handle type a repository stores objects under.
+var repoTypes = []ark.HandleType{
+	ark.ConfigFile, ark.KeyFile, ark.SnapshotFile, ark.LockFile, ark.DataPackFile,
+	ark.TreePackFile, ark.DataIndexFile, ark.TreeIndexFile, ark.LostPackFile,
+}
+
+// deleteRepo deletes every object of the repository at u.
+func deleteRepo(t *testing.T, u *url.URL) {
+	ctx := context.Background()
+	b, err := arkuri.Open(ctx, u.String())
+	if err != nil {
+		t.Errorf("open %s to delete it: %v", u.Redacted(), err)
+		return
+	}
+	defer b.Close()
+	for _, typ := range repoTypes {
+		var names []string
+		if err := b.List(ctx, typ, func(info ark.BlobInfo) error {
+			names = append(names, info.Name)
+			return nil
+		}); err != nil {
+			t.Errorf("list %s of %s: %v", typ, u.Redacted(), err)
+		}
+		for _, name := range names {
+			if err := b.Delete(ctx, ark.Handle{Type: typ, Name: name}); err != nil {
+				t.Errorf("delete %s %s of %s: %v", typ, name, u.Redacted(), err)
+			}
+		}
+	}
 }
 
 func lifecycle(t *testing.T, bin, repo string) {
