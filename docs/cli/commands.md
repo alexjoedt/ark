@@ -199,12 +199,14 @@ was taken with. `--json` adds the labels.
 `ark forget [options] [<id>...]`
 
 Removes snapshots, either the named ids or those a policy does not keep. The policy applies per
-series among the snapshots the filters match. Chunks stay in the repository until a prune.
+series among the snapshots the filters match. Chunks stay in the repository until a prune. This
+section is the flag reference; [Retention policies](../retention.md) explains with timelines what
+each rule keeps and how they combine.
 
 | Flag | Meaning |
 |---|---|
 | `--keep-last N` | keep the N newest; `unlimited` keeps all |
-| `--keep-hourly N`, `--keep-daily N`, `--keep-weekly N`, `--keep-monthly N`, `--keep-yearly N` | keep the newest of N hours, days, weeks, months, years; `unlimited` keeps the newest of every one |
+| `--keep-hourly N`, `--keep-daily N`, `--keep-weekly N`, `--keep-monthly N`, `--keep-yearly N` | keep the newest snapshot of each of the N most recent hours, days, weeks, months, years that have a snapshot; a period without one uses no count; `unlimited` keeps the newest of every one |
 | `--keep-within DURATION` | keep everything younger than DURATION, counted in years, months, days and hours, e.g. `30d`, `72h`, `1y6m` |
 | `--keep-within-hourly DURATION`, `--keep-within-daily DURATION`, `--keep-within-weekly DURATION`, `--keep-within-monthly DURATION`, `--keep-within-yearly DURATION` | keep the newest of every hour, day, week, month, year younger than DURATION |
 | `--keep-tag TAG[,TAG...]` | keep every snapshot that carries all tags of the list, `''` for the untagged ones; repeatable, a match of any list keeps |
@@ -240,11 +242,6 @@ no such rule. restic selects the same way.
 `1y2m3d4h`. There are no minutes, seconds or weeks, and no fractions. `m` counts months and goes up
 to 11, so `90m` is a usage error, exit 2, and not seven and a half years; write `1y6m` for 18
 months.
-
-Builds before this rule read Go durations, where `m` was a minute. A policy written for them has
-to be rewritten, and not every old value fails: `1m` to `11m` are still read, without an error,
-and now keep months of snapshots instead of minutes. Check every `--keep-within` in a script and
-every `keep-within` in a profile after the upgrade.
 
 The window ends at the newest snapshot of the series, not at the time of the run, so a series that
 stopped receiving backups keeps its last ones. A snapshot dated in the future, as a machine with a
@@ -290,12 +287,20 @@ Hours, days, weeks, months and years are those of the local time zone of the mac
 runs on, so a backup at 00:30 belongs to the new day; set `TZ` to count in another zone. A week is
 an ISO week and starts on Monday. `--keep-last` does not depend on the zone, and of a `--keep-within`
 duration only the hours do not.
-Builds before this rule counted the periods in UTC, so the first run after an upgrade can keep
-another snapshot of a period than the last one did: run it once with `--dry-run`.
 
 `ark forget --keep-last 1` without a filter keeps the newest snapshot of every series, see
 [Series](../SERIES.md). With `-P` the profile's `forget` section is the policy, see
 [Profiles](profiles.md).
+
+### Upgrading from older builds
+
+Builds before the current `--keep-within` read Go durations, where `m` was a minute. A policy
+written for them has to be rewritten, and not every old value fails: `1m` to `11m` are still read,
+without an error, and now keep months of snapshots instead of minutes. Check every `--keep-within`
+in a script and every `keep-within` in a profile after the upgrade.
+
+Builds before the current period rules counted the periods in UTC, so the first run after an
+upgrade can keep another snapshot of a period than the last one did: run it once with `--dry-run`.
 
 ## prune
 
