@@ -65,6 +65,23 @@ func Snapshots(list []*ark.Snapshot) []Snapshot {
 	return res
 }
 
+// Kept is the JSON shape of a snapshot forget keeps: the snapshot and the
+// rules that keep it.
+type Kept struct {
+	Snapshot
+	Reasons []string `json:"reasons"`
+}
+
+// KeptSnapshots maps a keep list with the reasons per snapshot ID. Neither
+// the result nor a Reasons list is null.
+func KeptSnapshots(list []*ark.Snapshot, reasons map[string][]string) []Kept {
+	res := make([]Kept, 0, len(list))
+	for _, s := range list {
+		res = append(res, Kept{Snapshot: NewSnapshot(s), Reasons: orEmpty(reasons[s.ID])})
+	}
+	return res
+}
+
 // BackupRows are the summary rows of a backup: the snapshot, its files, the
 // source size, and the data new after deduplication with what it took stored.
 func BackupRows(snap *ark.Snapshot) []Row {

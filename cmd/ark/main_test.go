@@ -618,7 +618,10 @@ func TestForgetAndPrune(t *testing.T) {
 	}
 
 	type result struct {
-		Keep   []struct{ ID string }
+		Keep []struct {
+			ID      string
+			Reasons []string
+		}
 		Remove []struct{ ID string }
 		DryRun bool `json:"dry_run"`
 	}
@@ -654,10 +657,17 @@ func TestForgetAndPrune(t *testing.T) {
 	}
 
 	// a 30d window keeps fresh snapshots, --all with a filter removes them
-	if r := forget(0, "--keep-within", "30d", "--dry-run"); len(r.Remove) != 0 {
+	r = forget(0, "--keep-within", "30d", "--dry-run")
+	if len(r.Remove) != 0 {
 		t.Fatalf("keep-within removed %d", len(r.Remove))
 	}
-	if r := forget(0, "--all", "-s", "two", "--yes"); len(r.Remove) != 1 || r.Remove[0].ID != ids[3] {
+	for _, k := range r.Keep {
+		if !slices.Equal(k.Reasons, []string{"within 30d"}) {
+			t.Fatalf("%s kept for %q, want within 30d", k.ID, k.Reasons)
+		}
+	}
+	r = forget(0, "--all", "-s", "two", "--yes")
+	if len(r.Remove) != 1 || r.Remove[0].ID != ids[3] || len(r.Keep) != 0 {
 		t.Fatalf("got %+v", r)
 	}
 	if r := forget(0, "--keep-last", "1", "--yes"); len(r.Remove) != 2 {

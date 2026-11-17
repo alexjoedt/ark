@@ -47,6 +47,12 @@ type ForgetResult struct {
 	Keep   []*Snapshot
 	Remove []*Snapshot
 	DryRun bool
+
+	// KeepReasons names, per kept snapshot ID, every rule that selected it,
+	// in the order the rules are applied and in restic's wording, such as
+	// "within 30d", "last snapshot" or "daily snapshot". It is nil when
+	// Forget removes named IDs, which keeps nothing.
+	KeepReasons map[string][]string
 }
 
 // forgetConfig holds configuration for a Forget call.

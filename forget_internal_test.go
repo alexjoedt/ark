@@ -2,6 +2,7 @@ package ark
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -84,6 +85,75 @@ func TestForgetPolicyFieldsSelectTheirPeriod(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestForgetReasonsNameEveryRule pins restic's wording for the reason of
+// each rule, and that a snapshot kept by several rules lists them all in the
+// order the rules apply.
+func TestForgetReasonsNameEveryRule(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy ForgetPolicy
+		want   map[string][]string
+	}{
+		{"KeepLast", ForgetPolicy{KeepLast: 2}, map[string][]string{
+			"s0": {"last snapshot"}, "s1": {"last snapshot"},
+		}},
+		{"KeepHourly", ForgetPolicy{KeepHourly: 2}, map[string][]string{
+			"s0": {"hourly snapshot"}, "s1": {"hourly snapshot"},
+		}},
+		{"KeepDaily", ForgetPolicy{KeepDaily: 2}, map[string][]string{
+			"s0": {"daily snapshot"}, "s3": {"daily snapshot"},
+		}},
+		{"KeepWeekly", ForgetPolicy{KeepWeekly: 2}, map[string][]string{
+			"s0": {"weekly snapshot"}, "s5": {"weekly snapshot"},
+		}},
+		{"KeepMonthly", ForgetPolicy{KeepMonthly: 2}, map[string][]string{
+			"s0": {"monthly snapshot"}, "s6": {"monthly snapshot"},
+		}},
+		{"KeepYearly", ForgetPolicy{KeepYearly: 2}, map[string][]string{
+			"s0": {"yearly snapshot"}, "s8": {"yearly snapshot"},
+		}},
+		{"KeepWithin", ForgetPolicy{KeepWithin: 25 * time.Hour}, map[string][]string{
+			"s0": {"within 1d1h"}, "s1": {"within 1d1h"}, "s2": {"within 1d1h"}, "s3": {"within 1d1h"},
+		}},
+		{
+			"rules combine",
+			ForgetPolicy{KeepWithin: 2 * time.Hour, KeepLast: 1, KeepDaily: 1, KeepYearly: 2},
+			map[string][]string{
+				"s0": {"within 2h", "last snapshot", "daily snapshot", "yearly snapshot"},
+				"s1": {"within 2h"},
+				"s8": {"yearly snapshot"},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res := applyForgetPolicy(forgetFixture(), tc.policy, time.UTC)
+			if !maps.EqualFunc(res.KeepReasons, tc.want, slices.Equal) {
+				t.Errorf("reasons %v, want %v", res.KeepReasons, tc.want)
+			}
+			if len(res.KeepReasons) != len(res.Keep) {
+				t.Errorf("%d reasons for %d kept snapshots", len(res.KeepReasons), len(res.Keep))
+			}
+		})
+	}
+}
+
+func TestWithinString(t *testing.T) {
+	for _, tc := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{30 * 24 * time.Hour, "30d"},
+		{36 * time.Hour, "1d12h"},
+		{5 * time.Hour, "5h"},
+		{90 * time.Minute, "1h30m0s"},
+	} {
+		if got := withinString(tc.d); got != tc.want {
+			t.Errorf("withinString(%v) = %q, want %q", tc.d, got, tc.want)
+		}
 	}
 }
 

@@ -202,7 +202,9 @@ func printForget(cmd *cli.Command, res *ark.ForgetResult) error {
 	p := printer(cmd)
 	if p.Mode().JSON {
 		return p.JSON(map[string]any{
-			"keep": out.Snapshots(res.Keep), "remove": out.Snapshots(res.Remove), "dry_run": res.DryRun,
+			"keep":    out.KeptSnapshots(res.Keep, res.KeepReasons),
+			"remove":  out.Snapshots(res.Remove),
+			"dry_run": res.DryRun,
 		})
 	}
 	verb := "removed"

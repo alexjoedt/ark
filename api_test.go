@@ -199,6 +199,9 @@ func TestForgetByIDsRemovesExactlyThose(t *testing.T) {
 	if len(result.Remove) != 1 || result.Remove[0].ID != first.ID {
 		t.Fatalf("Forget removed %v, want just %s", result.Remove, first.ID)
 	}
+	if result.KeepReasons != nil {
+		t.Errorf("removing named ids gave keep reasons %v", result.KeepReasons)
+	}
 
 	snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{})
 	if err != nil {

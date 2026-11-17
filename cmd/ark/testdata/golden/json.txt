@@ -135,7 +135,10 @@ no matches
         "deduplication_ratio": 1,
         "compression_ratio": 0,
         "duration": "<duration>"
-      }
+      },
+      "reasons": [
+        "last snapshot"
+      ]
     }
   ],
   "remove": [
