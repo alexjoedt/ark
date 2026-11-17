@@ -1,0 +1,12 @@
+# Retention policies
+
+`ark forget` keeps the snapshots a policy selects and removes the rest. The examples on this page are computed by ark itself: each shows a history of snapshots, what a policy keeps of it and the reasons `ark forget --json` gives. They count days, weeks, months and years in UTC; ark counts them in the local time zone of the machine that runs forget.
+
+## Keep daily
+
+`--keep-daily 3` keeps the newest snapshot of each of the three most recent days that have a snapshot.
+{{with scenario "keep-daily"}}
+{{.Table}}
+
+Saturday the 21st has no snapshot and uses no count, so the policy keeps {{join .Kept ", "}} and removes the other {{len .Removed}}.
+{{end}}

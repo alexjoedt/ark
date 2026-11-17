@@ -64,6 +64,11 @@ tasks:
     cmds:
       - go run ./scripts/forgetfixtures -dir "{{.DIR}}" {{.CLI_ARGS}}
 
+  docs:gen:
+    desc: Generate docs/retention.md and its illustrations from the forget selection
+    cmds:
+      - go run ./scripts/retentiondocs
+
   build:
     desc: Build bin/ark
     cmds:
