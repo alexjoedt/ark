@@ -230,6 +230,9 @@ func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOptio
 	// Nobody would see the totals, so the second walk is not paid for.
 	o.scan = o.scan && (o.progress != nil || r.progress != nil)
 	o.progress = r.observer(OperationBackup, o.progress)
+	if err := o.checkTime(); err != nil {
+		return nil, err
+	}
 	meta := src.Meta()
 	if err := checkBackupLabels(meta.Labels, o.labels); err != nil {
 		return nil, err
@@ -377,9 +380,20 @@ func (r *Repository) deleteSnapshot(ctx context.Context, id string) error {
 // source type, source name and host, so an empty filter keeps what the policy
 // says of every series in the repository.
 //
-// A policy without a positive rule removes every match, so it is only
-// accepted together with filter.IDs; otherwise Forget returns ErrEmptyPolicy
-// and deletes nothing.
+// The period rules count hours, days, weeks, months and years in the local
+// time zone, or in the one WithForgetLocation names, and a keep-within window
+// steps its years, months and days back there.
+//
+// A policy without a rule removes every match, so it is only accepted
+// together with filter.IDs; otherwise Forget returns ErrEmptyPolicy and
+// deletes nothing. A count of Unlimited is a rule; any other negative count
+// fails with ErrInvalidPolicy, and so does a keep-within window with a
+// number outside the bounds of [Within]: below zero, above 11 months or above
+// a million.
+//
+// A policy that keeps no snapshot of one of the series, as KeepTags alone
+// can, removes nothing of any series, in a dry run too: Forget returns
+// ErrNoSnapshotKept.
 //
 // Removing named ids without a policy reads only those manifests, and one
 // that fails with ErrCorruptManifest is still removed, reported with its ID
@@ -390,11 +404,14 @@ func (r *Repository) Forget(
 	filter SnapshotFilter,
 	opts ...ForgetOption,
 ) (*ForgetResult, error) {
-	if policy.keepsNothing() && len(filter.IDs) == 0 {
+	if err := policy.validate(); err != nil {
+		return nil, err
+	}
+	if policy.Empty() && len(filter.IDs) == 0 {
 		return nil, ErrEmptyPolicy
 	}
 
-	cfg := &forgetConfig{}
+	cfg := &forgetConfig{loc: time.Local}
 	for _, o := range opts {
 		o(cfg)
 	}
@@ -408,13 +425,14 @@ func (r *Repository) Forget(
 	defer lock.release(ctx)
 
 	var result *ForgetResult
-	if policy.keepsNothing() {
+	if policy.Empty() {
 		result, err = r.forgetNamed(ctx, filter)
 	} else {
 		var snapshots []*Snapshot
 		snapshots, err = r.Snapshots(ctx, filter)
 		if err == nil {
-			result = applyForgetPolicy(snapshots, policy)
+			result = applyForgetPolicy(snapshots, policy, cfg.loc, time.Now())
+			err = checkSeriesKept(snapshots, result.Keep)
 		}
 	}
 	if err != nil {

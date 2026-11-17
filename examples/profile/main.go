@@ -93,15 +93,11 @@ func run(ctx context.Context, p *arkprofile.Profile) error {
 	}
 	fmt.Printf("snapshot %s of %s: %d files\n", snap.ID, snap.SourceName, snap.Stats.FileCount)
 
-	policy, err := p.ForgetPolicy()
-	if err != nil {
-		return err
-	}
 	filter, err := p.Filter()
 	if err != nil {
 		return err
 	}
-	res, err := repo.Forget(ctx, policy, filter)
+	res, err := repo.Forget(ctx, p.ForgetPolicy(), filter)
 	if err != nil {
 		return err
 	}

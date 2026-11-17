@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	ark "github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkprofile"
@@ -33,6 +34,7 @@ func backupCommand() *cli.Command {
 			&cli.StringFlag{Name: "comment", Aliases: []string{"c"}, Usage: "free `TEXT` stored with the snapshot"},
 			&cli.StringFlag{Name: "host", Usage: "host `NAME` stored with the snapshot", Value: hostname},
 			&cli.StringFlag{Name: "parent", Usage: "explicit parent snapshot `ID`"},
+			timeFlag(),
 			&cli.StringFlag{Name: "source", Aliases: []string{"s"}, Usage: "source `NAME` (default: absolute path)"},
 			labelFlag("record the label `KEY=VALUE`, repeatable, the value may hold commas"),
 			&listFlag{
@@ -45,6 +47,10 @@ func backupCommand() *cli.Command {
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			labels, err := labelValue(cmd, false)
+			if err != nil {
+				return err
+			}
+			at, err := timeOption(cmd)
 			if err != nil {
 				return err
 			}
@@ -75,6 +81,7 @@ func backupCommand() *cli.Command {
 				p := printer(cmd)
 				// --label adds to the profile's labels, a key in both takes the flag's value
 				bopts := append(eff.BackupOptions(), ark.WithParent(cmd.String("parent")), ark.WithLabels(labels))
+				bopts = append(bopts, at...)
 				// an empty --host or --comment clears the profile's value,
 				// which BackupOptions would leave out or default
 				if cmd.IsSet("host") {
@@ -198,6 +205,39 @@ func (v *stringList) Get() any { return *v.p }
 func listValue(cmd *cli.Command, name string) []string {
 	v, _ := cmd.Value(name).([]string)
 	return v
+}
+
+// timeFlag is --time of backup and docker backup, in restic's format.
+func timeFlag() cli.Flag {
+	return &cli.StringFlag{
+		Name:  "time",
+		Usage: "`TIME` of the snapshot instead of now, as \"2006-01-02 15:04:05\" in local time",
+	}
+}
+
+// timeOption reads --time as local time into ark.WithTime; without the flag
+// there is no option. A value that does not parse, a time the local clocks
+// skip, or a time the library refuses, is a usage error before anything else
+// runs. Of an hour the clocks show twice, Go picks one of the two.
+func timeOption(cmd *cli.Command) ([]ark.BackupOption, error) {
+	if !cmd.IsSet("time") {
+		return nil, nil
+	}
+	s := cmd.String("time")
+	t, err := time.ParseInLocation(time.DateTime, s, time.Local)
+	if err != nil {
+		return nil, exitcode.Usagef(`--time: %q is not a time such as "2006-01-02 15:04:05"`, s)
+	}
+	// In the hour skipped when summer time starts, Go moves the time by the
+	// shift instead of failing: the clock of t then differs from the one read.
+	if wall, _ := time.Parse(time.DateTime, s); t.Format(time.DateTime) != wall.Format(time.DateTime) {
+		return nil, exitcode.Usagef("--time: %q does not exist in the local time zone, the clocks skip it", s)
+	}
+	opt := ark.WithTime(t)
+	if err := ark.ValidateBackupOptions(opt); err != nil {
+		return nil, exitcode.Usagef("--time: %w", err)
+	}
+	return []ark.BackupOption{opt}, nil
 }
 
 // labelFlag is --label: repeatable, never split on commas.

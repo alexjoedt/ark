@@ -4,9 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net/url"
-	"os"
-	"path"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -33,44 +30,23 @@ import (
 // ARK_SFTP_TEST_URI names. The repository's files are deleted at the end.
 func sftpVolumeEngine(t *testing.T) (*volumeDocker, *arkdocker.Engine, *ark.Repository) {
 	t.Helper()
-	env := os.Getenv(envSFTPTestURI)
-	if env == "" {
-		t.Skipf("%s is not set", envSFTPTestURI)
-	}
+	uri := sftpTestRepo(t, "volume-")
 	d := newVolumeDocker(t)
 
-	u, err := url.Parse(env)
-	if err != nil {
-		t.Fatalf("parse %s: %v", envSFTPTestURI, err)
-	}
-	u.Path = path.Join(u.Path, fmt.Sprintf("volume-%d", time.Now().UnixNano()))
 	ctx := context.Background()
-	b, err := arkuri.Open(ctx, u.String())
+	b, err := arkuri.Open(ctx, uri)
 	if err != nil {
-		t.Fatalf("open %s: %v", u.Redacted(), err)
+		t.Fatalf("open the sftp test repository: %v", err)
 	}
 	var (
 		repo *ark.Repository
 		e    *arkdocker.Engine
 	)
-	// Closing the repository closes b, so the files go first. Empty
-	// directories stay on the server.
+	// sftpTestRepo's cleanup deletes the files after this one has closed
+	// the engine and the repository.
 	t.Cleanup(func() {
 		if e != nil {
 			e.Close()
-		}
-		for _, typ := range []ark.HandleType{
-			ark.ConfigFile, ark.KeyFile, ark.SnapshotFile, ark.LockFile,
-			ark.DataPackFile, ark.TreePackFile, ark.DataIndexFile, ark.TreeIndexFile,
-		} {
-			var names []string
-			_ = b.List(ctx, typ, func(info ark.BlobInfo) error {
-				names = append(names, info.Name)
-				return nil
-			})
-			for _, name := range names {
-				_ = b.Delete(ctx, ark.Handle{Type: typ, Name: name})
-			}
 		}
 		if repo != nil {
 			_ = repo.Close()

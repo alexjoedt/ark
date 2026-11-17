@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkmem"
@@ -74,10 +74,7 @@ func TestBackupAndForgetThroughAProfile(t *testing.T) {
 		t.Fatalf("FileCount = %d, want 1 (skip.tmp excluded)", first.Stats.FileCount)
 	}
 
-	policy, err := docs.ForgetPolicy()
-	if err != nil {
-		t.Fatal(err)
-	}
+	policy := docs.ForgetPolicy()
 	filter, err := docs.Filter()
 	if err != nil {
 		t.Fatal(err)
@@ -195,10 +192,7 @@ func TestHostDefaultsToTheHostname(t *testing.T) {
 	if f.Host != hostname {
 		t.Fatalf("filter host = %q, want %q", f.Host, hostname)
 	}
-	policy, err := mine.ForgetPolicy()
-	if err != nil {
-		t.Fatal(err)
-	}
+	policy := mine.ForgetPolicy()
 	res, err := repo.Forget(ctx, policy, f)
 	if err != nil {
 		t.Fatal(err)
@@ -220,23 +214,28 @@ func TestSourceWithoutAPath(t *testing.T) {
 
 func TestForgetPolicy(t *testing.T) {
 	p := arkprofile.Profile{Forget: arkprofile.Forget{
-		KeepLast: 1, KeepHourly: 2, KeepDaily: 3, KeepWeekly: 4, KeepMonthly: 5, KeepYearly: 6, KeepWithin: "2d",
-	}}
-	got, err := p.ForgetPolicy()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := ark.ForgetPolicy{
-		KeepLast: 1, KeepHourly: 2, KeepDaily: 3, KeepWeekly: 4, KeepMonthly: 5, KeepYearly: 6,
-		KeepWithin: 48 * time.Hour,
-	}
-	if got != want {
-		t.Fatalf("policy = %+v, want %+v", got, want)
-	}
+		KeepLast: 1, KeepHourly: 2, KeepDaily: 3, KeepWeekly: 4, KeepMonthly: 5, KeepYearly: ark.Unlimited,
+		KeepWithin: ark.Within{Days: 2},
 
-	p.Forget.KeepWithin = "soon"
-	if _, err := p.ForgetPolicy(); !errors.Is(err, arkprofile.ErrInvalid) {
-		t.Fatalf("err = %v, want ErrInvalid", err)
+		KeepWithinHourly: ark.Within{Hours: 3}, KeepWithinDaily: ark.Within{Days: 4},
+		KeepWithinWeekly: ark.Within{Days: 35}, KeepWithinMonthly: ark.Within{Months: 6},
+		KeepWithinYearly: ark.Within{Years: 7},
+
+		KeepTags: []string{"pinned", "db, prod", ""},
+	}}
+	got := p.ForgetPolicy()
+	want := ark.ForgetPolicy{
+		KeepLast: 1, KeepHourly: 2, KeepDaily: 3, KeepWeekly: 4, KeepMonthly: 5, KeepYearly: ark.Unlimited,
+		KeepWithin: ark.Within{Days: 2},
+
+		KeepWithinHourly: ark.Within{Hours: 3}, KeepWithinDaily: ark.Within{Days: 4},
+		KeepWithinWeekly: ark.Within{Days: 35}, KeepWithinMonthly: ark.Within{Months: 6},
+		KeepWithinYearly: ark.Within{Years: 7},
+
+		KeepTags: [][]string{{"pinned"}, {"db", "prod"}, {""}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("policy = %+v, want %+v", got, want)
 	}
 }
 
@@ -284,4 +283,41 @@ func ids(snaps []*ark.Snapshot) []string {
 		out[i] = s.ID
 	}
 	return out
+}
+
+// TestEveryForgetRuleIsCarriedAndChecked holds each keep count and keep-within
+// window of Forget, found by reflection, to the ForgetPolicy field of its name
+// and to Validate, so a rule added to Forget cannot miss either.
+func TestEveryForgetRuleIsCarriedAndChecked(t *testing.T) {
+	samples := map[reflect.Type][2]any{
+		reflect.TypeFor[ark.KeepCount](): {ark.KeepCount(3), ark.KeepCount(-2)},
+		reflect.TypeFor[ark.Within]():    {ark.Within{Days: 3}, ark.Within{Days: -1}},
+	}
+	ft := reflect.TypeFor[arkprofile.Forget]()
+	rules := 0
+	for i := range ft.NumField() {
+		f := ft.Field(i)
+		s, ok := samples[f.Type]
+		if !ok {
+			continue
+		}
+		rules++
+		key := "forget." + f.Tag.Get("yaml")
+		for j, v := range s {
+			p := arkprofile.Profile{Name: "docs", Repo: "/srv/ark", PasswordEnv: "DOCS_PW"}
+			reflect.ValueOf(&p.Forget).Elem().Field(i).Set(reflect.ValueOf(v))
+			err := p.Validate()
+			if j == 0 {
+				pf := reflect.ValueOf(p.ForgetPolicy()).FieldByName(f.Name)
+				if err != nil || !pf.IsValid() || !pf.Equal(reflect.ValueOf(v)) {
+					t.Errorf("%s = %v: Validate %v, policy field %v", key, v, err, pf)
+				}
+			} else if !errors.Is(err, arkprofile.ErrInvalid) || !strings.Contains(err.Error(), key) {
+				t.Errorf("%s = %v: Validate %v, want ErrInvalid naming the key", key, v, err)
+			}
+		}
+	}
+	if rules != 12 {
+		t.Errorf("found %d rules in Forget, want 12", rules)
+	}
 }

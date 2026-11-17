@@ -64,6 +64,7 @@ Backs up the directory at `<path>` as one snapshot.
 | `--host NAME` | the host, default the machine's hostname |
 | `--label KEY=VALUE` | record a label, repeatable, the value may hold commas |
 | `--parent ID` | an explicit parent snapshot |
+| `--time TIME` | the time of the snapshot instead of now, as `"2006-01-02 15:04:05"` in local time |
 | `--exclude PATTERN`, `-e` | leave out paths matching PATTERN, repeatable |
 | `--exclude-file FILE` | read exclude patterns from FILE, repeatable |
 | `--exclude-cloud-files` | leave out files that exist only in the cloud |
@@ -71,6 +72,12 @@ Backs up the directory at `<path>` as one snapshot.
 A backup is one series per source type, source and host; its parent is the newest snapshot of that
 series unless `--parent` names one. `ark snapshots`, `ark find` and `ark forget` filter on labels,
 and all given labels must match. See [Series](../SERIES.md) and [Labels](../LABELS.md).
+
+`--time` dates a backup of data as it was at an earlier time: `ark snapshots` shows that time and
+`ark forget` counts the snapshot in its hour, day, week, month and year. The parent is still the
+newest snapshot of the series by time, so a backup may be dated before its parent. A time in the
+future is refused, exit 2, and so is a time the local clocks skip when summer time starts. Of an
+hour they show twice when it ends, either of the two is taken; both count in the same hour.
 
 ### Excludes
 
@@ -196,9 +203,11 @@ series among the snapshots the filters match. Chunks stay in the repository unti
 
 | Flag | Meaning |
 |---|---|
-| `--keep-last N` | keep the N newest |
-| `--keep-hourly N`, `--keep-daily N`, `--keep-weekly N`, `--keep-monthly N`, `--keep-yearly N` | keep the newest of N hours, days, weeks, months, years |
-| `--keep-within DURATION` | keep everything younger than DURATION, e.g. `72h`, `30d` |
+| `--keep-last N` | keep the N newest; `unlimited` keeps all |
+| `--keep-hourly N`, `--keep-daily N`, `--keep-weekly N`, `--keep-monthly N`, `--keep-yearly N` | keep the newest of N hours, days, weeks, months, years; `unlimited` keeps the newest of every one |
+| `--keep-within DURATION` | keep everything younger than DURATION, counted in years, months, days and hours, e.g. `30d`, `72h`, `1y6m` |
+| `--keep-within-hourly DURATION`, `--keep-within-daily DURATION`, `--keep-within-weekly DURATION`, `--keep-within-monthly DURATION`, `--keep-within-yearly DURATION` | keep the newest of every hour, day, week, month, year younger than DURATION |
+| `--keep-tag TAG[,TAG...]` | keep every snapshot that carries all tags of the list, `''` for the untagged ones; repeatable, a match of any list keeps |
 | `--all` | remove every matching snapshot; a policy that keeps nothing is refused without it |
 | `--source`, `--type`, `--tag`, `--host`, `--label` | filters, as for `ark snapshots` |
 | `--prune` | run prune afterwards |
@@ -209,7 +218,80 @@ series among the snapshots the filters match. Chunks stay in the repository unti
 ark forget --keep-last 3 --source /etc --prune
 ark forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6
 ark forget --keep-within 30d
+ark forget --keep-within-daily 14d --keep-within-monthly 1y
+ark forget --keep-daily 7 --keep-yearly unlimited
+ark forget --keep-last 5 --keep-tag pinned
 ```
+
+A count is a whole number or the word `unlimited`: `--keep-yearly unlimited` keeps the newest
+snapshot of every year there is. A negative number is a usage error, exit 2; `0` switches a rule
+off, which matters over a profile that sets it.
+
+A period rule keeps the newest snapshot of each period, newest period first, until its count is
+used up. When it reaches the oldest snapshot of a series and still has count left, it keeps that
+snapshot too, although its period is already taken: `--keep-daily 7` on a series that spans two
+days keeps the newest of each day and the oldest snapshot, which `--json` lists with the reason
+`oldest daily snapshot`. A series shorter than its policy so keeps its first snapshot until the
+policy is filled; with `unlimited` the oldest always stays. `--keep-last` and `--keep-within` have
+no such rule. restic selects the same way.
+
+`--keep-within` takes a duration in restic's units: whole numbers followed by `y` (years), `m`
+(months), `d` (days) or `h` (hours), each unit at most once and in that order, as in `30d`, `72h` or
+`1y2m3d4h`. There are no minutes, seconds or weeks, and no fractions. `m` counts months and goes up
+to 11, so `90m` is a usage error, exit 2, and not seven and a half years; write `1y6m` for 18
+months.
+
+Builds before this rule read Go durations, where `m` was a minute. A policy written for them has
+to be rewritten, and not every old value fails: `1m` to `11m` are still read, without an error,
+and now keep months of snapshots instead of minutes. Check every `--keep-within` in a script and
+every `keep-within` in a profile after the upgrade.
+
+The window ends at the newest snapshot of the series, not at the time of the run, so a series that
+stopped receiving backups keeps its last ones. A snapshot dated in the future, as a machine with a
+wrong clock leaves it, is kept and does not move the window: the newest snapshot that is not in the
+future does. Years, months and days are steps on the calendar of the local time zone, hours are
+elapsed time: `1m` back from 15 March is 15 February, and `1d` back across the start of summer time
+is 23 hours where `24h` is 24. A step onto a day the month lacks runs over into the next month, so
+`1m` back from 31 March is 3 March, or 2 March in a leap year. A step onto a time the clocks skip
+when summer time starts lands an hour before or after it. A snapshot exactly the duration old is
+not kept. `--json` lists the reason with the duration unit by unit, `within 72h` and not
+`within 3d`, the numbers written plainly: `030d` reads `within 30d`. restic counts and writes the
+same way.
+
+`--keep-within-hourly`, `--keep-within-daily`, `--keep-within-weekly`, `--keep-within-monthly` and
+`--keep-within-yearly` are the period rules with a duration in place of the count:
+`--keep-within-daily 14d` keeps the newest snapshot of every day of the last 14 days, however many
+days of them have one. The duration is written and measured as for `--keep-within`: back from the
+newest snapshot of the series that is not in the future, and a snapshot exactly the duration old
+is outside. The periods are those of the counted rules, cut in the local time zone. Each rule has
+its own duration and decides by itself, next to every other rule: a snapshot that any rule keeps
+stays. When the oldest snapshot of a series lies inside the window, the rule keeps it too,
+although its period is taken, as a counted rule with count left does. `--json` lists the reasons
+as `daily within 14d` and `oldest daily within 14d`. An empty value, `--keep-within-daily ''`,
+switches off a rule a profile sets. restic selects the same way.
+
+`--keep-tag` keeps by tag instead of by age. One value is a list of tags separated by commas, and a
+snapshot has to carry all of them; give the flag again for another list, and a snapshot that matches
+any of the lists stays: `--keep-tag db,prod --keep-tag pinned` keeps what is tagged `db` and `prod`,
+and what is tagged `pinned`. Blanks around a tag are dropped, and `--keep-tag ''` keeps the
+snapshots without a tag. A list with a stray comma, such as `pinned,`, would match no snapshot and
+is a usage error. The rule has no count and takes none from the other rules: a tagged
+snapshot among the three newest still uses one of the three slots of `--keep-last 3`. `--json`
+lists the reason as `has tags [db, prod]`. Over a profile the flag replaces the profile's
+`keep-tag` lists.
+
+Every other rule keeps at least the newest snapshot of a series; `--keep-tag` on its own can match
+none. When the policy keeps no snapshot of one of the series, `ark forget` removes nothing, of no
+series, and exits 1 naming that series, with `--dry-run` too. Narrow the filters to the series that
+carry the tag, add a rule such as `--keep-last 1`, or remove a series on purpose with `--all` and a
+filter. restic refuses the same way.
+
+Hours, days, weeks, months and years are those of the local time zone of the machine `ark forget`
+runs on, so a backup at 00:30 belongs to the new day; set `TZ` to count in another zone. A week is
+an ISO week and starts on Monday. `--keep-last` does not depend on the zone, and of a `--keep-within`
+duration only the hours do not.
+Builds before this rule counted the periods in UTC, so the first run after an upgrade can keep
+another snapshot of a period than the last one did: run it once with `--dry-run`.
 
 `ark forget --keep-last 1` without a filter keeps the newest snapshot of every series, see
 [Series](../SERIES.md). With `-P` the profile's `forget` section is the policy, see
@@ -276,9 +358,9 @@ Docker volumes live under `ark docker`. The daemon comes from `--docker-host ADD
 | `ark docker backup [options] <volume>` | stop the containers using the volume, back it up, restart them |
 | `ark docker restore [options] <id> [volume]` | restore into `volume`, default the snapshot's source name; creates it if missing, replaces its contents if present |
 
-`docker backup` takes `--tag`, `--comment`, `--label`, `--host` and `--parent` like `ark backup`, plus
-`--no-stop` (leave the containers running) and `--stop-timeout DURATION` (graceful stop, default
-30s). `docker restore` takes `--path`, `--dry-run` (show the affected containers and whether data is
+`docker backup` takes `--tag`, `--comment`, `--label`, `--host`, `--parent` and `--time` like
+`ark backup`, plus `--no-stop` (leave the containers running) and `--stop-timeout DURATION`
+(graceful stop, default 30s). `docker restore` takes `--path`, `--dry-run` (show the affected containers and whether data is
 replaced), `--yes`, `--no-stop` and `--stop-timeout`, and refuses snapshots whose source type is not
 `docker-volume`.
 

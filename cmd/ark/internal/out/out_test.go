@@ -565,23 +565,3 @@ func TestParseBytes(t *testing.T) {
 		}
 	}
 }
-
-func TestParseDuration(t *testing.T) {
-	ok := map[string]time.Duration{
-		"30d":  720 * time.Hour,
-		"72h":  72 * time.Hour,
-		"1.5d": 36 * time.Hour,
-		"90m":  90 * time.Minute,
-	}
-	for in, want := range ok {
-		got, err := ParseDuration(in)
-		if err != nil || got != want {
-			t.Errorf("ParseDuration(%q) = %v, %v; want %v", in, got, err, want)
-		}
-	}
-	for _, in := range []string{"", "d", "0", "-1d", "30", "3 days"} {
-		if _, err := ParseDuration(in); err == nil {
-			t.Errorf("ParseDuration(%q) accepted", in)
-		}
-	}
-}

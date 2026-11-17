@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -20,12 +22,19 @@ import (
 	dockerclient "github.com/moby/moby/client"
 )
 
+// envCLIChild makes the test binary run the CLI with its own arguments and
+// exit, for a test that needs a process of its own, as one under another TZ.
+const envCLIChild = "ARK_TEST_CLI_CHILD"
+
 // TestMain runs every test without a password: argon2id costs a noticeable
 // fraction of a second per run. Password tests clear the variable. Stdin is
 // not a terminal, so no test ever prompts.
 func TestMain(m *testing.M) {
 	os.Setenv("ARK_INSECURE_NO_PASSWORD", "1")
 	os.Unsetenv("ARK_CPUPROFILE")
+	if os.Getenv(envCLIChild) != "" {
+		os.Exit(run(os.Args))
+	}
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
 		panic(err)
@@ -611,7 +620,10 @@ func TestForgetAndPrune(t *testing.T) {
 	}
 
 	type result struct {
-		Keep   []struct{ ID string }
+		Keep []struct {
+			ID      string
+			Reasons []string
+		}
 		Remove []struct{ ID string }
 		DryRun bool `json:"dry_run"`
 	}
@@ -633,6 +645,9 @@ func TestForgetAndPrune(t *testing.T) {
 	// an empty policy without ids or --all is exit 2, a bad duration too
 	forget(2)
 	forget(2, "--keep-within", "soon")
+	// a Go duration is none: m counts months, and there are no minutes
+	forget(2, "--keep-within", "90m")
+	forget(2, "--keep-within", "1h30m")
 	forget(2, ids[0], "--keep-last", "1")
 	// prompt without a terminal and without --yes is exit 2 as well
 	forget(2, ids[0])
@@ -646,11 +661,21 @@ func TestForgetAndPrune(t *testing.T) {
 		t.Fatalf("dry run deleted something: %s", out)
 	}
 
-	// a 30d window keeps fresh snapshots, --all with a filter removes them
-	if r := forget(0, "--keep-within", "30d", "--dry-run"); len(r.Remove) != 0 {
-		t.Fatalf("keep-within removed %d", len(r.Remove))
+	// a window keeps fresh snapshots and the reason names it as given,
+	// --all with a filter removes them
+	for _, within := range []string{"30d", "72h", "1y6m"} {
+		r = forget(0, "--keep-within", within, "--dry-run")
+		if len(r.Remove) != 0 {
+			t.Fatalf("keep-within %s removed %d", within, len(r.Remove))
+		}
+		for _, k := range r.Keep {
+			if !slices.Equal(k.Reasons, []string{"within " + within}) {
+				t.Fatalf("%s kept for %q, want within %s", k.ID, k.Reasons, within)
+			}
+		}
 	}
-	if r := forget(0, "--all", "-s", "two", "--yes"); len(r.Remove) != 1 || r.Remove[0].ID != ids[3] {
+	r = forget(0, "--all", "-s", "two", "--yes")
+	if len(r.Remove) != 1 || r.Remove[0].ID != ids[3] || len(r.Keep) != 0 {
 		t.Fatalf("got %+v", r)
 	}
 	if r := forget(0, "--keep-last", "1", "--yes"); len(r.Remove) != 2 {
@@ -1247,5 +1272,74 @@ func TestInitRefusesNonEmptyDir(t *testing.T) {
 	}
 	if code, _ := runCapture(t, "-r", filepath.Join(dir, "new"), "init"); code != 0 {
 		t.Fatalf("init into a missing dir: exit %d", code)
+	}
+}
+
+// --time dates the snapshot in local time. ark snapshots shows that time,
+// and the next backup still takes the newest snapshot by time as its parent.
+func TestBackupTime(t *testing.T) {
+	repo := initRepo(t)
+	t.Setenv("ARK_REPOSITORY", "")
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	type snapshot struct {
+		ID        string    `json:"id"`
+		ParentID  string    `json:"parent_id"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+	backup := func(args ...string) snapshot {
+		t.Helper()
+		code, out := runCapture(t, append([]string{"--json", "-r", repo, "backup"}, args...)...)
+		var s snapshot
+		if err := json.Unmarshal([]byte(out), &s); code != 0 || err != nil {
+			t.Fatalf("backup %v: exit %d, %v: %s", args, code, err, out)
+		}
+		return s
+	}
+
+	first := backup(src)
+	dated := backup("--time", "2015-06-01 12:30:15", src)
+	if want := time.Date(2015, 6, 1, 12, 30, 15, 0, time.Local); !dated.CreatedAt.Equal(want) {
+		t.Errorf("--time stored %s, want %s", dated.CreatedAt, want)
+	}
+	if next := backup(src); next.ParentID != first.ID {
+		t.Errorf("parent after a dated backup = %q, want the newest by time %q", next.ParentID, first.ID)
+	}
+
+	for _, bad := range []string{"", "yesterday", "2015-06-01T12:30:15Z", "2999-01-01 00:00:00"} {
+		if code, out := runCapture(t, "--json", "-r", repo, "backup", "--time", bad, src); code != 2 {
+			t.Errorf("--time %q: exit %d, want 2: %s", bad, code, out)
+		}
+	}
+	code, out := runCapture(t, "-r", repo, "snapshots")
+	if code != 0 || strings.Count(out, "2015-06-01 12:30:15") != 1 || strings.Count(out, "\n") != 4 {
+		t.Errorf("snapshots: exit %d, want a header and three rows, one at 2015-06-01 12:30:15: %s", code, out)
+	}
+}
+
+// Berlin skips 02:00 to 03:00 when summer time starts and shows it twice when
+// it ends. A --time the clocks never show is refused rather than moved by an
+// hour; one they show twice is taken.
+func TestBackupTimeInAClockChange(t *testing.T) {
+	repo := initRepo(t)
+	src := t.TempDir()
+	backup := func(at string) (int, string) {
+		cmd := exec.CommandContext(t.Context(), os.Args[0], "--json", "-r", repo, "backup", "--time", at, src)
+		cmd.Env = append(os.Environ(), envCLIChild+"=1", "TZ=Europe/Berlin")
+		out, err := cmd.Output()
+		if _, exited := errors.AsType[*exec.ExitError](err); err != nil && !exited {
+			t.Fatalf("backup --time %q: %v", at, err)
+		}
+		return cmd.ProcessState.ExitCode(), string(out)
+	}
+	if code, out := backup("2015-03-29 02:30:00"); code != 2 || !strings.Contains(out, "does not exist") {
+		t.Errorf("skipped time: exit %d, want 2 and a message that it does not exist: %s", code, out)
+	}
+	for _, at := range []string{"2015-03-29 01:59:59", "2015-03-29 03:00:00", "2015-10-25 02:30:00"} {
+		if code, out := backup(at); code != 0 {
+			t.Errorf("--time %q: exit %d, want 0: %s", at, code, out)
+		}
 	}
 }

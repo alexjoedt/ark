@@ -5,9 +5,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/alexjoedt/ark/arkprofile"
 )
 
 // writeProfile writes body to dir/name.yaml, readable by the owner only.
@@ -414,6 +417,16 @@ func TestProfileShowSources(t *testing.T) {
 		for k, w := range want {
 			if got[k] != w {
 				t.Errorf("%v: %s = %v, want %v", args, k, got[k], w)
+			}
+		}
+	}
+	// every forget key of a profile is shown, so one added to arkprofile.Forget cannot miss it
+	got := show("profile", "show", "docs")
+	ft := reflect.TypeFor[arkprofile.Forget]()
+	for f := range ft.Fields() {
+		if key, _, _ := strings.Cut(f.Tag.Get("yaml"), ","); key != "" {
+			if _, ok := got["forget."+key]; !ok {
+				t.Errorf("profile show lacks forget.%s", key)
 			}
 		}
 	}

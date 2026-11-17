@@ -199,6 +199,9 @@ func TestForgetByIDsRemovesExactlyThose(t *testing.T) {
 	if len(result.Remove) != 1 || result.Remove[0].ID != first.ID {
 		t.Fatalf("Forget removed %v, want just %s", result.Remove, first.ID)
 	}
+	if result.KeepReasons != nil {
+		t.Errorf("removing named ids gave keep reasons %v", result.KeepReasons)
+	}
 
 	snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{})
 	if err != nil {
@@ -213,31 +216,33 @@ func TestKeepWithinKeepsRecentSnapshots(t *testing.T) {
 	ctx := context.Background()
 	repo := openRepo(t, arkmem.New())
 
-	for _, content := range []string{"one", "two", "three"} {
-		if _, err := repo.Backup(ctx, stubSource{name: "app", content: content}); err != nil {
-			t.Fatalf("Backup %s: %v", content, err)
+	now := time.Now()
+	for _, age := range []time.Duration{72 * time.Hour, 30 * time.Minute, 0} {
+		src := stubSource{name: "app", content: age.String()}
+		if _, err := repo.Backup(ctx, src, ark.WithTime(now.Add(-age))); err != nil {
+			t.Fatalf("Backup %v ago: %v", age, err)
 		}
 	}
+	// One dated in the future, as a machine with a wrong clock leaves it:
+	// the window is still measured from the newest of the others.
+	importAt(t, repo, now.AddDate(1, 0, 0))
 
-	// Everything was written seconds ago, so an hour keeps all three.
-	result, err := repo.Forget(ctx, ark.ForgetPolicy{KeepWithin: time.Hour}, ark.SnapshotFilter{},
-		ark.WithForgetDryRun())
-	if err != nil {
-		t.Fatalf("Forget: %v", err)
-	}
-	if len(result.Keep) != 3 || len(result.Remove) != 0 {
-		t.Errorf("KeepWithin=1h keeps %d and removes %d, want 3 and 0",
-			len(result.Keep), len(result.Remove))
-	}
-
-	// A window of one nanosecond keeps only the newest.
-	result, err = repo.Forget(ctx, ark.ForgetPolicy{KeepWithin: time.Nanosecond}, ark.SnapshotFilter{},
-		ark.WithForgetDryRun())
-	if err != nil {
-		t.Fatalf("Forget: %v", err)
-	}
-	if len(result.Keep) != 1 {
-		t.Errorf("KeepWithin=1ns keeps %d snapshots, want 1", len(result.Keep))
+	for _, tc := range []struct {
+		within ark.Within
+		keep   int
+	}{
+		{ark.Within{Hours: 1}, 3},
+		{ark.Within{Days: 7}, 4},
+	} {
+		result, err := repo.Forget(ctx, ark.ForgetPolicy{KeepWithin: tc.within}, ark.SnapshotFilter{},
+			ark.WithForgetDryRun())
+		if err != nil {
+			t.Fatalf("Forget: %v", err)
+		}
+		if len(result.Keep) != tc.keep || len(result.Keep)+len(result.Remove) != 4 {
+			t.Errorf("KeepWithin %v keeps %d and removes %d, want %d of 4",
+				tc.within, len(result.Keep), len(result.Remove), tc.keep)
+		}
 	}
 }
 

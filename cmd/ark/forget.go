@@ -19,19 +19,40 @@ func forgetCommand() *cli.Command {
    ark forget --keep-last N [--source NAME] [--prune]
    ark forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6
    ark forget --keep-within 30d
+   ark forget --keep-within-daily 14d --keep-within-monthly 1y
+   ark forget --keep-daily 7 --keep-yearly unlimited
+   ark forget --keep-last 5 --keep-tag pinned
 
    Removes snapshots. Either name ids, or give a policy that says what to keep;
    the policy is applied per series (source type, source name and host). A policy that
    keeps nothing is refused, use --all to remove every matching snapshot on purpose.
+   --keep-tag keeps what carries all tags of a list and is the one rule that can keep
+   nothing of a series: the run then fails and removes nothing.
+   Hours, days, weeks, months and years count in local time (TZ).
+   A period rule with count left at the end of a series keeps its oldest snapshot too.
+   --keep-within-hourly to --keep-within-yearly are the period rules bounded by a
+   DURATION instead of a count: the newest of every period younger than it.
    Chunks stay until prune.`,
 		Flags: []cli.Flag{
-			&cli.IntFlag{Name: "keep-last", Usage: "keep the `N` newest"},
-			&cli.IntFlag{Name: "keep-hourly", Usage: "keep the newest of `N` hours"},
-			&cli.IntFlag{Name: "keep-daily", Usage: "keep the newest of `N` days"},
-			&cli.IntFlag{Name: "keep-weekly", Usage: "keep the newest of `N` weeks"},
-			&cli.IntFlag{Name: "keep-monthly", Usage: "keep the newest of `N` months"},
-			&cli.IntFlag{Name: "keep-yearly", Usage: "keep the newest of `N` years"},
-			&cli.StringFlag{Name: "keep-within", Usage: "keep everything younger than `DURATION`, e.g. 72h, 30d"},
+			&cli.StringFlag{Name: "keep-last", Usage: "keep the `N` newest, unlimited for all"},
+			&cli.StringFlag{Name: "keep-hourly", Usage: "keep the newest of `N` hours, unlimited for all"},
+			&cli.StringFlag{Name: "keep-daily", Usage: "keep the newest of `N` days, unlimited for all"},
+			&cli.StringFlag{Name: "keep-weekly", Usage: "keep the newest of `N` weeks, unlimited for all"},
+			&cli.StringFlag{Name: "keep-monthly", Usage: "keep the newest of `N` months, unlimited for all"},
+			&cli.StringFlag{Name: "keep-yearly", Usage: "keep the newest of `N` years, unlimited for all"},
+			&cli.StringFlag{
+				Name:  "keep-within",
+				Usage: "keep everything younger than `DURATION` in years, months, days and hours, e.g. 30d, 72h, 1y6m",
+			},
+			&cli.StringFlag{Name: "keep-within-hourly", Usage: "keep the newest of every hour within `DURATION`"},
+			&cli.StringFlag{Name: "keep-within-daily", Usage: "keep the newest of every day within `DURATION`"},
+			&cli.StringFlag{Name: "keep-within-weekly", Usage: "keep the newest of every week within `DURATION`"},
+			&cli.StringFlag{Name: "keep-within-monthly", Usage: "keep the newest of every month within `DURATION`"},
+			&cli.StringFlag{Name: "keep-within-yearly", Usage: "keep the newest of every year within `DURATION`"},
+			&listFlag{
+				Name:  "keep-tag",
+				Usage: "keep what carries all of `TAG[,TAG...]`, '' for untagged, repeatable: any list keeps",
+			},
 			&cli.BoolFlag{Name: "all", Usage: "remove every snapshot matching the filter"},
 			&cli.StringFlag{Name: "source", Aliases: []string{"s"}, Usage: "filter by source `NAME`"},
 			&cli.StringFlag{Name: "type", Usage: "filter by source `TYPE`, file, docker-volume or stream"},
@@ -83,7 +104,7 @@ func forgetCommand() *cli.Command {
 			if lp != nil && !cmd.IsSet("prune") {
 				prune = lp.Forget.Prune
 			}
-			hasPolicy := policy != (ark.ForgetPolicy{})
+			hasPolicy := !policy.Empty()
 			switch {
 			case len(ids) > 0 && hasPolicy:
 				return exitcode.Usagef("give snapshot ids or a policy, not both")
@@ -159,18 +180,16 @@ func runForget(
 }
 
 // forgetPolicy is the profile's forget policy with every --keep-* flag given
-// on the command line put over its rule. A bad duration is a usage error.
+// on the command line put over its rule; --keep-tag replaces the profile's
+// lists. A bad count or duration is a usage error.
 func forgetPolicy(cmd *cli.Command, lp *loadedProfile) (ark.ForgetPolicy, error) {
 	var policy ark.ForgetPolicy
 	if lp != nil {
-		var err error
-		if policy, err = lp.ForgetPolicy(); err != nil {
-			return policy, exitcode.Usagef("profile %s: %w", lp.Name, err)
-		}
+		policy = lp.ForgetPolicy()
 	}
 	for _, f := range []struct {
 		name string
-		dst  *int
+		dst  *ark.KeepCount
 	}{
 		{"keep-last", &policy.KeepLast},
 		{"keep-hourly", &policy.KeepHourly},
@@ -180,18 +199,41 @@ func forgetPolicy(cmd *cli.Command, lp *loadedProfile) (ark.ForgetPolicy, error)
 		{"keep-yearly", &policy.KeepYearly},
 	} {
 		if cmd.IsSet(f.name) {
-			*f.dst = cmd.Int(f.name)
+			n, err := ark.ParseKeepCount(cmd.String(f.name))
+			if err != nil {
+				return policy, exitcode.Usagef("--%s: %v", f.name, err)
+			}
+			*f.dst = n
 		}
 	}
-	if cmd.IsSet("keep-within") {
+	for _, f := range []struct {
+		name string
+		dst  *ark.Within
+	}{
+		{"keep-within", &policy.KeepWithin},
+		{"keep-within-hourly", &policy.KeepWithinHourly},
+		{"keep-within-daily", &policy.KeepWithinDaily},
+		{"keep-within-weekly", &policy.KeepWithinWeekly},
+		{"keep-within-monthly", &policy.KeepWithinMonthly},
+		{"keep-within-yearly", &policy.KeepWithinYearly},
+	} {
+		if !cmd.IsSet(f.name) {
+			continue
+		}
 		// an empty value drops the profile's rule
-		policy.KeepWithin = 0
-		if s := cmd.String("keep-within"); s != "" {
-			d, err := out.ParseDuration(s)
+		*f.dst = ark.Within{}
+		if s := cmd.String(f.name); s != "" {
+			w, err := ark.ParseWithin(s)
 			if err != nil {
-				return policy, exitcode.Usagef("--keep-within: %v", err)
+				return policy, exitcode.Usagef("--%s: %v", f.name, err)
 			}
-			policy.KeepWithin = d
+			*f.dst = w
+		}
+	}
+	if cmd.IsSet("keep-tag") {
+		policy.KeepTags = nil
+		for _, list := range listValue(cmd, "keep-tag") {
+			policy.KeepTags = append(policy.KeepTags, ark.ParseTagList(list))
 		}
 	}
 	return policy, nil
@@ -201,7 +243,9 @@ func printForget(cmd *cli.Command, res *ark.ForgetResult) error {
 	p := printer(cmd)
 	if p.Mode().JSON {
 		return p.JSON(map[string]any{
-			"keep": out.Snapshots(res.Keep), "remove": out.Snapshots(res.Remove), "dry_run": res.DryRun,
+			"keep":    out.KeptSnapshots(res.Keep, res.KeepReasons),
+			"remove":  out.Snapshots(res.Remove),
+			"dry_run": res.DryRun,
 		})
 	}
 	verb := "removed"

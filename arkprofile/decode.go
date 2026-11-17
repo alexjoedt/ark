@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -112,6 +113,9 @@ func decodeStruct(n *yaml.Node, v reflect.Value, path, dir string) error {
 			}
 			if isInteger(f.v.Type()) && resolve(val).ShortTag() == "!!float" {
 				return fieldErrorf(val.Line, p, "want %s", describe(f.v.Type()))
+			}
+			if isInteger(f.v.Type()) && reflect.PointerTo(f.v.Type()).Implements(textUnmarshalerType) {
+				val = decimal(val)
 			}
 			if err := val.Decode(f.v.Addr().Interface()); err != nil {
 				if _, ok := errors.AsType[*yaml.TypeError](err); ok {
@@ -281,6 +285,20 @@ func isInteger(t reflect.Type) bool {
 		return t != durationType
 	}
 	return false
+}
+
+// decimal returns n with a YAML integer such as 0x10 or 1_000 written in
+// decimal, for a whole number that reads itself from text and so never sees
+// YAML's own reading of it. Any other node is returned as it is.
+func decimal(n *yaml.Node) *yaml.Node {
+	n = resolve(n)
+	var i int64
+	if n.Kind != yaml.ScalarNode || n.ShortTag() != "!!int" || n.Decode(&i) != nil {
+		return n
+	}
+	c := *n
+	c.Value = strconv.FormatInt(i, 10)
+	return &c
 }
 
 func describe(t reflect.Type) string {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkprofile"
 )
 
@@ -66,7 +67,7 @@ func TestDecodeExpandsAndResolves(t *testing.T) {
 			"number from variable",
 			"forget:\n  keep-daily: $DAYS\n",
 			func(p *arkprofile.Profile) any { return p.Forget.KeepDaily },
-			7,
+			ark.KeepCount(7),
 		},
 		{
 			"null from variable stays a string",
@@ -191,7 +192,7 @@ func TestDecodeRefusesAnUnsetVariable(t *testing.T) {
 		"forget:\n  keep-daily: $ARK_TEST_UNSET\n":            "line 2: forget.keep-daily: ARK_TEST_UNSET not set",
 		"password-file: ~/x\nbackup:\n  comment: $A$B\n":      "line 3: backup.comment: A not set",
 		"forget:\n  keep-daily: $FRACTION\n":                  "line 2: forget.keep-daily: want a whole number",
-		"forget:\n  keep-daily: !!str $WHOLE\n":               "line 2: forget.keep-daily: want a whole number",
+		"concurrency: !!str $WHOLE\n":                         "line 1: concurrency: want a whole number",
 		"backup:\n  path: ~bob/data\n":                        "line 2: backup.path: ~bob/data: only ~ and ~/ name a home directory, give the full path",
 	}
 	for in, want := range tests {

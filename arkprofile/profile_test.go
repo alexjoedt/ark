@@ -33,7 +33,14 @@ backup:
 forget:
   keep-last: 3
   keep-daily: 7
+  keep-yearly: unlimited
   keep-within: 30d
+  keep-within-hourly: 48h
+  keep-within-daily: 14d
+  keep-within-weekly: 2m
+  keep-within-monthly: 1y
+  keep-within-yearly: 10y
+  keep-tag: [pinned, "db, prod", ""]
   prune: true
   run-after-fail: echo failed
 `
@@ -62,13 +69,46 @@ func TestDecodeFillsEveryField(t *testing.T) {
 		Forget: arkprofile.Forget{
 			KeepLast:   3,
 			KeepDaily:  7,
-			KeepWithin: "30d",
-			Prune:      true,
-			Hooks:      arkprofile.Hooks{RunAfterFail: "echo failed"},
+			KeepYearly: ark.Unlimited,
+			KeepWithin: ark.Within{Days: 30},
+
+			KeepWithinHourly:  ark.Within{Hours: 48},
+			KeepWithinDaily:   ark.Within{Days: 14},
+			KeepWithinWeekly:  ark.Within{Months: 2},
+			KeepWithinMonthly: ark.Within{Years: 1},
+			KeepWithinYearly:  ark.Within{Years: 10},
+
+			KeepTags: []string{"pinned", "db, prod", ""},
+			Prune:    true,
+			Hooks:    arkprofile.Hooks{RunAfterFail: "echo failed"},
 		},
 	}
 	if !reflect.DeepEqual(p, want) {
 		t.Fatalf("decoded\n%+v\nwant\n%+v", p, want)
+	}
+}
+
+// A keep count reads text, and still takes every integer YAML writes.
+func TestDecodeReadsAKeepCountInAnyYAMLIntegerForm(t *testing.T) {
+	in := "forget:\n  keep-last: 0x10\n  keep-daily: 0o7\n  keep-weekly: 1_000\n  keep-monthly: \"7\"\n  keep-yearly: Unlimited\n"
+	var p arkprofile.Profile
+	if err := arkprofile.Decode(strings.NewReader(in), &p, ""); err != nil {
+		t.Fatal(err)
+	}
+	want := arkprofile.Forget{KeepLast: 16, KeepDaily: 7, KeepWeekly: 1000, KeepMonthly: 7, KeepYearly: ark.Unlimited}
+	if !reflect.DeepEqual(p.Forget, want) {
+		t.Errorf("forget = %+v, want %+v", p.Forget, want)
+	}
+}
+
+// An empty keep-within, as a variable without a value leaves it, is no rule.
+func TestDecodeReadsAnEmptyKeepWithinAsNoRule(t *testing.T) {
+	for _, in := range []string{"forget:\n  keep-within: \"\"\n", "forget:\n  keep-within:\n"} {
+		var p arkprofile.Profile
+		err := arkprofile.Decode(strings.NewReader(in), &p, "")
+		if err != nil || p.Forget.KeepWithin != (ark.Within{}) {
+			t.Errorf("%q: keep-within = %+v, %v, want no window", in, p.Forget.KeepWithin, err)
+		}
 	}
 }
 
@@ -159,7 +199,47 @@ func TestDecodeRejects(t *testing.T) {
 		{"null document", "~\n", "empty profile"},
 		{"not a mapping", "- repo\n", "line 1: profile: want a mapping of keys"},
 		{"section not a mapping", "backup: /data\n", "line 1: backup: want a mapping of keys"},
-		{"wrong kind", "forget:\n  keep-last: three\n", "line 2: forget.keep-last: want a whole number"},
+		{"wrong kind", "concurrency: three\n", "line 1: concurrency: want a whole number"},
+		{
+			"keep count not a number",
+			"forget:\n  keep-last: three\n",
+			`line 2: forget.keep-last: "three" is not a whole number or unlimited`,
+		},
+		{
+			"negative keep count",
+			"forget:\n  keep-yearly: -1\n",
+			"line 2: forget.keep-yearly: negative count -1: write unlimited to keep all",
+		},
+		{
+			"keep-within not a duration",
+			"forget:\n  keep-within: 30x\n",
+			`line 2: forget.keep-within: "30x" is not a duration: write whole numbers of y (years), m (months), ` +
+				"d (days) and h (hours) in that order, as in 30d, 72h or 1y6m",
+		},
+		{
+			"keep-within in minutes",
+			"forget:\n  keep-within: 90m\n",
+			`line 2: forget.keep-within: "90m": m counts months, up to 11, there are no minutes: write whole ` +
+				"numbers of y (years), m (months), d (days) and h (hours) in that order, as in 30d, 72h or 1y6m",
+		},
+		{
+			"keep-within as a Go duration",
+			"forget:\n  keep-within: 1h30m\n",
+			`line 2: forget.keep-within: "1h30m" is not a duration: write whole numbers of y (years), m (months), ` +
+				"d (days) and h (hours) in that order, as in 30d, 72h or 1y6m",
+		},
+		{
+			"keep-within-daily in minutes",
+			"forget:\n  keep-within-daily: 90m\n",
+			`line 2: forget.keep-within-daily: "90m": m counts months, up to 11, there are no minutes: write whole ` +
+				`numbers of y (years), m (months), d (days) and h (hours) in that order, as in 30d, 72h or 1y6m`,
+		},
+		{
+			"zero keep-within",
+			"forget:\n  keep-within: 0d\n",
+			`line 2: forget.keep-within: duration "0d" is zero: write whole numbers of y (years), m (months), ` +
+				"d (days) and h (hours) in that order, as in 30d, 72h or 1y6m",
+		},
 		{"scalar for a list", "backup:\n  tag: docs\n", "line 2: backup.tag: want a list of strings"},
 		{"bare number as duration", "lock-wait: 30\n", "line 1: lock-wait: want a duration such as 30s or 5m"},
 		{"bad bool", "insecure-no-password: maybe\n", "line 1: insecure-no-password: want true or false"},
@@ -198,7 +278,10 @@ func TestDecodeRejects(t *testing.T) {
 func TestValidate(t *testing.T) {
 	ok := arkprofile.Profile{Name: "docs", Repo: "/srv/ark", PasswordEnv: "DOCS_PW"}
 	ok.Backup.Path = "/data"
-	ok.Forget.KeepWithin = "30d"
+	ok.Forget.KeepWithin = ark.Within{Days: 30}
+	ok.Forget.KeepWithinWeekly = ark.Within{Months: 2}
+	ok.Forget.KeepYearly = ark.Unlimited
+	ok.Forget.KeepTags = []string{"pinned", "db, prod", ""}
 	if err := ok.Validate(); err != nil {
 		t.Fatalf("profile built in code: %v", err)
 	}
@@ -218,10 +301,18 @@ func TestValidate(t *testing.T) {
 		{"slash", func(p *arkprofile.Profile) { p.Name = "a/b" }},
 		{"negative concurrency", func(p *arkprofile.Profile) { p.Concurrency = -4 }},
 		{"negative lock-wait", func(p *arkprofile.Profile) { p.LockWait = -time.Second }},
-		{"negative keep-daily", func(p *arkprofile.Profile) { p.Forget.KeepDaily = -1 }},
-		{"negative keep-yearly", func(p *arkprofile.Profile) { p.Forget.KeepYearly = -1 }},
-		{"bad keep-within", func(p *arkprofile.Profile) { p.Forget.KeepWithin = "30x" }},
-		{"zero keep-within", func(p *arkprofile.Profile) { p.Forget.KeepWithin = "0d" }},
+		{"negative keep-daily", func(p *arkprofile.Profile) { p.Forget.KeepDaily = -2 }},
+		{"negative keep-yearly", func(p *arkprofile.Profile) { p.Forget.KeepYearly = -7 }},
+		{"negative keep-within", func(p *arkprofile.Profile) { p.Forget.KeepWithin = ark.Within{Days: -1} }},
+		{"keep-within of 90 months", func(p *arkprofile.Profile) { p.Forget.KeepWithin = ark.Within{Months: 90} }},
+		{"keep-within-hourly", func(p *arkprofile.Profile) { p.Forget.KeepWithinHourly = ark.Within{Hours: -1} }},
+		{"keep-within-daily", func(p *arkprofile.Profile) { p.Forget.KeepWithinDaily = ark.Within{Days: -1} }},
+		{"keep-within-weekly", func(p *arkprofile.Profile) { p.Forget.KeepWithinWeekly = ark.Within{Months: 90} }},
+		{"keep-within-monthly", func(p *arkprofile.Profile) { p.Forget.KeepWithinMonthly = ark.Within{Years: -1} }},
+		{"keep-within-yearly", func(p *arkprofile.Profile) { p.Forget.KeepWithinYearly = ark.Within{Years: -1} }},
+		{"keep-tag trailing comma", func(p *arkprofile.Profile) { p.Forget.KeepTags = []string{"", "pinned,"} }},
+		{"keep-tag doubled comma", func(p *arkprofile.Profile) { p.Forget.KeepTags = []string{"db,,prod"} }},
+		{"keep-tag only commas", func(p *arkprofile.Profile) { p.Forget.KeepTags = []string{" , "} }},
 		{"bad label key", func(p *arkprofile.Profile) { p.Backup.Labels = map[string]string{"-app": "x"} }},
 		{"reserved label", func(p *arkprofile.Profile) { p.Backup.Labels = map[string]string{"ark/path": "/x"} }},
 	}
@@ -232,6 +323,10 @@ func TestValidate(t *testing.T) {
 			err := p.Validate()
 			if !errors.Is(err, arkprofile.ErrInvalid) {
 				t.Fatalf("Validate = %v, want ErrInvalid", err)
+			}
+			if key, ok := strings.CutPrefix(tt.name, "negative keep-"); ok &&
+				!strings.Contains(err.Error(), "forget.keep-"+key) {
+				t.Errorf("Validate = %v, want the key forget.keep-%s named", err, key)
 			}
 			if strings.Contains(tt.name, "label") && !errors.Is(err, ark.ErrInvalidLabel) {
 				t.Errorf("Validate = %v, want ark.ErrInvalidLabel too", err)

@@ -15,10 +15,26 @@ var (
 	// the filter names no ids, which would remove every matching snapshot.
 	ErrEmptyPolicy = errors.New("ark: forget policy keeps nothing and no ids given")
 
+	// ErrInvalidPolicy is returned by Forget, before it reads anything, for
+	// a policy with a negative count other than Unlimited, a keep-within
+	// window (KeepWithin to KeepWithinYearly) outside the bounds of [Within],
+	// a KeepTags list without a tag, or one with the empty tag next to others.
+	ErrInvalidPolicy = errors.New("ark: invalid forget policy")
+
+	// ErrNoSnapshotKept is returned by Forget when the policy keeps no
+	// snapshot of a series among the matches, which only a policy of KeepTags
+	// alone can do. Nothing is removed, of no series; the message names the
+	// series.
+	ErrNoSnapshotKept = errors.New("ark: forget policy keeps no snapshot of a series")
+
 	// ErrInvalidLabel is returned by ValidateLabels, and by Backup before it
 	// writes anything, for a label key or value a caller may not set, or a
 	// key the source sets as well.
 	ErrInvalidLabel = errors.New("ark: invalid label")
+
+	// ErrInvalidTime is returned by Backup and ValidateBackupOptions for a
+	// WithTime that is the zero time or lies in the future.
+	ErrInvalidTime = errors.New("ark: invalid snapshot time")
 
 	// ErrIncompatibleSourceType is returned when restoring a snapshot into a
 	// Sink type that is incompatible with the snapshot's SourceType.

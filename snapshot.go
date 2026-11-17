@@ -1,6 +1,7 @@
 package ark
 
 import (
+	"fmt"
 	"maps"
 	"time"
 )
@@ -111,8 +112,23 @@ type backupOptions struct {
 	labels   map[string]string
 	host     string
 	parent   string
+	time     time.Time
+	timeSet  bool
 	progress ProgressFunc
 	scan     bool
+}
+
+// checkTime refuses a WithTime that is the zero time or lies in the future.
+func (o *backupOptions) checkTime() error {
+	switch {
+	case !o.timeSet:
+		return nil
+	case o.time.IsZero():
+		return fmt.Errorf("%w: the zero time", ErrInvalidTime)
+	case o.time.After(time.Now()):
+		return fmt.Errorf("%w: %s is in the future", ErrInvalidTime, o.time.Format(time.RFC3339))
+	}
+	return nil
 }
 
 // BackupOption is a functional option for Backup.
@@ -148,6 +164,21 @@ func WithLabels(labels map[string]string) BackupOption {
 // policy in [Repository.Forget].
 func WithHost(h string) BackupOption {
 	return func(o *backupOptions) { o.host = h }
+}
+
+// WithTime sets the time recorded as the snapshot's CreatedAt, stored in UTC,
+// in place of the time the backup starts: for a backup of data as it was at
+// an earlier time, and for tests of a keep policy. Backup refuses the zero
+// time and a time in the future with [ErrInvalidTime] before it writes
+// anything.
+//
+// The time does not change which snapshot is the parent, still the newest of
+// the series by CreatedAt, so a backup dated before its parent is allowed.
+// Files changed since the recorded time are read again by the next backup
+// that takes this snapshot as its parent, which is why a future time, which
+// would let that backup pass over a file changed during this one, is refused.
+func WithTime(t time.Time) BackupOption {
+	return func(o *backupOptions) { o.time, o.timeSet = t, true }
 }
 
 // WithParent names the parent snapshot explicitly, as a full id or a unique

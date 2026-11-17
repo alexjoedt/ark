@@ -31,8 +31,11 @@
 //	  keep-daily: 7
 //	  keep-weekly: 4
 //	  keep-monthly: 12
-//	  keep-yearly: 2
-//	  keep-within: 30d               # a duration such as 72h or 30d
+//	  keep-yearly: unlimited         # a count, or unlimited for every period
+//	  keep-within: 30d               # years, months, days, hours: 72h, 1y6m
+//	  keep-within-daily: 14d         # the newest of every day in the window,
+//	  keep-within-monthly: 1y        # also -hourly, -weekly and -yearly
+//	  keep-tag: [pinned, "db,prod"]  # keep what is tagged pinned, or db and prod
 //	  prune: true                    # prune after the forget
 //	  run-after: echo forgotten      # the same four hooks as backup
 //
@@ -53,7 +56,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -105,17 +108,29 @@ type Backup struct {
 	Hooks `yaml:",inline"`
 }
 
-// Forget holds the policy of a forget.
+// Forget holds the policy of a forget. A keep count is a whole number or
+// the word unlimited, in code [ark.Unlimited].
 type Forget struct {
-	KeepLast    int `yaml:"keep-last"`
-	KeepHourly  int `yaml:"keep-hourly"`
-	KeepDaily   int `yaml:"keep-daily"`
-	KeepWeekly  int `yaml:"keep-weekly"`
-	KeepMonthly int `yaml:"keep-monthly"`
-	KeepYearly  int `yaml:"keep-yearly"`
-	// KeepWithin is a duration as the CLI takes it, such as 72h or 30d.
-	KeepWithin string `yaml:"keep-within"`
-	Prune      bool   `yaml:"prune"`
+	KeepLast    ark.KeepCount `yaml:"keep-last"`
+	KeepHourly  ark.KeepCount `yaml:"keep-hourly"`
+	KeepDaily   ark.KeepCount `yaml:"keep-daily"`
+	KeepWeekly  ark.KeepCount `yaml:"keep-weekly"`
+	KeepMonthly ark.KeepCount `yaml:"keep-monthly"`
+	KeepYearly  ark.KeepCount `yaml:"keep-yearly"`
+	// KeepWithin is written as [ark.ParseWithin] reads it, such as 30d, 72h
+	// or 1y6m; m counts months.
+	KeepWithin ark.Within `yaml:"keep-within"`
+	// KeepWithinHourly to KeepWithinYearly are windows in the same form.
+	KeepWithinHourly  ark.Within `yaml:"keep-within-hourly"`
+	KeepWithinDaily   ark.Within `yaml:"keep-within-daily"`
+	KeepWithinWeekly  ark.Within `yaml:"keep-within-weekly"`
+	KeepWithinMonthly ark.Within `yaml:"keep-within-monthly"`
+	KeepWithinYearly  ark.Within `yaml:"keep-within-yearly"`
+	// KeepTags holds one tag list per entry, each as the CLI takes it and
+	// [ark.ParseTagList] reads it: "db,prod" keeps what carries both tags,
+	// "" what carries none.
+	KeepTags []string `yaml:"keep-tag"`
+	Prune    bool     `yaml:"prune"`
 
 	Hooks `yaml:",inline"`
 }
@@ -131,9 +146,11 @@ type Hooks struct {
 var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 // Validate reports a name outside [a-z0-9][a-z0-9._-]*, conflicting
-// password sources, a negative number or lock-wait, a backup label that
-// [ark.ValidateLabels] refuses and a keep-within that is not a positive
-// duration. Every error matches [ErrInvalid].
+// password sources, a negative concurrency or lock-wait, a negative keep
+// count other than [ark.Unlimited], a backup label that
+// [ark.ValidateLabels] refuses, a keep-within window that [ark.ParseWithin]
+// refuses and a keep-tag list with an empty tag next to others, as a stray
+// comma leaves one. Every error matches [ErrInvalid].
 func (p *Profile) Validate() error {
 	if !validName.MatchString(p.Name) {
 		return invalidf(
@@ -150,12 +167,14 @@ func (p *Profile) Validate() error {
 	if err := ark.ValidateLabels(p.Backup.Labels); err != nil {
 		return invalidf("backup.label: %w", err)
 	}
+	if p.Concurrency < 0 {
+		return invalidf("concurrency %d: want 0 or more", p.Concurrency)
+	}
 	f := p.Forget
 	for _, n := range []struct {
 		key string
-		v   int
+		v   ark.KeepCount
 	}{
-		{"concurrency", p.Concurrency},
 		{"forget.keep-last", f.KeepLast},
 		{"forget.keep-hourly", f.KeepHourly},
 		{"forget.keep-daily", f.KeepDaily},
@@ -163,38 +182,39 @@ func (p *Profile) Validate() error {
 		{"forget.keep-monthly", f.KeepMonthly},
 		{"forget.keep-yearly", f.KeepYearly},
 	} {
-		if n.v < 0 {
-			return invalidf("%s %d: want 0 or more", n.key, n.v)
+		if n.v < ark.Unlimited {
+			return invalidf("%s %d: want 0 or more, or unlimited", n.key, int(n.v))
 		}
 	}
-	if f.KeepWithin != "" {
-		if _, err := parseWithin(f.KeepWithin); err != nil {
-			return invalidf("forget.keep-within: %v", err)
+	// The keys are parsed when the profile is read; a window set in code
+	// has to be one the key can hold.
+	for _, w := range []struct {
+		key string
+		v   ark.Within
+	}{
+		{"forget.keep-within", f.KeepWithin},
+		{"forget.keep-within-hourly", f.KeepWithinHourly},
+		{"forget.keep-within-daily", f.KeepWithinDaily},
+		{"forget.keep-within-weekly", f.KeepWithinWeekly},
+		{"forget.keep-within-monthly", f.KeepWithinMonthly},
+		{"forget.keep-within-yearly", f.KeepWithinYearly},
+	} {
+		if w.v == (ark.Within{}) {
+			continue
+		}
+		if _, err := ark.ParseWithin(w.v.String()); err != nil {
+			return invalidf("%s: %v", w.key, err)
+		}
+	}
+	for _, list := range f.KeepTags {
+		if tags := ark.ParseTagList(list); len(tags) > 1 && slices.Contains(tags, "") {
+			return invalidf(
+				`forget.keep-tag %q: an empty tag next to others, drop the stray comma; "" alone keeps the untagged`,
+				list,
+			)
 		}
 	}
 	return nil
-}
-
-// parseWithin reads keep-within as the CLI does: a Go duration or a day
-// count such as 30d, days being 24 hours, and positive.
-func parseWithin(s string) (time.Duration, error) {
-	s = strings.TrimSpace(s)
-	var d time.Duration
-	var err error
-	if days, ok := strings.CutSuffix(s, "d"); ok {
-		var n float64
-		n, err = strconv.ParseFloat(days, 64)
-		d = time.Duration(n * float64(24*time.Hour))
-	} else {
-		d, err = time.ParseDuration(s)
-	}
-	if err != nil {
-		return 0, fmt.Errorf("%q is not a duration such as 72h or 30d", s)
-	}
-	if d <= 0 {
-		return 0, fmt.Errorf("duration %q must be positive", s)
-	}
-	return d, nil
 }
 
 func (p *Profile) checkPassword() error {

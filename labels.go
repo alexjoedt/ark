@@ -65,14 +65,18 @@ func validateLabel(key, value string) error {
 	return nil
 }
 
-// ValidateBackupOptions checks the labels opts set with [ValidateLabels], the
-// check Backup runs before it writes anything, short of the keys the source
-// sets as well. A caller that does work before Backup, such as stopping the
-// containers of a volume, runs it first.
+// ValidateBackupOptions checks the time opts set with [WithTime] and the
+// labels with [ValidateLabels], the checks Backup runs before it writes
+// anything, short of the label keys the source sets as well. A caller that
+// does work before Backup, such as stopping the containers of a volume, runs
+// it first.
 func ValidateBackupOptions(opts ...BackupOption) error {
 	o := &backupOptions{}
 	for _, opt := range opts {
 		opt(o)
+	}
+	if err := o.checkTime(); err != nil {
+		return err
 	}
 	return ValidateLabels(o.labels)
 }
