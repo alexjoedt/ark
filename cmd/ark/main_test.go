@@ -20,12 +20,19 @@ import (
 	dockerclient "github.com/moby/moby/client"
 )
 
+// envCLIChild makes the test binary run the CLI with its own arguments and
+// exit, for a test that needs a process of its own, as one under another TZ.
+const envCLIChild = "ARK_TEST_CLI_CHILD"
+
 // TestMain runs every test without a password: argon2id costs a noticeable
 // fraction of a second per run. Password tests clear the variable. Stdin is
 // not a terminal, so no test ever prompts.
 func TestMain(m *testing.M) {
 	os.Setenv("ARK_INSECURE_NO_PASSWORD", "1")
 	os.Unsetenv("ARK_CPUPROFILE")
+	if os.Getenv(envCLIChild) != "" {
+		os.Exit(run(os.Args))
+	}
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
 		panic(err)

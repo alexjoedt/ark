@@ -251,6 +251,8 @@ if p.Forget.Prune {
 }
 ```
 
+`Forget` counts the hours, days, weeks, months and years of a policy in `time.Local`; `ark.WithForgetLocation` names another zone.
+
 These calls apply neither the profile's hooks nor `forget.prune` on their own. Read `p.Forget.Prune` as above, and run each step inside `p.Backup.Hooks.Run` or `p.Forget.Hooks.Run` with an `arkprofile.HookEnv`, as the CLI does; a profile with `run-before` or `run-after` hooks otherwise behaves differently in your program than under `ark`.
 
 `arkprofile.Load` reads a profile file. A program with a configuration of its own, such as a scheduler, embeds `arkprofile.Profile` inline in its struct and decodes the whole file with `arkprofile.Decode`, which expands `$VAR` and `~` and resolves relative paths against the directory it is given, as `Load` does with the file's directory. [`examples/profile`](https://github.com/alexjoedt/ark/tree/main/examples/profile) does both.

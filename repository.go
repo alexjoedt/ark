@@ -377,6 +377,9 @@ func (r *Repository) deleteSnapshot(ctx context.Context, id string) error {
 // source type, source name and host, so an empty filter keeps what the policy
 // says of every series in the repository.
 //
+// The period rules count hours, days, weeks, months and years in the local
+// time zone, or in the one WithForgetLocation names.
+//
 // A policy without a positive rule removes every match, so it is only
 // accepted together with filter.IDs; otherwise Forget returns ErrEmptyPolicy
 // and deletes nothing.
@@ -394,7 +397,7 @@ func (r *Repository) Forget(
 		return nil, ErrEmptyPolicy
 	}
 
-	cfg := &forgetConfig{}
+	cfg := &forgetConfig{loc: time.Local}
 	for _, o := range opts {
 		o(cfg)
 	}
@@ -414,7 +417,7 @@ func (r *Repository) Forget(
 		var snapshots []*Snapshot
 		snapshots, err = r.Snapshots(ctx, filter)
 		if err == nil {
-			result = applyForgetPolicy(snapshots, policy)
+			result = applyForgetPolicy(snapshots, policy, cfg.loc)
 		}
 	}
 	if err != nil {

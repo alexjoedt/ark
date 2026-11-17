@@ -8,8 +8,8 @@ import (
 // applyForgetPolicy applies policy once per series (source type, source name
 // and host) and merges the groups, so one busy series cannot push another's
 // snapshots out of the window. Snapshots are expected to be sorted newest
-// first.
-func applyForgetPolicy(snapshots []*Snapshot, policy ForgetPolicy) *ForgetResult {
+// first. The period rules count in loc.
+func applyForgetPolicy(snapshots []*Snapshot, policy ForgetPolicy, loc *time.Location) *ForgetResult {
 	result := &ForgetResult{}
 	groups := make(map[seriesKey][]*Snapshot)
 	var order []seriesKey
@@ -21,7 +21,7 @@ func applyForgetPolicy(snapshots []*Snapshot, policy ForgetPolicy) *ForgetResult
 		groups[key] = append(groups[key], s)
 	}
 	for _, key := range order {
-		g := applyForgetPolicyToGroup(groups[key], policy)
+		g := applyForgetPolicyToGroup(groups[key], policy, loc)
 		result.Keep = append(result.Keep, g.Keep...)
 		result.Remove = append(result.Remove, g.Remove...)
 	}
@@ -35,7 +35,7 @@ func sortNewestFirst(snaps []*Snapshot) {
 }
 
 // applyForgetPolicyToGroup selects keep and remove for one series.
-func applyForgetPolicyToGroup(snapshots []*Snapshot, policy ForgetPolicy) *ForgetResult {
+func applyForgetPolicyToGroup(snapshots []*Snapshot, policy ForgetPolicy, loc *time.Location) *ForgetResult {
 	result := &ForgetResult{}
 	if len(snapshots) == 0 {
 		return result
@@ -61,19 +61,19 @@ func applyForgetPolicyToGroup(snapshots []*Snapshot, policy ForgetPolicy) *Forge
 		}
 	}
 
-	// Period keys are plain numbers: two time.Time values of one instant are
-	// unequal as map keys when their *time.Location pointers differ.
-	markPeriod(snapshots, keep, policy.KeepHourly, func(t time.Time) [4]int {
+	// Period keys are the numbers on a clock in loc. The hour a clock shows
+	// twice when summer time ends is one period, as it is for restic.
+	markPeriod(snapshots, keep, policy.KeepHourly, loc, func(t time.Time) [4]int {
 		return [4]int{t.Year(), int(t.Month()), t.Day(), t.Hour()}
 	})
-	markPeriod(snapshots, keep, policy.KeepDaily, func(t time.Time) [3]int {
+	markPeriod(snapshots, keep, policy.KeepDaily, loc, func(t time.Time) [3]int {
 		return [3]int{t.Year(), int(t.Month()), t.Day()}
 	})
-	markPeriod(snapshots, keep, policy.KeepWeekly, weekKey)
-	markPeriod(snapshots, keep, policy.KeepMonthly, func(t time.Time) [2]int {
+	markPeriod(snapshots, keep, policy.KeepWeekly, loc, weekKey)
+	markPeriod(snapshots, keep, policy.KeepMonthly, loc, func(t time.Time) [2]int {
 		return [2]int{t.Year(), int(t.Month())}
 	})
-	markPeriod(snapshots, keep, policy.KeepYearly, time.Time.Year)
+	markPeriod(snapshots, keep, policy.KeepYearly, loc, time.Time.Year)
 
 	for _, s := range snapshots {
 		if _, ok := keep[s.ID]; ok {
@@ -87,8 +87,14 @@ func applyForgetPolicyToGroup(snapshots []*Snapshot, policy ForgetPolicy) *Forge
 }
 
 // markPeriod keeps the newest snapshot of each of the n newest periods; key
-// names the period a time falls in.
-func markPeriod[K comparable](snapshots []*Snapshot, keep map[string]struct{}, n int, key func(time.Time) K) {
+// names the period a time in loc falls in.
+func markPeriod[K comparable](
+	snapshots []*Snapshot,
+	keep map[string]struct{},
+	n int,
+	loc *time.Location,
+	key func(time.Time) K,
+) {
 	if n <= 0 {
 		return
 	}
@@ -97,7 +103,7 @@ func markPeriod[K comparable](snapshots []*Snapshot, keep map[string]struct{}, n
 		if len(periods) >= n {
 			break
 		}
-		p := key(s.CreatedAt)
+		p := key(s.CreatedAt.In(loc))
 		if _, seen := periods[p]; !seen {
 			periods[p] = struct{}{}
 			keep[s.ID] = struct{}{}

@@ -12,6 +12,8 @@ type ForgetPolicy struct {
 	KeepLast int
 
 	// KeepHourly keeps one snapshot per hour for the most recent n hours.
+	// Hours, days, weeks, months and years are those of the local time zone,
+	// see WithForgetLocation.
 	KeepHourly int
 
 	// KeepDaily keeps one snapshot per day for the most recent n days.
@@ -47,10 +49,25 @@ type ForgetResult struct {
 }
 
 // forgetConfig holds configuration for a Forget call.
-type forgetConfig struct{ dryRun bool }
+type forgetConfig struct {
+	dryRun bool
+	loc    *time.Location
+}
 
 // ForgetOption configures a Forget call.
 type ForgetOption func(*forgetConfig)
 
 // WithForgetDryRun makes Forget report what would be removed without deleting anything.
 func WithForgetDryRun() ForgetOption { return func(c *forgetConfig) { c.dryRun = true } }
+
+// WithForgetLocation sets the time zone the period rules (KeepHourly to
+// KeepYearly) count in: a snapshot belongs to the hour, day, week, month or
+// year its time falls in on a clock in loc. Without it, and for a nil loc,
+// Forget counts in [time.Local]. KeepLast and KeepWithin do not depend on it.
+func WithForgetLocation(loc *time.Location) ForgetOption {
+	return func(c *forgetConfig) {
+		if loc != nil {
+			c.loc = loc
+		}
+	}
+}

@@ -68,7 +68,7 @@ func TestForgetPolicyFieldsSelectTheirPeriod(t *testing.T) {
 	snapshots := forgetFixture()
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := applyForgetPolicy(snapshots, tc.policy)
+			result := applyForgetPolicy(snapshots, tc.policy, time.UTC)
 
 			got := ids(result.Keep)
 			if !slices.Equal(got, tc.keep) {
@@ -117,7 +117,7 @@ func TestForgetPolicyAppliesPerSeries(t *testing.T) {
 					tc.odd(s)
 				}
 			}
-			res := applyForgetPolicy(snaps, ForgetPolicy{KeepLast: 1})
+			res := applyForgetPolicy(snaps, ForgetPolicy{KeepLast: 1}, time.UTC)
 
 			if keep := ids(res.Keep); !slices.Equal(keep, []string{"s0", "s1"}) {
 				t.Fatalf("keep = %v, want the newest of each series", keep)
@@ -166,7 +166,7 @@ func TestKeepWeeklyAcrossYearTurns(t *testing.T) {
 			for i, ts := range tc.times {
 				snaps[i] = &Snapshot{ID: fmt.Sprintf("s%d", i), CreatedAt: ts}
 			}
-			got := ids(applyForgetPolicy(snaps, ForgetPolicy{KeepWeekly: 2}).Keep)
+			got := ids(applyForgetPolicy(snaps, ForgetPolicy{KeepWeekly: 2}, time.UTC).Keep)
 			if !slices.Equal(got, tc.keep) {
 				t.Errorf("keeps %v, want %v", got, tc.keep)
 			}
@@ -179,8 +179,9 @@ func TestKeepWeeklyAcrossYearTurns(t *testing.T) {
 // is +05:30 because the time package shares one Location per unnamed
 // whole-hour offset.
 func TestPeriodKeysIgnoreLocationIdentity(t *testing.T) {
+	zone := func() *time.Location { return time.FixedZone("", 5*60*60+30*60) }
 	at := func(y int, m time.Month, d, h, minute int) time.Time {
-		return time.Date(y, m, d, h, minute, 0, 0, time.FixedZone("", 5*60*60+30*60))
+		return time.Date(y, m, d, h, minute, 0, 0, zone())
 	}
 	snaps := []*Snapshot{
 		{ID: "s0", CreatedAt: at(2020, 1, 2, 10, 30)},
@@ -196,8 +197,134 @@ func TestPeriodKeysIgnoreLocationIdentity(t *testing.T) {
 	}
 	for name, policy := range policies {
 		t.Run(name, func(t *testing.T) {
-			if got := ids(applyForgetPolicy(snaps, policy).Keep); !slices.Equal(got, []string{"s0", "s2"}) {
+			if got := ids(applyForgetPolicy(snaps, policy, zone()).Keep); !slices.Equal(got, []string{"s0", "s2"}) {
 				t.Errorf("keeps %v, want [s0 s2]", got)
+			}
+		})
+	}
+}
+
+// Periods are those of a clock in the given location, whatever zone a
+// snapshot's time carries. Stored times are UTC, so every case names UTC
+// instants and the Berlin wall clock they show.
+func TestPeriodsAreCutInTheGivenLocation(t *testing.T) {
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	utc := func(y int, m time.Month, d, h, minute int) time.Time {
+		return time.Date(y, m, d, h, minute, 0, 0, time.UTC)
+	}
+	tests := []struct {
+		name     string
+		policy   ForgetPolicy
+		times    []time.Time // newest first
+		inBerlin []string
+		inUTC    []string
+	}{
+		{
+			"midnight splits two days",
+			ForgetPolicy{KeepDaily: 2},
+			[]time.Time{
+				utc(2026, 1, 14, 23, 30), // 01-15 00:30 CET
+				utc(2026, 1, 14, 22, 30), // 01-14 23:30 CET
+			},
+			[]string{"s0", "s1"},
+			[]string{"s0"},
+		},
+		{
+			"the 25 hours of the day summer time ends are one day",
+			ForgetPolicy{KeepDaily: 3},
+			[]time.Time{
+				utc(2026, 10, 25, 23, 0),  // 10-26 00:00 CET
+				utc(2026, 10, 25, 22, 59), // 10-25 23:59 CET
+				utc(2026, 10, 24, 22, 0),  // 10-25 00:00 CEST
+				utc(2026, 10, 24, 21, 59), // 10-24 23:59 CEST
+			},
+			[]string{"s0", "s1", "s3"},
+			[]string{"s0", "s2"},
+		},
+		{
+			"the 23 hours of the day summer time starts are one day",
+			ForgetPolicy{KeepDaily: 3},
+			[]time.Time{
+				utc(2026, 3, 29, 22, 0),  // 03-30 00:00 CEST
+				utc(2026, 3, 29, 21, 59), // 03-29 23:59 CEST
+				utc(2026, 3, 28, 23, 0),  // 03-29 00:00 CET
+				utc(2026, 3, 28, 22, 59), // 03-28 23:59 CET
+			},
+			[]string{"s0", "s1", "s3"},
+			[]string{"s0", "s2"},
+		},
+		{
+			"the hour the clock shows twice is one hour",
+			ForgetPolicy{KeepHourly: 2},
+			[]time.Time{
+				utc(2026, 10, 25, 1, 30),  // 02:30 CET
+				utc(2026, 10, 25, 0, 30),  // 02:30 CEST
+				utc(2026, 10, 24, 23, 30), // 01:30 CEST
+			},
+			[]string{"s0", "s2"},
+			[]string{"s0", "s1"},
+		},
+		{
+			"Monday starts a week at local midnight",
+			ForgetPolicy{KeepWeekly: 2},
+			[]time.Time{
+				utc(2026, 1, 11, 23, 30), // Monday 01-12 00:30 CET
+				utc(2026, 1, 11, 22, 30), // Sunday 01-11 23:30 CET
+			},
+			[]string{"s0", "s1"},
+			[]string{"s0"},
+		},
+		{
+			"a month starts at local midnight",
+			ForgetPolicy{KeepMonthly: 2},
+			[]time.Time{
+				utc(2026, 6, 30, 22, 30), // 07-01 00:30 CEST
+				utc(2026, 6, 30, 21, 30), // 06-30 23:30 CEST
+			},
+			[]string{"s0", "s1"},
+			[]string{"s0"},
+		},
+		{
+			"a year starts at local midnight",
+			ForgetPolicy{KeepYearly: 2},
+			[]time.Time{
+				utc(2026, 12, 31, 23, 30), // 2027-01-01 00:30 CET
+				utc(2026, 12, 31, 22, 30), // 2026-12-31 23:30 CET
+			},
+			[]string{"s0", "s1"},
+			[]string{"s0"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			snaps := make([]*Snapshot, len(tc.times))
+			for i, ts := range tc.times {
+				snaps[i] = &Snapshot{ID: fmt.Sprintf("s%d", i), CreatedAt: ts}
+			}
+			if got := ids(applyForgetPolicy(snaps, tc.policy, berlin).Keep); !slices.Equal(got, tc.inBerlin) {
+				t.Errorf("in Berlin keeps %v, want %v", got, tc.inBerlin)
+			}
+			if got := ids(applyForgetPolicy(snaps, tc.policy, time.UTC).Keep); !slices.Equal(got, tc.inUTC) {
+				t.Errorf("in UTC keeps %v, want %v", got, tc.inUTC)
+			}
+		})
+	}
+}
+
+// Two snapshots whose own zones show the same wall clock are still a day
+// apart on the one clock the periods are cut on.
+func TestPeriodsIgnoreTheZoneASnapshotCarries(t *testing.T) {
+	snaps := []*Snapshot{
+		{ID: "s0", CreatedAt: time.Date(2026, 5, 2, 8, 0, 0, 0, time.FixedZone("", -12*60*60))},
+		{ID: "s1", CreatedAt: time.Date(2026, 5, 2, 8, 0, 0, 0, time.FixedZone("", 14*60*60))},
+	}
+	for name, policy := range map[string]ForgetPolicy{"hourly": {KeepHourly: 2}, "daily": {KeepDaily: 2}} {
+		t.Run(name, func(t *testing.T) {
+			if got := ids(applyForgetPolicy(snaps, policy, time.UTC).Keep); !slices.Equal(got, []string{"s0", "s1"}) {
+				t.Errorf("keeps %v, want [s0 s1]", got)
 			}
 		})
 	}
