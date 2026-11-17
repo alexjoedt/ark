@@ -22,6 +22,15 @@ const resticFixtures = "testdata/forget/restic.jsonl"
 // host's zone database may hold other rules for the same zone.
 const resticZoneinfo = "testdata/forget/zoneinfo"
 
+// resticZone loads the zone of that name from resticZoneinfo.
+func resticZone(name string) (*time.Location, error) {
+	data, err := os.ReadFile(filepath.Join(resticZoneinfo, name))
+	if err != nil {
+		return nil, err
+	}
+	return time.LoadLocationFromTZData(name, data)
+}
+
 // resticDeviations names every fixture case, by its line in the file, where
 // ark is meant to decide differently from restic, with the reason. A case
 // that differs without an entry fails the test, and so does an entry whose
@@ -86,11 +95,7 @@ func (c resticCase) decide() (keep []int, reasons [][]string, refused bool, err 
 	if err != nil {
 		return nil, nil, false, err
 	}
-	zone, err := os.ReadFile(filepath.Join(resticZoneinfo, c.TZ))
-	if err != nil {
-		return nil, nil, false, err
-	}
-	loc, err := time.LoadLocationFromTZData(c.TZ, zone)
+	loc, err := resticZone(c.TZ)
 	if err != nil {
 		return nil, nil, false, err
 	}

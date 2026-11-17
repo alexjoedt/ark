@@ -83,11 +83,15 @@ jobs:
       # test runs here too (skipped under -short), once per leg unless
       # ARK_CONC_RUNS says more: about 2 s on arklocal, about 22 s on arksftp
       # (ubuntu leg only). A failure names its seed, rerun with ARK_KILL_SEED
-      # for the kill harness or ARK_CONC_SEED for the concurrent test.
+      # for the kill harness or ARK_CONC_SEED for the concurrent test. The
+      # forget property test checks ARK_FORGET_RUNS random histories, 1000
+      # when unset, about 6 s for the 10,000 here; a failure names its seed,
+      # rerun with ARK_FORGET_SEED.
       - name: Test
         run: go test github.com/alexjoedt/ark/...
         env:
           ARK_KILL_RUNS: "10"
+          ARK_FORGET_RUNS: "10000"
 
       # The exit codes the CLI promises, driven through the binary.
       - name: Exit code contract

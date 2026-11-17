@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -69,16 +70,24 @@ func (c forgetCase) reference(snaps []*Snapshot) time.Time {
 	return time.Time{}.In(c.loc)
 }
 
-// windowStartsLater reports whether a keep-within window of the policy
-// starts later over the snapshots in kept than over all of the case.
-func (c forgetCase) windowStartsLater(kept []*Snapshot) bool {
-	first, second := c.reference(c.snaps), c.reference(kept)
+// lapsed reports whether a second run, over the snapshots in kept, may
+// remove s: no rule but keep-within rules kept it, and the window of each
+// that did, measured over kept, starts at s or after it. The rules decide by
+// themselves, so each is asked alone.
+func (c forgetCase) lapsed(s *Snapshot, kept []*Snapshot) bool {
+	second, rest := c.reference(kept), c.policy
 	for _, rule := range c.policy.windows() {
-		if rule.w != (Within{}) && rule.w.before(second).After(rule.w.before(first)) {
-			return true
+		if rule.w == (Within{}) {
+			continue
+		}
+		var alone ForgetPolicy
+		*ruleField[Within](&alone, rule.name) = rule.w
+		*ruleField[Within](&rest, rule.name) = Within{}
+		if s.CreatedAt.After(rule.w.before(second)) && keepSet(c.apply(c.snaps, alone))[s] {
+			return false
 		}
 	}
-	return false
+	return rest.Empty() || !keepSet(c.apply(c.snaps, rest))[s]
 }
 
 func unixDate(y int, m time.Month, d int) int64 {
@@ -106,15 +115,11 @@ func forgetZones(t *testing.T) []*time.Location {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
 		name, err := filepath.Rel(resticZoneinfo, path)
 		if err != nil {
 			return err
 		}
-		loc, err := time.LoadLocationFromTZData(filepath.ToSlash(name), data)
+		loc, err := resticZone(filepath.ToSlash(name))
 		zones = append(zones, loc)
 		return err
 	})
@@ -161,7 +166,7 @@ func drawHistory(rng *rand.Rand, loc *time.Location, id string, series seriesKey
 	//
 	// One history of five is a schedule, the same wall clock every hour,
 	// day, week, month or year counted from the newest snapshot, so that a
-	// keep-within window ends exactly on a snapshot; of the histories that
+	// keep-within window starts exactly on a snapshot; of the histories that
 	// end after a change of the offset it is every second.
 	end := unixDate(2012, 1, 1) + rng.Int64N(13*propYear)
 	scheduled := rng.IntN(5) == 0
@@ -172,7 +177,7 @@ func drawHistory(rng *rand.Rand, loc *time.Location, id string, series seriesKey
 		some := time.Unix(unixDate(2012, 1, 1)+rng.Int64N(10*propYear), 0).In(loc)
 		if _, shift := some.ZoneBounds(); !shift.IsZero() && shift.Unix() < unixDate(2025, 1, 1) {
 			end = shift.Unix() + rng.Int64N(3*propDay)
-			scheduled = scheduled || rng.IntN(2) == 0
+			scheduled = rng.IntN(2) == 0
 		}
 	}
 
@@ -196,9 +201,10 @@ func drawHistory(rng *rand.Rand, loc *time.Location, id string, series seriesKey
 	tagged := []int{0, 0, 25, 60}[rng.IntN(4)]
 	var snaps []*Snapshot
 	var t time.Time
-	for k := 0; len(snaps) < n; k++ {
+	for k := 0; len(snaps) < n; {
 		if k == 0 || !twice || rng.IntN(8) > 0 {
 			t = back(k)
+			k++
 		}
 		if t.Year() < 2000 {
 			break
@@ -221,17 +227,10 @@ func drawHistory(rng *rand.Rand, loc *time.Location, id string, series seriesKey
 	return snaps
 }
 
-// policyCounts and policyWindows list the rules of p in the order of
-// p.counted and p.windows, which name them.
-func policyCounts(p *ForgetPolicy) [6]*KeepCount {
-	return [6]*KeepCount{&p.KeepLast, &p.KeepHourly, &p.KeepDaily, &p.KeepWeekly, &p.KeepMonthly, &p.KeepYearly}
-}
-
-func policyWindows(p *ForgetPolicy) [6]*Within {
-	return [6]*Within{
-		&p.KeepWithin, &p.KeepWithinHourly, &p.KeepWithinDaily,
-		&p.KeepWithinWeekly, &p.KeepWithinMonthly, &p.KeepWithinYearly,
-	}
+// ruleField returns the field of p that a rule of p.counted or p.windows
+// names.
+func ruleField[T any](p *ForgetPolicy, name string) *T {
+	return reflect.ValueOf(p).Elem().FieldByName(name).Addr().Interface().(*T)
 }
 
 // drawPolicy draws one to three rules most of the time, sometimes more and
@@ -239,8 +238,8 @@ func policyWindows(p *ForgetPolicy) [6]*Within {
 // measured from, on the clock forget counts by.
 func drawPolicy(rng *rand.Rand, snaps []*Snapshot, newest time.Time) ForgetPolicy {
 	var p ForgetPolicy
-	c, w := policyCounts(&p), policyWindows(&p)
-	rules := len(c) + len(w) + 1
+	counted, windows := p.counted(), p.windows()
+	rules := len(counted) + len(windows) + 1
 	n := rules
 	switch pick := rng.IntN(100); {
 	case pick < 30:
@@ -254,13 +253,14 @@ func drawPolicy(rng *rand.Rand, snaps []*Snapshot, newest time.Time) ForgetPolic
 	}
 	for _, r := range rng.Perm(rules)[:n] {
 		switch {
-		case r < len(c):
-			*c[r] = Unlimited
+		case r < len(counted):
+			count := ruleField[KeepCount](&p, counted[r].name)
+			*count = Unlimited
 			if rng.IntN(100) >= 12 {
-				*c[r] = KeepCount(logUniform(rng, 1, 100))
+				*count = KeepCount(logUniform(rng, 1, 100))
 			}
-		case r < len(c)+len(w):
-			*w[r-len(c)] = drawWithin(rng, snaps, newest)
+		case r < len(counted)+len(windows):
+			*ruleField[Within](&p, windows[r-len(counted)].name) = drawWithin(rng, snaps, newest)
 		default:
 			for _, i := range rng.Perm(len(propTagLists))[:1+rng.IntN(2)] {
 				p.KeepTags = append(p.KeepTags, propTagLists[i])
@@ -271,8 +271,9 @@ func drawPolicy(rng *rand.Rand, snaps []*Snapshot, newest time.Time) ForgetPolic
 }
 
 // drawWithin draws a keep-within window. Half of the windows are fitted to
-// the history: the hours, days or months from one of its snapshots to
-// newest, so that the window ends at that snapshot. The others are random,
+// the history: the whole hours, days or months from one of its snapshots to
+// newest, so that the window starts within an hour, a day or a month of that
+// snapshot, and on it when the history is a schedule. The others are random,
 // half of them of one unit.
 func drawWithin(rng *rand.Rand, snaps []*Snapshot, newest time.Time) Within {
 	if rng.IntN(2) == 0 {
@@ -404,18 +405,18 @@ func (c forgetCase) check(rng *rand.Rand) error {
 		}
 		return nil
 	}
-	for i, rule := range c.policy.counted() {
+	for _, rule := range c.policy.counted() {
 		loose := c.policy
 		if n, ok := raised(rng, rule.n); ok {
-			*policyCounts(&loose)[i] = n
+			*ruleField[KeepCount](&loose, rule.name) = n
 			if err := superset(rule.name, loose); err != nil {
 				return err
 			}
 		}
 	}
-	for i, rule := range c.policy.windows() {
+	for _, rule := range c.policy.windows() {
 		loose := c.policy
-		*policyWindows(&loose)[i] = widened(rng, rule.w)
+		*ruleField[Within](&loose, rule.name) = widened(rng, rule.w)
 		if err := superset(rule.name, loose); err != nil {
 			return err
 		}
@@ -426,11 +427,14 @@ func (c forgetCase) check(rng *rand.Rand) error {
 		return err
 	}
 
-	// Idempotent: the policy removes nothing of what it kept, unless the
-	// second run measures a window from another snapshot and the window
-	// starts later for it; see TestForgetTwiceUnderAFutureSnapshot.
-	if again := c.apply(res.Keep, c.policy); len(again.Remove) > 0 && !c.windowStartsLater(res.Keep) {
-		return fmt.Errorf("idempotent: a second run removes %v of what the first kept", ids(again.Remove))
+	// Idempotent: the policy removes nothing of what it kept, but for the
+	// snapshots that only keep-within rules kept and that the windows of
+	// the second run, measured from another snapshot, start after; see
+	// TestForgetTwiceUnderAFutureSnapshot.
+	for _, s := range c.apply(res.Keep, c.policy).Remove {
+		if !c.lapsed(s, res.Keep) {
+			return fmt.Errorf("idempotent: a second run removes snapshot %s, which the first kept", s.ID)
+		}
 	}
 
 	// Independent: next to a series that differs in one part of the series
@@ -468,7 +472,8 @@ func (c forgetCase) check(rng *rand.Rand) error {
 // the snapshots, the newest snapshot of a series is kept, a larger count or
 // window keeps a superset, a second run removes nothing, and a series is
 // decided without regard to the others. A failure prints the seed;
-// ARK_FORGET_SEED replays it, ARK_FORGET_RUNS sets the number of cases.
+// ARK_FORGET_SEED replays it, ARK_FORGET_RUNS sets the number of cases: 1000
+// when unset, 10,000 in CI.
 func TestForgetProperties(t *testing.T) {
 	env := func(name string, unset uint64) uint64 {
 		s := os.Getenv(name)
@@ -481,11 +486,7 @@ func TestForgetProperties(t *testing.T) {
 		}
 		return n
 	}
-	runs := uint64(10_000)
-	if testing.Short() {
-		runs = 1000
-	}
-	seed, runs := env(forgetEnvSeed, uint64(time.Now().UnixNano())), env(forgetEnvRuns, runs)
+	seed, runs := env(forgetEnvSeed, uint64(time.Now().UnixNano())), env(forgetEnvRuns, 1000)
 	if runs == 0 {
 		t.Fatalf("%s=0: want a case to check", forgetEnvRuns)
 	}
@@ -533,8 +534,10 @@ func TestForgetTwiceUnderAFutureSnapshot(t *testing.T) {
 	if got, want := ids(second.Remove), []string{"mar2"}; !slices.Equal(got, want) {
 		t.Errorf("second run removes %v, want %v", got, want)
 	}
-	if !c.windowStartsLater(first.Keep) {
-		t.Error("the window of the second run does not start later, so the property test would not pass this case over")
+	for _, s := range first.Keep {
+		if got, want := c.lapsed(s, first.Keep), s.ID == "mar2"; got != want {
+			t.Errorf("the property test passes over a second run that removes %s: %t, want %t", s.ID, got, want)
+		}
 	}
 	if err := c.check(rand.New(rand.NewPCG(1, 1))); err != nil {
 		t.Errorf("the case breaks another invariant: %v", err)
