@@ -11,18 +11,38 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/alexjoedt/ark"
 )
 
 const root = "../.."
 
-func TestGeneratedFilesAreCurrent(t *testing.T) {
-	files, outcomes, err := generate(context.Background(), scenarios())
-	if err != nil {
-		t.Fatal(err)
+// generated runs the generator once for every test that reads its output:
+// each run backs every scenario up.
+var generated = sync.OnceValue(func() (g struct {
+	files    []file
+	outcomes map[string]*outcome
+	err      error
+},
+) {
+	g.files, g.outcomes, g.err = generate(context.Background(), scenarios())
+	return g
+})
+
+func generatedFiles(t *testing.T) ([]file, map[string]*outcome) {
+	t.Helper()
+	g := generated()
+	if g.err != nil {
+		t.Fatal(g.err)
 	}
+	return g.files, g.outcomes
+}
+
+func TestGeneratedFilesAreCurrent(t *testing.T) {
+	files, outcomes := generatedFiles(t)
 	for _, f := range files {
 		committed, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(f.path)))
 		if err != nil {
@@ -58,10 +78,7 @@ func staleScenarios(page string, outcomes map[string]*outcome) string {
 }
 
 func TestTimelinesAreWellFormed(t *testing.T) {
-	files, _, err := generate(context.Background(), scenarios())
-	if err != nil {
-		t.Fatal(err)
-	}
+	files, _ := generatedFiles(t)
 	again, _, err := generate(context.Background(), scenarios())
 	if err != nil {
 		t.Fatal(err)
@@ -107,11 +124,93 @@ func TestTimelineRefusesAnUnknownReason(t *testing.T) {
 	}
 }
 
-func TestNoStaleTimelines(t *testing.T) {
-	files, _, err := generate(context.Background(), scenarios())
+// A snapshot in the future would not move forget's window, while the
+// timeline measures the window from the newest snapshot: the drawing holds
+// only as long as no history can have one.
+func TestForgetRefusesASnapshotInTheFuture(t *testing.T) {
+	s := scenario{
+		name:    "future",
+		history: []snap{{at: time.Now().Add(time.Hour)}},
+		policy:  ark.ForgetPolicy{KeepLast: 1},
+	}
+	if _, err := forget(context.Background(), s); !errors.Is(err, ark.ErrInvalidTime) {
+		t.Errorf("a history with a snapshot in the future: %v, want ErrInvalidTime", err)
+	}
+}
+
+func TestForgetReturnsRowsInTheZoneItCutsIn(t *testing.T) {
+	east := time.FixedZone("east", 5*60*60)
+	s := scenario{
+		name:    "zone",
+		history: []snap{{at: time.Date(2015, 3, 3, 2, 0, 0, 0, east)}},
+		policy:  ark.ForgetPolicy{KeepDaily: 1},
+	}
+	rows, err := forget(context.Background(), s)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got, want := day.start(rows[0].at), time.Date(2015, 3, 2, 0, 0, 0, 0, zone); !got.Equal(want) ||
+		rows[0].at.Location() != zone {
+		t.Errorf("the day of %s starts at %s, want %s", rows[0].at, got, want)
+	}
+}
+
+func TestWeekLabelNamesTheISOYear(t *testing.T) {
+	lines, coarse := week.labels(time.Date(2025, 12, 29, 0, 0, 0, 0, time.UTC))
+	if lines[0] != "W1" || coarse != "2026" {
+		t.Errorf("the week of Mon 29 Dec 2025 is labelled %s of %s, want W1 of 2026", lines[0], coarse)
+	}
+}
+
+// daily returns n kept snapshots, one a day, newest first.
+func daily(newest time.Time, n int, reason string) []row {
+	rows := make([]row, n)
+	for i := range rows {
+		rows[i] = row{at: newest.AddDate(0, 0, -i), kept: true, reasons: []string{reason}}
+	}
+	return rows
+}
+
+// April starts two bands after the label of March, which still covers it.
+func TestBandLabelsNameAMonthThatStartsUnderTheLabelBefore(t *testing.T) {
+	rows := daily(time.Date(2015, 5, 8, 12, 0, 0, 0, time.UTC), 40, "")
+	var s svg
+	s.bandLabels(newAxis(rows, day, 16, width-16), 0)
+	for _, want := range []string{">Mar 2015<", ">Apr 2015<", ">May 2015<"} {
+		if n := strings.Count(s.b.String(), want); n != 1 {
+			t.Errorf("the band labels hold %s %d times, want once", want, n)
+		}
+	}
+}
+
+// An hourly rule over daily backups counts across 23 hours without a
+// snapshot a day, on an axis of weeks.
+func TestTimelineHatchesAGapOfFinerPeriodsOnce(t *testing.T) {
+	rows := daily(time.Date(2015, 5, 8, 12, 0, 0, 0, time.UTC), 90, "hourly snapshot")
+	img, err := timeline(ark.ForgetPolicy{KeepHourly: ark.Unlimited}, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkXML(t, "hourly", img)
+	// One per gap between two snapshots, and the legend's.
+	if n := bytes.Count(img, []byte(`class="hatch"`)); n != len(rows) {
+		t.Errorf("the timeline hatches %d rectangles, want %d", n, len(rows))
+	}
+}
+
+func TestTimelineDrawsTheWindowOfARuleThatKeepsNothing(t *testing.T) {
+	rows := []row{{at: time.Date(2015, 3, 22, 18, 0, 0, 0, time.UTC)}}
+	img, err := timeline(ark.ForgetPolicy{KeepWithin: ark.Within{Days: 5}}, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "5d window from Tue 17 Mar 18:00"; !bytes.Contains(img, []byte(want)) {
+		t.Errorf("the timeline lacks %q", want)
+	}
+}
+
+func TestNoStaleTimelines(t *testing.T) {
+	files, _ := generatedFiles(t)
 	generated := map[string]bool{}
 	for _, f := range files {
 		generated[f.path] = true

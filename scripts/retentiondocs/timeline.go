@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"html"
@@ -19,7 +20,8 @@ import (
 // image files with their own light and dark colours, so GitHub and the
 // site show them alike without inline SVG.
 
-// period is a calendar unit forget counts in, cut in UTC.
+// period is a calendar unit forget counts in, cut in the zone of the time
+// it is given: forget hands every row over in zone, where the dry run cuts.
 type period int
 
 const (
@@ -77,8 +79,10 @@ func (p period) labels(t time.Time) (lines []string, coarse string) {
 	case day:
 		return []string{t.Format("Mon"), t.Format("02")}, t.Format("Jan 2006")
 	case week:
-		_, w := t.ISOWeek()
-		return []string{"W" + strconv.Itoa(w), t.Format("02 Jan")}, strconv.Itoa(t.Year())
+		// The week that holds 1 January may start in December: its number
+		// belongs to the ISO year, not to the year of its Monday.
+		y, w := t.ISOWeek()
+		return []string{"W" + strconv.Itoa(w), t.Format("02 Jan")}, strconv.Itoa(y)
 	case month:
 		return []string{t.Format("Jan")}, strconv.Itoa(t.Year())
 	case year:
@@ -158,7 +162,7 @@ type ruleMark struct {
 	oldest   int            // row index of the oldest
 	usedUp   bool           // a counted rule ran out of count
 	noCount  []time.Time    // periods it counted across without a snapshot
-	winStart time.Time
+	winStart time.Time      // of a window rule, whether or not it keeps a snapshot
 }
 
 // mark matches the reasons of rows, newest first, to the rules of policy.
@@ -195,16 +199,16 @@ func mark(policy ark.ForgetPolicy, rows []row) ([]ruleMark, error) {
 	}
 	for i := range marks {
 		m := &marks[i]
+		if m.window != (ark.Within{}) {
+			// rows[0] is the newest snapshot. One in the future would not
+			// move forget's window, and Backup refuses to date one there.
+			w := m.window
+			m.winStart = rows[0].at.AddDate(-w.Years, -w.Months, -w.Days).Add(-time.Duration(w.Hours) * time.Hour)
+		}
 		if m.newest < 0 {
 			continue
 		}
 		m.usedUp = m.count > 0 && len(m.keeps) == int(m.count) && m.oldest < len(rows)-1
-		if m.window != (ark.Within{}) {
-			// rows[0] is the newest snapshot; no scenario dates one in
-			// the future, which would not move the window.
-			w := m.window
-			m.winStart = rows[0].at.AddDate(-w.Years, -w.Months, -w.Days).Add(-time.Duration(w.Hours) * time.Hour)
-		}
 		if m.count == 0 || !m.cut {
 			continue
 		}
@@ -363,6 +367,13 @@ func (s *svg) circle(x, y float64, class string) {
 	s.addf(`<circle cx="%s" cy="%s" r="%s" class="%s"/>`, num(x), num(y), num(dot), class)
 }
 
+func keptClass(kept bool) string {
+	if kept {
+		return "kept"
+	}
+	return "removed"
+}
+
 // pillX returns where the pill of row r centres, inside the axis.
 func (a *axis) pillX(r int, text string) float64 {
 	w := textWidth(text) + 10
@@ -385,7 +396,7 @@ func pillRows(pills map[int]string, a *axis) (map[int]int, int) {
 	for r := range pills {
 		idx = append(idx, r)
 	}
-	slices.SortFunc(idx, func(i, j int) int { return cmpFloat(a.snapX[i], a.snapX[j]) })
+	slices.SortFunc(idx, func(i, j int) int { return cmp.Compare(a.snapX[i], a.snapX[j]) })
 	rowOf := map[int]int{}
 	var ends []float64
 	for _, r := range idx {
@@ -402,18 +413,9 @@ func pillRows(pills map[int]string, a *axis) (map[int]int, int) {
 	return rowOf, len(ends)
 }
 
-func cmpFloat(a, b float64) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	}
-	return 0
-}
-
 // bandLabels writes the band labels from y down and returns the y below
-// them.
+// them. A coarse label that would run into the one before it waits for the
+// first band clear of it.
 func (s *svg) bandLabels(a *axis, y float64) float64 {
 	n := len(a.bands) - 1
 	widest, lines := 0.0, 0
@@ -437,8 +439,8 @@ func (s *svg) bandLabels(a *axis, y float64) float64 {
 		if coarse != "" && coarse != prev && bx >= coarseEnd {
 			s.text(bx+2, y+13*float64(lines+1), coarse, "", "start")
 			coarseEnd = bx + 2 + textWidth(coarse) + 8
+			prev = coarse
 		}
-		prev = coarse
 	}
 	if prev != "" {
 		lines++
@@ -446,9 +448,17 @@ func (s *svg) bandLabels(a *axis, y float64) float64 {
 	return y + 13*float64(lines) + 6
 }
 
+// hatchPeriods hatches the periods m counted across without a snapshot. A
+// period finer than the bands has no band of its own, so a run of them is
+// one rectangle: an hourly rule over months of daily backups hatches each
+// gap once, not each of its hours.
 func (s *svg) hatchPeriods(a *axis, m ruleMark, y, h float64) {
-	for _, p := range m.noCount {
-		x1, x2 := a.x(p), a.x(m.period.next(p))
+	for i := 0; i < len(m.noCount); i++ {
+		from := m.noCount[i]
+		for m.period < a.unit && i+1 < len(m.noCount) && m.noCount[i+1].Equal(m.period.next(m.noCount[i])) {
+			i++
+		}
+		x1, x2 := a.x(from), a.x(m.period.next(m.noCount[i]))
 		s.rect(x1+1, y, x2-x1-2, h, "hatch")
 	}
 }
@@ -609,7 +619,7 @@ func timelineAxis(s *svg, m ruleMark, rows []row) float64 {
 	if m.cut {
 		s.hatchPeriods(a, m, bandTop, bandBot-bandTop)
 	}
-	if m.window != (ark.Within{}) && m.newest >= 0 {
+	if m.window != (ark.Within{}) {
 		xs := a.x(m.winStart)
 		s.rect(xs, bandTop-4, a.snapX[0]-xs, bandBot-bandTop+8, "win")
 	}
@@ -621,7 +631,7 @@ func timelineAxis(s *svg, m ruleMark, rows []row) float64 {
 			s.addf(`<line x1="%s" y1="%s" x2="%s" y2="%s" class="lead"/>`, num(x), num(py), num(x), num(axisY))
 			s.pill(a.pillX(r, text), py, text)
 		}
-		s.circle(x, axisY, map[bool]string{true: "kept", false: "removed"}[row.kept])
+		s.circle(x, axisY, keptClass(row.kept))
 	}
 	s.fadeUsedUp(a, m, rows, bandTop, bandBot-bandTop)
 	y := s.bandLabels(a, bandBot)
@@ -682,7 +692,7 @@ func timelineLanes(s *svg, marks []ruleMark, rows []row) float64 {
 			}
 		case l.mark == nil:
 			for r, row := range rows {
-				s.circle(a.snapX[r], mid, map[bool]string{true: "kept", false: "removed"}[row.kept])
+				s.circle(a.snapX[r], mid, keptClass(row.kept))
 			}
 		default:
 			m := l.mark
@@ -690,7 +700,7 @@ func timelineLanes(s *svg, marks []ruleMark, rows []row) float64 {
 				s.hatchPeriods(a, *m, l.top+2, l.h-4)
 			}
 			s.fadeUsedUp(a, *m, rows, l.top+2, l.h-4)
-			if m.window != (ark.Within{}) && m.newest >= 0 {
+			if m.window != (ark.Within{}) {
 				xs := a.x(m.winStart)
 				s.rect(xs, l.top+2, a.snapX[0]-xs, l.h-4, "win")
 			}

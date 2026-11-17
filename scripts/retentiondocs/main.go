@@ -34,9 +34,11 @@ import (
 var pageTemplate string
 
 const (
-	pagePath = "docs/retention.md"
-	imageDir = "docs/retention"
-	header   = "[//]: # (Generated from scripts/retentiondocs/retention.md.tmpl by task docs:gen. Edit the template.)\n\n"
+	pageDir   = "docs"
+	pagePath  = pageDir + "/retention.md"
+	imageLink = "retention" // the timelines' directory as the page links it
+	imageDir  = pageDir + "/" + imageLink
+	header    = "[//]: # (Generated from scripts/retentiondocs/retention.md.tmpl by task docs:gen. Edit the template.)\n\n"
 )
 
 type scenario struct {
@@ -128,7 +130,7 @@ func generate(ctx context.Context, list []scenario) ([]file, map[string]*outcome
 		}
 		o := describe(s.name, rows)
 		files = append(files, file{path: path.Join(imageDir, s.name+".svg"), content: image})
-		o.Image = path.Join(path.Base(imageDir), s.name+".svg")
+		o.Image = path.Join(imageLink, s.name+".svg")
 		outcomes[s.name] = o
 	}
 	page, err := render(outcomes)
@@ -138,8 +140,12 @@ func generate(ctx context.Context, list []scenario) ([]file, map[string]*outcome
 	return append([]file{{path: pagePath, content: page}}, files...), outcomes, nil
 }
 
+// zone is where the dry run cuts its periods and where the page and the
+// timelines show and cut every time.
+var zone = time.UTC
+
 // forget backs the history up and returns every snapshot with what a dry
-// run of the policy does to it, newest first. Periods are cut in UTC.
+// run of the policy does to it, newest first and in zone.
 func forget(ctx context.Context, s scenario) ([]row, error) {
 	b := arkmem.New()
 	if err := ark.Init(ctx, b, ark.WithoutPassword()); err != nil {
@@ -172,7 +178,7 @@ func forget(ctx context.Context, s scenario) ([]row, error) {
 
 	rows := make([]row, len(s.history))
 	for i, h := range s.history {
-		rows[i] = row{at: h.at, kept: kept[ids[i]], reasons: result.KeepReasons[ids[i]]}
+		rows[i] = row{at: h.at.In(zone), kept: kept[ids[i]], reasons: result.KeepReasons[ids[i]]}
 	}
 	slices.SortStableFunc(rows, func(a, b row) int { return b.at.Compare(a.at) })
 	return rows, nil
@@ -212,7 +218,7 @@ func dryRun(ctx context.Context, b ark.Backend, policy ark.ForgetPolicy) (result
 		}
 	}()
 	result, err = repo.Forget(ctx, policy, ark.SnapshotFilter{},
-		ark.WithForgetDryRun(), ark.WithForgetLocation(time.UTC))
+		ark.WithForgetDryRun(), ark.WithForgetLocation(zone))
 	if err != nil {
 		return nil, fmt.Errorf("forget: %w", err)
 	}
