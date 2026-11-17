@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	_ "time/tzdata" // Europe/Berlin resolves on a machine without a zone database too
 )
 
 // afterAll is a now that leaves no fixture snapshot in the future.

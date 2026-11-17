@@ -8,6 +8,10 @@
 // only the file. A run takes about 40 minutes on 12 cores, nearly all of it
 // the key derivation of one restic process per snapshot.
 //
+// Every zone, for the draw and for restic, comes from the zone files in
+// -zoneinfo, not from the host's zone database, so the fixtures mean the
+// same on a host with other zone rules.
+//
 //	go run ./scripts/forgetfixtures -dir /empty/scratch/dir [-restic BIN] [-seed N] [-cases N]
 package main
 
@@ -57,6 +61,7 @@ func run(ctx context.Context, args []string) error {
 	bin := fs.String("restic", "restic", "restic binary, version "+resticVersion)
 	seed := fs.Uint64("seed", 1, "seed of the histories and policies")
 	n := fs.Int("cases", 500, "number of cases")
+	zoneDir := fs.String("zoneinfo", "testdata/forget/zoneinfo", "zone files of the fixture zones")
 	jobs := fs.Int("jobs", runtime.NumCPU(), "restic processes at a time")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -86,7 +91,12 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 
-	r := restic{bin: *bin, dir: scratch, jobs: *jobs}
+	zoneinfo, err := filepath.Abs(*zoneDir)
+	if err != nil {
+		return err
+	}
+
+	r := restic{bin: *bin, dir: scratch, zoneinfo: zoneinfo, jobs: *jobs}
 	version, err := r.run(ctx, "", "UTC", "version")
 	if err != nil {
 		return err
@@ -99,7 +109,7 @@ func run(ctx context.Context, args []string) error {
 	cases := make([]fixtureCase, *n)
 	snapshots := 0
 	for i := range cases {
-		if cases[i], err = drawCase(*seed, i); err != nil {
+		if cases[i], err = drawCase(*seed, i, zoneinfo); err != nil {
 			return err
 		}
 		snapshots += len(cases[i].Times)
@@ -135,13 +145,15 @@ func write(name string, head header, cases []fixtureCase) error {
 	return errors.Join(err, w.Flush(), f.Close())
 }
 
-// restic runs the binary on repositories below dir.
+// restic runs the binary on repositories below dir, with zone files from
+// zoneinfo.
 type restic struct {
-	bin, dir string
-	jobs     int
+	bin, dir, zoneinfo string
+	jobs               int
 }
 
-// run runs restic under the zone tz and returns its standard output. The
+// run runs restic under the zone tz, read from r.zoneinfo, and returns its
+// standard output. The
 // environment is built from scratch: restic reads none of the caller's
 // RESTIC_ variables and writes its cache below dir, not into the home
 // directory.
@@ -151,7 +163,7 @@ func (r restic) run(ctx context.Context, repo, tz string, args ...string) ([]byt
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + r.dir,
-		"TZ=" + tz,
+		"TZ=" + filepath.Join(r.zoneinfo, tz),
 		"RESTIC_PASSWORD=fixtures",
 		"RESTIC_REPOSITORY=" + repo,
 		"RESTIC_CACHE_DIR=" + filepath.Join(r.dir, "cache"),
@@ -174,26 +186,28 @@ func (r restic) decide(ctx context.Context, first int, cases []fixtureCase) erro
 	}
 	host := func(i int) string { return fmt.Sprintf("case%d", first+i) }
 
-	type backup struct{ c, snapshot int }
+	type backup struct {
+		c, snapshot int
+		at          string
+	}
 	var backups []backup
 	for i, c := range cases {
-		for j := range c.Times {
-			backups = append(backups, backup{i, j})
+		loc, err := loadZone(r.zoneinfo, c.TZ)
+		if err != nil {
+			return err
+		}
+		for j, t := range c.Times {
+			backups = append(backups, backup{i, j, time.Unix(t, 0).In(loc).Format(timeLayout)})
 		}
 	}
 	err := parallel(ctx, r.jobs, len(backups), func(ctx context.Context, i int) error {
 		c := cases[backups[i].c]
-		loc, err := time.LoadLocation(c.TZ)
-		if err != nil {
-			return err
-		}
-		at := time.Unix(c.Times[backups[i].snapshot], 0).In(loc).Format(timeLayout)
-		args := []string{"backup", "-q", "--no-cache", "--force", "--no-scan", "--time", at}
+		args := []string{"backup", "-q", "--no-cache", "--force", "--no-scan", "--time", backups[i].at}
 		args = append(args, "--host", host(backups[i].c))
 		if c.Tags != nil && c.Tags[backups[i].snapshot] != "" {
 			args = append(args, "--tag", c.Tags[backups[i].snapshot])
 		}
-		_, err = r.run(ctx, repo, c.TZ, append(args, "src")...)
+		_, err := r.run(ctx, repo, c.TZ, append(args, "src")...)
 		return err
 	})
 	if err != nil {

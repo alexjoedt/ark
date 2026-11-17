@@ -5,13 +5,14 @@ import (
 	"os"
 	"strings"
 	"testing"
-	_ "time/tzdata" // the zones resolve on a machine without a zone database too
 )
 
 // TestFixtureInputsAreDrawn ties the checked-in fixture file to this
 // generator: its histories and policies are the ones drawCase draws from the
 // seed in its header, so a run with that seed and restic version writes the
-// same questions again.
+// same questions again. A Go release that changes what math/rand/v2 derives
+// from PCG fails it without anything wrong in ark; the replay test reads the
+// stored cases and holds on.
 func TestFixtureInputsAreDrawn(t *testing.T) {
 	f, err := os.Open("../../testdata/forget/restic.jsonl")
 	if err != nil {
@@ -31,7 +32,7 @@ func TestFixtureInputsAreDrawn(t *testing.T) {
 		if err := dec.Decode(&got); err != nil {
 			t.Fatalf("case %d: %v", i, err)
 		}
-		want, err := drawCase(head.Seed, i)
+		want, err := drawCase(head.Seed, i, "../../testdata/forget/zoneinfo")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -48,10 +49,17 @@ func TestFixtureInputsAreDrawn(t *testing.T) {
 		}
 		// restic's answer is not drawn.
 		got.Keep, got.Reasons, got.Refused = nil, nil, false
-		gotLine, _ := json.Marshal(got)
-		wantLine, _ := json.Marshal(want)
+		gotLine, err := json.Marshal(got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantLine, err := json.Marshal(want)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if string(gotLine) != string(wantLine) {
-			t.Fatalf("case %d differs from the draw:\n file: %.300s\n draw: %.300s", i, gotLine, wantLine)
+			t.Fatalf("case %d differs from the draw, the generator or math/rand/v2 changed:\n"+
+				" file: %.300s\n draw: %.300s", i, gotLine, wantLine)
 		}
 	}
 }

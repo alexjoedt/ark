@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -78,12 +80,14 @@ var schedules = []struct{ months, days, hours int }{
 
 func unix(y int, m time.Month, d int) int64 { return time.Date(y, m, d, 0, 0, 0, 0, time.UTC).Unix() }
 
-// drawCase draws the history and the policy of case nr. It depends on seed
-// and nr alone, so a shorter run draws the first cases of a longer one.
-func drawCase(seed uint64, nr int) (fixtureCase, error) {
+// drawCase draws the history and the policy of case nr from the zone files
+// in zoneinfo. A shorter run draws the first cases of a longer one. The
+// draw also depends on how math/rand/v2 derives IntN, Int64N and Perm from
+// PCG, which Go does not promise to keep across releases.
+func drawCase(seed uint64, nr int, zoneinfo string) (fixtureCase, error) {
 	rng := rand.New(rand.NewPCG(seed, uint64(nr)))
 	c := fixtureCase{TZ: zones[rng.IntN(len(zones))]}
-	loc, err := time.LoadLocation(c.TZ)
+	loc, err := loadZone(zoneinfo, c.TZ)
 	if err != nil {
 		return c, err
 	}
@@ -91,6 +95,17 @@ func drawCase(seed uint64, nr int) (fixtureCase, error) {
 	c.Tags = drawTags(rng, len(c.Times))
 	c.Policy, c.KeepTag = drawPolicy(rng, c.Times, loc)
 	return c, nil
+}
+
+// loadZone reads zone name from dir, which holds the zone files the fixtures
+// were decided with. [time.LoadLocation] would read the host's zone database,
+// whose rules for the same zone may differ.
+func loadZone(dir, name string) (*time.Location, error) {
+	data, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		return nil, err
+	}
+	return time.LoadLocationFromTZData(name, data)
 }
 
 // logUniform draws from [lo, hi), each doubling of lo as likely as the next.
@@ -115,15 +130,18 @@ func drawTimes(rng *rand.Rand, loc *time.Location) []int64 {
 
 	// The history ends, a third of the time each, at the turn of 2015 to
 	// 2016 (2015 has an ISO week 53), just after the zone changes its
-	// offset, and anywhere. A change from 2025 on is none: some zone files
-	// end in a placeholder for 2038, which would put the history into the
-	// future.
+	// offset, and anywhere. A zone without a change around the drawn
+	// instant (UTC, Kolkata, Kathmandu, Sao Paulo after 2019) ends anywhere
+	// instead, so about a fifth of the histories end after a change. A
+	// change from 2025 on is none: some zone files end in a placeholder for
+	// 2038, which would put the history into the future.
 	//
 	// One history of five is a schedule, the same wall clock every hour,
 	// day, week, month or year counted from the newest snapshot, so that a
-	// keep-within window ends exactly on a snapshot. After a change of the
-	// offset it is every second, for backups that meet the hour the clocks
-	// skip and windows that reach across the change.
+	// keep-within window ends exactly on a snapshot. AddDate rolls a month
+	// back from the 31st over into the next month, as restic's window does.
+	// After a change of the offset it is every second, for backups that meet
+	// the hour the clocks skip and windows that reach across the change.
 	end := unix(2012, 1, 1) + rng.Int64N(13*year)
 	scheduled := rng.IntN(5) == 0
 	switch p := rng.IntN(100); {

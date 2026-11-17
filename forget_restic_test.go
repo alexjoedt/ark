@@ -6,17 +6,21 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
-	_ "time/tzdata" // the fixture zones resolve on a machine without a zone database too
 )
 
 // resticFixtures holds snapshot histories and keep policies together with
 // what restic keeps of them and why, written by scripts/forgetfixtures.
 const resticFixtures = "testdata/forget/restic.jsonl"
+
+// resticZoneinfo holds the zone files restic decided the fixtures with. The
+// host's zone database may hold other rules for the same zone.
+const resticZoneinfo = "testdata/forget/zoneinfo"
 
 // resticDeviations names every fixture case, by its line in the file, where
 // ark is meant to decide differently from restic, with the reason. A case
@@ -82,7 +86,11 @@ func (c resticCase) decide() (keep []int, reasons [][]string, refused bool, err 
 	if err != nil {
 		return nil, nil, false, err
 	}
-	loc, err := time.LoadLocation(c.TZ)
+	zone, err := os.ReadFile(filepath.Join(resticZoneinfo, c.TZ))
+	if err != nil {
+		return nil, nil, false, err
+	}
+	loc, err := time.LoadLocationFromTZData(c.TZ, zone)
 	if err != nil {
 		return nil, nil, false, err
 	}
