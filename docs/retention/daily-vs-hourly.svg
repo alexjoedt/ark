@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720.0 217.0" width="720.0" height="217.0" role="img">
+<title>--keep-daily 4 keeps 4, --keep-hourly 4 keeps 4 of 12 snapshots</title>
+<style>
+text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; fill: #2c3743; }
+.muted { fill: #55626f; }
+.bg { fill: #fbfcfd; stroke: #dde3ea; }
+.band, .lane { fill: #f3f6f9; }
+.band2 { fill: #e9eef3; }
+.fade { fill: #fbfcfd; opacity: 0.65; }
+.axis, .sep { stroke: #dde3ea; stroke-width: 1.5; }
+.kept { fill: #0b6fa8; stroke: #0b6fa8; stroke-width: 1.5; }
+.removed { fill: #fbfcfd; stroke: #8794a1; stroke-width: 1.5; }
+.snap { fill: #8794a1; }
+.pill { fill: #0b6fa8; }
+.on-pill { fill: #ffffff; }
+.lead { stroke: #0b6fa8; stroke-width: 1; }
+.arrow { stroke: #55626f; fill: none; }
+.win { fill: #0b6fa8; fill-opacity: 0.1; stroke: #0b6fa8; stroke-width: 1.5; stroke-dasharray: 5 4; }
+.hatch { fill: url(#hatch); }
+.hatch-line { stroke: #c3ccd6; stroke-width: 1.5; }
+@media (prefers-color-scheme: dark) {
+  text { fill: #b4c0cd; }
+  .muted { fill: #93a0ae; }
+  .bg { fill: #0a0e13; stroke: #232b35; }
+  .band, .lane { fill: #10161c; }
+  .band2 { fill: #161d25; }
+  .fade { fill: #0a0e13; }
+  .axis, .sep { stroke: #232b35; }
+  .kept { fill: #8be4f5; stroke: #8be4f5; }
+  .removed { fill: #0a0e13; stroke: #6b7785; }
+  .snap { fill: #6b7785; }
+  .pill { fill: #8be4f5; }
+  .on-pill { fill: #0a0e13; }
+  .lead { stroke: #8be4f5; }
+  .arrow { stroke: #93a0ae; }
+  .win { fill: #8be4f5; stroke: #8be4f5; }
+  .hatch-line { stroke: #3a4552; }
+}
+</style>
+<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" class="hatch-line"/></pattern></defs>
+<rect x="0.5" y="0.5" width="719.0" height="216.0" rx="8" class="bg"/>
+<rect x="160.0" y="14.0" width="548.0" height="28.0" class="lane"/>
+<text x="12.0" y="32.0" class="" text-anchor="start">snapshots</text>
+<rect x="160.0" y="48.0" width="548.0" height="32.0" class="lane"/>
+<text x="12.0" y="62.0" class="" text-anchor="start">--keep-daily</text>
+<text x="12.0" y="75.0" class="muted" text-anchor="start">4</text>
+<rect x="160.0" y="86.0" width="548.0" height="52.0" class="lane"/>
+<text x="12.0" y="110.0" class="" text-anchor="start">--keep-hourly</text>
+<text x="12.0" y="123.0" class="muted" text-anchor="start">4</text>
+<line x1="297.0" y1="14.0" x2="297.0" y2="138.0" class="sep"/>
+<line x1="434.0" y1="14.0" x2="434.0" y2="138.0" class="sep"/>
+<line x1="571.0" y1="14.0" x2="571.0" y2="138.0" class="sep"/>
+<circle cx="673.8" cy="28.0" r="4.0" class="snap"/>
+<circle cx="639.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="616.7" cy="28.0" r="4.0" class="snap"/>
+<circle cx="536.8" cy="28.0" r="4.0" class="snap"/>
+<circle cx="502.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="479.7" cy="28.0" r="4.0" class="snap"/>
+<circle cx="399.8" cy="28.0" r="4.0" class="snap"/>
+<circle cx="365.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="342.7" cy="28.0" r="4.0" class="snap"/>
+<circle cx="262.8" cy="28.0" r="4.0" class="snap"/>
+<circle cx="228.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="205.7" cy="28.0" r="4.0" class="snap"/>
+<rect x="160.0" y="50.0" width="0.0" height="28.0" class="fade"/>
+<rect x="658.0" y="55.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="673.8" y="68.0" class="on-pill" text-anchor="middle">1/4</text>
+<rect x="521.0" y="55.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="536.8" y="68.0" class="on-pill" text-anchor="middle">2/4</text>
+<rect x="383.9" y="55.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="399.8" y="68.0" class="on-pill" text-anchor="middle">3/4</text>
+<rect x="246.9" y="55.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="262.8" y="68.0" class="on-pill" text-anchor="middle">4/4</text>
+<rect x="543.5" y="88.0" width="72.2" height="48.0" class="hatch"/>
+<rect x="623.4" y="88.0" width="15.1" height="48.0" class="hatch"/>
+<rect x="646.2" y="88.0" width="26.5" height="48.0" class="hatch"/>
+<rect x="160.0" y="88.0" width="376.8" height="48.0" class="fade"/>
+<text x="348.4" y="102.0" class="muted" text-anchor="middle">count used up</text>
+<rect x="658.0" y="93.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="673.8" y="106.0" class="on-pill" text-anchor="middle">1/4</text>
+<rect x="623.7" y="113.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="639.5" y="126.0" class="on-pill" text-anchor="middle">2/4</text>
+<rect x="600.9" y="93.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="616.7" y="106.0" class="on-pill" text-anchor="middle">3/4</text>
+<rect x="521.0" y="93.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="536.8" y="106.0" class="on-pill" text-anchor="middle">4/4</text>
+<text x="228.5" y="151.0" class="muted" text-anchor="middle">Mon</text>
+<text x="228.5" y="164.0" class="muted" text-anchor="middle">02</text>
+<text x="162.0" y="177.0" class="" text-anchor="start">Mar 2015</text>
+<text x="365.5" y="151.0" class="muted" text-anchor="middle">Tue</text>
+<text x="365.5" y="164.0" class="muted" text-anchor="middle">03</text>
+<text x="502.5" y="151.0" class="muted" text-anchor="middle">Wed</text>
+<text x="502.5" y="164.0" class="muted" text-anchor="middle">04</text>
+<text x="639.5" y="151.0" class="muted" text-anchor="middle">Thu</text>
+<text x="639.5" y="164.0" class="muted" text-anchor="middle">05</text>
+<circle cx="19.0" cy="197.0" r="4.0" class="kept"/>
+<text x="32.0" y="201.0" class="" text-anchor="start">kept</text>
+<rect x="80.8" y="191.0" width="14" height="12" rx="6" class="pill"/>
+<text x="100.8" y="201.0" class="" text-anchor="start">count used, from the newest</text>
+<rect x="315.2" y="191.0" width="14.0" height="12.0" class="hatch"/>
+<text x="335.2" y="201.0" class="" text-anchor="start">no snapshot, uses no count</text>
+<rect x="542.4" y="191.0" width="14.0" height="12.0" class="lane"/>
+<rect x="542.4" y="191.0" width="7.0" height="12.0" class="fade"/>
+<text x="562.4" y="201.0" class="" text-anchor="start">count used up</text>
+</svg>

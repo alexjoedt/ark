@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720.0 154.0" width="720.0" height="154.0" role="img">
+<title>--keep-within-monthly 3m keeps 3 of 14 snapshots</title>
+<style>
+text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; fill: #2c3743; }
+.muted { fill: #55626f; }
+.bg { fill: #fbfcfd; stroke: #dde3ea; }
+.band, .lane { fill: #f3f6f9; }
+.band2 { fill: #e9eef3; }
+.fade { fill: #fbfcfd; opacity: 0.65; }
+.axis, .sep { stroke: #dde3ea; stroke-width: 1.5; }
+.kept { fill: #0b6fa8; stroke: #0b6fa8; stroke-width: 1.5; }
+.removed { fill: #fbfcfd; stroke: #8794a1; stroke-width: 1.5; }
+.snap { fill: #8794a1; }
+.pill { fill: #0b6fa8; }
+.on-pill { fill: #ffffff; }
+.lead { stroke: #0b6fa8; stroke-width: 1; }
+.arrow { stroke: #55626f; fill: none; }
+.win { fill: #0b6fa8; fill-opacity: 0.1; stroke: #0b6fa8; stroke-width: 1.5; stroke-dasharray: 5 4; }
+.hatch { fill: url(#hatch); }
+.hatch-line { stroke: #c3ccd6; stroke-width: 1.5; }
+@media (prefers-color-scheme: dark) {
+  text { fill: #b4c0cd; }
+  .muted { fill: #93a0ae; }
+  .bg { fill: #0a0e13; stroke: #232b35; }
+  .band, .lane { fill: #10161c; }
+  .band2 { fill: #161d25; }
+  .fade { fill: #0a0e13; }
+  .axis, .sep { stroke: #232b35; }
+  .kept { fill: #8be4f5; stroke: #8be4f5; }
+  .removed { fill: #0a0e13; stroke: #6b7785; }
+  .snap { fill: #6b7785; }
+  .pill { fill: #8be4f5; }
+  .on-pill { fill: #0a0e13; }
+  .lead { stroke: #8be4f5; }
+  .arrow { stroke: #93a0ae; }
+  .win { fill: #8be4f5; stroke: #8be4f5; }
+  .hatch-line { stroke: #3a4552; }
+}
+</style>
+<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" class="hatch-line"/></pattern></defs>
+<rect x="0.5" y="0.5" width="719.0" height="153.0" rx="8" class="bg"/>
+<text x="16.0" y="24.0" class="" text-anchor="start">--keep-within-monthly 3m</text>
+<text x="704.0" y="24.0" class="muted" text-anchor="end">3m window from Sun 24 May 18:00</text>
+<rect x="16.0" y="52.0" width="86.0" height="36.0" class="band"/>
+<rect x="102.0" y="52.0" width="86.0" height="36.0" class="band2"/>
+<rect x="188.0" y="52.0" width="86.0" height="36.0" class="band"/>
+<rect x="274.0" y="52.0" width="86.0" height="36.0" class="band2"/>
+<rect x="360.0" y="52.0" width="86.0" height="36.0" class="band"/>
+<rect x="446.0" y="52.0" width="86.0" height="36.0" class="band2"/>
+<rect x="532.0" y="52.0" width="86.0" height="36.0" class="band"/>
+<rect x="618.0" y="52.0" width="86.0" height="36.0" class="band2"/>
+<rect x="425.9" y="48.0" width="258.0" height="44.0" class="win"/>
+<line x1="16.0" y1="74.0" x2="704.0" y2="74.0" class="axis"/>
+<circle cx="683.9" cy="74.0" r="4.0" class="kept"/>
+<circle cx="625.6" cy="74.0" r="4.0" class="removed"/>
+<circle cx="586.8" cy="74.0" r="4.0" class="kept"/>
+<circle cx="548.0" cy="74.0" r="4.0" class="removed"/>
+<circle cx="508.4" cy="74.0" r="4.0" class="kept"/>
+<circle cx="468.2" cy="74.0" r="4.0" class="removed"/>
+<circle cx="350.7" cy="74.0" r="4.0" class="removed"/>
+<circle cx="310.6" cy="74.0" r="4.0" class="removed"/>
+<circle cx="269.5" cy="74.0" r="4.0" class="removed"/>
+<circle cx="212.3" cy="74.0" r="4.0" class="removed"/>
+<circle cx="171.9" cy="74.0" r="4.0" class="removed"/>
+<circle cx="107.4" cy="74.0" r="4.0" class="removed"/>
+<circle cx="68.0" cy="74.0" r="4.0" class="removed"/>
+<circle cx="29.2" cy="74.0" r="4.0" class="removed"/>
+<text x="59.0" y="101.0" class="muted" text-anchor="middle">Jan</text>
+<text x="18.0" y="114.0" class="" text-anchor="start">2015</text>
+<text x="145.0" y="101.0" class="muted" text-anchor="middle">Feb</text>
+<text x="231.0" y="101.0" class="muted" text-anchor="middle">Mar</text>
+<text x="317.0" y="101.0" class="muted" text-anchor="middle">Apr</text>
+<text x="403.0" y="101.0" class="muted" text-anchor="middle">May</text>
+<text x="489.0" y="101.0" class="muted" text-anchor="middle">Jun</text>
+<text x="575.0" y="101.0" class="muted" text-anchor="middle">Jul</text>
+<text x="661.0" y="101.0" class="muted" text-anchor="middle">Aug</text>
+<circle cx="23.0" cy="134.0" r="4.0" class="kept"/>
+<text x="36.0" y="138.0" class="" text-anchor="start">kept</text>
+<circle cx="91.8" cy="134.0" r="4.0" class="removed"/>
+<text x="104.8" y="138.0" class="" text-anchor="start">removed</text>
+<rect x="175.2" y="128.0" width="14.0" height="12.0" class="win"/>
+<text x="195.2" y="138.0" class="" text-anchor="start">window back from the newest snapshot</text>
+</svg>

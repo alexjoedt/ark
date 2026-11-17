@@ -1,0 +1,225 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720.0 434.0" width="720.0" height="434.0" role="img">
+<title>--keep-daily 7 --keep-weekly 4 --keep-monthly 12 --keep-yearly unlimited keeps 21 of 34 snapshots</title>
+<style>
+text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; fill: #2c3743; }
+.muted { fill: #55626f; }
+.bg { fill: #fbfcfd; stroke: #dde3ea; }
+.band, .lane { fill: #f3f6f9; }
+.band2 { fill: #e9eef3; }
+.fade { fill: #fbfcfd; opacity: 0.65; }
+.axis, .sep { stroke: #dde3ea; stroke-width: 1.5; }
+.kept { fill: #0b6fa8; stroke: #0b6fa8; stroke-width: 1.5; }
+.removed { fill: #fbfcfd; stroke: #8794a1; stroke-width: 1.5; }
+.snap { fill: #8794a1; }
+.pill { fill: #0b6fa8; }
+.on-pill { fill: #ffffff; }
+.lead { stroke: #0b6fa8; stroke-width: 1; }
+.arrow { stroke: #55626f; fill: none; }
+.win { fill: #0b6fa8; fill-opacity: 0.1; stroke: #0b6fa8; stroke-width: 1.5; stroke-dasharray: 5 4; }
+.hatch { fill: url(#hatch); }
+.hatch-line { stroke: #c3ccd6; stroke-width: 1.5; }
+@media (prefers-color-scheme: dark) {
+  text { fill: #b4c0cd; }
+  .muted { fill: #93a0ae; }
+  .bg { fill: #0a0e13; stroke: #232b35; }
+  .band, .lane { fill: #10161c; }
+  .band2 { fill: #161d25; }
+  .fade { fill: #0a0e13; }
+  .axis, .sep { stroke: #232b35; }
+  .kept { fill: #8be4f5; stroke: #8be4f5; }
+  .removed { fill: #0a0e13; stroke: #6b7785; }
+  .snap { fill: #6b7785; }
+  .pill { fill: #8be4f5; }
+  .on-pill { fill: #0a0e13; }
+  .lead { stroke: #8be4f5; }
+  .arrow { stroke: #93a0ae; }
+  .win { fill: #8be4f5; stroke: #8be4f5; }
+  .hatch-line { stroke: #3a4552; }
+}
+</style>
+<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" class="hatch-line"/></pattern></defs>
+<rect x="0.5" y="0.5" width="719.0" height="433.0" rx="8" class="bg"/>
+<rect x="160.0" y="14.0" width="548.0" height="28.0" class="lane"/>
+<text x="12.0" y="32.0" class="" text-anchor="start">snapshots</text>
+<rect x="160.0" y="48.0" width="548.0" height="112.0" class="lane"/>
+<text x="12.0" y="102.0" class="" text-anchor="start">--keep-daily</text>
+<text x="12.0" y="115.0" class="muted" text-anchor="start">7</text>
+<rect x="160.0" y="166.0" width="548.0" height="52.0" class="lane"/>
+<text x="12.0" y="190.0" class="" text-anchor="start">--keep-weekly</text>
+<text x="12.0" y="203.0" class="muted" text-anchor="start">4</text>
+<rect x="160.0" y="224.0" width="548.0" height="72.0" class="lane"/>
+<text x="12.0" y="258.0" class="" text-anchor="start">--keep-monthly</text>
+<text x="12.0" y="271.0" class="muted" text-anchor="start">12</text>
+<rect x="160.0" y="302.0" width="548.0" height="32.0" class="lane"/>
+<text x="12.0" y="316.0" class="" text-anchor="start">--keep-yearly</text>
+<text x="12.0" y="329.0" class="muted" text-anchor="start">unlimited</text>
+<rect x="160.0" y="340.0" width="548.0" height="28.0" class="lane"/>
+<text x="12.0" y="358.0" class="" text-anchor="start">kept</text>
+<line x1="181.7" y1="14.0" x2="181.7" y2="368.0" class="sep"/>
+<line x1="203.3" y1="14.0" x2="203.3" y2="368.0" class="sep"/>
+<line x1="225.0" y1="14.0" x2="225.0" y2="368.0" class="sep"/>
+<line x1="246.7" y1="14.0" x2="246.7" y2="368.0" class="sep"/>
+<line x1="268.3" y1="14.0" x2="268.3" y2="368.0" class="sep"/>
+<line x1="290.0" y1="14.0" x2="290.0" y2="368.0" class="sep"/>
+<line x1="311.7" y1="14.0" x2="311.7" y2="368.0" class="sep"/>
+<line x1="333.3" y1="14.0" x2="333.3" y2="368.0" class="sep"/>
+<line x1="355.0" y1="14.0" x2="355.0" y2="368.0" class="sep"/>
+<line x1="376.7" y1="14.0" x2="376.7" y2="368.0" class="sep"/>
+<line x1="398.3" y1="14.0" x2="398.3" y2="368.0" class="sep"/>
+<line x1="420.0" y1="14.0" x2="420.0" y2="368.0" class="sep"/>
+<line x1="441.7" y1="14.0" x2="441.7" y2="368.0" class="sep"/>
+<line x1="463.3" y1="14.0" x2="463.3" y2="368.0" class="sep"/>
+<line x1="485.0" y1="14.0" x2="485.0" y2="368.0" class="sep"/>
+<line x1="506.7" y1="14.0" x2="506.7" y2="368.0" class="sep"/>
+<line x1="528.3" y1="14.0" x2="528.3" y2="368.0" class="sep"/>
+<line x1="550.0" y1="14.0" x2="550.0" y2="368.0" class="sep"/>
+<line x1="589.0" y1="14.0" x2="589.0" y2="368.0" class="sep"/>
+<circle cx="703.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="693.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="683.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="673.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="663.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="653.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="643.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="633.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="623.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="613.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="603.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="593.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="584.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="574.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="564.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="554.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="532.8" cy="28.0" r="4.0" class="snap"/>
+<circle cx="511.2" cy="28.0" r="4.0" class="snap"/>
+<circle cx="489.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="467.8" cy="28.0" r="4.0" class="snap"/>
+<circle cx="446.2" cy="28.0" r="4.0" class="snap"/>
+<circle cx="424.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="402.8" cy="28.0" r="4.0" class="snap"/>
+<circle cx="381.2" cy="28.0" r="4.0" class="snap"/>
+<circle cx="359.5" cy="28.0" r="4.0" class="snap"/>
+<circle cx="337.8" cy="28.0" r="4.0" class="snap"/>
+<circle cx="316.2" cy="28.0" r="4.0" class="snap"/>
+<circle cx="294.7" cy="28.0" r="4.0" class="snap"/>
+<circle cx="272.8" cy="28.0" r="4.0" class="snap"/>
+<circle cx="251.2" cy="28.0" r="4.0" class="snap"/>
+<circle cx="229.9" cy="28.0" r="4.0" class="snap"/>
+<circle cx="207.8" cy="28.0" r="4.0" class="snap"/>
+<circle cx="186.2" cy="28.0" r="4.0" class="snap"/>
+<circle cx="164.5" cy="28.0" r="4.0" class="snap"/>
+<rect x="160.0" y="50.0" width="476.0" height="108.0" class="fade"/>
+<text x="398.0" y="64.0" class="muted" text-anchor="middle">count used up</text>
+<rect x="676.4" y="135.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="692.2" y="148.0" class="on-pill" text-anchor="middle">1/7</text>
+<rect x="676.4" y="75.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="692.2" y="88.0" class="on-pill" text-anchor="middle">2/7</text>
+<rect x="667.7" y="55.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="683.5" y="68.0" class="on-pill" text-anchor="middle">3/7</text>
+<rect x="657.7" y="115.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="673.5" y="128.0" class="on-pill" text-anchor="middle">4/7</text>
+<rect x="647.7" y="95.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="663.5" y="108.0" class="on-pill" text-anchor="middle">5/7</text>
+<rect x="637.7" y="75.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="653.5" y="88.0" class="on-pill" text-anchor="middle">6/7</text>
+<rect x="627.7" y="55.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="643.5" y="68.0" class="on-pill" text-anchor="middle">7/7</text>
+<rect x="160.0" y="168.0" width="423.4" height="48.0" class="fade"/>
+<text x="371.7" y="182.0" class="muted" text-anchor="middle">count used up</text>
+<rect x="676.4" y="173.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="692.2" y="186.0" class="on-pill" text-anchor="middle">1/4</text>
+<rect x="617.7" y="173.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="633.5" y="186.0" class="on-pill" text-anchor="middle">2/4</text>
+<rect x="577.7" y="193.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="593.5" y="206.0" class="on-pill" text-anchor="middle">3/4</text>
+<rect x="568.7" y="173.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="584.5" y="186.0" class="on-pill" text-anchor="middle">4/4</text>
+<rect x="160.0" y="226.0" width="173.3" height="68.0" class="fade"/>
+<text x="246.7" y="240.0" class="muted" text-anchor="middle">count used up</text>
+<rect x="669.2" y="231.5" width="38.8" height="17.0" rx="8" class="pill"/>
+<text x="688.6" y="244.0" class="on-pill" text-anchor="middle">1/12</text>
+<rect x="565.1" y="231.5" width="38.8" height="17.0" rx="8" class="pill"/>
+<text x="584.5" y="244.0" class="on-pill" text-anchor="middle">2/12</text>
+<rect x="513.4" y="231.5" width="38.8" height="17.0" rx="8" class="pill"/>
+<text x="532.8" y="244.0" class="on-pill" text-anchor="middle">3/12</text>
+<rect x="491.8" y="251.5" width="38.8" height="17.0" rx="8" class="pill"/>
+<text x="511.2" y="264.0" class="on-pill" text-anchor="middle">4/12</text>
+<rect x="470.1" y="231.5" width="38.8" height="17.0" rx="8" class="pill"/>
+<text x="489.5" y="244.0" class="on-pill" text-anchor="middle">5/12</text>
+<rect x="448.4" y="251.5" width="38.8" height="17.0" rx="8" class="pill"/>
+<text x="467.8" y="264.0" class="on-pill" text-anchor="middle">6/12</text>
+<rect x="426.8" y="231.5" width="38.8" height="17.0" rx="8" class="pill"/>
+<text x="446.2" y="244.0" class="on-pill" text-anchor="middle">7/12</text>
+<rect x="405.1" y="251.5" width="38.8" height="17.0" rx="8" class="pill"/>
+<text x="424.5" y="264.0" class="on-pill" text-anchor="middle">8/12</text>
+<rect x="383.4" y="231.5" width="38.8" height="17.0" rx="8" class="pill"/>
+<text x="402.8" y="244.0" class="on-pill" text-anchor="middle">9/12</text>
+<rect x="358.2" y="271.5" width="46.0" height="17.0" rx="8" class="pill"/>
+<text x="381.2" y="284.0" class="on-pill" text-anchor="middle">10/12</text>
+<rect x="336.5" y="251.5" width="46.0" height="17.0" rx="8" class="pill"/>
+<text x="359.5" y="264.0" class="on-pill" text-anchor="middle">11/12</text>
+<rect x="314.8" y="231.5" width="46.0" height="17.0" rx="8" class="pill"/>
+<text x="337.8" y="244.0" class="on-pill" text-anchor="middle">12/12</text>
+<rect x="676.4" y="309.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="692.2" y="322.0" class="on-pill" text-anchor="middle">1/∞</text>
+<rect x="387.0" y="309.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="402.8" y="322.0" class="on-pill" text-anchor="middle">2/∞</text>
+<rect x="160.0" y="309.5" width="31.6" height="17.0" rx="8" class="pill"/>
+<text x="175.8" y="322.0" class="on-pill" text-anchor="middle">3/∞</text>
+<circle cx="703.5" cy="354.0" r="4.0" class="kept"/>
+<circle cx="693.5" cy="354.0" r="4.0" class="kept"/>
+<circle cx="683.5" cy="354.0" r="4.0" class="kept"/>
+<circle cx="673.5" cy="354.0" r="4.0" class="kept"/>
+<circle cx="663.5" cy="354.0" r="4.0" class="kept"/>
+<circle cx="653.5" cy="354.0" r="4.0" class="kept"/>
+<circle cx="643.5" cy="354.0" r="4.0" class="kept"/>
+<circle cx="633.5" cy="354.0" r="4.0" class="kept"/>
+<circle cx="623.5" cy="354.0" r="4.0" class="removed"/>
+<circle cx="613.5" cy="354.0" r="4.0" class="removed"/>
+<circle cx="603.5" cy="354.0" r="4.0" class="removed"/>
+<circle cx="593.5" cy="354.0" r="4.0" class="kept"/>
+<circle cx="584.5" cy="354.0" r="4.0" class="kept"/>
+<circle cx="574.5" cy="354.0" r="4.0" class="removed"/>
+<circle cx="564.5" cy="354.0" r="4.0" class="removed"/>
+<circle cx="554.5" cy="354.0" r="4.0" class="removed"/>
+<circle cx="532.8" cy="354.0" r="4.0" class="kept"/>
+<circle cx="511.2" cy="354.0" r="4.0" class="kept"/>
+<circle cx="489.5" cy="354.0" r="4.0" class="kept"/>
+<circle cx="467.8" cy="354.0" r="4.0" class="kept"/>
+<circle cx="446.2" cy="354.0" r="4.0" class="kept"/>
+<circle cx="424.5" cy="354.0" r="4.0" class="kept"/>
+<circle cx="402.8" cy="354.0" r="4.0" class="kept"/>
+<circle cx="381.2" cy="354.0" r="4.0" class="kept"/>
+<circle cx="359.5" cy="354.0" r="4.0" class="kept"/>
+<circle cx="337.8" cy="354.0" r="4.0" class="kept"/>
+<circle cx="316.2" cy="354.0" r="4.0" class="removed"/>
+<circle cx="294.7" cy="354.0" r="4.0" class="removed"/>
+<circle cx="272.8" cy="354.0" r="4.0" class="removed"/>
+<circle cx="251.2" cy="354.0" r="4.0" class="removed"/>
+<circle cx="229.9" cy="354.0" r="4.0" class="removed"/>
+<circle cx="207.8" cy="354.0" r="4.0" class="removed"/>
+<circle cx="186.2" cy="354.0" r="4.0" class="removed"/>
+<circle cx="164.5" cy="354.0" r="4.0" class="kept"/>
+<text x="170.8" y="381.0" class="muted" text-anchor="middle">Jan</text>
+<text x="162.0" y="394.0" class="" text-anchor="start">2014</text>
+<text x="214.2" y="381.0" class="muted" text-anchor="middle">Mar</text>
+<text x="257.5" y="381.0" class="muted" text-anchor="middle">May</text>
+<text x="300.8" y="381.0" class="muted" text-anchor="middle">Jul</text>
+<text x="344.2" y="381.0" class="muted" text-anchor="middle">Sep</text>
+<text x="387.5" y="381.0" class="muted" text-anchor="middle">Nov</text>
+<text x="430.8" y="381.0" class="muted" text-anchor="middle">Jan</text>
+<text x="422.0" y="394.0" class="" text-anchor="start">2015</text>
+<text x="474.2" y="381.0" class="muted" text-anchor="middle">Mar</text>
+<text x="517.5" y="381.0" class="muted" text-anchor="middle">May</text>
+<text x="569.5" y="381.0" class="muted" text-anchor="middle">Jul</text>
+<text x="648.5" y="381.0" class="muted" text-anchor="middle">Aug</text>
+<circle cx="19.0" cy="414.0" r="4.0" class="kept"/>
+<text x="32.0" y="418.0" class="" text-anchor="start">kept</text>
+<circle cx="87.8" cy="414.0" r="4.0" class="removed"/>
+<text x="100.8" y="418.0" class="" text-anchor="start">removed</text>
+<rect x="171.2" y="408.0" width="14" height="12" rx="6" class="pill"/>
+<text x="191.2" y="418.0" class="" text-anchor="start">count used, from the newest</text>
+<rect x="405.6" y="408.0" width="14.0" height="12.0" class="lane"/>
+<rect x="405.6" y="408.0" width="7.0" height="12.0" class="fade"/>
+<text x="425.6" y="418.0" class="" text-anchor="start">count used up</text>
+</svg>

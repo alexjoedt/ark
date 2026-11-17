@@ -1,0 +1,168 @@
+{{define "example" -}}
+![Timeline of {{.Policy}}]({{.Image}})
+
+{{.Table}}
+
+`{{.Policy}}` keeps {{list .Kept}}{{with .Removed}} and removes {{plural (len .) "other snapshot"}}{{end}}.
+{{- end -}}
+
+{{define "comparison" -}}
+{{$a := index .Versus 0}}{{$b := index .Versus 1 -}}
+![Timeline of {{.Policy}}]({{.Image}})
+
+{{.Table}}
+
+`{{$a.Policy}}` keeps {{plural (len $a.Kept) "snapshot"}}{{with $a.Only}}, among them {{list .}}, which `{{$b.Policy}}` does not keep{{end}}. `{{$b.Policy}}` keeps {{plural (len $b.Kept) "snapshot"}}{{with $b.Only}}, among them {{list .}}, which `{{$a.Policy}}` does not keep{{end}}.
+{{- end -}}
+
+# Retention policies
+
+`ark forget` keeps the snapshots a policy selects and removes the rest. The examples on this page are computed by ark itself: each shows a history of snapshots, what one rule keeps of it and the reasons `ark forget --json` gives.
+
+The examples count hours, days, weeks, months and years in UTC; ark counts them in the local time zone of the machine that runs forget. A policy applies to each series on its own. Time zones, summer time, ISO weeks and series are covered in the [forget reference](cli/commands.md#forget).
+
+In short:
+
+- A counted rule such as `--keep-daily N` counts periods, not snapshots: it keeps the newest snapshot of each of the N most recent days that have one. A day without a snapshot uses no count, and of a day with several only the newest counts.
+- When a counted rule reaches the oldest snapshot of the history with count left, it keeps that snapshot too, and so does a rule such as `--keep-within-daily 30d` whose window holds it.
+- A within rule such as `--keep-within 7d` measures its window back from the newest snapshot, not from the time forget runs.
+- A snapshot that any rule keeps stays.
+
+Most examples share one history of three weeks, with days without a backup and days with several. Hourly, monthly and yearly rules, `--keep-tag`, the long-horizon recipe and the comparison of daily with hourly get histories of their own.
+
+## Keep last
+
+`--keep-last N` keeps the N newest snapshots, counted one by one: several snapshots of one day each use a count.
+
+{{template "example" scenario "keep-last"}}
+
+## Keep hourly, daily, weekly, monthly, yearly
+
+These rules count periods. Each keeps the newest snapshot of a period, newest period first, until its count is used up. A week is an ISO week and starts on Monday.
+
+### Keep daily
+
+`--keep-daily N` keeps the newest snapshot of each of the N most recent days that have a snapshot. It is not one snapshot a day for N days: days without a backup are skipped, so the rule reaches back as far as it takes to find N days.
+{{with scenario "keep-daily"}}
+{{template "example" .}}{{with (index .Rules 0).Gaps}} No snapshot falls on {{list .}}; a day without one uses no count.{{end}}
+{{- end}}
+
+### Keep hourly
+
+`--keep-hourly N` keeps the newest snapshot of each of the N most recent hours that have one.
+{{with scenario "keep-hourly"}}
+{{template "example" .}}{{with (index .Rules 0).Gaps}} No snapshot falls in the {{if eq (len .) 1}}hour{{else}}hours{{end}} starting {{list .}}; an hour without one uses no count.{{end}}
+{{- end}}
+
+### Keep weekly
+
+`--keep-weekly N` keeps the newest snapshot of each of the N most recent weeks that have one.
+{{with scenario "keep-weekly"}}
+{{template "example" .}}{{with (index .Rules 0)}}{{with .Gaps}} No snapshot falls in the {{if eq (len .) 1}}week{{else}}weeks{{end}} starting {{list .}}; a week without one uses no count.{{end}}{{with .Oldest}} The history ends before the count is used up, so the rule also keeps the oldest snapshot, {{.}}, although its week is taken; `--json` gives it an `oldest` reason.{{end}}{{end}}
+{{- end}}
+
+### Keep monthly
+
+`--keep-monthly N` keeps the newest snapshot of each of the N most recent months that have one.
+{{with scenario "keep-monthly"}}
+{{template "example" .}}{{with (index .Rules 0).Gaps}} No snapshot falls in {{list .}}; a month without one uses no count.{{end}}
+{{- end}}
+
+### Keep yearly
+
+`--keep-yearly N` keeps the newest snapshot of each of the N most recent years that have one.
+{{with scenario "keep-yearly"}}
+{{template "example" .}}{{with (index .Rules 0).Gaps}} No snapshot falls in {{list .}}; a year without one uses no count.{{end}}
+{{- end}}
+
+### Unlimited
+
+Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keeps the newest snapshot of every day that has one, and the oldest snapshot of the history always stays.
+{{with scenario "keep-unlimited"}}
+{{template "example" .}}{{with (index .Rules 0).Oldest}} The oldest snapshot, {{.}}, stays although its day is taken.{{end}}
+{{- end}}
+
+## Keep within
+
+### Keep within a duration
+
+`--keep-within DURATION` keeps every snapshot younger than the duration, however many there are. The window ends at the newest snapshot, so a history that stopped receiving backups keeps its last ones. A snapshot exactly the duration old is outside.
+{{with scenario "keep-within"}}
+{{template "example" .}} The window starts at {{(index .Rules 0).WindowStart}}.
+{{- end}}
+
+### Keep the newest of every period within a duration
+
+`--keep-within-hourly`, `--keep-within-daily`, `--keep-within-weekly`, `--keep-within-monthly` and `--keep-within-yearly` take a duration in place of a count: they keep the newest snapshot of every period that has one inside the window, however many periods that is. When the oldest snapshot of the history lies inside the window and shares its period with a newer one, they keep it too, for an `oldest` reason such as `oldest daily within 30d`.
+{{with scenario "keep-within-hourly"}}
+{{template "example" .}}{{with index .Rules 0}} The window starts at {{.WindowStart}}.{{with .Oldest}} The oldest snapshot, {{.}}, lies inside it, so the rule keeps it although its period is taken.{{end}}{{end}}
+{{- end}}
+{{with scenario "keep-within-daily"}}
+{{template "example" .}}{{with index .Rules 0}} The window starts at {{.WindowStart}}.{{with .Oldest}} The oldest snapshot, {{.}}, lies inside it, so the rule keeps it although its period is taken.{{end}}{{end}}
+{{- end}}
+{{with scenario "keep-within-weekly"}}
+{{template "example" .}}{{with index .Rules 0}} The window starts at {{.WindowStart}}.{{with .Oldest}} The oldest snapshot, {{.}}, lies inside it, so the rule keeps it although its period is taken.{{end}}{{end}}
+{{- end}}
+{{with scenario "keep-within-monthly"}}
+{{template "example" .}}{{with index .Rules 0}} The window starts at {{.WindowStart}}.{{with .Oldest}} The oldest snapshot, {{.}}, lies inside it, so the rule keeps it although its period is taken.{{end}}{{end}}
+{{- end}}
+{{with scenario "keep-within-yearly"}}
+{{template "example" .}}{{with index .Rules 0}} The window starts at {{.WindowStart}}.{{with .Oldest}} The oldest snapshot, {{.}}, lies inside it, so the rule keeps it although its period is taken.{{end}}{{end}}
+{{- end}}
+
+## Keep tag
+
+`--keep-tag TAG` keeps every snapshot that carries the tag, whatever its age. It has no count and no period, and on its own it keeps nothing else, not even the newest snapshot. The history is a week of daily backups, some of them tagged `release`.
+{{with scenario "keep-tag"}}
+{{template "example" .}}
+{{- end}}
+
+## Combining rules
+
+A policy of several rules keeps a snapshot when any of its rules keeps it and removes only what none of them keeps. Each rule counts on its own over the whole history: a snapshot two rules keep uses a count of each, and `--json` gives a reason for each. In a timeline of several rules each rule has a lane, and the bottom lane shows what the policy keeps.
+{{with scenario "union"}}
+{{template "example" .}}{{range .Rules}} `{{.Flag}}` keeps {{list .Kept}}.{{end}}{{$both := eq (len .Rules) 2}}{{with .Shared}} {{list .}} {{if eq (len .) 1}}is{{else}}are{{end}} kept by {{if $both}}both rules{{else}}more than one rule{{end}} and {{if eq (len .) 1}}uses{{else}}use{{end}} a count of each.{{end}}
+{{- end}}
+
+### Keep tag with a counted rule
+
+`--keep-tag` adds the snapshots it keeps to what the other rules keep and takes nothing out of their counts. A tagged snapshot that a counted rule reaches still uses a count of it, so a tagged snapshot among the newest leaves `--keep-last` a slot fewer for the others.
+{{with scenario "keep-tag-and-last"}}
+{{template "example" .}}{{$last := ""}}{{range .Rules}}{{if .Counted}}{{$last = .Flag}}{{end}}{{end}}{{with .Shared}} {{list .}} {{if eq (len .) 1}}carries{{else}}carry{{end}} the tag and still {{if eq (len .) 1}}uses a slot{{else}}use a slot each{{end}} of `{{$last}}`.{{end}}
+{{- end}}
+
+### A long-horizon recipe
+{{with scenario "recipe"}}
+`{{.Policy}}` keeps the newest snapshot of each of the {{list .Reach}} that have one. The history reaches back more than a year and a half, with backups that thin out with age: one a month at first, then one a week, then one a day.
+
+{{template "example" .}}
+
+{{range .Rules}}
+- `{{.Flag}}` keeps {{list .Kept}}{{if .Oldest}}, the last for an `oldest` reason{{end}}.
+{{- end}}
+{{- end}}
+
+## Comparisons
+
+Rules that sound alike can keep different snapshots. Each timeline below runs two policies on the same history, one lane each; the table shows what each keeps.
+
+### Keep daily or keep within daily
+
+`--keep-daily 7` and `--keep-within-daily 7d` both keep one snapshot a day. `--keep-daily 7` counts days that have a snapshot, so it reaches back past days without one until it has found 7; `--keep-within-daily 7d` looks only at the 7 days before the newest snapshot, whatever they hold.
+{{with scenario "daily-vs-within-daily"}}
+{{template "comparison" .}}{{$daily := index (index .Versus 0).Rules 0}}{{$within := index (index .Versus 1).Rules 0}}{{with $daily.Gaps}} No snapshot falls on {{list .}}: `{{$daily.Flag}}` uses no count for {{if eq (len .) 1}}it{{else}}them{{end}}, while those inside the window of `{{$within.Flag}}` take up part of it.{{end}} The window starts at {{$within.WindowStart}}.
+{{- end}}
+
+### Keep last or keep within
+
+`--keep-last 7` counts snapshots, `--keep-within 7d` measures time. Where backups are frequent, the last 7 snapshots span less than 7 days; where they are sparse, more.
+{{with scenario "last-vs-within"}}
+{{template "comparison" .}}{{with index (index .Versus 1).Rules 0}} The window starts at {{.WindowStart}}.{{end}}
+{{- end}}
+
+### Keep daily or keep hourly
+
+With several backups a day, `--keep-hourly 4` keeps the newest snapshot of each of the 4 most recent hours that have one, while `--keep-daily 4` keeps one snapshot from each of 4 days. The history is four days with three backups each.
+{{with scenario "daily-vs-hourly"}}
+{{template "comparison" .}}
+{{end -}}
