@@ -36,13 +36,16 @@ ark profile show docs           # each effective value and its source: cli, prof
 |---|---|
 | top level | `repo`, `password-file`, `password-env`, `insecure-no-password`, `lock-wait`, `concurrency` |
 | `backup` | `path`, `source`, `host`, `tag`, `comment`, `label`, `exclude`, `exclude-file`, `exclude-cloud-files`, hooks |
-| `forget` | `keep-last`, `keep-hourly`, `keep-daily`, `keep-weekly`, `keep-monthly`, `keep-yearly`, `keep-within`, `prune`, hooks |
+| `forget` | `keep-last`, `keep-hourly`, `keep-daily`, `keep-weekly`, `keep-monthly`, `keep-yearly`, `keep-within`, `keep-tag`, `prune`, hooks |
 
 Each key means what the flag of the same name means, see [CLI](index.md#global-flags) and
 [Commands](commands.md). `password-env` names the environment variable that holds the password.
 `backup.path` is the directory `ark backup -P` backs up when no path is given.
 A keep count is a whole number or `unlimited`, as on the command line: `keep-yearly: unlimited`
 keeps the newest snapshot of every year. A negative count fails the load.
+`keep-tag` is a list with one entry per tag list, each written as `--keep-tag` takes it:
+`keep-tag: [pinned, "db,prod"]` keeps what is tagged `pinned`, and what is tagged `db` and `prod`;
+the entry `""` keeps the untagged snapshots.
 
 ## Rules
 

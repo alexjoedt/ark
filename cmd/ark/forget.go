@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	ark "github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
@@ -20,10 +21,13 @@ func forgetCommand() *cli.Command {
    ark forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6
    ark forget --keep-within 30d
    ark forget --keep-daily 7 --keep-yearly unlimited
+   ark forget --keep-last 5 --keep-tag pinned
 
    Removes snapshots. Either name ids, or give a policy that says what to keep;
    the policy is applied per series (source type, source name and host). A policy that
    keeps nothing is refused, use --all to remove every matching snapshot on purpose.
+   --keep-tag keeps what carries all tags of a list and is the one rule that can keep
+   nothing of a series: the run then fails and removes nothing.
    Hours, days, weeks, months and years count in local time (TZ).
    A period rule with count left at the end of a series keeps its oldest snapshot too.
    Chunks stay until prune.`,
@@ -35,6 +39,10 @@ func forgetCommand() *cli.Command {
 			&cli.StringFlag{Name: "keep-monthly", Usage: "keep the newest of `N` months, unlimited for all"},
 			&cli.StringFlag{Name: "keep-yearly", Usage: "keep the newest of `N` years, unlimited for all"},
 			&cli.StringFlag{Name: "keep-within", Usage: "keep everything younger than `DURATION`, e.g. 72h, 30d"},
+			&listFlag{
+				Name:  "keep-tag",
+				Usage: "keep what carries all of `TAG[,TAG...]`, '' for untagged, repeatable: any list keeps",
+			},
 			&cli.BoolFlag{Name: "all", Usage: "remove every snapshot matching the filter"},
 			&cli.StringFlag{Name: "source", Aliases: []string{"s"}, Usage: "filter by source `NAME`"},
 			&cli.StringFlag{Name: "type", Usage: "filter by source `TYPE`, file, docker-volume or stream"},
@@ -86,7 +94,7 @@ func forgetCommand() *cli.Command {
 			if lp != nil && !cmd.IsSet("prune") {
 				prune = lp.Forget.Prune
 			}
-			hasPolicy := policy != (ark.ForgetPolicy{})
+			hasPolicy := !reflect.ValueOf(policy).IsZero()
 			switch {
 			case len(ids) > 0 && hasPolicy:
 				return exitcode.Usagef("give snapshot ids or a policy, not both")
@@ -162,8 +170,8 @@ func runForget(
 }
 
 // forgetPolicy is the profile's forget policy with every --keep-* flag given
-// on the command line put over its rule. A bad count or duration is a usage
-// error.
+// on the command line put over its rule; --keep-tag replaces the profile's
+// lists. A bad count or duration is a usage error.
 func forgetPolicy(cmd *cli.Command, lp *loadedProfile) (ark.ForgetPolicy, error) {
 	var policy ark.ForgetPolicy
 	if lp != nil {
@@ -200,6 +208,12 @@ func forgetPolicy(cmd *cli.Command, lp *loadedProfile) (ark.ForgetPolicy, error)
 				return policy, exitcode.Usagef("--keep-within: %v", err)
 			}
 			policy.KeepWithin = d
+		}
+	}
+	if cmd.IsSet("keep-tag") {
+		policy.KeepTags = nil
+		for _, list := range listValue(cmd, "keep-tag") {
+			policy.KeepTags = append(policy.KeepTags, ark.ParseTagList(list))
 		}
 	}
 	return policy, nil

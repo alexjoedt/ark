@@ -16,8 +16,15 @@ var (
 	ErrEmptyPolicy = errors.New("ark: forget policy keeps nothing and no ids given")
 
 	// ErrInvalidPolicy is returned by Forget, before it reads anything, for
-	// a policy with a negative count other than Unlimited.
+	// a policy with a negative count other than Unlimited or a KeepTags list
+	// without a tag.
 	ErrInvalidPolicy = errors.New("ark: invalid forget policy")
+
+	// ErrNoSnapshotKept is returned by Forget when the policy keeps no
+	// snapshot of a series among the matches, which only a policy of KeepTags
+	// alone can do. Nothing is removed, of no series; the message names the
+	// series.
+	ErrNoSnapshotKept = errors.New("ark: forget policy keeps no snapshot of a series")
 
 	// ErrInvalidLabel is returned by ValidateLabels, and by Backup before it
 	// writes anything, for a label key or value a caller may not set, or a

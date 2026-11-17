@@ -101,6 +101,9 @@ func (p *Profile) ForgetPolicy() (ark.ForgetPolicy, error) {
 		}
 		policy.KeepWithin = d
 	}
+	for _, list := range f.KeepTags {
+		policy.KeepTags = append(policy.KeepTags, ark.ParseTagList(list))
+	}
 	return policy, nil
 }
 

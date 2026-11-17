@@ -532,3 +532,68 @@ func TestWeekKeyIsDistinctPerISOWeek(t *testing.T) {
 		}
 	}
 }
+
+// taggedFixture is one series, newest first, one snapshot a day:
+//
+//	s0  a, b
+//	s1  a
+//	s2  b
+//	s3  no tag
+//	s4  a, b
+func taggedFixture() []*Snapshot {
+	tags := [][]string{{"a", "b"}, {"a"}, {"b"}, nil, {"a", "b"}}
+	snaps := make([]*Snapshot, len(tags))
+	for i := range tags {
+		at := time.Date(2026, 1, 5-i, 12, 0, 0, 0, time.UTC)
+		snaps[i] = &Snapshot{ID: fmt.Sprintf("s%d", i), CreatedAt: at, Tags: tags[i]}
+	}
+	return snaps
+}
+
+// The cases and their reasons are what restic 0.18.1 answers for --keep-tag
+// on these five snapshots.
+func TestForgetKeepTags(t *testing.T) {
+	const a, b, ab, last = "has tags [a]", "has tags [b]", "has tags [a, b]", "last snapshot"
+	tests := []struct {
+		name   string
+		policy ForgetPolicy
+		want   map[string][]string
+	}{
+		{"one tag", ForgetPolicy{KeepTags: [][]string{{"a"}}}, map[string][]string{
+			"s0": {a}, "s1": {a}, "s4": {a},
+		}},
+		{"two lists, any of them", ForgetPolicy{KeepTags: [][]string{{"a"}, {"b"}}}, map[string][]string{
+			"s0": {a, b}, "s1": {a}, "s2": {b}, "s4": {a, b},
+		}},
+		{"one list, all of its tags", ForgetPolicy{KeepTags: [][]string{{"a", "b"}}}, map[string][]string{
+			"s0": {ab}, "s4": {ab},
+		}},
+		{"a tag no snapshot has", ForgetPolicy{KeepTags: [][]string{{"zz"}}}, map[string][]string{}},
+		{"the empty tag is no tag", ForgetPolicy{KeepTags: [][]string{{""}}}, map[string][]string{
+			"s3": {"has tags []"},
+		}},
+		{"the empty tag first decides for an untagged snapshot", ForgetPolicy{KeepTags: [][]string{{"", "a"}}},
+			map[string][]string{"s3": {"has tags [, a]"}}},
+		{"the empty tag after a tag is never reached", ForgetPolicy{KeepTags: [][]string{{"a", ""}}},
+			map[string][]string{}},
+		{"a tagged snapshot uses a KeepLast slot", ForgetPolicy{KeepLast: 3, KeepTags: [][]string{{"a"}}},
+			map[string][]string{"s0": {a, last}, "s1": {a, last}, "s2": {last}, "s4": {a}}},
+		{"tags come before within", ForgetPolicy{KeepWithin: 36 * time.Hour, KeepTags: [][]string{{"b"}}},
+			map[string][]string{"s0": {b, "within 1d12h"}, "s1": {"within 1d12h"}, "s2": {b}, "s4": {b}}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			snaps := taggedFixture()
+			res := applyForgetPolicy(snaps, tc.policy, time.UTC)
+			if !maps.EqualFunc(res.KeepReasons, tc.want, slices.Equal) {
+				t.Errorf("reasons %v, want %v", res.KeepReasons, tc.want)
+			}
+			if got := len(res.Keep); got != len(tc.want) || got+len(res.Remove) != len(snaps) {
+				t.Errorf("keeps %d and removes %d of %d, want %d kept", got, len(res.Remove), len(snaps), len(tc.want))
+			}
+			if err := checkSeriesKept(snaps, res.Keep); (err != nil) != (len(tc.want) == 0) {
+				t.Errorf("checkSeriesKept = %v with %d kept", err, len(tc.want))
+			}
+		})
+	}
+}

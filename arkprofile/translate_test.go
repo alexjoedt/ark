@@ -221,6 +221,7 @@ func TestSourceWithoutAPath(t *testing.T) {
 func TestForgetPolicy(t *testing.T) {
 	p := arkprofile.Profile{Forget: arkprofile.Forget{
 		KeepLast: 1, KeepHourly: 2, KeepDaily: 3, KeepWeekly: 4, KeepMonthly: 5, KeepYearly: ark.Unlimited, KeepWithin: "2d",
+		KeepTags: []string{"pinned", "db, prod", ""},
 	}}
 	got, err := p.ForgetPolicy()
 	if err != nil {
@@ -229,8 +230,9 @@ func TestForgetPolicy(t *testing.T) {
 	want := ark.ForgetPolicy{
 		KeepLast: 1, KeepHourly: 2, KeepDaily: 3, KeepWeekly: 4, KeepMonthly: 5, KeepYearly: ark.Unlimited,
 		KeepWithin: 48 * time.Hour,
+		KeepTags:   [][]string{{"pinned"}, {"db", "prod"}, {""}},
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("policy = %+v, want %+v", got, want)
 	}
 

@@ -388,6 +388,10 @@ func (r *Repository) deleteSnapshot(ctx context.Context, id string) error {
 // deletes nothing. A count of Unlimited is a rule; any other negative count
 // fails with ErrInvalidPolicy.
 //
+// A policy that keeps no snapshot of one of the series, as KeepTags alone
+// can, removes nothing of any series, in a dry run too: Forget returns
+// ErrNoSnapshotKept.
+//
 // Removing named ids without a policy reads only those manifests, and one
 // that fails with ErrCorruptManifest is still removed, reported with its ID
 // alone. This is how a corrupt manifest leaves the repository.
@@ -425,6 +429,7 @@ func (r *Repository) Forget(
 		snapshots, err = r.Snapshots(ctx, filter)
 		if err == nil {
 			result = applyForgetPolicy(snapshots, policy, cfg.loc)
+			err = checkSeriesKept(snapshots, result.Keep)
 		}
 	}
 	if err != nil {

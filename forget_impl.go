@@ -2,7 +2,9 @@ package ark
 
 import (
 	"fmt"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -85,6 +87,11 @@ func applyForgetPolicyToGroup(result *ForgetResult, snapshots []*Snapshot, polic
 	}
 
 	for nr, s := range snapshots {
+		for _, list := range policy.KeepTags {
+			if hasTags(s.Tags, list) {
+				reasons[s.ID] = append(reasons[s.ID], "has tags ["+strings.Join(list, ", ")+"]")
+			}
+		}
 		if policy.KeepWithin > 0 && s.CreatedAt.After(cutoff) {
 			reasons[s.ID] = append(reasons[s.ID], within)
 		}
@@ -118,6 +125,36 @@ func applyForgetPolicyToGroup(result *ForgetResult, snapshots []*Snapshot, polic
 			result.Remove = append(result.Remove, s)
 		}
 	}
+}
+
+// hasTags reports whether a snapshot with tags matches one KeepTags list: it
+// carries every tag of the list. As in restic, the empty tag matches a
+// snapshot without tags, whatever the list names after it.
+func hasTags(tags, list []string) bool {
+	for _, tag := range list {
+		if tag == "" && len(tags) == 0 {
+			return true
+		}
+		if !slices.Contains(tags, tag) {
+			return false
+		}
+	}
+	return true
+}
+
+// checkSeriesKept returns ErrNoSnapshotKept when a series among snapshots
+// has no snapshot in keep, naming the first such series.
+func checkSeriesKept(snapshots, keep []*Snapshot) error {
+	kept := make(map[seriesKey]bool)
+	for _, s := range keep {
+		kept[s.series()] = true
+	}
+	for _, s := range snapshots {
+		if !kept[s.series()] {
+			return fmt.Errorf("%w: %s %q of host %q", ErrNoSnapshotKept, s.SourceType, s.SourceName, s.Host)
+		}
+	}
+	return nil
 }
 
 // weekKey names the ISO week of t. The year is the ISO year, which differs

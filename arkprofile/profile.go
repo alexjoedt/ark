@@ -33,6 +33,7 @@
 //	  keep-monthly: 12
 //	  keep-yearly: unlimited         # a count, or unlimited for every period
 //	  keep-within: 30d               # a duration such as 72h or 30d
+//	  keep-tag: [pinned, "db,prod"]  # keep what is tagged pinned, or db and prod
 //	  prune: true                    # prune after the forget
 //	  run-after: echo forgotten      # the same four hooks as backup
 //
@@ -116,7 +117,11 @@ type Forget struct {
 	KeepYearly  ark.KeepCount `yaml:"keep-yearly"`
 	// KeepWithin is a duration as the CLI takes it, such as 72h or 30d.
 	KeepWithin string `yaml:"keep-within"`
-	Prune      bool   `yaml:"prune"`
+	// KeepTags holds one tag list per entry, each as the CLI takes it and
+	// [ark.ParseTagList] reads it: "db,prod" keeps what carries both tags,
+	// "" what carries none.
+	KeepTags []string `yaml:"keep-tag"`
+	Prune    bool     `yaml:"prune"`
 
 	Hooks `yaml:",inline"`
 }

@@ -161,6 +161,16 @@ func profileOnly(key, value, def string) profileValue {
 	return profileValue{key, value, "profile"}
 }
 
+// quotedList shows each tag list of forget.keep-tag in quotes, so the commas
+// inside a list and a list of the empty tag stay readable.
+func quotedList(lists []string) string {
+	quoted := make([]string, len(lists))
+	for i, l := range lists {
+		quoted[i] = strconv.Quote(l)
+	}
+	return strings.Join(quoted, ", ")
+}
+
 func profileCount(key string, n ark.KeepCount) profileValue {
 	if n == 0 {
 		return profileValue{key, "0", "default"}
@@ -208,6 +218,7 @@ func effectiveValues(root *cli.Command, lp *loadedProfile) []profileValue {
 		profileCount("forget.keep-monthly", f.KeepMonthly),
 		profileCount("forget.keep-yearly", f.KeepYearly),
 		profileOnly("forget.keep-within", f.KeepWithin, ""),
+		profileOnly("forget.keep-tag", quotedList(f.KeepTags), ""),
 		profileBool("forget.prune", f.Prune),
 	)
 	return append(values, hookValues("forget", f.Hooks)...)

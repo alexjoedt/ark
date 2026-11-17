@@ -45,6 +45,7 @@ func TestCommandSurface(t *testing.T) {
 			"keep-monthly",
 			"keep-yearly",
 			"keep-within",
+			"keep-tag",
 			"all",
 			"source",
 			"type",

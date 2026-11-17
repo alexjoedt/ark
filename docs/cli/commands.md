@@ -206,6 +206,7 @@ series among the snapshots the filters match. Chunks stay in the repository unti
 | `--keep-last N` | keep the N newest; `unlimited` keeps all |
 | `--keep-hourly N`, `--keep-daily N`, `--keep-weekly N`, `--keep-monthly N`, `--keep-yearly N` | keep the newest of N hours, days, weeks, months, years; `unlimited` keeps the newest of every one |
 | `--keep-within DURATION` | keep everything younger than DURATION, e.g. `72h`, `30d` |
+| `--keep-tag TAG[,TAG...]` | keep every snapshot that carries all tags of the list, `''` for the untagged ones; repeatable, a match of any list keeps |
 | `--all` | remove every matching snapshot; a policy that keeps nothing is refused without it |
 | `--source`, `--type`, `--tag`, `--host`, `--label` | filters, as for `ark snapshots` |
 | `--prune` | run prune afterwards |
@@ -217,6 +218,7 @@ ark forget --keep-last 3 --source /etc --prune
 ark forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6
 ark forget --keep-within 30d
 ark forget --keep-daily 7 --keep-yearly unlimited
+ark forget --keep-last 5 --keep-tag pinned
 ```
 
 A count is a whole number or the word `unlimited`: `--keep-yearly unlimited` keeps the newest
@@ -230,6 +232,21 @@ days keeps the newest of each day and the oldest snapshot, which `--json` lists 
 `oldest daily snapshot`. A series shorter than its policy so keeps its first snapshot until the
 policy is filled; with `unlimited` the oldest always stays. `--keep-last` and `--keep-within` have
 no such rule. restic selects the same way.
+
+`--keep-tag` keeps by tag instead of by age. One value is a list of tags separated by commas, and a
+snapshot has to carry all of them; give the flag again for another list, and a snapshot that matches
+any of the lists stays: `--keep-tag db,prod --keep-tag pinned` keeps what is tagged `db` and `prod`,
+and what is tagged `pinned`. Blanks around a tag are dropped, and `--keep-tag ''` keeps the
+snapshots without a tag. The rule has no count and takes none from the other rules: a tagged
+snapshot among the three newest still uses one of the three slots of `--keep-last 3`. `--json`
+lists the reason as `has tags [db, prod]`. Over a profile the flag replaces the profile's
+`keep-tag` lists.
+
+Every other rule keeps at least the newest snapshot of a series; `--keep-tag` on its own can match
+none. When the policy keeps no snapshot of one of the series, `ark forget` removes nothing, of no
+series, and exits 1 naming that series, with `--dry-run` too. Narrow the filters to the series that
+carry the tag, add a rule such as `--keep-last 1`, or remove a series on purpose with `--all` and a
+filter. restic refuses the same way.
 
 Hours, days, weeks, months and years are those of the local time zone of the machine `ark forget`
 runs on, so a backup at 00:30 belongs to the new day; set `TZ` to count in another zone. A week is

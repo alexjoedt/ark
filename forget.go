@@ -114,6 +114,30 @@ type ForgetPolicy struct {
 	// newest snapshot of the group rather than from the wall clock, so a
 	// repository that stopped receiving backups does not lose everything.
 	KeepWithin time.Duration
+
+	// KeepTags keeps every snapshot that carries all tags of at least one
+	// of its lists: {{"a", "b"}, {"c"}} keeps what is tagged a and b, and
+	// what is tagged c. The empty tag stands for no tag, so {{""}} keeps the
+	// untagged snapshots. The rule has no count and takes none from the
+	// others: a snapshot it keeps still uses a KeepLast slot. A list
+	// without a tag is refused with [ErrInvalidPolicy].
+	//
+	// Every other rule keeps at least the newest snapshot of a series, this
+	// one may keep none. Forget then removes nothing at all and returns
+	// [ErrNoSnapshotKept].
+	KeepTags [][]string
+}
+
+// ParseTagList reads one list of KeepTags from its text form, the one a
+// profile and the command line take: tags separated by commas, the blanks
+// around a tag dropped. The empty text is the list of the empty tag, which
+// matches untagged snapshots. This is restic's --keep-tag syntax.
+func ParseTagList(s string) []string {
+	tags := strings.Split(s, ",")
+	for i, tag := range tags {
+		tags[i] = strings.TrimSpace(tag)
+	}
+	return tags
 }
 
 // countedRule is one counted rule of a policy: its field name and count.
@@ -134,26 +158,32 @@ func (p ForgetPolicy) counted() [6]countedRule {
 	}
 }
 
-// validate refuses a negative count other than Unlimited.
+// validate refuses a negative count other than Unlimited, and a KeepTags
+// list without a tag, which every snapshot would match.
 func (p ForgetPolicy) validate() error {
 	for _, c := range p.counted() {
 		if c.n < Unlimited {
 			return fmt.Errorf("%w: %s is %d, want 0 or more, or Unlimited", ErrInvalidPolicy, c.name, int(c.n))
 		}
 	}
+	for i, list := range p.KeepTags {
+		if len(list) == 0 {
+			return fmt.Errorf(`%w: KeepTags[%d] names no tag, want a tag, or "" for untagged`, ErrInvalidPolicy, i)
+		}
+	}
 	return nil
 }
 
-// keepsNothing reports whether no rule of a valid p keeps a snapshot. An
-// unlimited count is a rule; a negative window keeps nothing, the same as a
-// zero one.
+// keepsNothing reports whether a valid p has no rule that keeps a snapshot.
+// An unlimited count is a rule, and so is a tag list, although it may match
+// nothing; a negative window keeps nothing, the same as a zero one.
 func (p ForgetPolicy) keepsNothing() bool {
 	for _, c := range p.counted() {
 		if c.n != 0 {
 			return false
 		}
 	}
-	return p.KeepWithin <= 0
+	return p.KeepWithin <= 0 && len(p.KeepTags) == 0
 }
 
 // ForgetResult is returned by Repository.Forget.
@@ -164,7 +194,7 @@ type ForgetResult struct {
 
 	// KeepReasons names, per kept snapshot ID, every rule that selected it,
 	// in the order the rules are applied and in restic's wording, such as
-	// "within 30d", "last snapshot" or "daily snapshot". A snapshot that is
+	// "has tags [a, b]", "within 30d", "last snapshot" or "daily snapshot". A snapshot that is
 	// not kept has no entry; when nothing is kept the map may be nil or empty.
 	KeepReasons map[string][]string
 }

@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,24 +147,100 @@ func TestParseKeepCount(t *testing.T) {
 
 // A policy in JSON holds plain numbers, and the word for Unlimited.
 func TestKeepCountJSON(t *testing.T) {
-	policy := ark.ForgetPolicy{KeepLast: 3, KeepYearly: ark.Unlimited}
+	policy := ark.ForgetPolicy{KeepLast: 3, KeepYearly: ark.Unlimited, KeepTags: [][]string{{"a", "b"}, {""}}}
 	data, err := json.Marshal(policy)
 	if err != nil || !bytes.Contains(data, []byte(`"KeepLast":3,`)) ||
-		!bytes.Contains(data, []byte(`"KeepYearly":"unlimited",`)) {
-		t.Fatalf("Marshal = %s, %v, want KeepLast 3 and KeepYearly \"unlimited\"", data, err)
+		!bytes.Contains(data, []byte(`"KeepYearly":"unlimited",`)) ||
+		!bytes.Contains(data, []byte(`"KeepTags":[["a","b"],[""]]`)) {
+		t.Fatalf("Marshal = %s, %v, want KeepLast 3, KeepYearly \"unlimited\" and the tag lists", data, err)
 	}
 	var back ark.ForgetPolicy
-	if err := json.Unmarshal(data, &back); err != nil || back != policy {
+	if err := json.Unmarshal(data, &back); err != nil || !reflect.DeepEqual(back, policy) {
 		t.Errorf("Unmarshal(%s) = %+v, %v, want %+v", data, back, err, policy)
 	}
 	in := `{"KeepLast":3,"KeepDaily":"7","KeepWeekly":null,"KeepYearly":"Unlimited"}`
 	policy.KeepDaily = 7
-	if err := json.Unmarshal([]byte(in), &back); err != nil || back != policy {
+	if err := json.Unmarshal([]byte(in), &back); err != nil || !reflect.DeepEqual(back, policy) {
 		t.Errorf("Unmarshal(%s) = %+v, %v, want %+v", in, back, err, policy)
 	}
 	for _, bad := range []string{`{"KeepLast":-1}`, `{"KeepLast":1.5}`, `{"KeepLast":"all"}`, `{"KeepLast":true}`} {
 		if err := json.Unmarshal([]byte(bad), &back); err == nil {
 			t.Errorf("Unmarshal(%s) = %+v, want an error", bad, back)
+		}
+	}
+}
+
+// A policy of tag lists alone is a policy, and the one rule that can keep
+// nothing of a series: Forget then removes nothing of any series.
+func TestForgetByTagsRefusesToEmptyASeries(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+	backup := func(name string, tags ...string) string {
+		t.Helper()
+		snap, err := repo.Backup(ctx, stubSource{name: name, content: name}, ark.WithTags(tags...))
+		if err != nil {
+			t.Fatalf("Backup: %v", err)
+		}
+		return snap.ID
+	}
+	// db is the oldest, so the newest snapshot is of a series that keeps one
+	backup("db")
+	pinned := backup("app", "pinned")
+	plain := backup("app")
+	left := func() int {
+		t.Helper()
+		snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{})
+		if err != nil {
+			t.Fatalf("Snapshots: %v", err)
+		}
+		return len(snaps)
+	}
+	policy := ark.ForgetPolicy{KeepTags: [][]string{{"pinned"}}}
+
+	// db has no pinned snapshot, so app's untagged one stays too
+	for _, opts := range [][]ark.ForgetOption{nil, {ark.WithForgetDryRun()}} {
+		res, err := repo.Forget(ctx, policy, ark.SnapshotFilter{}, opts...)
+		if !errors.Is(err, ark.ErrNoSnapshotKept) || !strings.Contains(err.Error(), `"db"`) || res != nil {
+			t.Fatalf("Forget = %+v, %v, want ErrNoSnapshotKept naming db", res, err)
+		}
+	}
+	if n := left(); n != 3 {
+		t.Fatalf("the refused Forget left %d snapshots, want 3", n)
+	}
+
+	// a list without a tag would match every snapshot
+	empty := ark.ForgetPolicy{KeepLast: 1, KeepTags: [][]string{{"pinned"}, {}}}
+	if _, err := repo.Forget(ctx, empty, ark.SnapshotFilter{}); !errors.Is(err, ark.ErrInvalidPolicy) {
+		t.Errorf("Forget with a tag list of no tag = %v, want ErrInvalidPolicy", err)
+	}
+
+	// within app the rule keeps the tagged snapshot and not the newest
+	res, err := repo.Forget(ctx, policy, ark.SnapshotFilter{Source: "app"})
+	if err != nil {
+		t.Fatalf("Forget of app: %v", err)
+	}
+	if len(res.Keep) != 1 || res.Keep[0].ID != pinned || len(res.Remove) != 1 || res.Remove[0].ID != plain {
+		t.Errorf("keeps %v and removes %v, want the pinned kept and the plain removed", res.Keep, res.Remove)
+	}
+	if got := res.KeepReasons[pinned]; !slices.Equal(got, []string{"has tags [pinned]"}) {
+		t.Errorf("reasons %v, want has tags [pinned]", got)
+	}
+	if n := left(); n != 2 {
+		t.Errorf("%d snapshots left, want 2", n)
+	}
+}
+
+func TestParseTagList(t *testing.T) {
+	for in, want := range map[string][]string{
+		"a":       {"a"},
+		"a,b":     {"a", "b"},
+		" a , b ": {"a", "b"},
+		"":        {""},
+		"a,":      {"a", ""},
+		"a b":     {"a b"},
+	} {
+		if got := ark.ParseTagList(in); !slices.Equal(got, want) {
+			t.Errorf("ParseTagList(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

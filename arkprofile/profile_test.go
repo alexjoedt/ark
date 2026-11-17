@@ -35,6 +35,7 @@ forget:
   keep-daily: 7
   keep-yearly: unlimited
   keep-within: 30d
+  keep-tag: [pinned, "db, prod", ""]
   prune: true
   run-after-fail: echo failed
 `
@@ -65,6 +66,7 @@ func TestDecodeFillsEveryField(t *testing.T) {
 			KeepDaily:  7,
 			KeepYearly: ark.Unlimited,
 			KeepWithin: "30d",
+			KeepTags:   []string{"pinned", "db, prod", ""},
 			Prune:      true,
 			Hooks:      arkprofile.Hooks{RunAfterFail: "echo failed"},
 		},
@@ -82,7 +84,7 @@ func TestDecodeReadsAKeepCountInAnyYAMLIntegerForm(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := arkprofile.Forget{KeepLast: 16, KeepDaily: 7, KeepWeekly: 1000, KeepMonthly: 7, KeepYearly: ark.Unlimited}
-	if p.Forget != want {
+	if !reflect.DeepEqual(p.Forget, want) {
 		t.Errorf("forget = %+v, want %+v", p.Forget, want)
 	}
 }
