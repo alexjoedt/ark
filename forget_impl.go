@@ -61,19 +61,19 @@ func applyForgetPolicyToGroup(snapshots []*Snapshot, policy ForgetPolicy) *Forge
 		}
 	}
 
-	markPeriod(snapshots, keep, policy.KeepHourly, func(t time.Time) time.Time {
-		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, t.Location())
+	// Period keys are plain numbers: two time.Time values of one instant are
+	// unequal as map keys when their *time.Location pointers differ.
+	markPeriod(snapshots, keep, policy.KeepHourly, func(t time.Time) [4]int {
+		return [4]int{t.Year(), int(t.Month()), t.Day(), t.Hour()}
 	})
-	markPeriod(snapshots, keep, policy.KeepDaily, func(t time.Time) time.Time {
-		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+	markPeriod(snapshots, keep, policy.KeepDaily, func(t time.Time) [3]int {
+		return [3]int{t.Year(), int(t.Month()), t.Day()}
 	})
 	markPeriod(snapshots, keep, policy.KeepWeekly, weekKey)
-	markPeriod(snapshots, keep, policy.KeepMonthly, func(t time.Time) time.Time {
-		return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
+	markPeriod(snapshots, keep, policy.KeepMonthly, func(t time.Time) [2]int {
+		return [2]int{t.Year(), int(t.Month())}
 	})
-	markPeriod(snapshots, keep, policy.KeepYearly, func(t time.Time) time.Time {
-		return time.Date(t.Year(), 1, 1, 0, 0, 0, 0, t.Location())
-	})
+	markPeriod(snapshots, keep, policy.KeepYearly, time.Time.Year)
 
 	for _, s := range snapshots {
 		if _, ok := keep[s.ID]; ok {

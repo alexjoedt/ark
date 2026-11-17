@@ -174,6 +174,35 @@ func TestKeepWeeklyAcrossYearTurns(t *testing.T) {
 	}
 }
 
+// Two times in one period must share a key even when each carries its own
+// [time.Location], as timestamps decoded with a foreign offset do. The offset
+// is +05:30 because the time package shares one Location per unnamed
+// whole-hour offset.
+func TestPeriodKeysIgnoreLocationIdentity(t *testing.T) {
+	at := func(y int, m time.Month, d, h, minute int) time.Time {
+		return time.Date(y, m, d, h, minute, 0, 0, time.FixedZone("", 5*60*60+30*60))
+	}
+	snaps := []*Snapshot{
+		{ID: "s0", CreatedAt: at(2020, 1, 2, 10, 30)},
+		{ID: "s1", CreatedAt: at(2020, 1, 2, 10, 10)},
+		{ID: "s2", CreatedAt: at(2018, 12, 1, 9, 0)},
+	}
+	policies := map[string]ForgetPolicy{
+		"hourly":  {KeepHourly: 2},
+		"daily":   {KeepDaily: 2},
+		"weekly":  {KeepWeekly: 2},
+		"monthly": {KeepMonthly: 2},
+		"yearly":  {KeepYearly: 2},
+	}
+	for name, policy := range policies {
+		t.Run(name, func(t *testing.T) {
+			if got := ids(applyForgetPolicy(snaps, policy).Keep); !slices.Equal(got, []string{"s0", "s2"}) {
+				t.Errorf("keeps %v, want [s0 s2]", got)
+			}
+		})
+	}
+}
+
 func TestWeekKeyIsDistinctPerISOWeek(t *testing.T) {
 	seen := make(map[[2]int]time.Time)
 	// 2000-01-03 is the Monday of week 1 of 2000.
