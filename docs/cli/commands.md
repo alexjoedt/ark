@@ -29,6 +29,7 @@ ark repair index            # after check or prune report a lost or damaged inde
 | [`find`](#find) | find files in snapshots by pattern |
 | [`mount`](#mount) | serve every snapshot read-only through FUSE |
 | [`inspect`](#inspect) | show one snapshot in detail |
+| [`info`](#info) | show what a repository holds |
 | [`forget`](#forget) | remove snapshots by id or policy |
 | [`prune`](#prune) | delete packs no snapshot references |
 | [`repair index`](#repair-index) | rebuild the index from the stored packs |
@@ -193,6 +194,23 @@ platforms.
 Shows one snapshot: source and type, host, time, parent, tags, file count, size with what was stored
 new and reused, deduplication and compression ratios, duration, comment and the exclude patterns it
 was taken with. `--json` adds the labels.
+
+## info
+
+`ark info [--exact]`
+
+Shows how many snapshots the repository holds, the total size of the files they cover and what the
+repository stores, split into data packs, tree packs, indexes, snapshots, keys and other objects
+(config, locks, the lost-pack marker), with the ratio of total size to stored size. The total size is
+summed over the snapshots and not deduplicated: a file in ten snapshots counts ten times, so the
+ratio grows with every unchanged backup. It reads the snapshot list and the object sizes the
+backend lists, no data, and takes no lock.
+
+`--exact` adds the bytes no snapshot uses that a prune would leave in place, from a prune dry run:
+it reads every tree and index and takes the exclusive lock, so it waits for or fails on a running
+backup like prune does. `--json` prints one object with `snapshots`, `total_size`, `stored_size`,
+`stored` (bytes per kind: `datapacks`, `treepacks`, `indexes`, `snapshots`, `keys`, `other`) and,
+with `--exact`, `bytes_unused`.
 
 ## forget
 

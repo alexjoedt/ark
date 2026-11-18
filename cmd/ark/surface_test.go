@@ -36,6 +36,7 @@ func TestCommandSurface(t *testing.T) {
 		"ls":        {"long"},
 		"find":      {"source", "type", "tag", "host"},
 		"inspect":   {},
+		"info":      {"exact"},
 		"mount":     {},
 		"forget": {
 			"keep-last",

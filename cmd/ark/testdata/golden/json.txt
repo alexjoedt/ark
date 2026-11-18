@@ -184,3 +184,36 @@ no matches
   "packs_deleted": 0
 }
 --- stderr
+=== --json info (exit 0)
+--- stdout
+{
+  "snapshots": 1,
+  "stored": {
+    "datapacks": <bytes>,
+    "indexes": <bytes>,
+    "keys": <bytes>,
+    "other": <bytes>,
+    "snapshots": <bytes>,
+    "treepacks": <bytes>
+  },
+  "stored_size": <bytes>,
+  "total_size": 10
+}
+--- stderr
+=== --json info --exact (exit 0)
+--- stdout
+{
+  "bytes_unused": 0,
+  "snapshots": 1,
+  "stored": {
+    "datapacks": <bytes>,
+    "indexes": <bytes>,
+    "keys": <bytes>,
+    "other": <bytes>,
+    "snapshots": <bytes>,
+    "treepacks": <bytes>
+  },
+  "stored_size": <bytes>,
+  "total_size": 10
+}
+--- stderr

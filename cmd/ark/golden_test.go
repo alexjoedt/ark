@@ -20,6 +20,14 @@ import (
 var (
 	volatileKey = regexp.MustCompile(`^(\s*"(id|parent_id|created_at|duration|source_name)": )"(.*)"(,?)$`)
 	clockTime   = regexp.MustCompile(`\d{4}-\d\d-\d\d[ T]\d\d:\d\d(:\d\d(\.\d+)?)?(Z|[+-]\d\d:\d\d)?`)
+	// Stored sizes of ark info: tree nodes, manifests, key files and locks
+	// hold times, so their length changes from run to run.
+	storedJSON = regexp.MustCompile(
+		`(?m)^(    "(datapacks|treepacks|indexes|snapshots|keys|other)"|  "stored_size"): \d+`,
+	)
+	storedRow = regexp.MustCompile(
+		`(?m)^(Stored:|  (data packs|tree packs|indexes|snapshots|keys|other):)(\s+)\S+ \S+$`,
+	)
 )
 
 type normalizer struct {
@@ -65,6 +73,8 @@ func (n *normalizer) apply(s string) string {
 		pairs = append(pairs, k, repl[k])
 	}
 	s = strings.NewReplacer(pairs...).Replace(strings.Join(lines, "\n"))
+	s = storedJSON.ReplaceAllString(s, "$1: <bytes>")
+	s = storedRow.ReplaceAllString(s, "$1$3<bytes>")
 	return clockTime.ReplaceAllString(s, "<time>")
 }
 
@@ -131,6 +141,8 @@ func goldenRun(t *testing.T, mode string) string {
 	step("restore", first, dest)
 	step("forget", "--keep-last", "1", "--yes")
 	step("prune", "--yes")
+	step("info")
+	step("info", "--exact")
 	return sb.String()
 }
 
