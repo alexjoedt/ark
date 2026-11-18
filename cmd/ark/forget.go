@@ -166,7 +166,10 @@ func runForget(
 		return printForget(cmd, preview)
 	}
 
-	if !p.Mode().JSON {
+	// only a question shows the list first; --yes and scripts keep the
+	// per-snapshot lines after the removal
+	asks := p.Asks()
+	if asks {
 		printRemoveLines(p, "remove", preview.Remove)
 	}
 	question := fmt.Sprintf("remove %d snapshots", len(preview.Remove))
@@ -190,15 +193,13 @@ func runForget(
 	}
 	pr.Done()
 	res.Keep, res.KeepReasons = preview.Keep, preview.KeepReasons
-	if p.Mode().JSON {
-		if err := printForget(cmd, res); err != nil {
-			return err
-		}
-	} else {
+	if asks {
 		p.Linef("removed %d snapshots, kept %d", len(res.Remove), len(res.Keep))
+	} else if err := printForget(cmd, res); err != nil {
+		return err
 	}
 	if prune {
-		return runPrune(ctx, cmd, repo, false, true)
+		return runPrune(ctx, cmd, repo, false)
 	}
 	return nil
 }

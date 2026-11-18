@@ -40,10 +40,11 @@ func countLines(out, prefix string) int {
 	return n
 }
 
-func TestForgetListsBeforeThePrompt(t *testing.T) {
+func TestForgetWithoutATerminal(t *testing.T) {
 	repo, _ := forgetListRepo(t, 3)
 
-	// a non-tty run without --yes lists, names one question and removes nothing
+	// a non-tty run without --yes names one question, lists nothing on
+	// stdout, since nothing is removed, and removes nothing
 	code, out, logs := runCaptureAll(t, "-r", repo, "forget", "--keep-last", "1", "--prune")
 	if code != 2 {
 		t.Fatalf("exit %d, want 2: %q", code, logs)
@@ -51,19 +52,20 @@ func TestForgetListsBeforeThePrompt(t *testing.T) {
 	if !strings.Contains(logs, "remove 2 snapshots and prune unreferenced data: confirmation needed") {
 		t.Fatalf("stderr %q", logs)
 	}
-	if n := countLines(out, "remove "); n != 2 || !strings.Contains(out, "(docs)") {
-		t.Fatalf("%d remove lines: %q", n, out)
+	if out != "" {
+		t.Fatalf("stdout %q", out)
 	}
 	if _, out := runCapture(t, "--json", "-r", repo, "snapshots"); strings.Count(out, `"id"`) != 3 {
 		t.Fatalf("snapshots removed before confirmation: %q", out)
 	}
 
-	// --yes: the list once, then the summary, then the prune result
+	// --yes asks nothing: each removed snapshot once after the removal, the
+	// summary, then the prune result
 	code, out = runCapture(t, "-r", repo, "forget", "--keep-last", "1", "--prune", "--yes")
 	if code != 0 {
 		t.Fatalf("exit %d: %q", code, out)
 	}
-	if countLines(out, "remove ") != 2 || countLines(out, "removed ") != 2 ||
+	if countLines(out, "remove ") != 0 || strings.Count(out, "(docs)\n") != 2 ||
 		!strings.Contains(out, "removed 2 snapshots, kept 1") ||
 		strings.Contains(out, "would") {
 		t.Fatalf("output %q", out)
@@ -73,15 +75,15 @@ func TestForgetListsBeforeThePrompt(t *testing.T) {
 	}
 }
 
-func TestForgetByIDListsBeforeThePrompt(t *testing.T) {
+func TestForgetByIDWithoutATerminal(t *testing.T) {
 	repo, ids := forgetListRepo(t, 2)
 	code, out, logs := runCaptureAll(t, "-r", repo, "forget", ids[0])
-	if code != 2 || !strings.Contains(logs, "remove 1 snapshots: confirmation needed") ||
-		!strings.Contains(out, "remove "+ids[0]) {
+	if code != 2 || !strings.Contains(logs, "remove 1 snapshots: confirmation needed") || out != "" {
 		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, logs)
 	}
 	code, out = runCapture(t, "-r", repo, "forget", "--yes", ids[0])
-	if code != 0 || strings.Count(out, ids[0]) != 1 || !strings.Contains(out, "removed 1 snapshots, kept 0") {
+	if code != 0 || !strings.Contains(out, "removed "+ids[0]) || strings.Count(out, ids[0]) != 1 ||
+		!strings.Contains(out, "removed 1 snapshots, kept 0") {
 		t.Fatalf("exit %d: %q", code, out)
 	}
 }

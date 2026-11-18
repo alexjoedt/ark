@@ -203,7 +203,7 @@ series among the snapshots the filters match. Chunks stay in the repository unti
 [Retention policies](../retention.md) for what each rule keeps, with timelines.
 
 On a terminal, `forget` lists the snapshots it will remove and then asks once. With `--prune` that
-question covers the prune too.
+question covers the prune too. With `--yes` it asks nothing and lists each snapshot after removing it.
 
 | Flag | Meaning |
 |---|---|
