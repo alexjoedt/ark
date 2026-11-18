@@ -72,10 +72,15 @@ func importCommand() *cli.Command {
 // date is still ahead of its clock, forget keeps it and leaves it out of every
 // policy rule, so a wrong clock on the machine that wrote it stays visible.
 func warnFuture(p *out.Printer, s *ark.Snapshot) {
+	p.Warnf("snapshot %s (%s) is dated in the future; until that date has passed, forget keeps it and ignores it in the policy, check the clock of the machine that wrote it",
+		out.ShortID(s.ID), timeAndHost(s))
+}
+
+// timeAndHost is the creation time of s, with its host when it has one.
+func timeAndHost(s *ark.Snapshot) string {
 	where := out.Time(s.CreatedAt)
 	if s.Host != "" {
 		where += ", host " + s.Host
 	}
-	p.Warnf("snapshot %s (%s) is dated in the future; until that date has passed, forget keeps it and ignores it in the policy, check the clock of the machine that wrote it",
-		out.ShortID(s.ID), where)
+	return where
 }

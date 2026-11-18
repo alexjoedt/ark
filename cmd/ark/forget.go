@@ -155,6 +155,12 @@ func runForget(
 	if err != nil {
 		return fmt.Errorf("forget: %w", err)
 	}
+	for _, s := range preview.Future {
+		printer(
+			cmd,
+		).Warnf("snapshot %s (%s) is dated in the future; kept and ignored by the policy, check that machine's clock",
+			out.ShortID(s.ID), timeAndHost(s))
+	}
 	if cmd.Bool("dry-run") || len(preview.Remove) == 0 {
 		return printForget(cmd, preview)
 	}
