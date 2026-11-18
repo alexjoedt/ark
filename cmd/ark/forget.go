@@ -166,13 +166,20 @@ func runForget(
 	if err := p.Confirm(fmt.Sprintf("remove %d snapshots", len(preview.Remove))); err != nil {
 		return err
 	}
+	// Remove what the prompt named, not what a second policy run picks: a
+	// snapshot dated seconds ahead can stop being in the future meanwhile.
+	named := ark.SnapshotFilter{IDs: make([]string, 0, len(preview.Remove))}
+	for _, s := range preview.Remove {
+		named.IDs = append(named.IDs, s.ID)
+	}
 	pr := startProgress(p, "forget")
-	res, err := repo.Forget(ctx, policy, filter)
+	res, err := repo.Forget(ctx, ark.ForgetPolicy{}, named)
 	if err != nil {
 		pr.Fail()
 		return fmt.Errorf("forget: %w", err)
 	}
 	pr.Done()
+	res.Keep, res.KeepReasons = preview.Keep, preview.KeepReasons
 	if err := printForget(cmd, res); err != nil {
 		return err
 	}
