@@ -102,7 +102,7 @@ func (s passwordSource) resolve(cmd *cli.Command, pp arkprofile.Profile) (insecu
 	return insecure, from, nil
 }
 
-// read resolves the passphrase from the source resolve picks, else a prompt
+// read resolves the password from the source resolve picks, else a prompt
 // on the terminal. No password from the flag, the profile or the variable
 // conflicts with every password source. confirm prompts twice.
 func (s passwordSource) read(ctx context.Context, cmd *cli.Command, confirm bool, prof *arkprofile.Profile) (ark.Password, error) {
