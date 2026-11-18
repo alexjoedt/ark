@@ -40,7 +40,7 @@ func (r *Repository) runBackup(
 		createdAt = opts.time
 	}
 	m := &manifest{
-		Version:    manifestVersion3,
+		Version:    manifestVersion,
 		ID:         newSnapshotID(),
 		ParentID:   parentID,
 		CreatedAt:  createdAt.UTC(),

@@ -174,13 +174,13 @@ func TestOpenRejectsTheFormatBeforePacks(t *testing.T) {
 	if err := Init(ctx, b, NoPassword()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	rebindConfig(t, b, func(cfg *repositoryConfig) { cfg.Version = 2 })
+	rebindConfig(t, b, func(cfg *repositoryConfig) { cfg.Version = 3 })
 
 	_, err := Open(ctx, b, NoPassword())
 	if !errors.Is(err, ErrUnsupportedFormat) {
 		t.Fatalf("Open = %v, want ErrUnsupportedFormat", err)
 	}
-	for _, want := range []string{"format version 2", "reads version 3"} {
+	for _, want := range []string{"format version 3", "reads version 1"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("Open = %q, want it to name %q", err, want)
 		}

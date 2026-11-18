@@ -12,11 +12,11 @@ import (
 	"time"
 )
 
-// manifestVersion3 is the only supported manifest format.
-const manifestVersion3 = 3
+// manifestVersion is the only supported manifest format.
+const manifestVersion = 1
 
 // manifest describes a CDC snapshot stored on disk.
-// Only v3 manifests are written; all other versions are rejected.
+// Only v1 manifests are written; all other versions are rejected.
 type manifest struct {
 	Version    int               `json:"version"`
 	ID         string            `json:"id"`
@@ -156,8 +156,8 @@ func (r *Repository) loadManifest(ctx context.Context, id string) (*manifest, er
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("%w: snapshot %s: %w", ErrCorruptManifest, id, err)
 	}
-	if m.Version != manifestVersion3 {
-		return nil, fmt.Errorf("manifest: unsupported version %d (only v3 is supported)", m.Version)
+	if m.Version != manifestVersion {
+		return nil, fmt.Errorf("manifest: unsupported version %d (only v1 is supported)", m.Version)
 	}
 	return &m, nil
 }

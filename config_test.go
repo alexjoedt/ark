@@ -71,8 +71,8 @@ func TestInitWritesTheConfigSchema(t *testing.T) {
 		t.Fatalf("config is not valid JSON: %v", err)
 	}
 
-	if cfg.Version != 3 {
-		t.Errorf("version = %d, want 3", cfg.Version)
+	if cfg.Version != 1 {
+		t.Errorf("version = %d, want 1", cfg.Version)
 	}
 	if len(cfg.ID) != 64 {
 		t.Errorf("id = %q (len %d), want 32 random bytes in hex", cfg.ID, len(cfg.ID))
@@ -219,8 +219,8 @@ func TestOpenRejectsUnknownFormats(t *testing.T) {
 	cases := map[string]string{
 		"future version":     `{"version":4,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3},"compression":"zstd"}`,
 		"missing version":    `{"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3},"compression":"zstd"}`,
-		"unknown codec":      `{"version":3,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3},"compression":"lz4"}`,
-		"impossible chunker": `{"version":3,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":9,"avg":2,"max":3},"compression":"zstd"}`,
+		"unknown codec":      `{"version":1,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3},"compression":"lz4"}`,
+		"impossible chunker": `{"version":1,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":9,"avg":2,"max":3},"compression":"zstd"}`,
 		"not json":           `this is not a repository`,
 	}
 	for name, body := range cases {

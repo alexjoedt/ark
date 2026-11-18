@@ -21,7 +21,7 @@ import (
 func importAt(t *testing.T, repo *ark.Repository, at time.Time) *ark.Snapshot {
 	t.Helper()
 	meta, err := json.Marshal(map[string]any{
-		"version": 3, "created_at": at, "source_name": "app", "source_type": ark.SourceTypeFile,
+		"version": 1, "created_at": at, "source_name": "app", "source_type": ark.SourceTypeFile,
 	})
 	if err != nil {
 		t.Fatal(err)

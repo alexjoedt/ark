@@ -1,6 +1,6 @@
 # Repository format
 
-This describes what ark stores in a repository, format version 3. The byte layout is the contract
+This describes what ark stores in a repository, format version 1. The byte layout is the contract
 of the version: a build reads and writes exactly this. The reasons behind the layout are in
 [docs/adr](adr/README.md) (0010 to 0015); what each object reveals to someone who can read the
 storage is in [SECURITY.md](SECURITY.md).
@@ -8,9 +8,10 @@ storage is in [SECURITY.md](SECURITY.md).
 ## Version
 
 The `config` object carries `version`. A build opens only its own version and refuses any other
-with `ErrUnsupportedFormat`. Format version 2 stored one object per chunk and per tree node; ark
-does not read it and does not migrate it. A version 2 repository has to be re-initialised: create
-a new repository with `ark init` and back up again.
+with `ErrUnsupportedFormat`; the message names the version found and the one this build reads.
+Version 1 is the first stable format and is frozen with `v1.1.0`: later changes are only additive
+or come with a version bump. Ark does not migrate an older format: create a new repository with
+`ark init` and back up again.
 
 ## Layout
 

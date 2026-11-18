@@ -344,12 +344,12 @@ func parseArchiveMetadata(data []byte) (*manifest, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("import: failed to parse the archive metadata: %w", err)
 	}
-	if m.Version == manifestVersion3 {
+	if m.Version == manifestVersion {
 		return &m, nil
 	}
 	if m.Version != 0 {
 		// Saved as is, it would be a manifest no reader loads and prune sweeps.
-		return nil, fmt.Errorf("import: unsupported manifest version %d (only v3 is supported)", m.Version)
+		return nil, fmt.Errorf("import: unsupported manifest version %d (only v1 is supported)", m.Version)
 	}
 
 	// No version field: an archive from before the manifest was the metadata.
@@ -362,7 +362,7 @@ func parseArchiveMetadata(data []byte) (*manifest, error) {
 	}
 
 	return &manifest{
-		Version:    manifestVersion3,
+		Version:    manifestVersion,
 		ID:         legacy.ID,
 		CreatedAt:  legacy.CreatedAt,
 		SourceName: legacy.Source.Volume,
