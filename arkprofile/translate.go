@@ -121,7 +121,7 @@ func (p *Profile) Filter() (ark.SnapshotFilter, error) {
 // Open opens the repository at repo through [arkuri.Open] with pw, applying
 // lock-wait and concurrency when set; opts come after them and win. The
 // returned repository closes the backend on Close.
-func (p *Profile) Open(ctx context.Context, pw ark.Passphrase, opts ...ark.Option) (*ark.Repository, error) {
+func (p *Profile) Open(ctx context.Context, pw ark.Password, opts ...ark.Option) (*ark.Repository, error) {
 	if p.Repo == "" {
 		return nil, invalidf("repo is empty: set it to a path, local:// or sftp:// location")
 	}

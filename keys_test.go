@@ -78,7 +78,7 @@ func deleteKeyFiles(t *testing.T, b ark.Backend) {
 	}
 }
 
-func initRepo(t *testing.T, pw ark.Passphrase) *arkmem.Backend {
+func initRepo(t *testing.T, pw ark.Password) *arkmem.Backend {
 	t.Helper()
 	b := arkmem.New()
 	if err := ark.Init(context.Background(), b, pw); err != nil {
@@ -89,16 +89,16 @@ func initRepo(t *testing.T, pw ark.Passphrase) *arkmem.Backend {
 
 func TestInitWritesOneKeyFile(t *testing.T) {
 	cases := map[string]struct {
-		pw         ark.Passphrase
+		pw         ark.Password
 		kdf        string
 		wantFields []string
 	}{
 		"password": {
-			ark.WithPassword("secret"),
+			ark.NewPassword("secret"),
 			"argon2id",
 			[]string{"version", "kdf", "time", "memory", "threads", "salt", "key"},
 		},
-		"no password": {ark.WithoutPassword(), "none", []string{"version", "kdf", "key"}},
+		"no password": {ark.NoPassword(), "none", []string{"version", "kdf", "key"}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -149,24 +149,24 @@ func TestInitWritesOneKeyFile(t *testing.T) {
 	}
 }
 
-func TestOpenChecksThePassphrase(t *testing.T) {
-	protected := initRepo(t, ark.WithPassword("secret"))
-	unprotected := initRepo(t, ark.WithoutPassword())
+func TestOpenChecksThePassword(t *testing.T) {
+	protected := initRepo(t, ark.NewPassword("secret"))
+	unprotected := initRepo(t, ark.NoPassword())
 	anyErr := errors.New("any error")
 
 	// Repositories stay open: Close would drop the shared arkmem objects.
 	cases := map[string]struct {
 		b    ark.Backend
-		pw   ark.Passphrase
+		pw   ark.Password
 		want error
 	}{
-		"right password":                 {protected, ark.WithPassword("secret"), nil},
-		"wrong password":                 {protected, ark.WithPassword("Secret"), ark.ErrWrongPassword},
-		"no password on protected":       {protected, ark.WithoutPassword(), ark.ErrPasswordRequired},
-		"no password on unprotected":     {unprotected, ark.WithoutPassword(), nil},
-		"password on unprotected":        {unprotected, ark.WithPassword("secret"), ark.ErrNotPasswordProtected},
-		"empty password on protected":    {protected, ark.WithPassword(""), anyErr},
-		"zero passphrase on unprotected": {unprotected, ark.Passphrase{}, anyErr},
+		"right password":                 {protected, ark.NewPassword("secret"), nil},
+		"wrong password":                 {protected, ark.NewPassword("Secret"), ark.ErrWrongPassword},
+		"no password on protected":       {protected, ark.NoPassword(), ark.ErrPasswordRequired},
+		"no password on unprotected":     {unprotected, ark.NoPassword(), nil},
+		"password on unprotected":        {unprotected, ark.NewPassword("secret"), ark.ErrNotPasswordProtected},
+		"empty password on protected":    {protected, ark.NewPassword(""), anyErr},
+		"zero passphrase on unprotected": {unprotected, ark.Password{}, anyErr},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -183,8 +183,8 @@ func TestOpenChecksThePassphrase(t *testing.T) {
 	}
 }
 
-func TestInitRejectsAnEmptyPassphrase(t *testing.T) {
-	for name, pw := range map[string]ark.Passphrase{"empty": ark.WithPassword(""), "zero": {}} {
+func TestInitRejectsAnEmptyPassword(t *testing.T) {
+	for name, pw := range map[string]ark.Password{"empty": ark.NewPassword(""), "zero": {}} {
 		t.Run(name, func(t *testing.T) {
 			b := arkmem.New()
 			if err := ark.Init(context.Background(), b, pw); err == nil {
@@ -201,8 +201,8 @@ func TestInitRejectsAnEmptyPassphrase(t *testing.T) {
 }
 
 func TestWrongPasswordReadsOnlyConfigAndKeys(t *testing.T) {
-	b := &readBackend{Backend: initRepo(t, ark.WithPassword("secret"))}
-	if _, err := ark.Open(context.Background(), b, ark.WithPassword("wrong")); !errors.Is(err, ark.ErrWrongPassword) {
+	b := &readBackend{Backend: initRepo(t, ark.NewPassword("secret"))}
+	if _, err := ark.Open(context.Background(), b, ark.NewPassword("wrong")); !errors.Is(err, ark.ErrWrongPassword) {
 		t.Fatalf("Open = %v, want ark.ErrWrongPassword", err)
 	}
 	for _, h := range b.reads {
@@ -214,7 +214,7 @@ func TestWrongPasswordReadsOnlyConfigAndKeys(t *testing.T) {
 
 func TestKeyFileDoesNotOpenElsewhere(t *testing.T) {
 	ctx := context.Background()
-	pw := ark.WithPassword("secret")
+	pw := ark.NewPassword("secret")
 
 	t.Run("other repository", func(t *testing.T) {
 		donor := initRepo(t, pw)
@@ -229,7 +229,7 @@ func TestKeyFileDoesNotOpenElsewhere(t *testing.T) {
 		}
 	})
 	t.Run("other repository next to the own key", func(t *testing.T) {
-		other := ark.WithPassword("other secret")
+		other := ark.NewPassword("other secret")
 		donor := initRepo(t, other)
 		name, body := onlyKeyFile(t, donor)
 		b := initRepo(t, pw)
@@ -250,7 +250,7 @@ func TestKeyFileDoesNotOpenElsewhere(t *testing.T) {
 		}
 	})
 	t.Run("tampered", func(t *testing.T) {
-		for _, pw := range []ark.Passphrase{pw, ark.WithoutPassword()} {
+		for _, pw := range []ark.Password{pw, ark.NoPassword()} {
 			b := initRepo(t, pw)
 			name, body := onlyKeyFile(t, b)
 			var kf map[string]any
@@ -284,13 +284,13 @@ func TestOpenRejectsUnknownKeyFiles(t *testing.T) {
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
-			b := initRepo(t, ark.WithoutPassword())
+			b := initRepo(t, ark.NoPassword())
 			deleteKeyFiles(t, b)
 			putObject(t, b, ark.KeyFile, "k", []byte(body))
 			if _, err := ark.Open(
 				context.Background(),
 				b,
-				ark.WithoutPassword(),
+				ark.NoPassword(),
 			); !errors.Is(
 				err,
 				ark.ErrUnsupportedFormat,
@@ -301,12 +301,12 @@ func TestOpenRejectsUnknownKeyFiles(t *testing.T) {
 	}
 
 	t.Run("no key file", func(t *testing.T) {
-		b := initRepo(t, ark.WithoutPassword())
+		b := initRepo(t, ark.NoPassword())
 		deleteKeyFiles(t, b)
 		if _, err := ark.Open(
 			context.Background(),
 			b,
-			ark.WithoutPassword(),
+			ark.NoPassword(),
 		); !errors.Is(
 			err,
 			ark.ErrUnsupportedFormat,
@@ -317,7 +317,7 @@ func TestOpenRejectsUnknownKeyFiles(t *testing.T) {
 }
 
 func TestOpenTriesAtMostTwentyKeyFiles(t *testing.T) {
-	pw := ark.WithPassword("secret")
+	pw := ark.NewPassword("secret")
 	_, foreign := onlyKeyFile(t, initRepo(t, pw))
 	mem := initRepo(t, pw)
 	deleteKeyFiles(t, mem)
@@ -340,8 +340,8 @@ func TestOpenTriesAtMostTwentyKeyFiles(t *testing.T) {
 	}
 }
 
-func TestPassphraseHidesThePassword(t *testing.T) {
-	pw := ark.WithPassword("hunter2")
+func TestPasswordHidesThePassword(t *testing.T) {
+	pw := ark.NewPassword("hunter2")
 	for _, format := range []string{"%v", "%+v", "%#v", "%s"} {
 		if got := fmt.Sprintf(format, pw); strings.Contains(got, "hunter2") {
 			t.Errorf("Sprintf(%q) = %q, shows the password", format, got)
@@ -370,10 +370,10 @@ func (b *keyFaults) Delete(ctx context.Context, h ark.Handle) error {
 }
 
 func TestChangePassword(t *testing.T) {
-	cases := map[string]struct{ from, to, wrong ark.Passphrase }{
-		"new password":      {ark.WithPassword("old"), ark.WithPassword("new"), ark.WithPassword("old")},
-		"drop the password": {ark.WithPassword("old"), ark.WithoutPassword(), ark.WithPassword("old")},
-		"add a password":    {ark.WithoutPassword(), ark.WithPassword("new"), ark.WithoutPassword()},
+	cases := map[string]struct{ from, to, wrong ark.Password }{
+		"new password":      {ark.NewPassword("old"), ark.NewPassword("new"), ark.NewPassword("old")},
+		"drop the password": {ark.NewPassword("old"), ark.NoPassword(), ark.NewPassword("old")},
+		"add a password":    {ark.NoPassword(), ark.NewPassword("new"), ark.NoPassword()},
 	}
 	wantWrong := map[string]error{
 		"new password":      ark.ErrWrongPassword,
@@ -421,14 +421,14 @@ func TestChangePassword(t *testing.T) {
 
 func TestChangePasswordRejectsAnEmptyPassword(t *testing.T) {
 	ctx := context.Background()
-	b := initRepo(t, ark.WithPassword("old"))
+	b := initRepo(t, ark.NewPassword("old"))
 	before, _ := onlyKeyFile(t, b)
-	repo, err := ark.Open(ctx, b, ark.WithPassword("old"))
+	repo, err := ark.Open(ctx, b, ark.NewPassword("old"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 
-	if err := repo.ChangePassword(ctx, ark.WithPassword("")); err == nil {
+	if err := repo.ChangePassword(ctx, ark.NewPassword("")); err == nil {
 		t.Fatal("ChangePassword accepted an empty password")
 	}
 	if after, _ := onlyKeyFile(t, b); after != before {
@@ -438,30 +438,30 @@ func TestChangePasswordRejectsAnEmptyPassword(t *testing.T) {
 
 func TestChangePasswordKeepsTheOldKeyFileOnFailure(t *testing.T) {
 	ctx := context.Background()
-	b := &keyFaults{Backend: initRepo(t, ark.WithPassword("old"))}
-	repo, err := ark.Open(ctx, b, ark.WithPassword("old"))
+	b := &keyFaults{Backend: initRepo(t, ark.NewPassword("old"))}
+	repo, err := ark.Open(ctx, b, ark.NewPassword("old"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 
 	b.failPut = true
-	if err := repo.ChangePassword(ctx, ark.WithPassword("new")); err == nil {
+	if err := repo.ChangePassword(ctx, ark.NewPassword("new")); err == nil {
 		t.Fatal("ChangePassword with a failing write returned no error")
 	}
 	onlyKeyFile(t, b)
-	if _, err := ark.Open(ctx, b, ark.WithPassword("old")); err != nil {
+	if _, err := ark.Open(ctx, b, ark.NewPassword("old")); err != nil {
 		t.Errorf("Open with the old password after a failed write: %v", err)
 	}
 
 	// A failed delete leaves both key files, and Open tries each of them.
 	b.failPut, b.failDelete = false, true
-	if err := repo.ChangePassword(ctx, ark.WithPassword("new")); err == nil {
+	if err := repo.ChangePassword(ctx, ark.NewPassword("new")); err == nil {
 		t.Fatal("ChangePassword with a failing delete returned no error")
 	}
 	if n := len(keyFiles(t, b)); n != 2 {
 		t.Fatalf("repository has %d key files after a failed delete, want 2", n)
 	}
-	for _, pw := range []ark.Passphrase{ark.WithPassword("old"), ark.WithPassword("new")} {
+	for _, pw := range []ark.Password{ark.NewPassword("old"), ark.NewPassword("new")} {
 		if _, err := ark.Open(ctx, b, pw); err != nil {
 			t.Errorf("Open %v with two key files: %v", pw, err)
 		}

@@ -28,7 +28,7 @@ keeps its own keys beside it. Decoding is strict: an unknown key, a key given tw
 document, an empty file and a value of the wrong kind fail with the line and the field path, such
 as `line 4: backup.pahts: unknown field`. The YAML library gives the line but not the path, so
 `Decode` parses into a node tree and walks it against the struct's fields. A `password:` key fails
-by name: a profile holds no password, only `password-file` or `password-env`, and `Passphrase`
+by name: a profile holds no password, only `password-file` or `password-env`, and `Password`
 never falls back to `ARK_*` variables, so the environment of whoever runs the profile cannot
 change which password it uses. `Load` refuses a file writable by group or others or owned by
 someone other than the caller and root, since a profile names commands the hooks run; there is
@@ -56,5 +56,5 @@ A profile file is a format to keep: renaming a key breaks users' files, and v0 i
 where that is allowed. Tests in `arkprofile/profile_test.go` pin the error texts
 (`TestDecodeRejects`), the embedding struct (`TestDecodeIntoAStructEmbeddingAProfile`), the file
 checks (`TestLoad`, `TestCheckFileRefusesAForeignOwner`) and the password order
-(`TestPassphrase`). Strictness reaches nested structs only; a map or a list of structs added by an
+(`TestPassword`). Strictness reaches nested structs only; a map or a list of structs added by an
 embedder decodes as YAML has it. The parser adds about 344 KiB to the CLI binary.

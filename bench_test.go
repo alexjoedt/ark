@@ -98,10 +98,10 @@ func benchRepo(b *testing.B) *ark.Repository {
 func benchRepoOn(b *testing.B, backend ark.Backend) *ark.Repository {
 	b.Helper()
 	ctx := context.Background()
-	if err := ark.Init(ctx, backend, ark.WithoutPassword()); err != nil {
+	if err := ark.Init(ctx, backend, ark.NoPassword()); err != nil {
 		b.Fatalf("Init: %v", err)
 	}
-	repo, err := ark.Open(ctx, backend, ark.WithoutPassword(), ark.WithLogger(slog.New(slog.DiscardHandler)))
+	repo, err := ark.Open(ctx, backend, ark.NoPassword(), ark.WithLogger(slog.New(slog.DiscardHandler)))
 	if err != nil {
 		b.Fatalf("Open: %v", err)
 	}

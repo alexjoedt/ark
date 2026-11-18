@@ -105,38 +105,38 @@ func (s passwordSource) resolve(cmd *cli.Command, pp arkprofile.Profile) (insecu
 // read resolves the passphrase from the source resolve picks, else a prompt
 // on the terminal. No password from the flag, the profile or the variable
 // conflicts with every password source. confirm prompts twice.
-func (s passwordSource) read(ctx context.Context, cmd *cli.Command, confirm bool, prof *arkprofile.Profile) (ark.Passphrase, error) {
+func (s passwordSource) read(ctx context.Context, cmd *cli.Command, confirm bool, prof *arkprofile.Profile) (ark.Password, error) {
 	var pp arkprofile.Profile
 	if prof != nil {
 		pp = *prof
 	}
 	insecure, from, err := s.resolve(cmd, pp)
 	if err != nil {
-		return ark.Passphrase{}, err
+		return ark.Password{}, err
 	}
 	if insecure.label != "" && from.label != "" {
-		return ark.Passphrase{}, exitcode.Usagef("%s conflicts with %s", insecure.label, from.label)
+		return ark.Password{}, exitcode.Usagef("%s conflicts with %s", insecure.label, from.label)
 	}
 
 	switch {
 	case insecure.label != "":
-		return ark.WithoutPassword(), nil
+		return ark.NoPassword(), nil
 	case from.layer == "profile":
-		return profilePassphrase(prof)
+		return profilePassword(prof)
 	case from.file != "":
 		pw, err := readPasswordFile(from.file)
 		if err != nil {
-			return ark.Passphrase{}, err
+			return ark.Password{}, err
 		}
-		return ark.WithPassword(pw), nil
+		return ark.NewPassword(pw), nil
 	case from.command != "":
 		pw, err := runPasswordCommand(ctx, from.command)
 		if err != nil {
-			return ark.Passphrase{}, err
+			return ark.Password{}, err
 		}
-		return ark.WithPassword(pw), nil
+		return ark.NewPassword(pw), nil
 	case from.label != "":
-		return ark.WithPassword(os.Getenv(s.envVar)), nil
+		return ark.NewPassword(os.Getenv(s.envVar)), nil
 	}
 
 	fd := int(os.Stdin.Fd())
@@ -145,7 +145,7 @@ func (s passwordSource) read(ctx context.Context, cmd *cli.Command, confirm bool
 		if s.commandFlag != "" {
 			flags += ", --" + s.commandFlag
 		}
-		return ark.Passphrase{}, exitcode.Usagef(
+		return ark.Password{}, exitcode.Usagef(
 			"no %s given: set %s or %s, or pass --%s for a repository without one",
 			s.prompt,
 			flags,
@@ -155,18 +155,18 @@ func (s passwordSource) read(ctx context.Context, cmd *cli.Command, confirm bool
 	}
 	pw, err := promptPassword(fd, "Enter "+s.prompt+": ")
 	if err != nil {
-		return ark.Passphrase{}, err
+		return ark.Password{}, err
 	}
 	if confirm {
 		again, err := promptPassword(fd, "Repeat "+s.prompt+": ")
 		if err != nil {
-			return ark.Passphrase{}, err
+			return ark.Password{}, err
 		}
 		if again != pw {
-			return ark.Passphrase{}, exitcode.Usagef("passwords do not match")
+			return ark.Password{}, exitcode.Usagef("passwords do not match")
 		}
 	}
-	return ark.WithPassword(pw), nil
+	return ark.NewPassword(pw), nil
 }
 
 // readPasswordFile reads the file as a profile's password-file is read; an

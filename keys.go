@@ -14,42 +14,42 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// Passphrase is the password of a repository, or the explicit statement that
-// it has none. WithPassword and WithoutPassword are its only constructors; the
+// Password is the password of a repository, or the explicit statement that
+// it has none. NewPassword and NoPassword are its only constructors; the
 // zero value is rejected by Init and Open. The package documentation, section
 // Passwords, describes what the password protects and what it does not.
-type Passphrase struct {
+type Password struct {
 	password string
 	none     bool
 }
 
-// WithPassword returns the passphrase for a password protected repository.
-// An empty password is rejected by Init and Open; use WithoutPassword.
-func WithPassword(password string) Passphrase {
-	return Passphrase{password: password}
+// NewPassword returns the Password for a password protected repository.
+// An empty password is rejected by Init and Open; use NoPassword.
+func NewPassword(password string) Password {
+	return Password{password: password}
 }
 
-// WithoutPassword returns the passphrase for a repository without a password.
+// NoPassword returns the Password for a repository without a password.
 // Its master key is stored unprotected: anyone with access to the backend can
 // read and forge its contents, only corruption is still detected.
-func WithoutPassword() Passphrase {
-	return Passphrase{none: true}
+func NoPassword() Password {
+	return Password{none: true}
 }
 
 // String never reveals the password.
-func (p Passphrase) String() string {
+func (p Password) String() string {
 	if p.none {
-		return "ark.WithoutPassword()"
+		return "ark.NoPassword()"
 	}
-	return "ark.WithPassword(redacted)"
+	return "ark.NewPassword(redacted)"
 }
 
 // GoString keeps %#v from printing the password.
-func (p Passphrase) GoString() string { return p.String() }
+func (p Password) GoString() string { return p.String() }
 
-func (p Passphrase) validate() error {
+func (p Password) validate() error {
 	if !p.none && p.password == "" {
-		return errors.New("ark: empty password, use ark.WithoutPassword() for a repository without one")
+		return errors.New("ark: empty password, use ark.NoPassword() for a repository without one")
 	}
 	return nil
 }
@@ -139,7 +139,7 @@ func newMasterKey(repoID string) *masterKey {
 
 // putKeyFile seals mk under pw into a new key file with a random name and
 // returns that name.
-func putKeyFile(ctx context.Context, b Backend, codec *objectCodec, mk *masterKey, pw Passphrase) (string, error) {
+func putKeyFile(ctx context.Context, b Backend, codec *objectCodec, mk *masterKey, pw Password) (string, error) {
 	h := Handle{Type: KeyFile, Name: randomHex(keyFileNameBytes)}
 
 	kf := keyFile{Version: keyFileVersion, KDF: kdfNone}
@@ -193,7 +193,7 @@ func loadMasterKey(
 	b Backend,
 	codec *objectCodec,
 	data []byte,
-	pw Passphrase,
+	pw Password,
 ) (*masterKey, string, error) {
 	var names []string
 	err := b.List(ctx, KeyFile, func(info BlobInfo) error {
@@ -315,7 +315,7 @@ func readKeyFile(ctx context.Context, b Backend, name string) (*keyFile, error) 
 // open unseals the master key of kf, the key file name, under pw. It returns
 // nil when the key does not open; a wrong password and a tampered key are
 // indistinguishable by design.
-func (kf *keyFile) open(codec *objectCodec, name string, pw Passphrase) *masterKey {
+func (kf *keyFile) open(codec *objectCodec, name string, pw Password) *masterKey {
 	sealed, err := hex.DecodeString(kf.Key)
 	if err != nil {
 		return nil

@@ -230,7 +230,7 @@ func TestDurabilityBarriers(t *testing.T) {
 		t.Fatalf("idle Prune synced %v, want once", s)
 	}
 
-	if err := repo.ChangePassword(ctx, ark.WithPassword("another one")); err != nil {
+	if err := repo.ChangePassword(ctx, ark.NewPassword("another one")); err != nil {
 		t.Fatalf("ChangePassword: %v", err)
 	}
 	if s := b.take(); len(s) != 1 || s[0][ark.KeyFile] != 2 {

@@ -120,11 +120,11 @@ func TestOpenTakesChunkerParametersFromTheConfig(t *testing.T) {
 	if want == chunker.DefaultConfig() {
 		t.Fatal("the test parameters equal the code defaults, pick different ones")
 	}
-	if err := Init(ctx, b, WithoutPassword(), WithChunkerConfig(want)); err != nil {
+	if err := Init(ctx, b, NoPassword(), WithChunkerConfig(want)); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
-	repo, err := Open(ctx, b, WithoutPassword())
+	repo, err := Open(ctx, b, NoPassword())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestOpenTakesChunkerParametersFromTheConfig(t *testing.T) {
 func TestOpenDefaultRepositoryUsesTheWrittenDefaults(t *testing.T) {
 	ctx := context.Background()
 	b := newStubBackend()
-	if err := Init(ctx, b, WithoutPassword()); err != nil {
+	if err := Init(ctx, b, NoPassword()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
@@ -151,7 +151,7 @@ func TestOpenDefaultRepositoryUsesTheWrittenDefaults(t *testing.T) {
 	stored := chunkerParams{Min: 1 << 16, Avg: 1 << 19, Max: 1 << 21}
 	rebindConfig(t, b, func(cfg *repositoryConfig) { cfg.Chunker = stored })
 
-	repo, err := Open(ctx, b, WithoutPassword())
+	repo, err := Open(ctx, b, NoPassword())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -171,12 +171,12 @@ func TestOpenDefaultRepositoryUsesTheWrittenDefaults(t *testing.T) {
 func TestOpenRejectsTheFormatBeforePacks(t *testing.T) {
 	ctx := context.Background()
 	b := newStubBackend()
-	if err := Init(ctx, b, WithoutPassword()); err != nil {
+	if err := Init(ctx, b, NoPassword()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	rebindConfig(t, b, func(cfg *repositoryConfig) { cfg.Version = 2 })
 
-	_, err := Open(ctx, b, WithoutPassword())
+	_, err := Open(ctx, b, NoPassword())
 	if !errors.Is(err, ErrUnsupportedFormat) {
 		t.Fatalf("Open = %v, want ErrUnsupportedFormat", err)
 	}
@@ -193,7 +193,7 @@ func TestOpenRejectsTheFormatBeforePacks(t *testing.T) {
 func rebindConfig(t *testing.T, b Backend, change func(*repositoryConfig)) {
 	t.Helper()
 	ctx := context.Background()
-	repo, err := Open(ctx, b, WithoutPassword())
+	repo, err := Open(ctx, b, NoPassword())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -215,7 +215,7 @@ func rebindConfig(t *testing.T, b Backend, change func(*repositoryConfig)) {
 		t.Fatalf("write config: %v", err)
 	}
 	repo.key.ConfigHash = configHash(data)
-	if _, err := putKeyFile(ctx, b, repo.codec, repo.key, WithoutPassword()); err != nil {
+	if _, err := putKeyFile(ctx, b, repo.codec, repo.key, NoPassword()); err != nil {
 		t.Fatalf("putKeyFile: %v", err)
 	}
 	if err := b.Delete(ctx, Handle{Type: KeyFile, Name: repo.keyName}); err != nil {
@@ -229,10 +229,10 @@ func rebindConfig(t *testing.T, b Backend, change func(*repositoryConfig)) {
 func TestOpenRejectsAMasterKeyWithoutConfigHash(t *testing.T) {
 	ctx := context.Background()
 	b := newStubBackend()
-	if err := Init(ctx, b, WithoutPassword()); err != nil {
+	if err := Init(ctx, b, NoPassword()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	repo, err := Open(ctx, b, WithoutPassword())
+	repo, err := Open(ctx, b, NoPassword())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestOpenRejectsAMasterKeyWithoutConfigHash(t *testing.T) {
 		t.Fatalf("put key file: %v", err)
 	}
 
-	if _, err := Open(ctx, b, WithoutPassword()); !errors.Is(err, ErrUnsupportedFormat) {
+	if _, err := Open(ctx, b, NoPassword()); !errors.Is(err, ErrUnsupportedFormat) {
 		t.Errorf("Open = %v, want ErrUnsupportedFormat", err)
 	}
 }

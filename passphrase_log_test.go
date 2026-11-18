@@ -10,10 +10,10 @@ import (
 	"github.com/alexjoedt/ark/arkmem"
 )
 
-// TestPassphraseNeverInTheLogs runs Init, Open, ChangePassword and a failed
+// TestPasswordNeverInTheLogs runs Init, Open, ChangePassword and a failed
 // Open with a debug logger, on the repository and as the default, and looks
 // for either passphrase in everything logged.
-func TestPassphraseNeverInTheLogs(t *testing.T) {
+func TestPasswordNeverInTheLogs(t *testing.T) {
 	const pw, next = "hunter2-old-passphrase", "hunter2-new-passphrase"
 	ctx := t.Context()
 
@@ -24,18 +24,18 @@ func TestPassphraseNeverInTheLogs(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	b := arkmem.New()
-	if err := ark.Init(ctx, b, ark.WithPassword(pw)); err != nil {
+	if err := ark.Init(ctx, b, ark.NewPassword(pw)); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	repo, err := ark.Open(ctx, b, ark.WithPassword(pw), ark.WithLogger(logger))
+	repo, err := ark.Open(ctx, b, ark.NewPassword(pw), ark.WithLogger(logger))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer repo.Close()
-	if err := repo.ChangePassword(ctx, ark.WithPassword(next)); err != nil {
+	if err := repo.ChangePassword(ctx, ark.NewPassword(next)); err != nil {
 		t.Fatalf("ChangePassword: %v", err)
 	}
-	failed, err := ark.Open(ctx, b, ark.WithPassword(pw), ark.WithLogger(logger))
+	failed, err := ark.Open(ctx, b, ark.NewPassword(pw), ark.WithLogger(logger))
 	if err == nil {
 		failed.Close()
 		t.Fatal("Open with the replaced passphrase succeeded")

@@ -107,10 +107,10 @@ func (s excludingMetaSource) Meta() ark.SourceMeta {
 func TestBackendHoldsNoPlaintext(t *testing.T) {
 	for _, tt := range []struct {
 		name string
-		pw   ark.Passphrase
+		pw   ark.Password
 	}{
 		{"password", testPassword},
-		{"without password", ark.WithoutPassword()},
+		{"without password", ark.NoPassword()},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -216,7 +216,7 @@ func TestBackendHoldsNoPlaintext(t *testing.T) {
 // error. Open never succeeds and never panics.
 func TestEveryFlippedKeyFileByteFailsOpen(t *testing.T) {
 	ctx := context.Background()
-	for _, pw := range []ark.Passphrase{testPassword, ark.WithoutPassword()} {
+	for _, pw := range []ark.Password{testPassword, ark.NoPassword()} {
 		b := initRepo(t, pw)
 		name, body := onlyKeyFile(t, b)
 		var kf struct{ Key string }

@@ -15,10 +15,10 @@ import (
 func ExampleFind() {
 	ctx := context.Background()
 	b := arkmem.New()
-	if err := ark.Init(ctx, b, ark.WithoutPassword()); err != nil {
+	if err := ark.Init(ctx, b, ark.NoPassword()); err != nil {
 		panic(err)
 	}
-	repo, err := ark.Open(ctx, b, ark.WithoutPassword())
+	repo, err := ark.Open(ctx, b, ark.NoPassword())
 	if err != nil {
 		panic(err)
 	}

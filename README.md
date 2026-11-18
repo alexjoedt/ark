@@ -60,7 +60,7 @@ b, err := arklocal.New("/srv/ark")
 if err != nil {
 	return err
 }
-pw := ark.WithPassword(os.Getenv("ARK_PASSWORD"))
+pw := ark.NewPassword(os.Getenv("ARK_PASSWORD"))
 if err := ark.Init(ctx, b, pw); err != nil && !errors.Is(err, ark.ErrAlreadyInitialized) {
 	return err
 }

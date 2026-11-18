@@ -14,11 +14,11 @@ import (
 func TestBackupLogNamesSourceAndHost(t *testing.T) {
 	ctx := context.Background()
 	b := arkmem.New()
-	if err := ark.Init(ctx, b, ark.WithoutPassword()); err != nil {
+	if err := ark.Init(ctx, b, ark.NoPassword()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	var buf bytes.Buffer
-	repo, err := ark.Open(ctx, b, ark.WithoutPassword(), ark.WithLogger(slog.New(slog.NewJSONHandler(&buf, nil))))
+	repo, err := ark.Open(ctx, b, ark.NoPassword(), ark.WithLogger(slog.New(slog.NewJSONHandler(&buf, nil))))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

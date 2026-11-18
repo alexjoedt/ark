@@ -43,7 +43,7 @@ import (
 
 // testPassword protects the repositories of the scenario list and the helpers
 // it points at. TestMain lowers argon2id, so it costs nothing.
-var testPassword = ark.WithPassword("ark-test")
+var testPassword = ark.NewPassword("ark-test")
 
 // scenarioMaxChunk is the maximum chunk size the scenario repositories use.
 // It is small so "larger than the max chunk" costs kilobytes, not megabytes.

@@ -58,10 +58,10 @@ func lockRepo(t *testing.T, opts ...Option) (*Repository, *stubBackend, *testClo
 	t.Helper()
 	ctx := context.Background()
 	b := newStubBackend()
-	if err := Init(ctx, b, WithPassword("ark-test")); err != nil {
+	if err := Init(ctx, b, NewPassword("ark-test")); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	repo, err := Open(ctx, b, WithPassword("ark-test"), opts...)
+	repo, err := Open(ctx, b, NewPassword("ark-test"), opts...)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -480,10 +480,10 @@ func TestOperationAbortsWhenTheLockCannotBeRefreshed(t *testing.T) {
 	ctx := context.Background()
 
 	b := &failingLocks{stubBackend: newStubBackend()}
-	if err := Init(ctx, b, WithPassword("ark-test")); err != nil {
+	if err := Init(ctx, b, NewPassword("ark-test")); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	repo, err := Open(ctx, b, WithPassword("ark-test"))
+	repo, err := Open(ctx, b, NewPassword("ark-test"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

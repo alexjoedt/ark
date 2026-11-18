@@ -67,7 +67,7 @@ func main() {
 }
 
 func run(ctx context.Context, p *arkprofile.Profile) error {
-	pw, err := p.Passphrase()
+	pw, err := p.Password()
 	if err != nil {
 		return err
 	}
@@ -110,7 +110,7 @@ func run(ctx context.Context, p *arkprofile.Profile) error {
 	return nil
 }
 
-func initRepo(ctx context.Context, uri string, pw ark.Passphrase) error {
+func initRepo(ctx context.Context, uri string, pw ark.Password) error {
 	b, err := arkuri.Open(ctx, uri)
 	if err != nil {
 		return err

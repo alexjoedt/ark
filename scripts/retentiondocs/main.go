@@ -261,7 +261,7 @@ func forget(ctx context.Context, history []snap, policies ...ark.ForgetPolicy) (
 			err = errors.Join(err, fmt.Errorf("closing the repository: %w", cerr))
 		}
 	}()
-	if err := ark.Init(ctx, b, ark.WithoutPassword()); err != nil {
+	if err := ark.Init(ctx, b, ark.NoPassword()); err != nil {
 		return nil, fmt.Errorf("initializing the repository: %w", err)
 	}
 
@@ -306,7 +306,7 @@ type keepOpen struct{ ark.Backend }
 func (keepOpen) Close() error { return nil }
 
 func backup(ctx context.Context, b ark.Backend, h snap) (id string, err error) {
-	repo, err := ark.Open(ctx, b, ark.WithoutPassword())
+	repo, err := ark.Open(ctx, b, ark.NoPassword())
 	if err != nil {
 		return "", fmt.Errorf("opening the repository: %w", err)
 	}
@@ -324,7 +324,7 @@ func backup(ctx context.Context, b ark.Backend, h snap) (id string, err error) {
 }
 
 func dryRun(ctx context.Context, b ark.Backend, policy ark.ForgetPolicy) (result *ark.ForgetResult, err error) {
-	repo, err := ark.Open(ctx, b, ark.WithoutPassword())
+	repo, err := ark.Open(ctx, b, ark.NoPassword())
 	if err != nil {
 		return nil, fmt.Errorf("opening the repository: %w", err)
 	}

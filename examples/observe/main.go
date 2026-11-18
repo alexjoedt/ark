@@ -39,7 +39,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 	backend := ark.Instrument(local)
-	if err := ark.Init(ctx, backend, ark.WithoutPassword()); err != nil {
+	if err := ark.Init(ctx, backend, ark.NoPassword()); err != nil {
 		return err
 	}
 	// Per-chunk and per-file events go to Debug; Info gets the first event
@@ -50,7 +50,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}
 	var mu sync.Mutex
 	seen := map[opPhase]bool{}
-	repo, err := ark.Open(ctx, backend, ark.WithoutPassword(),
+	repo, err := ark.Open(ctx, backend, ark.NoPassword(),
 		ark.WithLogger(logger),
 		ark.WithProgress(func(e ark.ProgressEvent) {
 			key := opPhase{e.Operation, e.Phase}

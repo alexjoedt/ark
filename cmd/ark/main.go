@@ -314,7 +314,7 @@ func concurrencySetting(root *cli.Command, lp *loadedProfile) (int, string) {
 
 // readRepoPassword resolves the repository password with the profile's
 // source between the flags and the variables.
-func readRepoPassword(ctx context.Context, cmd *cli.Command, confirm bool) (ark.Passphrase, error) {
+func readRepoPassword(ctx context.Context, cmd *cli.Command, confirm bool) (ark.Password, error) {
 	var prof *arkprofile.Profile
 	if lp := profileFrom(ctx); lp != nil {
 		prof = lp.Profile

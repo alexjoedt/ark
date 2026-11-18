@@ -54,7 +54,7 @@ func TestReplayedLockIsHonouredUntilItIsStale(t *testing.T) {
 func TestReplayedConfigOpensOnlyWithItsKeyFile(t *testing.T) {
 	ctx := context.Background()
 	b := newStubBackend()
-	if err := Init(ctx, b, WithoutPassword()); err != nil {
+	if err := Init(ctx, b, NoPassword()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	cfgHandle := Handle{Type: ConfigFile, Name: configName}
@@ -67,7 +67,7 @@ func TestReplayedConfigOpensOnlyWithItsKeyFile(t *testing.T) {
 	oldKeyData := readObject(t, b, oldKey)
 
 	rebindConfig(t, b, func(cfg *repositoryConfig) { cfg.Chunker.Min++ })
-	repo, err := Open(ctx, b, WithoutPassword())
+	repo, err := Open(ctx, b, NoPassword())
 	if err != nil {
 		t.Fatalf("Open after the change: %v", err)
 	}
@@ -76,14 +76,14 @@ func TestReplayedConfigOpensOnlyWithItsKeyFile(t *testing.T) {
 	if err := b.Put(ctx, cfgHandle, bytes.NewReader(oldCfg)); err != nil {
 		t.Fatalf("replay config: %v", err)
 	}
-	if _, err := Open(ctx, b, WithoutPassword()); !errors.Is(err, ErrCorruptConfig) {
+	if _, err := Open(ctx, b, NoPassword()); !errors.Is(err, ErrCorruptConfig) {
 		t.Fatalf("Open with the replayed config = %v, want ErrCorruptConfig", err)
 	}
 
 	if err := b.Put(ctx, oldKey, bytes.NewReader(oldKeyData)); err != nil {
 		t.Fatalf("replay key file: %v", err)
 	}
-	repo, err = Open(ctx, b, WithoutPassword())
+	repo, err = Open(ctx, b, NoPassword())
 	if err != nil {
 		t.Fatalf("Open with the replayed config and key file: %v", err)
 	}

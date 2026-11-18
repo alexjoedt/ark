@@ -122,11 +122,11 @@ func (r *Repository) now() time.Time {
 //
 // Then it unseals the master key with pw before any other object is read. It
 // returns ErrWrongPassword when no key file opens, ErrPasswordRequired for
-// WithoutPassword on a protected repository and ErrNotPasswordProtected for a
-// password on a repository created with WithoutPassword, and ErrCorruptConfig
+// NoPassword on a protected repository and ErrNotPasswordProtected for a
+// password on a repository created with NoPassword, and ErrCorruptConfig
 // when a key opens but the config is not the one it was sealed with. Unsealing
 // a password protected key file runs argon2id with 64 MiB of memory.
-func Open(ctx context.Context, b Backend, pw Passphrase, opts ...Option) (*Repository, error) {
+func Open(ctx context.Context, b Backend, pw Password, opts ...Option) (*Repository, error) {
 	if err := pw.validate(); err != nil {
 		return nil, err
 	}
@@ -173,7 +173,7 @@ func Open(ctx context.Context, b Backend, pw Passphrase, opts ...Option) (*Repos
 }
 
 // ChangePassword replaces the key file the repository was opened with by one
-// sealed under pw, which may also be WithoutPassword. The master key stays,
+// sealed under pw, which may also be NoPassword. The master key stays,
 // so no data is rewritten; for the same reason the change does not revoke
 // access for anyone who could read the master key before, through the old
 // password or a copy of the old key file.
@@ -181,7 +181,7 @@ func Open(ctx context.Context, b Backend, pw Passphrase, opts ...Option) (*Repos
 // It takes the exclusive lock. The new key file is written before the old
 // one is deleted: when the write fails the old password still opens the
 // repository, when the delete fails both do and the error says so.
-func (r *Repository) ChangePassword(ctx context.Context, pw Passphrase) error {
+func (r *Repository) ChangePassword(ctx context.Context, pw Password) error {
 	if err := pw.validate(); err != nil {
 		return err
 	}

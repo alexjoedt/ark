@@ -85,7 +85,7 @@ func TestTamperedObjectsAreRejected(t *testing.T) {
 // a tamper too: the version is only trusted once the hash matches.
 func TestTamperedConfigIsRejected(t *testing.T) {
 	ctx := context.Background()
-	pw := ark.WithPassword("changed password")
+	pw := ark.NewPassword("changed password")
 	cells := []struct {
 		name   string
 		mutate func(t *testing.T, cfg []byte) []byte
@@ -422,7 +422,7 @@ var tamperNamespaces = []tamperNamespace{
 		typ: ark.KeyFile,
 		setup: func(t *testing.T, f *tamperFixture) (string, string) {
 			victim, body := onlyKeyFile(t, f.b)
-			if err := f.repo.ChangePassword(context.Background(), ark.WithPassword("second password")); err != nil {
+			if err := f.repo.ChangePassword(context.Background(), ark.NewPassword("second password")); err != nil {
 				t.Fatalf("ChangePassword: %v", err)
 			}
 			other, _ := onlyKeyFile(t, f.b)

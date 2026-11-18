@@ -126,7 +126,7 @@ func TestReplayedManifestRestoresOnlyItsOwnBytes(t *testing.T) {
 // key file: put back, it opens the repository again, next to the new one.
 func TestReplayedKeyFileOpensUnderTheOldPassword(t *testing.T) {
 	ctx := context.Background()
-	oldPW, newPW := ark.WithPassword("old"), ark.WithPassword("new")
+	oldPW, newPW := ark.NewPassword("old"), ark.NewPassword("new")
 	b := initRepo(t, oldPW)
 	oldName, oldKey := onlyKeyFile(t, b)
 
@@ -146,7 +146,7 @@ func TestReplayedKeyFileOpensUnderTheOldPassword(t *testing.T) {
 	}
 
 	putObject(t, b, ark.KeyFile, oldName, oldKey)
-	for _, pw := range []ark.Passphrase{oldPW, newPW} {
+	for _, pw := range []ark.Password{oldPW, newPW} {
 		got, err := ark.Open(ctx, b, pw)
 		if err != nil {
 			t.Fatalf("Open after the replay: %v", err)

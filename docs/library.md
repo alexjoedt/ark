@@ -24,7 +24,7 @@ b, err := arklocal.New("/srv/ark")
 if err != nil {
 	return err
 }
-pw := ark.WithPassword(os.Getenv("ARK_PASSWORD"))
+pw := ark.NewPassword(os.Getenv("ARK_PASSWORD"))
 if err := ark.Init(ctx, b, pw); err != nil && !errors.Is(err, ark.ErrAlreadyInitialized) {
 	return err
 }
@@ -164,7 +164,7 @@ snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{
 Every repository is encrypted and authenticated. The password unlocks a random master key stored in `keys/`; chunks, trees, snapshot manifests and locks are sealed with XChaCha20-Poly1305 and named by an HMAC, so the backend sees neither contents nor file names. A changed object fails to open instead of restoring garbage.
 
 - A lost password is lost data. There is no recovery and no backdoor.
-- `ark.WithoutPassword()` creates or opens a repository without one. The format is the same, but the master key is stored unprotected: anyone with access to the backend can read it. `Init` records the choice, and `Open` holds to it: `WithoutPassword` on a protected repository fails with `ark.ErrPasswordRequired`, a password on an unprotected one with `ark.ErrNotPasswordProtected`.
+- `ark.NoPassword()` creates or opens a repository without one. The format is the same, but the master key is stored unprotected: anyone with access to the backend can read it. `Init` records the choice, and `Open` holds to it: `NoPassword` on a protected repository fails with `ark.ErrPasswordRequired`, a password on an unprotected one with `ark.ErrNotPasswordProtected`.
 - A wrong password fails with `ark.ErrWrongPassword` before any data is read.
 - `repo.ChangePassword` seals the same master key under a new password. It does not revoke a key that already leaked.
 - `Init`, `Open` and `ChangePassword` derive the key with argon2id and need 64 MiB of memory for it. Size containers accordingly.
@@ -184,7 +184,7 @@ An embedder that shows progress, waits on locks or measures the backend hooks in
 
 ```go
 backend := ark.Instrument(local)
-repo, err := ark.Open(ctx, backend, ark.WithoutPassword(),
+repo, err := ark.Open(ctx, backend, ark.NoPassword(),
 	ark.WithLogger(logger),
 	ark.WithProgress(func(e ark.ProgressEvent) {
 		logger.Debug("progress", "op", e.Operation, "phase", e.Phase, "files", e.FilesDone, "bytes", e.BytesDone)
@@ -218,7 +218,7 @@ p := &arkprofile.Profile{
 if err := p.Validate(); err != nil {
 	return err
 }
-pw, err := p.Passphrase()
+pw, err := p.Password()
 if err != nil {
 	return err
 }

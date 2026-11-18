@@ -71,7 +71,7 @@ Every guarantee and accepted risk of `docs/SECURITY.md` ends with a test that pi
 hash, `TestReplayedManifestRestoresOnlyItsOwnBytes`, `TestReplayedKeyFileOpensUnderTheOldPassword`
 and `TestReplayedConfigOpensOnlyWithItsKeyFile` for the replays, `TestSnapshotIDsCarryNoTimestamp`
 in `encryption_test.go` for the IDs, `TestListingRevealsCountsAndSizes` for the sizes and
-`TestPassphraseNeverInTheLogs` in `passphrase_log_test.go` (library) and
+`TestPasswordNeverInTheLogs` in `passphrase_log_test.go` (library) and
 `cmd/ark/transport_test.go` (CLI) for the passphrase. A user who needs protection against rollback or
 a leaked master key has no answer yet: append-only mode and key rotation stay open items. A cluster
 service that wants rollback detection must keep its own record of the snapshot set.
