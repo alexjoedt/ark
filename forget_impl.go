@@ -95,17 +95,17 @@ func applyForgetPolicyToGroup(
 	// count of a rule from a real snapshot, and a later run, to which it
 	// may no longer be in the future, would decide differently. So no rule
 	// sees it, and it is kept: its date says nothing about its worth.
-	seen := make([]*Snapshot, 0, len(snapshots))
-	for _, s := range snapshots {
-		if !s.CreatedAt.After(now) {
-			seen = append(seen, s)
-			continue
-		}
-		reasons[s.ID] = []string{reasonFuture}
-		result.Keep = append(result.Keep, s)
-		result.Future = append(result.Future, s)
+	// Newest first, these are the head of the series.
+	first := slices.IndexFunc(snapshots, func(s *Snapshot) bool { return !s.CreatedAt.After(now) })
+	if first < 0 {
+		first = len(snapshots)
 	}
-	snapshots = seen
+	for _, s := range snapshots[:first] {
+		reasons[s.ID] = []string{reasonFuture}
+	}
+	result.Keep = append(result.Keep, snapshots[:first]...)
+	result.Future = append(result.Future, snapshots[:first]...)
+	snapshots = snapshots[first:]
 	if len(snapshots) == 0 {
 		return
 	}
@@ -200,21 +200,19 @@ func hasTags(tags, list []string) bool {
 
 // checkSeriesKept returns ErrNoSnapshotKept when a rule of the policy kept
 // no snapshot of a series among snapshots, naming the first such series. A
-// snapshot in res.Future is kept by no rule, so it does not count; a series
-// of such snapshots alone has nothing a rule could keep and passes.
+// snapshot kept for reasonFuture is kept by no rule, so it does not count; a
+// series of such snapshots alone has nothing a rule could keep and passes.
 func checkSeriesKept(snapshots []*Snapshot, res *ForgetResult) error {
-	future := make(map[*Snapshot]bool, len(res.Future))
-	for _, s := range res.Future {
-		future[s] = true
-	}
+	// no rule gives reasonFuture, and a snapshot that has it has no other
+	future := func(s *Snapshot) bool { return slices.Contains(res.KeepReasons[s.ID], reasonFuture) }
 	kept := make(map[seriesKey]bool)
 	for _, s := range res.Keep {
-		if !future[s] {
+		if !future(s) {
 			kept[s.series()] = true
 		}
 	}
 	for _, s := range snapshots {
-		if future[s] || kept[s.series()] {
+		if future(s) || kept[s.series()] {
 			continue
 		}
 		err := fmt.Errorf("%w: %s %q of host %q", ErrNoSnapshotKept, s.SourceType, s.SourceName, s.Host)

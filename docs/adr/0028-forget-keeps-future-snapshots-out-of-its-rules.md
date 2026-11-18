@@ -58,9 +58,10 @@ The time of the run is the repository's clock, the one its locks use, read once 
 
 ark and restic keep different snapshots of a series that holds a future-dated one; they agree on
 every other history. The restic fixtures hold none, so `TestForgetMatchesRestic` is unchanged.
-0027 stands: the window ends at the newest snapshot that is not after the run. What changes there
-is the reason of a future-dated snapshot under a keep-within rule, `in the future` instead of
-`within 7d`.
+This supersedes the part of 0027 that has a keep-within rule keep a future-dated snapshot, a
+series of them alone included: no rule keeps one now, and its reason is `in the future` instead of
+`within 7d`. The rest of 0027 stands: the window ends at the newest snapshot that is not after the
+run.
 
 A second forget with the same policy and clock removes nothing. `TestForgetProperties` checks
 that on random histories without an exception, and that a future-dated snapshot changes nothing

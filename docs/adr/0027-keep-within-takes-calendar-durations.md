@@ -1,6 +1,6 @@
 # 0027: Keep-within takes restic's calendar durations
 
-Status: accepted
+Status: partly superseded by 0028
 Date: 2026-11-17
 
 ## Context
