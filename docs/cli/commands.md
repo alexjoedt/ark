@@ -242,9 +242,9 @@ no such rule. restic selects the same way.
 to 11, so `90m` is a usage error, exit 2, and not seven and a half years; write `1y6m` for 18
 months.
 
-The window ends at the newest snapshot of the series, not at the time of the run, so a series that
-stopped receiving backups keeps its last ones. Years, months and days are steps on the calendar of the local time zone, hours are
-elapsed time: `1m` back from 15 March is 15 February, and `1d` back across the start of summer time
+The window ends at the newest snapshot of the series that is not in the future, not at the time of
+the run, so a series that stopped receiving backups keeps its last ones. Years, months and days are
+steps on the calendar of the local time zone, hours are elapsed time: `1m` back from 15 March is 15 February, and `1d` back across the start of summer time
 is 23 hours where `24h` is 24. A step onto a day the month lacks runs over into the next month, so
 `1m` back from 31 March is 3 March, or 2 March in a leap year. A step onto a time the clocks skip
 when summer time starts lands an hour before or after it. A snapshot exactly the duration old is
@@ -281,13 +281,15 @@ carry the tag, add a rule such as `--keep-last 1`, or remove a series on purpose
 filter. restic refuses the same way.
 
 A snapshot dated after the time of the run, as a machine with a wrong clock or an imported archive
-leaves it, is kept, whatever the policy says. No rule counts it, no period takes it and no window
-starts at it, so the other snapshots are decided as if it was not there; its reason in `--json` is
-`in the future`, also when its tags match a `--keep-tag` list. It does not count as a kept snapshot
-of its series, so a policy that keeps nothing else of the series is still refused. `ark forget`
-A policy run warns on stderr about each one, `--dry-run` too. It stays until its date has passed, when the
-rules see it like any other, or until you remove it by ID. restic counts such a snapshot in its
-rules, so the two keep different snapshots of a series that holds one, see
+leaves it, the time being the repository's clock that its locks use, read once per run, is kept,
+whatever the policy says. No rule counts it, no period takes it and no window starts at it, so the
+other snapshots are decided as if it was not there; its reason in `--json` is `in the future`, also
+when its tags match a `--keep-tag` list. It does not count as a kept snapshot of its series, so a
+policy that keeps nothing else of the series is still refused. A policy run warns on stderr about
+each one, `--dry-run` too, but not when it is refused: the error names the snapshots instead. A
+snapshot stays until its date has passed, when the rules see it like any other, or until you remove
+it by ID. restic counts such a snapshot in its rules, so the two keep different snapshots of a
+series that holds one, see
 [the decision](../adr/0028-forget-keeps-future-snapshots-out-of-its-rules.md).
 
 Hours, days, weeks, months and years are those of the local time zone of the machine `ark forget`
@@ -312,7 +314,6 @@ Each of these changed after v0.3.0. Builds up to v0.3.0:
 - Kept only the newest snapshot of each period. A period rule with count left now also keeps the
   oldest snapshot of the series, with the reason `oldest daily snapshot`, so a short series keeps
   one more snapshot per rule than before.
-
 - Counted a snapshot dated in the future like any other, as restic does. It is now kept and used by
   no rule, and `ark forget` warns about it.
 
