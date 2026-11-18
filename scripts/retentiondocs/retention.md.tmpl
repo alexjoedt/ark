@@ -27,6 +27,7 @@ In short:
 - When a counted rule reaches the oldest snapshot of the history with count left, it keeps that snapshot too, and so does a rule such as `--keep-within-daily 30d` whose window holds it.
 - A within rule such as `--keep-within 7d` measures its window back from the newest snapshot, not from the time forget runs.
 - A snapshot that any rule keeps stays.
+- A snapshot dated in the future is kept and used by no rule, see the [forget reference](cli/commands.md#forget).
 
 Most examples share one history of three weeks, with days without a backup and days with several. Hourly, monthly and yearly rules, `--keep-tag`, the long-horizon recipe and the comparison of daily with hourly get histories of their own.
 
