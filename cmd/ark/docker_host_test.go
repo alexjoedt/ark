@@ -121,7 +121,10 @@ func TestPrintVolumesColumn(t *testing.T) {
 	if got := render(true, map[string]time.Time{"pg": at}); !strings.Contains(got, `"last_snapshot": "2026-01-02`) {
 		t.Errorf("repository, json %q", got)
 	}
-	if got := render(true, nil); !strings.Contains(got, `"last_snapshot": null`) {
+	if got := render(true, map[string]time.Time{}); !strings.Contains(got, `"last_snapshot": null`) {
+		t.Errorf("repository without snapshot, json %q", got)
+	}
+	if got := render(true, nil); strings.Contains(got, "last_snapshot") || !strings.Contains(got, `"name": "pg"`) {
 		t.Errorf("no repository, json %q", got)
 	}
 }
@@ -136,5 +139,10 @@ func TestDockerVolumesNeedsNoRepository(t *testing.T) {
 		if code, out := runCapture(t, args...); code != 1 {
 			t.Errorf("%v: exit %d, want 1: %q", args, code, out)
 		}
+	}
+	// --host is still checked without a repository
+	code, _, logs := runCaptureAll(t, "docker", "volumes", "--host", "tcp://db1:2375")
+	if code != 2 || !strings.Contains(logs, "--docker-host") {
+		t.Errorf("--host with a daemon address: exit %d: %q", code, logs)
 	}
 }
