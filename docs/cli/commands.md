@@ -202,6 +202,9 @@ Removes snapshots, either the named ids or those a policy does not keep. The pol
 series among the snapshots the filters match. Chunks stay in the repository until a prune. See
 [Retention policies](../retention.md) for what each rule keeps, with timelines.
 
+On a terminal, `forget` lists the snapshots it will remove and then asks once. With `--prune` that
+question covers the prune too.
+
 | Flag | Meaning |
 |---|---|
 | `--keep-last N` | keep the N newest; `unlimited` keeps all |

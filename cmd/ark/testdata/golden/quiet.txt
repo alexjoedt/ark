@@ -31,7 +31,7 @@ ark: verify nonexistent: ark: snapshot not found: nonexistent
 --- stderr
 === --quiet forget --keep-last 1 --yes (exit 0)
 --- stdout
-removed <id1> <time> (<src>)
+remove <id1> <time> (<src>)
 removed 1 snapshots, kept 1
 --- stderr
 === --quiet prune --yes (exit 0)
