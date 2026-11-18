@@ -11,7 +11,8 @@ import (
 // applyForgetPolicy applies policy once per series (source type, source name
 // and host) and merges the groups, so one busy series cannot push another's
 // snapshots out of the window. Snapshots are expected to be sorted newest
-// first. The period rules count in loc; a snapshot after now is in the future.
+// first. The period rules count in loc; a snapshot after now is in the future
+// and is kept without a rule seeing it.
 func applyForgetPolicy(snapshots []*Snapshot, policy ForgetPolicy, loc *time.Location, now time.Time) *ForgetResult {
 	result := &ForgetResult{KeepReasons: make(map[string][]string)}
 	groups := make(map[seriesKey][]*Snapshot)
@@ -28,6 +29,7 @@ func applyForgetPolicy(snapshots []*Snapshot, policy ForgetPolicy, loc *time.Loc
 	}
 	sortNewestFirst(result.Keep)
 	sortNewestFirst(result.Remove)
+	sortNewestFirst(result.Future)
 	return result
 }
 
@@ -71,9 +73,13 @@ type keepBucket struct {
 	cutoff   time.Time
 }
 
+// reasonFuture is the one keep reason of a snapshot dated after the run.
+const reasonFuture = "in the future"
+
 // applyForgetPolicyToGroup adds the keep and remove picks and the keep
 // reasons for one series, which is not empty and sorted newest first, to
-// result. It is restic's walk: one pass from the newest snapshot to the
+// result. The snapshots after now are kept and set aside first. Over the
+// others it is restic's walk: one pass from the newest snapshot to the
 // oldest, every rule deciding on each snapshot by itself.
 func applyForgetPolicyToGroup(
 	result *ForgetResult,
@@ -84,13 +90,29 @@ func applyForgetPolicyToGroup(
 ) {
 	reasons := result.KeepReasons
 
-	// A keep-within window is measured from the newest snapshot that is not
-	// in the future. When all are, latest stays the zero time and every
-	// snapshot is after the cutoff, as for restic.
-	var latest time.Time
-	if i := slices.IndexFunc(snapshots, func(s *Snapshot) bool { return !s.CreatedAt.After(now) }); i >= 0 {
-		latest = snapshots[i].CreatedAt
+	// A snapshot dated in the future, as a machine with a wrong clock
+	// leaves it, would take the newest slot of its period and the first
+	// count of a rule from a real snapshot, and a later run, to which it
+	// may no longer be in the future, would decide differently. So no rule
+	// sees it, and it is kept: its date says nothing about its worth.
+	seen := make([]*Snapshot, 0, len(snapshots))
+	for _, s := range snapshots {
+		if !s.CreatedAt.After(now) {
+			seen = append(seen, s)
+			continue
+		}
+		reasons[s.ID] = []string{reasonFuture}
+		result.Keep = append(result.Keep, s)
+		result.Future = append(result.Future, s)
 	}
+	snapshots = seen
+	if len(snapshots) == 0 {
+		return
+	}
+
+	// A keep-within window is measured from the newest snapshot the rules
+	// see.
+	latest := snapshots[0].CreatedAt
 	window := func(reason string, w Within, key func(time.Time) periodKey) keepBucket {
 		if w == (Within{}) {
 			return keepBucket{}
@@ -176,17 +198,37 @@ func hasTags(tags, list []string) bool {
 	return true
 }
 
-// checkSeriesKept returns ErrNoSnapshotKept when a series among snapshots
-// has no snapshot in keep, naming the first such series.
-func checkSeriesKept(snapshots, keep []*Snapshot) error {
+// checkSeriesKept returns ErrNoSnapshotKept when a rule of the policy kept
+// no snapshot of a series among snapshots, naming the first such series. A
+// snapshot in res.Future is kept by no rule, so it does not count; a series
+// of such snapshots alone has nothing a rule could keep and passes.
+func checkSeriesKept(snapshots []*Snapshot, res *ForgetResult) error {
+	future := make(map[*Snapshot]bool, len(res.Future))
+	for _, s := range res.Future {
+		future[s] = true
+	}
 	kept := make(map[seriesKey]bool)
-	for _, s := range keep {
-		kept[s.series()] = true
+	for _, s := range res.Keep {
+		if !future[s] {
+			kept[s.series()] = true
+		}
 	}
 	for _, s := range snapshots {
-		if !kept[s.series()] {
-			return fmt.Errorf("%w: %s %q of host %q", ErrNoSnapshotKept, s.SourceType, s.SourceName, s.Host)
+		if future[s] || kept[s.series()] {
+			continue
 		}
+		err := fmt.Errorf("%w: %s %q of host %q", ErrNoSnapshotKept, s.SourceType, s.SourceName, s.Host)
+		var ids []string
+		for _, f := range res.Future {
+			if f.series() == s.series() {
+				// the eight characters the CLI lists a snapshot by
+				ids = append(ids, f.ID[:min(len(f.ID), 8)])
+			}
+		}
+		if len(ids) == 0 {
+			return err
+		}
+		return fmt.Errorf("%w; its snapshots dated in the future do not count: %s", err, strings.Join(ids, ", "))
 	}
 	return nil
 }

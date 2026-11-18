@@ -24,7 +24,8 @@ var (
 	// ErrNoSnapshotKept is returned by Forget when the policy keeps no
 	// snapshot of a series among the matches, which only a policy of KeepTags
 	// alone can do. Nothing is removed, of no series; the message names the
-	// series.
+	// series. A snapshot Forget keeps for being dated in the future does not
+	// count as kept, and the message names those of the series too.
 	ErrNoSnapshotKept = errors.New("ark: forget policy keeps no snapshot of a series")
 
 	// ErrInvalidLabel is returned by ValidateLabels, and by Backup before it

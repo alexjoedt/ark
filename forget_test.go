@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -359,5 +360,86 @@ func TestParseTagList(t *testing.T) {
 		if got := ark.ParseTagList(in); !slices.Equal(got, want) {
 			t.Errorf("ParseTagList(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// Forget takes the time of the run from the repository's clock: to a clock
+// between the last two backups the newest one is in the future. It is kept
+// next to what the policy keeps, listed in Future, and the policy counts
+// from the snapshot before it. By ID it is removed like any other.
+func TestForgetSetsFutureSnapshotsAsideByTheRepositoryClock(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+	now := time.Now()
+	var snaps []*ark.Snapshot // oldest first
+	for _, age := range []int{3, 2, 1} {
+		snap, err := repo.Backup(ctx, stubSource{name: "app", content: "v"}, ark.WithTime(now.AddDate(0, 0, -age)))
+		if err != nil {
+			t.Fatalf("Backup: %v", err)
+		}
+		snaps = append(snaps, snap)
+	}
+	ark.SetClock(repo, func() time.Time { return now.Add(-36 * time.Hour) })
+
+	res, err := repo.Forget(ctx, ark.ForgetPolicy{KeepLast: 1}, ark.SnapshotFilter{})
+	if err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+	ids := func(snaps []*ark.Snapshot) (out []string) {
+		for _, s := range snaps {
+			out = append(out, s.ID)
+		}
+		return out
+	}
+	keep, future, remove := ids(res.Keep), ids(res.Future), ids(res.Remove)
+	if !slices.Equal(keep, []string{snaps[2].ID, snaps[1].ID}) || !slices.Equal(future, []string{snaps[2].ID}) ||
+		!slices.Equal(remove, []string{snaps[0].ID}) {
+		t.Fatalf("keeps %v, future %v, removes %v; want the two newest kept, the newest of them in Future",
+			keep, future, remove)
+	}
+	wantReasons := map[string][]string{snaps[2].ID: {"in the future"}, snaps[1].ID: {"last snapshot"}}
+	if !maps.EqualFunc(res.KeepReasons, wantReasons, slices.Equal) {
+		t.Errorf("reasons %v, want %v", res.KeepReasons, wantReasons)
+	}
+
+	res, err = repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{snaps[2].ID}})
+	if err != nil {
+		t.Fatalf("Forget by ID: %v", err)
+	}
+	if len(res.Remove) != 1 || res.Remove[0].ID != snaps[2].ID || res.Future != nil || len(res.Keep) != 0 {
+		t.Errorf("Forget by ID removes %v, keeps %v, Future %v; want the future one removed and Future nil",
+			res.Remove, res.Keep, res.Future)
+	}
+	left, err := repo.Snapshots(ctx, ark.SnapshotFilter{})
+	if err != nil || len(left) != 1 || left[0].ID != snaps[1].ID {
+		t.Errorf("Snapshots = %v, %v, want the one KeepLast kept", left, err)
+	}
+}
+
+// A snapshot dated in the future is kept, but not by the policy: tag lists
+// that match no other snapshot of the series still refuse to run, the error
+// names the future one, and nothing is removed.
+func TestForgetByTagsDoesNotCountAFutureSnapshot(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+	for _, content := range []string{"a", "b"} {
+		if _, err := repo.Backup(ctx, stubSource{name: "app", content: content}); err != nil {
+			t.Fatalf("Backup: %v", err)
+		}
+	}
+	future := importAt(t, repo, time.Now().AddDate(1, 0, 0))
+
+	policy := ark.ForgetPolicy{KeepTags: [][]string{{"x"}}}
+	for _, opts := range [][]ark.ForgetOption{nil, {ark.WithForgetDryRun()}} {
+		res, err := repo.Forget(ctx, policy, ark.SnapshotFilter{}, opts...)
+		if !errors.Is(err, ark.ErrNoSnapshotKept) || res != nil {
+			t.Fatalf("Forget = %+v, %v, want ErrNoSnapshotKept", res, err)
+		}
+		if msg := err.Error(); !strings.HasSuffix(msg, "do not count: "+future.ID[:8]) {
+			t.Errorf("error %q, want it to end with the short ID %s of the future snapshot", msg, future.ID[:8])
+		}
+	}
+	if left, err := repo.Snapshots(ctx, ark.SnapshotFilter{}); err != nil || len(left) != 3 {
+		t.Errorf("the refused Forget left %d snapshots (%v), want 3", len(left), err)
 	}
 }

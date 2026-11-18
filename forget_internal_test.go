@@ -1,6 +1,7 @@
 package ark
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -410,7 +411,7 @@ func TestKeepWithinIsACalendarWindowFromTheNewestSnapshotNotInTheFuture(t *testi
 			[]string{"s0", "s1"},
 		},
 		{
-			"only future snapshots are all kept",
+			"only future snapshots are all kept, by no rule",
 			Within{Days: 1}, time.UTC, future,
 			[]string{"2027-06-01T00:00:00Z", "2027-01-01T00:00:00Z", "2026-12-01T00:00:00Z"},
 			[]string{"s0", "s1", "s2"},
@@ -433,9 +434,13 @@ func TestKeepWithinIsACalendarWindowFromTheNewestSnapshotNotInTheFuture(t *testi
 			if len(res.Keep)+len(res.Remove) != len(snaps) {
 				t.Errorf("keeps %d and removes %d of %d", len(res.Keep), len(res.Remove), len(snaps))
 			}
-			for _, id := range tc.keep {
-				if want := []string{"within " + tc.within.String()}; !slices.Equal(res.KeepReasons[id], want) {
-					t.Errorf("%s kept for %q, want %q", id, res.KeepReasons[id], want)
+			for _, s := range res.Keep {
+				want := []string{"within " + tc.within.String()}
+				if s.CreatedAt.After(tc.now) {
+					want = []string{"in the future"}
+				}
+				if got := res.KeepReasons[s.ID]; !slices.Equal(got, want) {
+					t.Errorf("%s kept for %q, want %q", s.ID, got, want)
 				}
 			}
 		})
@@ -869,9 +874,164 @@ func TestForgetKeepTags(t *testing.T) {
 			if got := len(res.Keep); got != len(tc.want) || got+len(res.Remove) != len(snaps) {
 				t.Errorf("keeps %d and removes %d of %d, want %d kept", got, len(res.Remove), len(snaps), len(tc.want))
 			}
-			if err := checkSeriesKept(snaps, res.Keep); (err != nil) != (len(tc.want) == 0) {
+			if err := checkSeriesKept(snaps, res); (err != nil) != (len(tc.want) == 0) {
 				t.Errorf("checkSeriesKept = %v with %d kept", err, len(tc.want))
 			}
 		})
+	}
+}
+
+// A snapshot after the clock is kept for being in the future and seen by no
+// rule: it uses no count, takes no period from a real snapshot, is not the
+// oldest of its series and is not selected by its tags. Snapshots are named
+// s0, s1, ... in the order given, newest first; the clock is 2026-03-10
+// 12:00 UTC.
+func TestForgetKeepsFutureSnapshotsOutOfTheRules(t *testing.T) {
+	now := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
+	const future, daily, last = "in the future", "daily snapshot", "last snapshot"
+	type snap struct {
+		at   string
+		tags []string
+	}
+	tests := []struct {
+		name    string
+		policy  ForgetPolicy
+		snaps   []snap
+		want    map[string][]string
+		futures []string
+	}{
+		{
+			"three days of KeepDaily go to the three real days",
+			ForgetPolicy{KeepDaily: 3},
+			[]snap{{at: "2099-01-01T00:00:00Z"}, {at: "2026-03-10T10:00:00Z"}, {at: "2026-03-09T10:00:00Z"},
+				{at: "2026-03-08T10:00:00Z"}},
+			map[string][]string{"s0": {future}, "s1": {daily}, "s2": {daily}, "s3": {daily}},
+			[]string{"s0"},
+		},
+		{
+			"and a fourth real day is still removed",
+			ForgetPolicy{KeepDaily: 3},
+			[]snap{{at: "2099-01-01T00:00:00Z"}, {at: "2026-03-10T10:00:00Z"}, {at: "2026-03-09T10:00:00Z"},
+				{at: "2026-03-08T10:00:00Z"}, {at: "2026-03-07T10:00:00Z"}},
+			map[string][]string{"s0": {future}, "s1": {daily}, "s2": {daily}, "s3": {daily}},
+			[]string{"s0"},
+		},
+		{
+			"a future snapshot of today does not take the day",
+			ForgetPolicy{KeepDaily: 3},
+			[]snap{{at: "2026-03-10T18:00:00Z"}, {at: "2026-03-10T10:00:00Z"}, {at: "2026-03-09T10:00:00Z"},
+				{at: "2026-03-08T10:00:00Z"}},
+			map[string][]string{"s0": {future}, "s1": {daily}, "s2": {daily}, "s3": {daily}},
+			[]string{"s0"},
+		},
+		{
+			"a snapshot of this instant is not in the future, one a second later is",
+			ForgetPolicy{KeepLast: 1},
+			[]snap{{at: "2026-03-10T12:00:01Z"}, {at: "2026-03-10T12:00:00Z"}, {at: "2026-03-10T11:00:00Z"}},
+			map[string][]string{"s0": {future}, "s1": {last}},
+			[]string{"s0"},
+		},
+		{
+			"the newest real snapshot is the first of the series, the oldest its last",
+			ForgetPolicy{KeepDaily: 5},
+			[]snap{{at: "2026-03-10T18:00:00Z"}, {at: "2026-03-10T11:00:00Z"}, {at: "2026-03-10T10:00:00Z"}},
+			map[string][]string{"s0": {future}, "s1": {daily}, "s2": {"oldest daily snapshot"}},
+			[]string{"s0"},
+		},
+		{
+			"a period inside a window is not taken either",
+			ForgetPolicy{KeepWithinDaily: Within{Days: 2}},
+			[]snap{{at: "2026-03-10T18:00:00Z"}, {at: "2026-03-10T10:00:00Z"}, {at: "2026-03-09T10:00:00Z"},
+				{at: "2026-03-08T10:00:00Z"}},
+			map[string][]string{"s0": {future}, "s1": {"daily within 2d"}, "s2": {"daily within 2d"}},
+			[]string{"s0"},
+		},
+		{
+			"a matching tag adds no reason",
+			ForgetPolicy{KeepLast: 1, KeepTags: [][]string{{"x"}}},
+			[]snap{{"2099-01-01T00:00:00Z", []string{"x"}}, {"2026-03-10T10:00:00Z", nil},
+				{"2026-03-09T10:00:00Z", []string{"x"}}, {"2026-03-08T10:00:00Z", nil}},
+			map[string][]string{"s0": {future}, "s1": {last}, "s2": {"has tags [x]"}},
+			[]string{"s0"},
+		},
+		{
+			"a series of future snapshots is kept whole, whatever the policy",
+			ForgetPolicy{KeepLast: 1, KeepWithin: Within{Hours: 1}, KeepTags: [][]string{{"x"}}},
+			[]snap{{at: "2099-01-01T00:00:00Z"}, {at: "2027-01-01T00:00:00Z"}, {at: "2026-03-10T12:00:01Z"}},
+			map[string][]string{"s0": {future}, "s1": {future}, "s2": {future}},
+			[]string{"s0", "s1", "s2"},
+		},
+		{
+			"without one, Future is empty",
+			ForgetPolicy{KeepLast: 1},
+			[]snap{{at: "2026-03-10T12:00:00Z"}, {at: "2026-03-09T10:00:00Z"}},
+			map[string][]string{"s0": {last}},
+			nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			snaps := make([]*Snapshot, len(tc.snaps))
+			for i, s := range tc.snaps {
+				at, err := time.Parse(time.RFC3339, s.at)
+				if err != nil {
+					t.Fatal(err)
+				}
+				snaps[i] = &Snapshot{ID: fmt.Sprintf("s%d", i), CreatedAt: at, Tags: s.tags}
+			}
+			res := applyForgetPolicy(snaps, tc.policy, time.UTC, now)
+			if !maps.EqualFunc(res.KeepReasons, tc.want, slices.Equal) {
+				t.Errorf("reasons %v, want %v", res.KeepReasons, tc.want)
+			}
+			if got := len(res.Keep); got != len(tc.want) || got+len(res.Remove) != len(snaps) {
+				t.Errorf("keeps %d and removes %d of %d, want %d kept", got, len(res.Remove), len(snaps), len(tc.want))
+			}
+			if got := ids(res.Future); !slices.Equal(got, tc.futures) {
+				t.Errorf("Future = %v, want %v", got, tc.futures)
+			}
+			if err := checkSeriesKept(snaps, res); err != nil {
+				t.Errorf("checkSeriesKept = %v", err)
+			}
+		})
+	}
+}
+
+// A snapshot kept for being in the future is no kept snapshot of its series:
+// a policy that keeps no other fails, and the error names the future-dated
+// snapshots of that series, by eight characters of the ID, and no others.
+func TestForgetSeriesCheckPassesOverFutureSnapshots(t *testing.T) {
+	now := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
+	snap := func(id, source string, at time.Time, tags ...string) *Snapshot {
+		return &Snapshot{ID: id, SourceType: SourceTypeFile, SourceName: source, Host: "h", CreatedAt: at, Tags: tags}
+	}
+	snaps := []*Snapshot{
+		snap("aaaaaaaa11111111", "app", now.AddDate(2, 0, 0), "x"),
+		snap("bbbbbbbb22222222", "db", now.AddDate(1, 0, 0)),
+		snap("cc", "app", now.Add(time.Second)),
+		snap("app-real", "app", now),
+		snap("db-pinned", "db", now.Add(-time.Hour), "x"),
+		snap("db-plain", "db", now.Add(-2*time.Hour)),
+	}
+	res := applyForgetPolicy(snaps, ForgetPolicy{KeepTags: [][]string{{"x"}}}, time.UTC, now)
+	if got, want := ids(res.Future), []string{"aaaaaaaa11111111", "bbbbbbbb22222222", "cc"}; !slices.Equal(got, want) {
+		t.Errorf("Future = %v, want %v, newest first across the series", got, want)
+	}
+	if got, want := ids(res.Remove), []string{"app-real", "db-plain"}; !slices.Equal(got, want) {
+		t.Errorf("removes %v, want %v", got, want)
+	}
+
+	err := checkSeriesKept(snaps, res)
+	const want = `ark: forget policy keeps no snapshot of a series: file "app" of host "h"; ` +
+		`its snapshots dated in the future do not count: aaaaaaaa, cc`
+	if !errors.Is(err, ErrNoSnapshotKept) || err.Error() != want {
+		t.Errorf("checkSeriesKept = %v\nwant %s", err, want)
+	}
+
+	// db alone keeps a real snapshot
+	db := snaps[1:2:2]
+	db = append(db, snaps[4:]...)
+	res = applyForgetPolicy(db, ForgetPolicy{KeepTags: [][]string{{"x"}}}, time.UTC, now)
+	if err := checkSeriesKept(db, res); err != nil {
+		t.Errorf("checkSeriesKept of db = %v, want none", err)
 	}
 }
