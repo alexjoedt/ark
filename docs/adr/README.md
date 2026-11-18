@@ -41,4 +41,5 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0024 | [Forget periods count in the local time of the forget run](0024-forget-periods-in-the-local-time-of-the-forget-run.md) | partly superseded by 0027 | 2026-11-17 |
 | 0025 | [A typed keep count with a named unlimited value](0025-typed-keep-count-with-unlimited.md) | accepted | 2026-11-17 |
 | 0026 | [Forget keeps the oldest snapshot while a rule has count left](0026-forget-keeps-the-oldest-snapshot-while-a-rule-has-count-left.md) | accepted | 2026-11-17 |
-| 0027 | [Keep-within takes restic's calendar durations](0027-keep-within-takes-calendar-durations.md) | accepted | 2026-11-17 |
+| 0027 | [Keep-within takes restic's calendar durations](0027-keep-within-takes-calendar-durations.md) | partly superseded by 0028 | 2026-11-17 |
+| 0028 | [Forget keeps future-dated snapshots out of its rules](0028-forget-keeps-future-snapshots-out-of-its-rules.md) | accepted | 2026-11-18 |

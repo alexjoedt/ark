@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
+	ark "github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
 	"github.com/alexjoedt/ark/cmd/ark/internal/out"
 	"github.com/urfave/cli/v3"
@@ -53,6 +55,10 @@ func importCommand() *cli.Command {
 				out.R("files", "%s", out.Count(snap.Stats.FileCount)),
 				out.R("size", "%s", out.Bytes(snap.Stats.TotalSize)))
 
+			if snap.CreatedAt.After(time.Now()) {
+				warnFuture(p, snap)
+			}
+
 			if p.Mode().JSON {
 				return p.JSON(out.NewSnapshot(snap))
 			}
@@ -60,4 +66,21 @@ func importCommand() *cli.Command {
 			return nil
 		},
 	}
+}
+
+// warnFuture tells the user that a snapshot is dated after now: while that
+// date is still ahead of its clock, forget keeps it and leaves it out of every
+// policy rule, so a wrong clock on the machine that wrote it stays visible.
+func warnFuture(p *out.Printer, s *ark.Snapshot) {
+	p.Warnf("snapshot %s (%s) is dated in the future; until that date has passed, forget keeps it and ignores it in the policy, check the clock of the machine that wrote it",
+		out.ShortID(s.ID), timeAndHost(s))
+}
+
+// timeAndHost is the creation time of s, with its host when it has one.
+func timeAndHost(s *ark.Snapshot) string {
+	where := out.Time(s.CreatedAt)
+	if s.Host != "" {
+		where += ", host " + s.Host
+	}
+	return where
 }

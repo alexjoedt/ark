@@ -114,7 +114,7 @@ func (c resticCase) decide() (keep []int, reasons [][]string, refused bool, err 
 	}
 	// restic refuses a policy that keeps nothing of a history and gives no
 	// answer; Forget does the same after this check.
-	if errors.Is(checkSeriesKept(snapshots, res.Keep), ErrNoSnapshotKept) {
+	if errors.Is(checkSeriesKept(snapshots, res), ErrNoSnapshotKept) {
 		return nil, nil, true, nil
 	}
 	for _, s := range res.Keep {

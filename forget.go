@@ -227,6 +227,15 @@ func (w Within) before(t time.Time) time.Time {
 // The hours, days, weeks, months and years of KeepHourly to KeepYearly and
 // of KeepWithinHourly to KeepWithinYearly are those of the local time zone,
 // not of UTC; see WithForgetLocation.
+//
+// A snapshot dated after the time of the run, as a machine with a wrong
+// clock leaves it, is kept and seen by no rule: it uses no count, takes the
+// place of no snapshot in a period, moves no window and is not the oldest
+// snapshot of its series, and a tag list does not select it. Its one reason
+// is "in the future", and [ForgetResult.Future] lists it. Here ark leaves
+// restic, which lets such a snapshot take the first count and the newest
+// slot of its period, and a real snapshot is removed in its place. To remove
+// one, name its ID in the filter with a policy that has no rule.
 type ForgetPolicy struct {
 	// KeepLast keeps the most recent n snapshots regardless of age.
 	KeepLast KeepCount
@@ -250,10 +259,10 @@ type ForgetPolicy struct {
 	// from the newest snapshot of the series rather than from the wall
 	// clock, so a repository that stopped receiving backups does not lose
 	// everything. A snapshot exactly the window old is not kept. A snapshot
-	// dated in the future, as a machine with a wrong clock leaves it, does
-	// not move the window: the newest snapshot that is not in the future
-	// does, and when all are in the future the rule keeps them all. The
-	// years, months and days are counted in the zone of WithForgetLocation.
+	// dated in the future is no part of this: the window is measured from
+	// the newest snapshot that is not, and the future ones are kept as
+	// [ForgetPolicy] says, not by this rule. The years, months and days are
+	// counted in the zone of WithForgetLocation.
 	KeepWithin Within
 
 	// KeepWithinHourly keeps the newest snapshot of every hour inside this
@@ -289,9 +298,10 @@ type ForgetPolicy struct {
 	// without a tag, and one with the empty tag next to others, which no
 	// snapshot could match, are refused with [ErrInvalidPolicy].
 	//
-	// Every other rule keeps at least the newest snapshot of a series, this
-	// one may keep none. Forget then removes nothing at all and returns
-	// [ErrNoSnapshotKept].
+	// Every other rule keeps at least the newest snapshot of a series that
+	// is not dated in the future, this one may keep none. Forget then
+	// removes nothing at all and returns [ErrNoSnapshotKept]; a snapshot
+	// kept for being in the future does not count as kept here.
 	KeepTags [][]string
 }
 
@@ -406,9 +416,16 @@ type ForgetResult struct {
 	// KeepReasons names, per kept snapshot ID, every rule that selected it,
 	// in the order the rules are applied and in restic's wording, such as
 	// "has tags [a, b]", "within 30d", "last snapshot", "daily snapshot" or
-	// "daily within 30d". A snapshot that is not kept has no entry; when
-	// nothing is kept the map may be nil or empty.
+	// "daily within 30d". A snapshot in Future has the one reason "in the
+	// future". A snapshot that is not kept has no entry; when nothing is
+	// kept the map may be nil or empty.
 	KeepReasons map[string][]string
+
+	// Future lists the snapshots dated after the time of the run, newest
+	// first. No rule of the policy saw them and all are kept, so each is in
+	// Keep too. It is nil when there is none, and when Forget removes named
+	// IDs without a policy, which removes such a snapshot like any other.
+	Future []*Snapshot
 }
 
 // forgetConfig holds configuration for a Forget call.

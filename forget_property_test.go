@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -68,26 +69,6 @@ func (c forgetCase) reference(snaps []*Snapshot) time.Time {
 		}
 	}
 	return time.Time{}.In(c.loc)
-}
-
-// lapsed reports whether a second run, over the snapshots in kept, may
-// remove s: no rule but keep-within rules kept it, and the window of each
-// that did, measured over kept, starts at s or after it. The rules decide by
-// themselves, so each is asked alone.
-func (c forgetCase) lapsed(s *Snapshot, kept []*Snapshot) bool {
-	second, rest := c.reference(kept), c.policy
-	for _, rule := range c.policy.windows() {
-		if rule.w == (Within{}) {
-			continue
-		}
-		var alone ForgetPolicy
-		*ruleField[Within](&alone, rule.name) = rule.w
-		*ruleField[Within](&rest, rule.name) = Within{}
-		if s.CreatedAt.After(rule.w.before(second)) && keepSet(c.apply(c.snaps, alone))[s] {
-			return false
-		}
-	}
-	return rest.Empty() || !keepSet(c.apply(c.snaps, rest))[s]
 }
 
 func unixDate(y int, m time.Month, d int) int64 {
@@ -370,15 +351,19 @@ func checkPartition(in []*Snapshot, res *ForgetResult) error {
 }
 
 // checkNewest reports a series of in, which is sorted newest first, whose
-// newest snapshot is not kept. A policy of KeepTags alone has no such
-// snapshot: it keeps what carries the tags and nothing else.
-func checkNewest(in []*Snapshot, policy ForgetPolicy, res *ForgetResult) error {
+// newest snapshot that is not after now is not kept. A policy of KeepTags
+// alone has no such snapshot: it keeps what carries the tags and nothing
+// else.
+func checkNewest(in []*Snapshot, policy ForgetPolicy, now time.Time, res *ForgetResult) error {
 	policy.KeepTags = nil
 	if policy.Empty() {
 		return nil
 	}
 	kept, seen := keepSet(res), make(map[seriesKey]bool)
 	for _, s := range in {
+		if s.CreatedAt.After(now) {
+			continue
+		}
 		if !seen[s.series()] && !kept[s] {
 			return fmt.Errorf("newest: snapshot %s, the newest of its series, is removed", s.ID)
 		}
@@ -387,11 +372,45 @@ func checkNewest(in []*Snapshot, policy ForgetPolicy, res *ForgetResult) error {
 	return nil
 }
 
+// checkFuture reports a snapshot of in after the clock that is not kept for
+// being in the future and for nothing else, a Future list that is not those
+// snapshots, newest first, and a snapshot that is not after the clock and is
+// decided otherwise than in a history without the ones that are.
+func (c forgetCase) checkFuture(in []*Snapshot, res *ForgetResult) error {
+	var future, rest []*Snapshot
+	for _, s := range in {
+		if s.CreatedAt.After(c.now) {
+			future = append(future, s)
+		} else {
+			rest = append(rest, s)
+		}
+	}
+	if !slices.Equal(res.Future, future) {
+		return fmt.Errorf("future: Future lists %v, want %v", ids(res.Future), ids(future))
+	}
+	kept, without := keepSet(res), c.apply(rest, c.policy)
+	for _, s := range in {
+		want := without.KeepReasons[s.ID]
+		if s.CreatedAt.After(c.now) {
+			want = []string{"in the future"}
+		}
+		if got := res.KeepReasons[s.ID]; !slices.Equal(got, want) || kept[s] != (len(want) > 0) {
+			return fmt.Errorf("future: snapshot %s is kept (%t) for %q, want %q", s.ID, kept[s], got, want)
+		}
+	}
+	return nil
+}
+
 // check holds the case against the invariants of a keep policy. rng draws
 // the looser policies and the second series.
 func (c forgetCase) check(rng *rand.Rand) error {
 	res := c.apply(c.snaps, c.policy)
-	if err := errors.Join(checkPartition(c.snaps, res), checkNewest(c.snaps, c.policy, res)); err != nil {
+	err := errors.Join(
+		checkPartition(c.snaps, res),
+		checkNewest(c.snaps, c.policy, c.now, res),
+		c.checkFuture(c.snaps, res),
+	)
+	if err != nil {
 		return err
 	}
 
@@ -427,14 +446,9 @@ func (c forgetCase) check(rng *rand.Rand) error {
 		return err
 	}
 
-	// Idempotent: the policy removes nothing of what it kept, but for the
-	// snapshots that only keep-within rules kept and that the windows of
-	// the second run, measured from another snapshot, start after; see
-	// TestForgetTwiceUnderAFutureSnapshot.
-	for _, s := range c.apply(res.Keep, c.policy).Remove {
-		if !c.lapsed(s, res.Keep) {
-			return fmt.Errorf("idempotent: a second run removes snapshot %s, which the first kept", s.ID)
-		}
+	// Idempotent: the policy removes nothing of what it kept.
+	if again := c.apply(res.Keep, c.policy).Remove; len(again) > 0 {
+		return fmt.Errorf("idempotent: a second run removes %v, which the first kept", ids(again))
 	}
 
 	// Independent: next to a series that differs in one part of the series
@@ -455,7 +469,12 @@ func (c forgetCase) check(rng *rand.Rand) error {
 	}
 	sortNewestFirst(both)
 	with := c.apply(both, c.policy)
-	if err := errors.Join(checkPartition(both, with), checkNewest(both, c.policy, with)); err != nil {
+	err = errors.Join(
+		checkPartition(both, with),
+		checkNewest(both, c.policy, c.now, with),
+		c.checkFuture(both, with),
+	)
+	if err != nil {
 		return fmt.Errorf("next to series %q: %w", series, err)
 	}
 	for _, s := range c.snaps {
@@ -469,9 +488,11 @@ func (c forgetCase) check(rng *rand.Rand) error {
 
 // TestForgetProperties holds the keep policy against what must be true of
 // every history and every policy, on random cases: Keep and Remove partition
-// the snapshots, the newest snapshot of a series is kept, a larger count or
-// window keeps a superset, a second run removes nothing, and a series is
-// decided without regard to the others. A failure prints the seed;
+// the snapshots, the newest snapshot of a series that is not in the future
+// is kept, one that is in the future is kept and changes nothing for the
+// others, a larger count or window keeps a superset, a second run removes
+// nothing, and a series is decided without regard to the others. A failure
+// prints the seed;
 // ARK_FORGET_SEED replays it, ARK_FORGET_RUNS sets the number of cases: 1000
 // when unset, 10,000 in CI.
 func TestForgetProperties(t *testing.T) {
@@ -505,14 +526,14 @@ func TestForgetProperties(t *testing.T) {
 	}
 }
 
-// TestForgetTwiceUnderAFutureSnapshot pins the one case in which a second
-// forget removes what the first kept. A keep-within window is measured from
-// the newest snapshot that is not in the future. A period rule passes that
-// snapshot over when one dated in the future is the newest of the same
-// period, so the second run measures from an older snapshot, and a calendar
-// window does not move back evenly with its end: a month before 1 April
-// starts on 1 March, a month before 31 March on 3 March. restic measures
-// and steps the same way.
+// TestForgetTwiceUnderAFutureSnapshot pins the case that keeps snapshots
+// dated in the future out of the rules. As the newest of April, the future
+// one used to take the month from apr1, the snapshot the window is measured
+// from. A second run then measured from mar31, and a calendar window does
+// not move back evenly with its end: a month before 1 April starts on 1
+// March, a month before 31 March on 3 March, so the second run removed mar2,
+// which the first had kept. No rule sees the future snapshot now, apr1 keeps
+// its month, and the second run removes nothing.
 func TestForgetTwiceUnderAFutureSnapshot(t *testing.T) {
 	at := func(m time.Month, d, h int) time.Time { return time.Date(2021, m, d, h, 0, 0, 0, time.UTC) }
 	c := forgetCase{
@@ -527,19 +548,19 @@ func TestForgetTwiceUnderAFutureSnapshot(t *testing.T) {
 		policy: ForgetPolicy{KeepWithinMonthly: Within{Months: 1}},
 	}
 	first := c.apply(c.snaps, c.policy)
-	if got, want := ids(first.Keep), []string{"future", "mar31", "mar2"}; !slices.Equal(got, want) {
-		t.Fatalf("first run keeps %v, want %v", got, want)
+	want := map[string][]string{
+		"future": {"in the future"},
+		"apr1":   {"monthly within 1m"},
+		"mar31":  {"monthly within 1m"},
+		"mar2":   {"oldest monthly within 1m"},
 	}
-	second := c.apply(first.Keep, c.policy)
-	if got, want := ids(second.Remove), []string{"mar2"}; !slices.Equal(got, want) {
-		t.Errorf("second run removes %v, want %v", got, want)
+	if !maps.EqualFunc(first.KeepReasons, want, slices.Equal) || len(first.Remove) > 0 {
+		t.Fatalf("first run keeps %v and removes %v, want %v kept", first.KeepReasons, ids(first.Remove), want)
 	}
-	for _, s := range first.Keep {
-		if got, want := c.lapsed(s, first.Keep), s.ID == "mar2"; got != want {
-			t.Errorf("the property test passes over a second run that removes %s: %t, want %t", s.ID, got, want)
-		}
+	if second := c.apply(first.Keep, c.policy); len(second.Remove) > 0 {
+		t.Errorf("second run removes %v, want nothing", ids(second.Remove))
 	}
 	if err := c.check(rand.New(rand.NewPCG(1, 1))); err != nil {
-		t.Errorf("the case breaks another invariant: %v", err)
+		t.Errorf("the case breaks an invariant: %v", err)
 	}
 }

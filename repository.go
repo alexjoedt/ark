@@ -391,9 +391,14 @@ func (r *Repository) deleteSnapshot(ctx context.Context, id string) error {
 // number outside the bounds of [Within]: below zero, above 11 months or above
 // a million.
 //
+// A snapshot dated after the time of the run is kept whatever the policy
+// says, and no rule sees it; ForgetResult.Future lists these. See
+// [ForgetPolicy].
+//
 // A policy that keeps no snapshot of one of the series, as KeepTags alone
 // can, removes nothing of any series, in a dry run too: Forget returns
-// ErrNoSnapshotKept.
+// ErrNoSnapshotKept. A snapshot kept for its future date does not count
+// there, and the error names those of the series.
 //
 // Removing named ids without a policy reads only those manifests, and one
 // that fails with ErrCorruptManifest is still removed, reported with its ID
@@ -431,8 +436,8 @@ func (r *Repository) Forget(
 		var snapshots []*Snapshot
 		snapshots, err = r.Snapshots(ctx, filter)
 		if err == nil {
-			result = applyForgetPolicy(snapshots, policy, cfg.loc, time.Now())
-			err = checkSeriesKept(snapshots, result.Keep)
+			result = applyForgetPolicy(snapshots, policy, cfg.loc, r.now())
+			err = checkSeriesKept(snapshots, result)
 		}
 	}
 	if err != nil {
