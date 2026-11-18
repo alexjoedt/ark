@@ -39,3 +39,30 @@ removed 1 snapshots, kept 1
 removed 0 blobs in 0 packs, 0 B
 repacked 0 B, 0 B unused
 --- stderr
+=== --quiet info (exit 0)
+--- stdout
+Snapshots:     1
+Total size:    10 B (summed over snapshots, not deduplicated)
+Stored:        <bytes>
+  data packs:  <bytes>
+  tree packs:  <bytes>
+  indexes:     <bytes>
+  snapshots:   <bytes>
+  keys:        <bytes>
+  other:       <bytes>
+Ratio:         <0.1x (total size over stored)
+--- stderr
+=== --quiet info --exact (exit 0)
+--- stdout
+Snapshots:     1
+Total size:    10 B (summed over snapshots, not deduplicated)
+Stored:        <bytes>
+  data packs:  <bytes>
+  tree packs:  <bytes>
+  indexes:     <bytes>
+  snapshots:   <bytes>
+  keys:        <bytes>
+  other:       <bytes>
+Ratio:         <0.1x (total size over stored)
+Unused:        0 B (a prune frees 0 B)
+--- stderr

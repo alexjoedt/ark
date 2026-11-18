@@ -166,7 +166,17 @@ func runForget(
 		return printForget(cmd, preview)
 	}
 
-	if err := p.Confirm(fmt.Sprintf("remove %d snapshots", len(preview.Remove))); err != nil {
+	// only a question shows the list first; --yes and scripts keep the
+	// per-snapshot lines after the removal
+	asks := p.Asks()
+	if asks {
+		printRemoveLines(p, "remove", preview.Remove)
+	}
+	question := fmt.Sprintf("remove %d snapshots", len(preview.Remove))
+	if prune {
+		question += " and prune unreferenced data"
+	}
+	if err := p.Confirm(question); err != nil {
 		return err
 	}
 	// Remove what the prompt named, not what a second policy run picks: a
@@ -183,7 +193,9 @@ func runForget(
 	}
 	pr.Done()
 	res.Keep, res.KeepReasons = preview.Keep, preview.KeepReasons
-	if err := printForget(cmd, res); err != nil {
+	if asks {
+		p.Linef("removed %d snapshots, kept %d", len(res.Remove), len(res.Keep))
+	} else if err := printForget(cmd, res); err != nil {
 		return err
 	}
 	if prune {
@@ -265,13 +277,17 @@ func printForget(cmd *cli.Command, res *ark.ForgetResult) error {
 	if res.DryRun {
 		verb = "would remove"
 	}
-	for _, s := range res.Remove {
+	printRemoveLines(p, verb, res.Remove)
+	p.Linef("%s %d snapshots, kept %d", verb, len(res.Remove), len(res.Keep))
+	return nil
+}
+
+func printRemoveLines(p *out.Printer, verb string, snaps []*ark.Snapshot) {
+	for _, s := range snaps {
 		if s.CreatedAt.IsZero() {
 			p.Linef("%s %s (corrupt manifest)", verb, s.ID)
 			continue
 		}
 		p.Linef("%s %s %s (%s)", verb, s.ID, out.Time(s.CreatedAt), s.SourceName)
 	}
-	p.Linef("%s %d snapshots, kept %d", verb, len(res.Remove), len(res.Keep))
-	return nil
 }

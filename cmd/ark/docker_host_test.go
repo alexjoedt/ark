@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -93,5 +95,54 @@ func TestDockerBackupRecordsTheHostAndParentsPerHost(t *testing.T) {
 	}
 	if d1 := backup("d", "--parent", string(b1.ID)); d1.ParentID != b1.ID {
 		t.Errorf("backup with --parent: parent %q, want %q", d1.ParentID, b1.ID)
+	}
+}
+
+func TestPrintVolumesColumn(t *testing.T) {
+	vols := []arkdocker.VolumeInfo{{Name: "pg", Driver: "local", Mountpoint: "/m/pg"}}
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	render := func(json bool, last map[string]time.Time) string {
+		var buf bytes.Buffer
+		p := out.NewWriter(out.Mode{JSON: json}, &buf, io.Discard, strings.NewReader(""))
+		if err := printVolumes(p, vols, last); err != nil {
+			t.Fatal(err)
+		}
+		return buf.String()
+	}
+	if got := render(false, nil); strings.Contains(got, "LAST SNAPSHOT") || !strings.Contains(got, "/m/pg") {
+		t.Errorf("no repository, table %q", got)
+	}
+	if got := render(false, map[string]time.Time{}); !strings.Contains(got, "LAST SNAPSHOT") {
+		t.Errorf("repository, table %q", got)
+	}
+	if got := render(false, map[string]time.Time{"pg": at}); !strings.Contains(got, "2026") {
+		t.Errorf("repository with snapshot, table %q", got)
+	}
+	if got := render(true, map[string]time.Time{"pg": at}); !strings.Contains(got, `"last_snapshot": "2026-01-02`) {
+		t.Errorf("repository, json %q", got)
+	}
+	if got := render(true, map[string]time.Time{}); !strings.Contains(got, `"last_snapshot": null`) {
+		t.Errorf("repository without snapshot, json %q", got)
+	}
+	if got := render(true, nil); strings.Contains(got, "last_snapshot") || !strings.Contains(got, `"name": "pg"`) {
+		t.Errorf("no repository, json %q", got)
+	}
+}
+
+func TestDockerVolumesNeedsNoRepository(t *testing.T) {
+	t.Setenv("ARK_REPOSITORY", "")
+	// an unreachable daemon is a runtime error, not a missing repository (exit 2)
+	for _, args := range [][]string{
+		{"docker", "--docker-host", "tcp://127.0.0.1:2", "volumes"},
+		{"--json", "docker", "--docker-host", "tcp://127.0.0.1:2", "volumes"},
+	} {
+		if code, out := runCapture(t, args...); code != 1 {
+			t.Errorf("%v: exit %d, want 1: %q", args, code, out)
+		}
+	}
+	// --host is still checked without a repository
+	code, _, logs := runCaptureAll(t, "docker", "volumes", "--host", "tcp://db1:2375")
+	if code != 2 || !strings.Contains(logs, "--docker-host") {
+		t.Errorf("--host with a daemon address: exit %d: %q", code, logs)
 	}
 }

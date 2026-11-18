@@ -46,7 +46,6 @@ func openDocker(ctx context.Context, cmd *cli.Command) (*arkdocker.Engine, *ark.
 	if err != nil {
 		return nil, nil, err
 	}
-	// volumes has no stop flags, the zero duration keeps the engine default
 	opts := []arkdocker.Option{
 		arkdocker.WithLogger(slog.Default()),
 		arkdocker.WithDockerHost(cmd.String("docker-host")),
@@ -72,51 +71,91 @@ func dockerVolumesCommand() *cli.Command {
 			if cmd.NArg() != 0 {
 				return exitcode.Usagef("usage: ark docker volumes")
 			}
-			e, repo, err := openDocker(ctx, cmd)
+			vols, last, err := listVolumes(ctx, cmd)
 			if err != nil {
 				return err
 			}
-			defer repo.Close()
-			defer e.Close()
-
-			host, err := dockerSeriesHost(ctx, cmd, e)
-			if err != nil {
-				return fmt.Errorf("docker volumes: %w", err)
-			}
-			vols, err := e.ListVolumes(ctx)
-			if err != nil {
-				return fmt.Errorf("docker volumes: %w", err)
-			}
-			snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{Type: arkdocker.SourceTypeDockerVolume})
-			if err != nil {
-				return fmt.Errorf("docker volumes: %w", err)
-			}
-			last := lastVolumeSnapshots(snaps, host)
-
-			p := printer(cmd)
-			if p.Mode().JSON {
-				list := make([]volumeJSON, 0, len(vols))
-				for _, v := range vols {
-					j := volumeJSON{Name: v.Name, Driver: v.Driver, Mountpoint: v.Mountpoint}
-					if t, ok := last[v.Name]; ok {
-						j.LastSnapshot = &t
-					}
-					list = append(list, j)
-				}
-				return p.JSON(list)
-			}
-			rows := make([][]string, 0, len(vols))
-			for _, v := range vols {
-				when := "-"
-				if t, ok := last[v.Name]; ok {
-					when = out.TimeLong(t)
-				}
-				rows = append(rows, []string{v.Name, v.Driver, v.Mountpoint, when})
-			}
-			p.Table([]string{"NAME", "DRIVER", "MOUNTPOINT", "LAST SNAPSHOT"}, rows)
-			return nil
+			return printVolumes(printer(cmd), vols, last)
 		},
 	}
+}
+
+// listVolumes asks the daemon for the volumes. The repository feeds only the
+// last snapshot map and is optional: without one configured the map is nil.
+// A configured one still has to open, password included.
+func listVolumes(ctx context.Context, cmd *cli.Command) ([]arkdocker.VolumeInfo, map[string]time.Time, error) {
+	var repo *ark.Repository
+	if uri, _ := repoSetting(cmd.Root(), profileFrom(ctx)); uri != "" {
+		var err error
+		if repo, err = openRepo(ctx, cmd); err != nil {
+			return nil, nil, err
+		}
+		defer repo.Close()
+	}
+	c, err := arkdocker.NewClient(cmd.String("docker-host"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("docker volumes: %w", err)
+	}
+	defer c.Close()
+
+	host, err := dockerSeriesHost(ctx, cmd, c)
+	if err != nil {
+		return nil, nil, fmt.Errorf("docker volumes: %w", err)
+	}
+	vols, err := c.ListVolumes(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("docker volumes: %w", err)
+	}
+	if repo == nil {
+		return vols, nil, nil
+	}
+	snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{Type: arkdocker.SourceTypeDockerVolume})
+	if err != nil {
+		return nil, nil, fmt.Errorf("docker volumes: %w", err)
+	}
+	return vols, lastVolumeSnapshots(snaps, host), nil
+}
+
+// printVolumes lists vols. last is nil without a repository: the LAST
+// SNAPSHOT column and the last_snapshot key are then left out, so a volume
+// never backed up (null) reads apart from no repository to ask (absent).
+func printVolumes(p *out.Printer, vols []arkdocker.VolumeInfo, last map[string]time.Time) error {
+	if p.Mode().JSON {
+		plain := make([]volumeJSON, 0, len(vols))
+		for _, v := range vols {
+			plain = append(plain, volumeJSON{Name: v.Name, Driver: v.Driver, Mountpoint: v.Mountpoint})
+		}
+		if last == nil {
+			return p.JSON(plain)
+		}
+		list := make([]volumeSnapshotJSON, 0, len(vols))
+		for _, j := range plain {
+			s := volumeSnapshotJSON{volumeJSON: j}
+			if t, ok := last[j.Name]; ok {
+				s.LastSnapshot = &t
+			}
+			list = append(list, s)
+		}
+		return p.JSON(list)
+	}
+	header := []string{"NAME", "DRIVER", "MOUNTPOINT"}
+	if last != nil {
+		header = append(header, "LAST SNAPSHOT")
+	}
+	rows := make([][]string, 0, len(vols))
+	for _, v := range vols {
+		row := []string{v.Name, v.Driver, v.Mountpoint}
+		if last != nil {
+			when := "-"
+			if t, ok := last[v.Name]; ok {
+				when = out.TimeLong(t)
+			}
+			row = append(row, when)
+		}
+		rows = append(rows, row)
+	}
+	p.Table(header, rows)
+	return nil
 }
 
 // hostFlag is --host of the docker commands. Its default is computed by
@@ -133,7 +172,7 @@ func hostFlag() cli.Flag {
 // machine for a local daemon and the daemon's own name for a remote one, so
 // the same volume name on two daemons is two series. A local daemon is not
 // asked, Docker Desktop names itself docker-desktop on every machine.
-func dockerSeriesHost(ctx context.Context, cmd *cli.Command, e *arkdocker.Engine) (string, error) {
+func dockerSeriesHost(ctx context.Context, cmd *cli.Command, c *arkdocker.Client) (string, error) {
 	if cmd.IsSet("host") {
 		h := cmd.String("host")
 		if strings.Contains(h, "://") {
@@ -142,7 +181,7 @@ func dockerSeriesHost(ctx context.Context, cmd *cli.Command, e *arkdocker.Engine
 		return h, nil
 	}
 	if remoteDaemon(cmd.String("docker-host")) {
-		return e.Client().DaemonName(ctx)
+		return c.DaemonName(ctx)
 	}
 	h, err := os.Hostname()
 	if err != nil {
@@ -186,11 +225,16 @@ func lastVolumeSnapshots(snaps []*ark.Snapshot, host string) map[string]time.Tim
 	return last
 }
 
-// volumeJSON is one element of ark docker volumes --json.
+// volumeJSON is one element of ark docker volumes --json without a
+// repository, volumeSnapshotJSON one with a repository.
 type volumeJSON struct {
-	Name         string     `json:"name"`
-	Driver       string     `json:"driver"`
-	Mountpoint   string     `json:"mountpoint"`
+	Name       string `json:"name"`
+	Driver     string `json:"driver"`
+	Mountpoint string `json:"mountpoint"`
+}
+
+type volumeSnapshotJSON struct {
+	volumeJSON
 	LastSnapshot *time.Time `json:"last_snapshot"`
 }
 
@@ -235,7 +279,7 @@ func dockerBackupCommand() *cli.Command {
 			defer repo.Close()
 			defer e.Close()
 
-			host, err := dockerSeriesHost(ctx, cmd, e)
+			host, err := dockerSeriesHost(ctx, cmd, e.Client())
 			if err != nil {
 				return fmt.Errorf("docker backup %s: %w", volume, err)
 			}

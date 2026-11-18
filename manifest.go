@@ -164,11 +164,15 @@ func (r *Repository) loadManifest(ctx context.Context, id SnapshotID) (*manifest
 
 // readManifests returns all manifests, newest first. A manifest that does not
 // load is an error: a listing must not hide a snapshot, and prune must not
-// treat one it cannot read as absent and sweep its objects.
+// treat one it cannot read as absent and sweep its objects. One that is gone
+// by the time it is read was deleted after the listing and is left out.
 func (r *Repository) readManifests(ctx context.Context) ([]*manifest, error) {
 	var manifests []*manifest
 	err := r.backend.List(ctx, SnapshotFile, func(info BlobInfo) error {
 		m, err := r.loadManifest(ctx, SnapshotID(info.Name))
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
 		if err != nil {
 			return fmt.Errorf("snapshot %s: %w", info.Name, err)
 		}

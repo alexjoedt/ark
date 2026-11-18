@@ -43,7 +43,19 @@ _, err = arkfs.Restore(ctx, repo, snap.ID, "/tmp/docs")
 
 `arkfs.Backup` and `arkfs.Restore` are `repo.Backup(ctx, source)` and `repo.Restore(ctx, snapshotID, sink)` with a directory as source and sink. A snapshot ID has its own type, `ark.SnapshotID`; `Snapshot.ID` is one, and `Restore`, `Snapshot`, `Verify`, `Walk`, `Export`, `Reader.FS`, `WithParent`, and `SnapshotFilter.IDs` passed to `Snapshots` or `Forget`, take a full ID or a unique prefix of one, in upper or lower case. A prefix that matches no snapshot wraps `ark.ErrNotFound`, one that matches several wraps `ark.ErrAmbiguousID`. `SnapshotFilter.Match` resolves nothing: called on its own, it compares `IDs` with the full, lower-case `Snapshot.ID` exactly. A literal converts as it is, `ark.SnapshotID("3f9a")`. Restore and export stream the snapshot: memory stays at the chunk cache plus one chunk per worker, no matter how large the snapshot is. The cache is 256 MiB; `ark.WithRestoreCache` changes it for a restore, export always uses the default. Verify reads pack by pack instead and holds about 150 bytes per distinct chunk of the snapshot plus one pack range of up to about 20 MiB, so its memory grows with the snapshot.
 
-Besides backup and restore, a `*ark.Repository` lists snapshots (`Snapshots`, `Walk`), forgets and prunes (`Forget`, `Prune`), checks (`Verify`, `Check`), exports and imports, changes the password and lists locks.
+Besides backup and restore, a `*ark.Repository` lists snapshots (`Snapshots`, `Walk`), reports its size (`Info`), forgets and prunes (`Forget`, `Prune`), checks (`Verify`, `Check`), exports and imports, changes the password and lists locks.
+
+## Repository size
+
+`repo.Info` counts the snapshots, sums their `Stats.TotalSize` and adds up the object sizes the backend lists per namespace in `Stored` (data packs, tree packs, indexes, snapshots, keys, other); `Stored.Total()` is the size of the repository. The summed total size is not deduplicated: a file in ten snapshots counts ten times. `Info` reads the snapshot manifests and no pack or index, and takes no lock. A manifest deleted while it runs is left out. With `ark.WithInfoExact()` it runs a prune dry run and fills `BytesFreed`, the bytes no snapshot uses that a prune deletes, and `BytesUnused`, those it leaves in place; together they are all the unused space. That reads every tree and index, holds the exclusive lock like `Prune` and reports progress as a prune.
+
+```go
+info, err := repo.Info(ctx, ark.WithInfoExact())
+if err != nil {
+	return err
+}
+fmt.Printf("%d snapshots, %d of %d bytes unused\n", info.Snapshots, info.BytesFreed+info.BytesUnused, info.Stored.Total())
+```
 
 ## Packages
 

@@ -28,19 +28,24 @@ func pruneCommand() *cli.Command {
 				return err
 			}
 			defer repo.Close()
-			return runPrune(ctx, cmd, repo, cmd.Bool("dry-run"))
+			dryRun := cmd.Bool("dry-run")
+			if !dryRun {
+				if err := printer(cmd).Confirm("delete unreferenced packs"); err != nil {
+					return err
+				}
+			}
+			return runPrune(ctx, cmd, repo, dryRun)
 		},
 	}
 }
 
-// runPrune is shared with forget --prune. It prompts unless dry-run.
+// runPrune is shared with forget --prune. The caller asks first: prune for
+// itself, forget once for both steps.
 func runPrune(ctx context.Context, cmd *cli.Command, repo *ark.Repository, dryRun bool) error {
 	p := printer(cmd)
 	var opts []ark.PruneOption
 	if dryRun {
 		opts = append(opts, ark.WithPruneDryRun())
-	} else if err := p.Confirm("delete unreferenced packs"); err != nil {
-		return err
 	}
 	pr := startProgress(p, "prune")
 	res, err := repo.Prune(ctx, opts...)

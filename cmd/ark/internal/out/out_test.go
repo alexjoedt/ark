@@ -485,6 +485,18 @@ func TestProgressDropsEventsAfterEnd(t *testing.T) {
 }
 
 func TestConfirm(t *testing.T) {
+	for _, c := range []struct {
+		mode Mode
+		tty  bool
+		want bool
+	}{{Mode{}, true, true}, {Mode{}, false, false}, {Mode{Yes: true}, true, false}, {Mode{JSON: true}, true, false}} {
+		p, _, _ := newTest(c.mode, "")
+		p.SetTTY(c.tty)
+		if p.Asks() != c.want {
+			t.Errorf("%+v tty %v: Asks %v", c.mode, c.tty, !c.want)
+		}
+	}
+
 	p, _, _ := newTest(Mode{Yes: true}, "")
 	if err := p.Confirm("delete"); err != nil {
 		t.Fatalf("--yes: %v", err)

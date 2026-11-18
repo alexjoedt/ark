@@ -29,6 +29,7 @@ ark repair index            # after check or prune report a lost or damaged inde
 | [`find`](#find) | find files in snapshots by pattern |
 | [`mount`](#mount) | serve every snapshot read-only through FUSE |
 | [`inspect`](#inspect) | show one snapshot in detail |
+| [`info`](#info) | show what a repository holds |
 | [`forget`](#forget) | remove snapshots by id or policy |
 | [`prune`](#prune) | delete packs no snapshot references |
 | [`repair index`](#repair-index) | rebuild the index from the stored packs |
@@ -194,6 +195,24 @@ Shows one snapshot: source and type, host, time, parent, tags, file count, size 
 new and reused, deduplication and compression ratios, duration, comment and the exclude patterns it
 was taken with. `--json` adds the labels.
 
+## info
+
+`ark info [--exact]`
+
+Shows how many snapshots the repository holds, the total size of the files they cover and what the
+repository stores, split into data packs, tree packs, indexes, snapshots, keys and other objects
+(config, locks, the lost-pack marker), with the ratio of total size to stored size. The total size is
+summed over the snapshots and not deduplicated: a file in ten snapshots counts ten times, so the
+ratio grows with every unchanged backup. It reads the snapshot list and the object sizes the
+backend lists, no data, and takes no lock.
+
+`--exact` adds the bytes no snapshot uses and how many of them a prune frees, from a prune dry run:
+it reads every tree and index and takes the exclusive lock, so it waits for or fails on a running
+backup like prune does. A ratio below 0.05 prints as `<0.1x`. `--json` prints one object with
+`snapshots`, `total_size`, `stored_size`, `stored` (bytes per kind: `datapacks`, `treepacks`,
+`indexes`, `snapshots`, `keys`, `other`) and, with `--exact`, `bytes_freed` (what a prune deletes)
+and `bytes_unused` (what it leaves in place).
+
 ## forget
 
 `ark forget [options] [<id>...]`
@@ -201,6 +220,9 @@ was taken with. `--json` adds the labels.
 Removes snapshots, either the named ids or those a policy does not keep. The policy applies per
 series among the snapshots the filters match. Chunks stay in the repository until a prune. See
 [Retention policies](../retention.md) for what each rule keeps, with timelines.
+
+On a terminal, `forget` lists the snapshots it will remove and then asks once. With `--prune` that
+question covers the prune too. With `--yes` it asks nothing and lists each snapshot after removing it.
 
 | Flag | Meaning |
 |---|---|
@@ -377,7 +399,7 @@ Docker volumes live under `ark docker`. The daemon comes from `--docker-host ADD
 
 | Command | Purpose |
 |---|---|
-| `ark docker volumes [--host NAME]` | list the volumes with driver, mountpoint and last snapshot |
+| `ark docker volumes [--host NAME]` | list the volumes with driver and mountpoint, and the last snapshot when a repository is configured (`--json`: `last_snapshot` is null for a volume never backed up, absent without a repository) |
 | `ark docker backup [options] <volume>` | stop the containers using the volume, back it up, restart them |
 | `ark docker restore [options] <id> [volume]` | restore into `volume`, default the snapshot's source name; creates it if missing, replaces its contents if present |
 
@@ -388,7 +410,7 @@ replaced), `--yes`, `--no-stop` and `--stop-timeout`, and refuses snapshots whos
 `docker-volume`.
 
 ```bash
-ark docker volumes
+ark docker volumes                     # needs only the daemon; a configured repository must open
 ark docker backup postgres_data --comment "before upgrade"  # --host NAME overrides the host
 ark snapshots --type docker-volume    # only volume snapshots, file backups have type file
 ark docker restore <id>                # into the volume it came from
