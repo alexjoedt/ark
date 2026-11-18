@@ -49,7 +49,7 @@ const SealOverhead = sealOverhead
 func ObjectName(r *Repository, data []byte) string { return keyedName(r.key.IDKey[:], data) }
 
 // RootTree returns the root tree hash of snapshot id.
-func RootTree(ctx context.Context, r *Repository, id string) (string, error) {
+func RootTree(ctx context.Context, r *Repository, id SnapshotID) (string, error) {
 	m, err := r.loadManifest(ctx, id)
 	if err != nil {
 		return "", err
@@ -158,14 +158,14 @@ func SetPackLimits(r *Repository, packBytes, checkpointBlobs int) {
 // WriteBase32Snapshot stores a copy of snapshot id under a 26 character
 // Crockford base32 name, the form snapshots had before hex IDs, and returns
 // that name.
-func WriteBase32Snapshot(ctx context.Context, r *Repository, id string) (string, error) {
+func WriteBase32Snapshot(ctx context.Context, r *Repository, id SnapshotID) (SnapshotID, error) {
 	m, err := r.loadManifest(ctx, id)
 	if err != nil {
 		return "", err
 	}
 	b := make([]byte, 16)
 	_, _ = cryptorand.Read(b)
-	m.ID = encodeBase32(b)
+	m.ID = SnapshotID(encodeBase32(b))
 	return m.ID, r.saveManifest(ctx, m)
 }
 

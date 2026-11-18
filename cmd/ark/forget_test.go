@@ -60,7 +60,7 @@ func TestForgetCutsPeriodsInTheZoneOfTZ(t *testing.T) {
 func importEmptySnapshot(t *testing.T, repo, createdAt string, tags ...string) {
 	t.Helper()
 	meta, err := json.Marshal(map[string]any{
-		"version": 3, "created_at": createdAt, "source_name": "app", "source_type": "file", "tags": tags,
+		"version": 1, "created_at": createdAt, "source_name": "app", "source_type": "file", "tags": tags,
 	})
 	if err != nil {
 		t.Fatal(err)

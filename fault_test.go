@@ -77,10 +77,10 @@ func faultRepo(t *testing.T, packBytes int) (*ark.Repository, *faultBackend) {
 	t.Helper()
 	ctx := context.Background()
 	b := &faultBackend{Backend: arkmem.New()}
-	if err := ark.Init(ctx, b, ark.WithoutPassword()); err != nil {
+	if err := ark.Init(ctx, b, ark.NoPassword()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	repo, err := ark.Open(ctx, b, ark.WithoutPassword(), ark.WithConcurrency(1))
+	repo, err := ark.Open(ctx, b, ark.NoPassword(), ark.WithConcurrency(1))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

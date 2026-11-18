@@ -27,7 +27,7 @@ const (
 	legacyMetadataName = "manifest.json"
 
 	// gzipMagic opens every gzip stream. Import sniffs it to stay compatible
-	// with the archives the v1.1.0 binary compressed.
+	// with the archives the pre-v1 binary compressed.
 	gzipMagic = "\x1f\x8b"
 )
 
@@ -61,7 +61,7 @@ func xattrsFromPAX(records map[string]string) map[string][]byte {
 	return xattrs
 }
 
-func (r *Repository) runExport(ctx context.Context, snapshotID string, w io.Writer) error {
+func (r *Repository) runExport(ctx context.Context, snapshotID SnapshotID, w io.Writer) error {
 	logger := r.logger.With("component", "export", "snapshot", snapshotID)
 
 	m, err := r.loadManifest(ctx, snapshotID)
@@ -194,7 +194,7 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader, session *p
 				return nil, err
 			}
 			m.ID = importedSnapshotID(m.ID)
-			exists, err := r.backend.Exists(ctx, Handle{Type: SnapshotFile, Name: m.ID})
+			exists, err := r.backend.Exists(ctx, Handle{Type: SnapshotFile, Name: string(m.ID)})
 			if err != nil {
 				return nil, fmt.Errorf("import: failed to check snapshot %s: %w", m.ID, err)
 			}
@@ -304,7 +304,7 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader, session *p
 
 // maybeGunzip returns reader as it is, or wrapped in a gzip reader when the
 // stream starts with the gzip magic. ark writes plain tar since v1, and the
-// archives the v1.1.0 binary wrote are gzipped.
+// archives the pre-v1 binary wrote are gzipped.
 func maybeGunzip(reader io.Reader) (io.Reader, func(), error) {
 	br := bufio.NewReader(reader)
 	magic, err := br.Peek(len(gzipMagic))
@@ -322,12 +322,12 @@ func maybeGunzip(reader io.Reader) (io.Reader, func(), error) {
 	return gr, func() { _ = gr.Close() }, nil
 }
 
-// legacyMetadata is the metadata.json the v1.1.0 binary wrote. Only the fields
+// legacyMetadata is the metadata.json the pre-v1 binary wrote. Only the fields
 // that survive a re-chunking import are read; everything else about the
 // snapshot is rebuilt from the archive itself.
 type legacyMetadata struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        SnapshotID `json:"id"`
+	CreatedAt time.Time  `json:"created_at"`
 	Source    struct {
 		Volume string            `json:"volume"`
 		Labels map[string]string `json:"labels"`
@@ -338,18 +338,18 @@ type legacyMetadata struct {
 }
 
 // parseArchiveMetadata reads the archive's metadata entry, in this version's
-// shape or in the one the v1.1.0 binary wrote.
+// shape or in the one the pre-v1 binary wrote.
 func parseArchiveMetadata(data []byte) (*manifest, error) {
 	var m manifest
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("import: failed to parse the archive metadata: %w", err)
 	}
-	if m.Version == manifestVersion3 {
+	if m.Version == manifestVersion {
 		return &m, nil
 	}
 	if m.Version != 0 {
 		// Saved as is, it would be a manifest no reader loads and prune sweeps.
-		return nil, fmt.Errorf("import: unsupported manifest version %d (only v3 is supported)", m.Version)
+		return nil, fmt.Errorf("import: unsupported manifest version %d (only v1 is supported)", m.Version)
 	}
 
 	// No version field: an archive from before the manifest was the metadata.
@@ -362,7 +362,7 @@ func parseArchiveMetadata(data []byte) (*manifest, error) {
 	}
 
 	return &manifest{
-		Version:    manifestVersion3,
+		Version:    manifestVersion,
 		ID:         legacy.ID,
 		CreatedAt:  legacy.CreatedAt,
 		SourceName: legacy.Source.Volume,

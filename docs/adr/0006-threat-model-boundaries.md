@@ -48,7 +48,7 @@ the argon2id parameters and the config plaintext are accepted and documented at 
 The passphrase never appears in a log (debug included), in a URI or in argv. It is read from
 `ARK_PASSWORD`, `--password-file` (or `ARK_PASSWORD_FILE`) or the prompt; `ARK_PASSWORD` is visible
 to processes of the same user, and zeroing memory or disabling core dumps is not promised. A
-repository can also be created without any passphrase (`WithoutPassword`, `--insecure-no-password`):
+repository can also be created without any passphrase (`NoPassword`, `--insecure-no-password`):
 the format and the integrity checks are the same, but anyone with backend access can read it, and
 the explicit flag on every call is the only guard. `ark serve` (removed by 0016) binds
 loopback by default and warns on a non-loopback address; TLS is a reverse proxy's job.
@@ -71,7 +71,7 @@ Every guarantee and accepted risk of `docs/SECURITY.md` ends with a test that pi
 hash, `TestReplayedManifestRestoresOnlyItsOwnBytes`, `TestReplayedKeyFileOpensUnderTheOldPassword`
 and `TestReplayedConfigOpensOnlyWithItsKeyFile` for the replays, `TestSnapshotIDsCarryNoTimestamp`
 in `encryption_test.go` for the IDs, `TestListingRevealsCountsAndSizes` for the sizes and
-`TestPassphraseNeverInTheLogs` in `passphrase_log_test.go` (library) and
+`TestPasswordNeverInTheLogs` in `passphrase_log_test.go` (library) and
 `cmd/ark/transport_test.go` (CLI) for the passphrase. A user who needs protection against rollback or
 a leaked master key has no answer yet: append-only mode and key rotation stay open items. A cluster
 service that wants rollback detection must keep its own record of the snapshot set.

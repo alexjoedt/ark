@@ -122,11 +122,11 @@ func (r *Repository) now() time.Time {
 //
 // Then it unseals the master key with pw before any other object is read. It
 // returns ErrWrongPassword when no key file opens, ErrPasswordRequired for
-// WithoutPassword on a protected repository and ErrNotPasswordProtected for a
-// password on a repository created with WithoutPassword, and ErrCorruptConfig
+// NoPassword on a protected repository and ErrNotPasswordProtected for a
+// password on a repository created with NoPassword, and ErrCorruptConfig
 // when a key opens but the config is not the one it was sealed with. Unsealing
 // a password protected key file runs argon2id with 64 MiB of memory.
-func Open(ctx context.Context, b Backend, pw Passphrase, opts ...Option) (*Repository, error) {
+func Open(ctx context.Context, b Backend, pw Password, opts ...Option) (*Repository, error) {
 	if err := pw.validate(); err != nil {
 		return nil, err
 	}
@@ -173,7 +173,7 @@ func Open(ctx context.Context, b Backend, pw Passphrase, opts ...Option) (*Repos
 }
 
 // ChangePassword replaces the key file the repository was opened with by one
-// sealed under pw, which may also be WithoutPassword. The master key stays,
+// sealed under pw, which may also be NoPassword. The master key stays,
 // so no data is rewritten; for the same reason the change does not revoke
 // access for anyone who could read the master key before, through the old
 // password or a copy of the old key file.
@@ -181,7 +181,7 @@ func Open(ctx context.Context, b Backend, pw Passphrase, opts ...Option) (*Repos
 // It takes the exclusive lock. The new key file is written before the old
 // one is deleted: when the write fails the old password still opens the
 // repository, when the delete fails both do and the error says so.
-func (r *Repository) ChangePassword(ctx context.Context, pw Passphrase) error {
+func (r *Repository) ChangePassword(ctx context.Context, pw Password) error {
 	if err := pw.validate(); err != nil {
 		return err
 	}
@@ -258,16 +258,21 @@ func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOptio
 	return manifestToSnapshot(m), nil
 }
 
-// Restore streams the snapshot into sink. id is a full snapshot id or a
-// unique prefix.
-func (r *Repository) Restore(ctx context.Context, id string, sink Sink, opts ...RestoreOption) (*RestoreResult, error) {
+// Restore streams the snapshot into sink. snapshotID is a full snapshot ID
+// or a unique prefix.
+func (r *Repository) Restore(
+	ctx context.Context,
+	snapshotID SnapshotID,
+	sink Sink,
+	opts ...RestoreOption,
+) (*RestoreResult, error) {
 	ctx, lock, err := r.acquire(ctx, false)
 	if err != nil {
 		return nil, err
 	}
 	defer lock.release(ctx)
 
-	id, err = r.resolveID(ctx, id)
+	id, err := r.resolveID(ctx, snapshotID)
 	if err != nil {
 		return nil, err
 	}
@@ -283,10 +288,11 @@ func (r *Repository) Restore(ctx context.Context, id string, sink Sink, opts ...
 	return &RestoreResult{FilesRestored: stats.FilesRestored, BytesRestored: stats.BytesRestored}, nil
 }
 
-// resolveID turns a full snapshot id or a unique prefix into the full id.
-// It returns ErrNotFound when nothing matches and ErrAmbiguousID, naming the
-// candidates, when more than one does.
-func (r *Repository) resolveID(ctx context.Context, id string) (string, error) {
+// resolveID turns a full snapshot ID or a unique prefix into the full ID,
+// the name the manifest is stored under. It returns ErrNotFound when nothing
+// matches and ErrAmbiguousID, naming the candidates, when more than one does.
+func (r *Repository) resolveID(ctx context.Context, snapshotID SnapshotID) (SnapshotID, error) {
+	id := string(snapshotID)
 	if id == "" {
 		return "", fmt.Errorf("%w: empty snapshot id", ErrNotFound)
 	}
@@ -294,7 +300,7 @@ func (r *Repository) resolveID(ctx context.Context, id string) (string, error) {
 	// An exact hit costs one Stat; only a prefix needs the full listing.
 	lower := strings.ToLower(id)
 	if _, err := r.backend.Stat(ctx, Handle{Type: SnapshotFile, Name: lower}); err == nil {
-		return lower, nil
+		return SnapshotID(lower), nil
 	}
 
 	var matches []string
@@ -312,7 +318,7 @@ func (r *Repository) resolveID(ctx context.Context, id string) (string, error) {
 	case 0:
 		return "", fmt.Errorf("%w: %s", ErrNotFound, id)
 	case 1:
-		return matches[0], nil
+		return SnapshotID(matches[0]), nil
 	default:
 		sort.Strings(matches)
 		return "", fmt.Errorf("%w: %s matches %s", ErrAmbiguousID, id, strings.Join(matches, ", "))
@@ -323,7 +329,7 @@ func (r *Repository) resolveID(ctx context.Context, id string) (string, error) {
 func (r *Repository) Snapshots(ctx context.Context, filter SnapshotFilter) ([]*Snapshot, error) {
 	if len(filter.IDs) > 0 {
 		// Resolve into a copy: the caller's slice stays untouched.
-		resolved := make([]string, len(filter.IDs))
+		resolved := make([]SnapshotID, len(filter.IDs))
 		for i, id := range filter.IDs {
 			full, err := r.resolveID(ctx, id)
 			if err != nil {
@@ -350,9 +356,10 @@ func (r *Repository) Snapshots(ctx context.Context, filter SnapshotFilter) ([]*S
 	return out, nil
 }
 
-// Snapshot returns one snapshot. id is a full snapshot id or a unique prefix.
-func (r *Repository) Snapshot(ctx context.Context, id string) (*Snapshot, error) {
-	id, err := r.resolveID(ctx, id)
+// Snapshot returns one snapshot. snapshotID is a full snapshot ID or a
+// unique prefix.
+func (r *Repository) Snapshot(ctx context.Context, snapshotID SnapshotID) (*Snapshot, error) {
+	id, err := r.resolveID(ctx, snapshotID)
 	if err != nil {
 		return nil, err
 	}
@@ -366,8 +373,8 @@ func (r *Repository) Snapshot(ctx context.Context, id string) (*Snapshot, error)
 // deleteSnapshot removes one manifest. Its objects stay in the CAS until
 // Prune sweeps them, which is why this is not part of the public surface:
 // callers go through Forget.
-func (r *Repository) deleteSnapshot(ctx context.Context, id string) error {
-	if err := r.backend.Delete(ctx, Handle{Type: SnapshotFile, Name: id}); err != nil {
+func (r *Repository) deleteSnapshot(ctx context.Context, id SnapshotID) error {
+	if err := r.backend.Delete(ctx, Handle{Type: SnapshotFile, Name: string(id)}); err != nil {
 		return fmt.Errorf("ark: failed to delete snapshot %s: %w", id, err)
 	}
 	return nil
@@ -478,7 +485,7 @@ func (r *Repository) forgetNamed(ctx context.Context, filter SnapshotFilter) (*F
 	rest := filter
 	rest.IDs = nil
 	result := &ForgetResult{}
-	seen := make(map[string]bool, len(filter.IDs))
+	seen := make(map[SnapshotID]bool, len(filter.IDs))
 	for _, id := range filter.IDs {
 		full, err := r.resolveID(ctx, id)
 		if err != nil {
@@ -563,16 +570,16 @@ func (r *Repository) RebuildIndex(ctx context.Context) (*RebuildIndexResult, err
 	return r.runRebuildIndex(ctx)
 }
 
-// Export writes a portable tar.gz archive of one snapshot to w. id is a full
-// snapshot id or a unique prefix.
-func (r *Repository) Export(ctx context.Context, id string, w io.Writer) error {
+// Export writes a portable tar.gz archive of one snapshot to w. snapshotID
+// is a full snapshot ID or a unique prefix.
+func (r *Repository) Export(ctx context.Context, snapshotID SnapshotID, w io.Writer) error {
 	ctx, lock, err := r.acquire(ctx, false)
 	if err != nil {
 		return err
 	}
 	defer lock.release(ctx)
 
-	id, err = r.resolveID(ctx, id)
+	id, err := r.resolveID(ctx, snapshotID)
 	if err != nil {
 		return err
 	}
@@ -597,8 +604,8 @@ func (r *Repository) Import(ctx context.Context, reader io.Reader) (*Snapshot, e
 }
 
 // Verify checks one snapshot: manifest, tree and every chunk.
-// id is a full snapshot id or a unique prefix.
-func (r *Repository) Verify(ctx context.Context, id string) (*VerifyResult, error) {
+// snapshotID is a full snapshot ID or a unique prefix.
+func (r *Repository) Verify(ctx context.Context, snapshotID SnapshotID) (*VerifyResult, error) {
 	progress := r.observer(OperationVerify, nil)
 	progress(ProgressEvent{Phase: PhaseLoad})
 
@@ -608,7 +615,7 @@ func (r *Repository) Verify(ctx context.Context, id string) (*VerifyResult, erro
 	}
 	defer lock.release(ctx)
 
-	id, err = r.resolveID(ctx, id)
+	id, err := r.resolveID(ctx, snapshotID)
 	if err != nil {
 		return nil, err
 	}
@@ -617,7 +624,7 @@ func (r *Repository) Verify(ctx context.Context, id string) (*VerifyResult, erro
 	if err != nil {
 		return result, err
 	}
-	progress(ProgressEvent{Phase: PhaseFinalize, CurrentPath: id})
+	progress(ProgressEvent{Phase: PhaseFinalize, CurrentPath: string(id)})
 	return result, nil
 }
 
@@ -638,15 +645,16 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 
 	// Names, not manifests: a manifest that does not open is a finding of the
 	// check, not a reason to stop it.
-	var ids []string
+	var ids []SnapshotID
 	err = r.backend.List(ctx, SnapshotFile, func(info BlobInfo) error {
-		ids = append(ids, info.Name)
+		ids = append(ids, SnapshotID(info.Name))
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ark: failed to list snapshots: %w", err)
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(ids)))
+	slices.Sort(ids)
+	slices.Reverse(ids)
 
 	_, unreadable, err := r.loadLocks(ctx)
 	if err != nil {
@@ -680,7 +688,7 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 		if ctx.Err() != nil {
 			return nil, ctx.Err() //nolint:wrapcheck // the caller's own cancellation
 		}
-		progress(ProgressEvent{Phase: PhaseFetch, CurrentPath: id, FilesDone: i + 1, FilesTotal: len(ids)})
+		progress(ProgressEvent{Phase: PhaseFetch, CurrentPath: string(id), FilesDone: i + 1, FilesTotal: len(ids)})
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("snapshot %s: %v", id, err))
 			continue
@@ -702,19 +710,19 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 }
 
 // Walk calls fn for every entry of a snapshot in tree order, parents before
-// children, without materialising the list. id is a full snapshot id or a
-// unique prefix. An error from fn ends the walk and is returned.
+// children, without materialising the list. snapshotID is a full snapshot
+// ID or a unique prefix. An error from fn ends the walk and is returned.
 //
 // Directory paths carry a trailing slash, the way tar names them; every other
 // entry carries the plain path a Source yielded.
-func (r *Repository) Walk(ctx context.Context, id string, fn func(FileInfo) error) error {
+func (r *Repository) Walk(ctx context.Context, snapshotID SnapshotID, fn func(FileInfo) error) error {
 	ctx, lock, err := r.acquire(ctx, false)
 	if err != nil {
 		return err
 	}
 	defer lock.release(ctx)
 
-	id, err = r.resolveID(ctx, id)
+	id, err := r.resolveID(ctx, snapshotID)
 	if err != nil {
 		return err
 	}

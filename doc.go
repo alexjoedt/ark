@@ -9,9 +9,9 @@
 // Basic usage:
 //
 //	b, _ := arklocal.New("/path/to/repo")
-//	ark.Init(ctx, b, ark.WithPassword(pw)) // once, per repository
+//	ark.Init(ctx, b, ark.NewPassword(pw)) // once, per repository
 //
-//	repo, _ := ark.Open(ctx, b, ark.WithPassword(pw))
+//	repo, _ := ark.Open(ctx, b, ark.NewPassword(pw))
 //	snapshot, _ := repo.Backup(ctx, mySource)
 //	repo.Restore(ctx, snapshot.ID, mySink)
 //
@@ -23,10 +23,10 @@
 // master key before it reads any other object, and a wrong password fails
 // with ErrWrongPassword. There is no recovery: a lost password is lost data.
 //
-// A repository without a password is created and opened with WithoutPassword.
+// A repository without a password is created and opened with NoPassword.
 // It has the same format with the master key stored unprotected, so anyone
 // with access to the backend can read and forge it; corruption is still
-// detected. The choice is explicit on every Init and Open: WithoutPassword on
+// detected. The choice is explicit on every Init and Open: NoPassword on
 // a protected repository fails with ErrPasswordRequired, a password on an
 // unprotected one with ErrNotPasswordProtected.
 //

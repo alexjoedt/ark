@@ -27,7 +27,14 @@ func TestBuildLayout(t *testing.T) {
 	sec := out.TimeLong(at)
 	file := func(id, name, host string, d time.Duration, tags ...string) *ark.Snapshot {
 		return &ark.Snapshot{
-			ID: id, SourceType: ark.SourceTypeFile, SourceName: name, Host: host, Tags: tags, CreatedAt: at.Add(d),
+			ID: ark.SnapshotID(
+				id,
+			),
+			SourceType: ark.SourceTypeFile,
+			SourceName: name,
+			Host:       host,
+			Tags:       tags,
+			CreatedAt:  at.Add(d),
 		}
 	}
 	snaps := []*ark.Snapshot{
@@ -241,7 +248,7 @@ func TestMount(t *testing.T) {
 	done := startMount(t, mnt)
 	when := out.TimeLong(snap.CreatedAt)
 	for _, dir := range []string{
-		filepath.Join("ids", out.ShortID(snap.ID)),
+		filepath.Join("ids", out.ShortID(ark.SnapshotID(snap.ID))),
 		filepath.Join("sources", "files", "h1", "app", "data", when),
 		filepath.Join("sources", "files", "h1", "app", "data", "latest"),
 		filepath.Join("tags", "_.t", when),
@@ -251,7 +258,7 @@ func TestMount(t *testing.T) {
 			t.Errorf("%s/dir/file.txt = %q, %v", dir, got, err)
 		}
 	}
-	snapDir := filepath.Join(mnt, "ids", out.ShortID(snap.ID))
+	snapDir := filepath.Join(mnt, "ids", out.ShortID(ark.SnapshotID(snap.ID)))
 	if entries, err := os.ReadDir(snapDir); err != nil || len(entries) != 3 {
 		t.Errorf("snapshot root lists %v, %v; want dir, hard.txt, link", entries, err)
 	}
@@ -401,7 +408,7 @@ func TestMountAttributes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := ark.Open(context.Background(), b, ark.WithoutPassword())
+	r, err := ark.Open(context.Background(), b, ark.NoPassword())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -37,9 +37,9 @@ func TestNoPasswordFlag(t *testing.T) {
 	walk(newApp())
 }
 
-// TestPassphraseNeverInTheLogs runs the commands that touch the passphrase at
+// TestPasswordNeverInTheLogs runs the commands that touch the passphrase at
 // debug level and looks for it, and for the new one, in everything written.
-func TestPassphraseNeverInTheLogs(t *testing.T) {
+func TestPasswordNeverInTheLogs(t *testing.T) {
 	const pw, next = "hunter2-old-passphrase", "hunter2-new-passphrase"
 	repo := filepath.Join(t.TempDir(), "repo")
 	t.Setenv("ARK_REPOSITORY", "")

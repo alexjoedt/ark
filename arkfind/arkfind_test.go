@@ -60,10 +60,10 @@ func newRepo(t *testing.T) (*ark.Repository, *arkmem.Backend) {
 	t.Helper()
 	ctx := context.Background()
 	b := arkmem.New()
-	if err := ark.Init(ctx, b, ark.WithoutPassword()); err != nil {
+	if err := ark.Init(ctx, b, ark.NoPassword()); err != nil {
 		t.Fatal(err)
 	}
-	repo, err := ark.Open(ctx, b, ark.WithoutPassword())
+	repo, err := ark.Open(ctx, b, ark.NoPassword())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func find(t *testing.T, repo *ark.Repository, filter ark.SnapshotFilter, pattern
 	t.Helper()
 	var got []string
 	err := arkfind.Find(context.Background(), repo, filter, patterns, func(m arkfind.Match) error {
-		got = append(got, m.Snapshot.ID+" "+m.File.Path)
+		got = append(got, string(m.Snapshot.ID)+" "+m.File.Path)
 		return nil
 	})
 	if err != nil {
@@ -135,8 +135,8 @@ func TestFindNewestFirstGroupedInTreeOrder(t *testing.T) {
 
 	all := find(t, repo, ark.SnapshotFilter{}, "*.txt")
 	want := []string{
-		s3.ID + " a/report.txt", s3.ID + " b/w.txt", s3.ID + " b/y.txt",
-		s1.ID + " a/report.txt", s1.ID + " b/y.txt",
+		string(s3.ID) + " a/report.txt", string(s3.ID) + " b/w.txt", string(s3.ID) + " b/y.txt",
+		string(s1.ID) + " a/report.txt", string(s1.ID) + " b/y.txt",
 	}
 	if !slices.Equal(all, want) {
 		t.Errorf("*.txt = %q, want %q (s2 %s has none)", all, want, s2.ID)
@@ -221,7 +221,7 @@ func TestFindFilter(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var want []string
 			for _, s := range tt.want {
-				want = append(want, s.ID+" f.txt")
+				want = append(want, string(s.ID)+" f.txt")
 			}
 			if got := find(t, repo, tt.filter, "f.txt"); !slices.Equal(got, want) {
 				t.Errorf("got %q, want %q", got, want)
@@ -287,19 +287,19 @@ func TestFindSkipsSnapshotForgottenDuringSearch(t *testing.T) {
 	s2 := backup(t, repo, src)
 	s3 := backup(t, repo, src)
 
-	var got []string
+	var got []ark.SnapshotID
 	err := arkfind.Find(ctx, repo, ark.SnapshotFilter{}, []string{"a.txt"}, func(m arkfind.Match) error {
 		got = append(got, m.Snapshot.ID)
 		if m.Snapshot.ID != s3.ID {
 			return nil
 		}
-		_, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{s2.ID}})
+		_, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{s2.ID}})
 		return err
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{s3.ID, s1.ID}; !slices.Equal(got, want) {
+	if want := []ark.SnapshotID{s3.ID, s1.ID}; !slices.Equal(got, want) {
 		t.Errorf("searched %q, want %q", got, want)
 	}
 }
@@ -323,7 +323,7 @@ func TestFindNamesSnapshotOnWalkError(t *testing.T) {
 	}
 
 	err := arkfind.Find(ctx, repo, ark.SnapshotFilter{}, []string{"a.txt"}, func(arkfind.Match) error { return nil })
-	if err == nil || !strings.Contains(err.Error(), snap.ID) {
+	if err == nil || !strings.Contains(err.Error(), string(snap.ID)) {
 		t.Errorf("err = %v, want an error naming snapshot %s", err, snap.ID)
 	}
 }

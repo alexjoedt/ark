@@ -116,7 +116,7 @@ func TestEveryOperationTakesItsLockClass(t *testing.T) {
 			return err
 		}},
 		{"forget", false, b, func() error {
-			_, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{snap.ID}})
+			_, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{snap.ID}})
 			return err
 		}},
 		{"prune", true, b, func() error {

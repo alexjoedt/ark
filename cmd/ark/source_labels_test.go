@@ -20,12 +20,12 @@ func storedLabels(t *testing.T, repo, id string) map[string]string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := ark.Open(context.Background(), b, ark.WithoutPassword())
+	r, err := ark.Open(context.Background(), b, ark.NoPassword())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	snap, err := r.Snapshot(context.Background(), id)
+	snap, err := r.Snapshot(context.Background(), ark.SnapshotID(id))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -419,7 +419,7 @@ type ForgetResult struct {
 	// "daily within 30d". A snapshot in Future has the one reason "in the
 	// future". A snapshot that is not kept has no entry; when nothing is
 	// kept the map may be nil or empty.
-	KeepReasons map[string][]string
+	KeepReasons map[SnapshotID][]string
 
 	// Future lists the snapshots dated after the time of the run, newest
 	// first. No rule of the policy saw them and all are kept, so each is in

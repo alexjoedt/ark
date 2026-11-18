@@ -68,7 +68,7 @@ func blobPlaces(
 
 func mustForget(t *testing.T, repo *ark.Repository, snaps ...*ark.Snapshot) {
 	t.Helper()
-	ids := make([]string, len(snaps))
+	ids := make([]ark.SnapshotID, len(snaps))
 	for i, s := range snaps {
 		ids[i] = s.ID
 	}

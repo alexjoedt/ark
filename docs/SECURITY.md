@@ -68,7 +68,7 @@ writer, every accepted risk included.
   `TestChunksAndTreesAreSealedUnderKeyedNames`.
 - Snapshot IDs carry no timestamp; prefix resolution still works: `TestSnapshotIDsCarryNoTimestamp`.
 - A wrong passphrase fails with `ErrWrongPassword` after reading only the config and the key files:
-  `TestOpenChecksThePassphrase`, `TestWrongPasswordReadsOnlyConfigAndKeys`.
+  `TestOpenChecksThePassword`, `TestWrongPasswordReadsOnlyConfigAndKeys`.
 - Every key file, chunk, tree and snapshot that is flipped in its format byte, nonce, ciphertext or
   tag, truncated, swapped, moved, copied from another namespace or replaced by the same-name object
   of another repository is rejected, a chunk or tree in the place its pack holds it: Open, Restore
@@ -122,7 +122,7 @@ writer, every accepted risk included.
 - No command takes a passphrase as a flag, so it never lands in argv; the inputs are `ARK_PASSWORD`,
   `--password-file` or `ARK_PASSWORD_FILE`, and the prompt: `TestNoPasswordFlag`.
 - The passphrase never appears in the library's or the CLI's logs, debug level included, during
-  Init, Open, a failed Open and ChangePassword: `TestPassphraseNeverInTheLogs`.
+  Init, Open, a failed Open and ChangePassword: `TestPasswordNeverInTheLogs`.
 
 ## Accepted risks
 
@@ -166,7 +166,7 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
   Key rotation is a Backlog item.
 - Availability: a writer on the backend can delete objects; Check, Verify and Restore report what is
   missing, nothing prevents it.
-- Repositories created with `WithoutPassword` or `--insecure-no-password`: the master key is stored
+- Repositories created with `NoPassword` or `--insecure-no-password`: the master key is stored
   unprotected, so anyone who reads the backend can read and forge them.
 - Metadata the storage host keeps on its own, such as modification times: they show when each pack
   and index object was written, and with it when backups ran and how long they took.

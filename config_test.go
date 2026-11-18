@@ -34,7 +34,7 @@ func TestInitWritesTheConfigSchema(t *testing.T) {
 	b := arkmem.New()
 	before := time.Now().UTC().Add(-time.Second)
 
-	if err := ark.Init(ctx, b, ark.WithoutPassword()); err != nil {
+	if err := ark.Init(ctx, b, ark.NoPassword()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
@@ -71,8 +71,8 @@ func TestInitWritesTheConfigSchema(t *testing.T) {
 		t.Fatalf("config is not valid JSON: %v", err)
 	}
 
-	if cfg.Version != 3 {
-		t.Errorf("version = %d, want 3", cfg.Version)
+	if cfg.Version != 1 {
+		t.Errorf("version = %d, want 1", cfg.Version)
 	}
 	if len(cfg.ID) != 64 {
 		t.Errorf("id = %q (len %d), want 32 random bytes in hex", cfg.ID, len(cfg.ID))
@@ -94,10 +94,10 @@ func TestInitGivesEachRepositoryItsOwnID(t *testing.T) {
 	seen := make(map[string]bool)
 	for range 4 {
 		b := arkmem.New()
-		if err := ark.Init(ctx, b, ark.WithoutPassword()); err != nil {
+		if err := ark.Init(ctx, b, ark.NoPassword()); err != nil {
 			t.Fatalf("Init: %v", err)
 		}
-		repo, err := ark.Open(ctx, b, ark.WithoutPassword())
+		repo, err := ark.Open(ctx, b, ark.NoPassword())
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
@@ -112,12 +112,12 @@ func TestInitGivesEachRepositoryItsOwnID(t *testing.T) {
 func TestInitTwiceIsRefused(t *testing.T) {
 	ctx := context.Background()
 	b := arkmem.New()
-	if err := ark.Init(ctx, b, ark.WithoutPassword()); err != nil {
+	if err := ark.Init(ctx, b, ark.NoPassword()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	first := readConfig(t, b)
 
-	if err := ark.Init(ctx, b, ark.WithoutPassword()); !errors.Is(err, ark.ErrAlreadyInitialized) {
+	if err := ark.Init(ctx, b, ark.NoPassword()); !errors.Is(err, ark.ErrAlreadyInitialized) {
 		t.Errorf("second Init = %v, want ark.ErrAlreadyInitialized", err)
 	}
 	if got := readConfig(t, b); string(got) != string(first) {
@@ -130,7 +130,7 @@ func TestInitWithChunkerConfig(t *testing.T) {
 	b := arkmem.New()
 	want := chunker.Config{MinSize: 1 << 19, AvgSize: 1 << 21, MaxSize: 1 << 23}
 
-	if err := ark.Init(ctx, b, ark.WithoutPassword(), ark.WithChunkerConfig(want)); err != nil {
+	if err := ark.Init(ctx, b, ark.NoPassword(), ark.WithChunkerConfig(want)); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
@@ -151,7 +151,7 @@ func TestInitFillsZeroChunkerFields(t *testing.T) {
 	if err := ark.Init(
 		ctx,
 		b,
-		ark.WithoutPassword(),
+		ark.NoPassword(),
 		ark.WithChunkerConfig(chunker.Config{AvgSize: 1 << 21}),
 	); err != nil {
 		t.Fatalf("Init: %v", err)
@@ -182,7 +182,7 @@ func TestInitRejectsInvalidChunkerConfig(t *testing.T) {
 	for name, cfg := range cases {
 		t.Run(name, func(t *testing.T) {
 			b := arkmem.New()
-			if err := ark.Init(ctx, b, ark.WithoutPassword(), ark.WithChunkerConfig(cfg)); err == nil {
+			if err := ark.Init(ctx, b, ark.NoPassword(), ark.WithChunkerConfig(cfg)); err == nil {
 				t.Fatal("Init = nil, want an error")
 			}
 			ok, err := b.Exists(ctx, ark.Handle{Type: ark.ConfigFile, Name: "config"})
@@ -200,7 +200,7 @@ func TestOpenRequiresAConfig(t *testing.T) {
 	ctx := context.Background()
 	b := arkmem.New()
 
-	if _, err := ark.Open(ctx, b, ark.WithoutPassword()); !errors.Is(err, ark.ErrNotInitialized) {
+	if _, err := ark.Open(ctx, b, ark.NoPassword()); !errors.Is(err, ark.ErrNotInitialized) {
 		t.Errorf("Open on an empty backend = %v, want ark.ErrNotInitialized", err)
 	}
 
@@ -219,8 +219,8 @@ func TestOpenRejectsUnknownFormats(t *testing.T) {
 	cases := map[string]string{
 		"future version":     `{"version":4,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3},"compression":"zstd"}`,
 		"missing version":    `{"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3},"compression":"zstd"}`,
-		"unknown codec":      `{"version":3,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3},"compression":"lz4"}`,
-		"impossible chunker": `{"version":3,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":9,"avg":2,"max":3},"compression":"zstd"}`,
+		"unknown codec":      `{"version":1,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3},"compression":"lz4"}`,
+		"impossible chunker": `{"version":1,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":9,"avg":2,"max":3},"compression":"zstd"}`,
 		"not json":           `this is not a repository`,
 	}
 	for name, body := range cases {
@@ -230,7 +230,7 @@ func TestOpenRejectsUnknownFormats(t *testing.T) {
 			if err := b.Put(ctx, h, strings.NewReader(body)); err != nil {
 				t.Fatalf("Put: %v", err)
 			}
-			if _, err := ark.Open(ctx, b, ark.WithoutPassword()); !errors.Is(err, ark.ErrUnsupportedFormat) {
+			if _, err := ark.Open(ctx, b, ark.NoPassword()); !errors.Is(err, ark.ErrUnsupportedFormat) {
 				t.Errorf("Open = %v, want ark.ErrUnsupportedFormat", err)
 			}
 		})
@@ -239,13 +239,13 @@ func TestOpenRejectsUnknownFormats(t *testing.T) {
 
 func TestOpenPropagatesContextCancellation(t *testing.T) {
 	b := arkmem.New()
-	if err := ark.Init(context.Background(), b, ark.WithoutPassword()); err != nil {
+	if err := ark.Init(context.Background(), b, ark.NoPassword()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := ark.Open(ctx, b, ark.WithoutPassword()); !errors.Is(err, context.Canceled) {
+	if _, err := ark.Open(ctx, b, ark.NoPassword()); !errors.Is(err, context.Canceled) {
 		t.Errorf("Open with a cancelled context = %v, want context.Canceled", err)
 	}
 }

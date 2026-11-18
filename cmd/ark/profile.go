@@ -128,10 +128,10 @@ func withHooks(ctx context.Context, lp *loadedProfile, command string, fn func(c
 	return hooks.Run(ctx, env, fn)
 }
 
-// profilePassphrase reads the profile's password. A missing source or an
+// profilePassword reads the profile's password. A missing source or an
 // empty file is a usage error, a file that cannot be read is not.
-func profilePassphrase(p *arkprofile.Profile) (ark.Passphrase, error) {
-	pw, err := p.Passphrase()
+func profilePassword(p *arkprofile.Profile) (ark.Password, error) {
+	pw, err := p.Password()
 	var pe *os.PathError
 	switch {
 	case err == nil:

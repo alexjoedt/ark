@@ -16,17 +16,18 @@ func Backup(ctx context.Context, repo *ark.Repository, path string, opts ...ark.
 	return repo.Backup(ctx, src, opts...)
 }
 
-// Restore writes the snapshot to destPath on the local filesystem. id is a
-// full snapshot id or a unique prefix.
+// Restore writes the snapshot to destPath on the local filesystem.
+// snapshotID is a full snapshot ID or a unique prefix.
 func Restore(
 	ctx context.Context,
 	repo *ark.Repository,
-	id, destPath string,
+	snapshotID ark.SnapshotID,
+	destPath string,
 	opts ...ark.RestoreOption,
 ) (*ark.RestoreResult, error) {
 	sink, err := NewSink(destPath)
 	if err != nil {
 		return nil, err
 	}
-	return repo.Restore(ctx, id, sink, opts...)
+	return repo.Restore(ctx, snapshotID, sink, opts...)
 }

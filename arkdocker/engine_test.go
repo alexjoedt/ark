@@ -22,10 +22,10 @@ import (
 func testRepo(t *testing.T, b ark.Backend) *ark.Repository {
 	t.Helper()
 	ctx := context.Background()
-	if err := ark.Init(ctx, b, ark.WithoutPassword()); err != nil {
+	if err := ark.Init(ctx, b, ark.NoPassword()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	repo, err := ark.Open(ctx, b, ark.WithoutPassword())
+	repo, err := ark.Open(ctx, b, ark.NoPassword())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -262,7 +262,11 @@ func TestVolumeRestoresAfterARepack(t *testing.T) {
 			t.Fatalf("second BackupVolume: %v", err)
 		}
 
-		if _, err := e.repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{first.ID}}); err != nil {
+		if _, err := e.repo.Forget(
+			ctx,
+			ark.ForgetPolicy{},
+			ark.SnapshotFilter{IDs: []ark.SnapshotID{first.ID}},
+		); err != nil {
 			t.Fatalf("Forget: %v", err)
 		}
 		pruned, err := e.repo.Prune(ctx)

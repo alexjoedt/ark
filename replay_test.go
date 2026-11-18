@@ -28,7 +28,7 @@ func putObject(t *testing.T, b ark.Backend, typ ark.HandleType, name string, dat
 	}
 }
 
-func restoreData(t *testing.T, repo *ark.Repository, id string) (string, error) {
+func restoreData(t *testing.T, repo *ark.Repository, id ark.SnapshotID) (string, error) {
 	t.Helper()
 	sink := &recordingSink{}
 	_, err := repo.Restore(context.Background(), id, sink)
@@ -42,7 +42,7 @@ func restoreData(t *testing.T, repo *ark.Repository, id string) (string, error) 
 // anew: names are keyed hashes of the plaintext, so no other bytes fit them.
 func TestReplayedManifestRestoresOnlyItsOwnBytes(t *testing.T) {
 	ctx := context.Background()
-	setup := func(t *testing.T) (*arkmem.Backend, *ark.Repository, string, []byte) {
+	setup := func(t *testing.T) (*arkmem.Backend, *ark.Repository, ark.SnapshotID, []byte) {
 		t.Helper()
 		b := arkmem.New()
 		repo := openRepo(t, b)
@@ -50,8 +50,12 @@ func TestReplayedManifestRestoresOnlyItsOwnBytes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Backup: %v", err)
 		}
-		manifest := readObject(t, b, ark.SnapshotFile, snap.ID)
-		if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{snap.ID}}); err != nil {
+		manifest := readObject(t, b, ark.SnapshotFile, string(snap.ID))
+		if _, err := repo.Forget(
+			ctx,
+			ark.ForgetPolicy{},
+			ark.SnapshotFilter{IDs: []ark.SnapshotID{snap.ID}},
+		); err != nil {
 			t.Fatalf("Forget: %v", err)
 		}
 		return b, repo, snap.ID, manifest
@@ -59,7 +63,7 @@ func TestReplayedManifestRestoresOnlyItsOwnBytes(t *testing.T) {
 
 	t.Run("before prune", func(t *testing.T) {
 		b, repo, id, manifest := setup(t)
-		putObject(t, b, ark.SnapshotFile, id, manifest)
+		putObject(t, b, ark.SnapshotFile, string(id), manifest)
 
 		snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{})
 		if err != nil || len(snaps) != 1 || snaps[0].ID != id {
@@ -78,7 +82,7 @@ func TestReplayedManifestRestoresOnlyItsOwnBytes(t *testing.T) {
 		if _, err := repo.Prune(ctx); err != nil {
 			t.Fatalf("Prune: %v", err)
 		}
-		putObject(t, b, ark.SnapshotFile, id, manifest)
+		putObject(t, b, ark.SnapshotFile, string(id), manifest)
 
 		for _, typ := range []ark.HandleType{
 			ark.DataPackFile, ark.TreePackFile, ark.DataIndexFile, ark.TreeIndexFile,
@@ -99,7 +103,7 @@ func TestReplayedManifestRestoresOnlyItsOwnBytes(t *testing.T) {
 				t.Errorf("Verify = %+v, %v; want ErrNotFound and OK false", res, err)
 			}
 			check, err := repo.Check(ctx)
-			if err != nil || len(check.Errors) != 1 || !strings.Contains(check.Errors[0], id) {
+			if err != nil || len(check.Errors) != 1 || !strings.Contains(check.Errors[0], string(id)) {
 				t.Errorf("Check = %+v, %v; want the replayed snapshot under Errors", check, err)
 			}
 		}
@@ -126,7 +130,7 @@ func TestReplayedManifestRestoresOnlyItsOwnBytes(t *testing.T) {
 // key file: put back, it opens the repository again, next to the new one.
 func TestReplayedKeyFileOpensUnderTheOldPassword(t *testing.T) {
 	ctx := context.Background()
-	oldPW, newPW := ark.WithPassword("old"), ark.WithPassword("new")
+	oldPW, newPW := ark.NewPassword("old"), ark.NewPassword("new")
 	b := initRepo(t, oldPW)
 	oldName, oldKey := onlyKeyFile(t, b)
 
@@ -146,7 +150,7 @@ func TestReplayedKeyFileOpensUnderTheOldPassword(t *testing.T) {
 	}
 
 	putObject(t, b, ark.KeyFile, oldName, oldKey)
-	for _, pw := range []ark.Passphrase{oldPW, newPW} {
+	for _, pw := range []ark.Password{oldPW, newPW} {
 		got, err := ark.Open(ctx, b, pw)
 		if err != nil {
 			t.Fatalf("Open after the replay: %v", err)
@@ -180,7 +184,7 @@ func TestReplayedIndexObjectIsPassedOver(t *testing.T) {
 			index[ark.Handle{Type: typ, Name: name}] = readObject(t, b, typ, name)
 		}
 	}
-	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{snap.ID}}); err != nil {
+	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{snap.ID}}); err != nil {
 		t.Fatalf("Forget: %v", err)
 	}
 	if _, err := repo.Prune(ctx); err != nil {

@@ -90,11 +90,11 @@ var (
 	// repository opens with the given password.
 	ErrWrongPassword = errors.New("ark: wrong password or no key file matches")
 
-	// ErrPasswordRequired is returned by Open when WithoutPassword is given
+	// ErrPasswordRequired is returned by Open when NoPassword is given
 	// for a password protected repository.
 	ErrPasswordRequired = errors.New("ark: repository is password protected")
 
 	// ErrNotPasswordProtected is returned by Open when a password is given
-	// for a repository created with WithoutPassword.
+	// for a repository created with NoPassword.
 	ErrNotPasswordProtected = errors.New("ark: repository is not password protected")
 )

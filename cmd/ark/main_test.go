@@ -579,7 +579,7 @@ func TestSnapshotsLastAndLsPrefix(t *testing.T) {
 // series of its own, the key the library's parent and forget policy use.
 func TestLastPerSeries(t *testing.T) {
 	snap := func(id string, typ ark.SourceType, name, host string) *ark.Snapshot {
-		return &ark.Snapshot{ID: id, SourceType: typ, SourceName: name, Host: host}
+		return &ark.Snapshot{ID: ark.SnapshotID(id), SourceType: typ, SourceName: name, Host: host}
 	}
 	got := lastPerSeries([]*ark.Snapshot{
 		snap("1", "file", "db", "a"),
@@ -592,7 +592,7 @@ func TestLastPerSeries(t *testing.T) {
 	}, 1)
 	var ids []string
 	for _, s := range got {
-		ids = append(ids, s.ID)
+		ids = append(ids, string(s.ID))
 	}
 	if want := []string{"1", "2", "3", "4", "5"}; !slices.Equal(ids, want) {
 		t.Errorf("kept %v, want the newest of each series %v", ids, want)
@@ -789,7 +789,7 @@ func TestRestoreRefusesVolumeSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := ark.Open(context.Background(), b, ark.WithoutPassword())
+	r, err := ark.Open(context.Background(), b, ark.NoPassword())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -800,7 +800,7 @@ func TestRestoreRefusesVolumeSnapshot(t *testing.T) {
 	}
 
 	dest := filepath.Join(t.TempDir(), "out")
-	code, out := runCapture(t, "--json", "-r", repo, "restore", snap.ID, dest)
+	code, out := runCapture(t, "--json", "-r", repo, "restore", string(snap.ID), dest)
 	if code != 1 || !strings.Contains(out, "ark docker restore") || !strings.Contains(out, "tar x") {
 		t.Fatalf("exit %d, stdout %q", code, out)
 	}

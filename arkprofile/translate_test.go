@@ -19,10 +19,10 @@ import (
 func TestBackupAndForgetThroughAProfile(t *testing.T) {
 	ctx := context.Background()
 	b := arkmem.New()
-	if err := ark.Init(ctx, b, ark.WithoutPassword()); err != nil {
+	if err := ark.Init(ctx, b, ark.NoPassword()); err != nil {
 		t.Fatal(err)
 	}
-	repo, err := ark.Open(ctx, b, ark.WithoutPassword())
+	repo, err := ark.Open(ctx, b, ark.NoPassword())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestBackupAndForgetThroughAProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, want := ids(left), []string{otherOld.ID, otherNew.ID, last.ID}
+	got, want := ids(left), []ark.SnapshotID{otherOld.ID, otherNew.ID, last.ID}
 	slices.Sort(got)
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
@@ -147,10 +147,10 @@ func TestHostDefaultsToTheHostname(t *testing.T) {
 	}
 	ctx := context.Background()
 	b := arkmem.New()
-	if err := ark.Init(ctx, b, ark.WithoutPassword()); err != nil {
+	if err := ark.Init(ctx, b, ark.NoPassword()); err != nil {
 		t.Fatal(err)
 	}
-	repo, err := ark.Open(ctx, b, ark.WithoutPassword())
+	repo, err := ark.Open(ctx, b, ark.NoPassword())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestForgetPolicy(t *testing.T) {
 func TestOpen(t *testing.T) {
 	ctx := context.Background()
 
-	_, err := (&arkprofile.Profile{Name: "docs"}).Open(ctx, ark.WithoutPassword())
+	_, err := (&arkprofile.Profile{Name: "docs"}).Open(ctx, ark.NoPassword())
 	if !errors.Is(err, arkprofile.ErrInvalid) {
 		t.Fatalf("empty repo: err = %v, want ErrInvalid", err)
 	}
@@ -251,7 +251,7 @@ func TestOpen(t *testing.T) {
 	if err := os.Mkdir(p.Repo, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.Open(ctx, ark.WithoutPassword()); !errors.Is(err, ark.ErrNotInitialized) {
+	if _, err := p.Open(ctx, ark.NoPassword()); !errors.Is(err, ark.ErrNotInitialized) {
 		t.Fatalf("uninitialized: err = %v, want ErrNotInitialized", err)
 	}
 
@@ -259,7 +259,7 @@ func TestOpen(t *testing.T) {
 	if err := initAt(ctx, p.Repo); err != nil {
 		t.Fatal(err)
 	}
-	repo, err := p.Open(ctx, ark.WithoutPassword())
+	repo, err := p.Open(ctx, ark.NoPassword())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,11 +274,11 @@ func initAt(ctx context.Context, uri string) error {
 		return err
 	}
 	defer b.Close()
-	return ark.Init(ctx, b, ark.WithoutPassword())
+	return ark.Init(ctx, b, ark.NoPassword())
 }
 
-func ids(snaps []*ark.Snapshot) []string {
-	out := make([]string, len(snaps))
+func ids(snaps []*ark.Snapshot) []ark.SnapshotID {
+	out := make([]ark.SnapshotID, len(snaps))
 	for i, s := range snaps {
 		out[i] = s.ID
 	}

@@ -375,7 +375,7 @@ func TestPruneDeletesDeadAndUnlistedPacks(t *testing.T) {
 	b.onPut = nil
 	b.mu.Unlock()
 
-	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{gone.ID}}); err != nil {
+	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{gone.ID}}); err != nil {
 		t.Fatalf("Forget: %v", err)
 	}
 	before := packObjects(t, b)

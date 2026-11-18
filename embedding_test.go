@@ -240,7 +240,11 @@ func TestEmbeddingObservesEveryOperation(t *testing.T) {
 			t.Fatalf("second Backup: %v", err)
 		}
 		rec.take()
-		if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{snap.ID}}); err != nil {
+		if _, err := repo.Forget(
+			ctx,
+			ark.ForgetPolicy{},
+			ark.SnapshotFilter{IDs: []ark.SnapshotID{snap.ID}},
+		); err != nil {
 			t.Fatalf("Forget: %v", err)
 		}
 		checkOp(t, rec.take(), ark.OperationForget)

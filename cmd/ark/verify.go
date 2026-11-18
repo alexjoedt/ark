@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
 	"github.com/alexjoedt/ark/cmd/ark/internal/out"
 	"github.com/urfave/cli/v3"
@@ -11,11 +12,11 @@ import (
 
 // verifyJSON is the shape of ark verify --json, frozen for 1.x.
 type verifyJSON struct {
-	SnapshotID    string   `json:"snapshot_id"`
-	ChunksChecked int      `json:"chunks_checked"`
-	MissingChunks []string `json:"missing_chunks"`
-	CorruptChunks []string `json:"corrupt_chunks"`
-	OK            bool     `json:"ok"`
+	SnapshotID    ark.SnapshotID `json:"snapshot_id"`
+	ChunksChecked int            `json:"chunks_checked"`
+	MissingChunks []string       `json:"missing_chunks"`
+	CorruptChunks []string       `json:"corrupt_chunks"`
+	OK            bool           `json:"ok"`
 }
 
 func verifyCommand() *cli.Command {
@@ -38,7 +39,7 @@ func verifyCommand() *cli.Command {
 
 			p := printer(cmd)
 			pr := startProgress(p, "verify "+cmd.Args().First())
-			res, err := repo.Verify(ctx, cmd.Args().First())
+			res, err := repo.Verify(ctx, ark.SnapshotID(cmd.Args().First()))
 			if err != nil {
 				pr.Fail()
 				return fmt.Errorf("verify %s: %w", cmd.Args().First(), err)

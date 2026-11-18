@@ -20,7 +20,7 @@ type restoreStats struct {
 // current one (streamSnapshot).
 func (r *Repository) runRestore(
 	ctx context.Context,
-	snapshotID string,
+	snapshotID SnapshotID,
 	sink Sink,
 	opts restoreOptions,
 ) (*restoreStats, error) {

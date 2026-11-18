@@ -11,10 +11,10 @@ import (
 // newSnapshotID returns 128 random bits as 32 lowercase hex characters.
 // A snapshot name carries no time: the backend listing must not date them.
 // Snapshots written before the hex form keep their 26 character base32 names.
-func newSnapshotID() string {
+func newSnapshotID() SnapshotID {
 	b := make([]byte, 16)
 	rand.Read(b)
-	return hex.EncodeToString(b)
+	return SnapshotID(hex.EncodeToString(b))
 }
 
 // isHexSnapshotID reports whether id has the shape newSnapshotID returns.
@@ -28,15 +28,15 @@ func isHexSnapshotID(id string) bool {
 // derived from it, so importing one archive twice yields one name, and the
 // time a legacy base32 name encodes does not show through; an archive without
 // an id gets a random one.
-func importedSnapshotID(id string) string {
-	if isHexSnapshotID(id) {
+func importedSnapshotID(id SnapshotID) SnapshotID {
+	if isHexSnapshotID(string(id)) {
 		return id
 	}
 	if id == "" {
 		return newSnapshotID()
 	}
 	sum := sha256.Sum256([]byte(id))
-	return hex.EncodeToString(sum[:16])
+	return SnapshotID(hex.EncodeToString(sum[:16]))
 }
 
 // generateID creates a sortable, unique lock name.

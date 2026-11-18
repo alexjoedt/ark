@@ -65,7 +65,10 @@ func forgetCommand() *cli.Command {
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			lp := profileFrom(ctx)
-			ids := cmd.Args().Slice()
+			var ids []ark.SnapshotID
+			for _, arg := range cmd.Args().Slice() {
+				ids = append(ids, ark.SnapshotID(arg))
+			}
 			// named ids are removed as named: the profile's policy and
 			// snapshot scope do not apply to them
 			scope := lp
@@ -168,7 +171,7 @@ func runForget(
 	}
 	// Remove what the prompt named, not what a second policy run picks: a
 	// snapshot dated seconds ahead can stop being in the future meanwhile.
-	named := ark.SnapshotFilter{IDs: make([]string, 0, len(preview.Remove))}
+	named := ark.SnapshotFilter{IDs: make([]ark.SnapshotID, 0, len(preview.Remove))}
 	for _, s := range preview.Remove {
 		named.IDs = append(named.IDs, s.ID)
 	}

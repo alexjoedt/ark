@@ -10,7 +10,7 @@ import (
 // Snapshot.Labels used, so their labels read back unchanged.
 func TestManifestLabelsKeepTheSourceMetaKey(t *testing.T) {
 	var m manifest
-	if err := json.Unmarshal([]byte(`{"version":3,"source_meta":{"docker_host":"tcp://h:2375"}}`), &m); err != nil {
+	if err := json.Unmarshal([]byte(`{"version":1,"source_meta":{"docker_host":"tcp://h:2375"}}`), &m); err != nil {
 		t.Fatal(err)
 	}
 	if got := manifestToSnapshot(&m).Labels["docker_host"]; got != "tcp://h:2375" {

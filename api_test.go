@@ -17,7 +17,7 @@ import (
 )
 
 // commonPrefix returns the longest prefix shared by a and b.
-func commonPrefix(a, b string) string {
+func commonPrefix(a, b ark.SnapshotID) ark.SnapshotID {
 	n := 0
 	for n < len(a) && n < len(b) && a[n] == b[n] {
 		n++
@@ -83,8 +83,8 @@ func TestAmbiguousPrefixIsRejected(t *testing.T) {
 		t.Fatalf("Snapshot(%q) returned %v, want ErrAmbiguousID", shared, err)
 	}
 	// The message has to name the candidates, otherwise the user cannot pick.
-	for _, id := range []string{first.ID, second.ID} {
-		if !strings.Contains(err.Error(), id) {
+	for _, id := range []ark.SnapshotID{first.ID, second.ID} {
+		if !strings.Contains(err.Error(), string(id)) {
 			t.Errorf("error does not name candidate %s: %v", id, err)
 		}
 	}
@@ -142,7 +142,7 @@ func TestForgetKeepsTheNewestOfEverySeries(t *testing.T) {
 		{stubSource{name: "db", typ: "docker-volume"}, ""},
 	}
 	// Two rounds; the last series of a round is the newest in the repository.
-	var newest []string
+	var newest []ark.SnapshotID
 	for round := range 2 {
 		newest = newest[:0]
 		for _, s := range series {
@@ -166,7 +166,7 @@ func TestForgetKeepsTheNewestOfEverySeries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshots: %v", err)
 	}
-	var got []string
+	var got []ark.SnapshotID
 	for _, s := range left {
 		got = append(got, s.ID)
 	}
@@ -192,7 +192,7 @@ func TestForgetByIDsRemovesExactlyThose(t *testing.T) {
 
 	// A unique prefix names the snapshot just as well as the full id.
 	prefix := first.ID[:len(first.ID)-4]
-	result, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{prefix}})
+	result, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{prefix}})
 	if err != nil {
 		t.Fatalf("Forget: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestManifestKeepsDurationAsAString(t *testing.T) {
 	var m struct {
 		Stats map[string]json.RawMessage `json:"stats"`
 	}
-	raw, err := ark.OpenObject(ctx, repo, ark.SnapshotFile, snap.ID)
+	raw, err := ark.OpenObject(ctx, repo, ark.SnapshotFile, string(snap.ID))
 	if err != nil {
 		t.Fatalf("open manifest: %v", err)
 	}

@@ -29,12 +29,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	repo, err := ark.Open(ctx, b, ark.WithoutPassword())
+	repo, err := ark.Open(ctx, b, ark.NoPassword())
 	if errors.Is(err, ark.ErrNotInitialized) {
-		if err := ark.Init(ctx, b, ark.WithoutPassword()); err != nil {
+		if err := ark.Init(ctx, b, ark.NoPassword()); err != nil {
 			log.Fatal(err)
 		}
-		repo, err = ark.Open(ctx, b, ark.WithoutPassword())
+		repo, err = ark.Open(ctx, b, ark.NoPassword())
 	}
 	if err != nil {
 		log.Fatal(err)

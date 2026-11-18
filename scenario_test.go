@@ -43,7 +43,7 @@ import (
 
 // testPassword protects the repositories of the scenario list and the helpers
 // it points at. TestMain lowers argon2id, so it costs nothing.
-var testPassword = ark.WithPassword("ark-test")
+var testPassword = ark.NewPassword("ark-test")
 
 // scenarioMaxChunk is the maximum chunk size the scenario repositories use.
 // It is small so "larger than the max chunk" costs kilobytes, not megabytes.
@@ -80,7 +80,7 @@ func backupDir(t *testing.T, repo *ark.Repository, root string) *ark.Snapshot {
 }
 
 // restoreInto restores a snapshot into a fresh directory and returns it.
-func restoreInto(t *testing.T, repo *ark.Repository, id string) string {
+func restoreInto(t *testing.T, repo *ark.Repository, id ark.SnapshotID) string {
 	t.Helper()
 	dst := t.TempDir()
 	sink, err := arkfs.NewSink(dst)
@@ -313,7 +313,7 @@ func TestScenarioVerifyFindsACorruptTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
-	if len(result.Errors) != 1 || !strings.Contains(result.Errors[0], snap.ID) {
+	if len(result.Errors) != 1 || !strings.Contains(result.Errors[0], string(snap.ID)) {
 		t.Errorf("Check reports %v, want one error naming snapshot %s", result.Errors, snap.ID)
 	}
 }
@@ -329,9 +329,9 @@ func TestScenarioTamperedManifestIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
-	obj := readObject(t, b, ark.SnapshotFile, snap.ID)
+	obj := readObject(t, b, ark.SnapshotFile, string(snap.ID))
 	obj[len(obj)-1] ^= 0x01
-	if err := b.Put(ctx, ark.Handle{Type: ark.SnapshotFile, Name: snap.ID}, bytes.NewReader(obj)); err != nil {
+	if err := b.Put(ctx, ark.Handle{Type: ark.SnapshotFile, Name: string(snap.ID)}, bytes.NewReader(obj)); err != nil {
 		t.Fatalf("overwrite manifest: %v", err)
 	}
 
@@ -353,11 +353,11 @@ func TestScenarioMovedManifestIsRefused(t *testing.T) {
 	if moved == snap.ID {
 		moved = snap.ID[:len(snap.ID)-1] + "y"
 	}
-	obj := readObject(t, b, ark.SnapshotFile, snap.ID)
-	if err := b.Put(ctx, ark.Handle{Type: ark.SnapshotFile, Name: moved}, bytes.NewReader(obj)); err != nil {
+	obj := readObject(t, b, ark.SnapshotFile, string(snap.ID))
+	if err := b.Put(ctx, ark.Handle{Type: ark.SnapshotFile, Name: string(moved)}, bytes.NewReader(obj)); err != nil {
 		t.Fatalf("copy manifest: %v", err)
 	}
-	if err := b.Delete(ctx, ark.Handle{Type: ark.SnapshotFile, Name: snap.ID}); err != nil {
+	if err := b.Delete(ctx, ark.Handle{Type: ark.SnapshotFile, Name: string(snap.ID)}); err != nil {
 		t.Fatalf("delete manifest: %v", err)
 	}
 
@@ -379,9 +379,13 @@ func TestScenarioForgetRemovesACorruptManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
-	obj := readObject(t, b, ark.SnapshotFile, broken.ID)
+	obj := readObject(t, b, ark.SnapshotFile, string(broken.ID))
 	obj[len(obj)-1] ^= 0x01
-	if err := b.Put(ctx, ark.Handle{Type: ark.SnapshotFile, Name: broken.ID}, bytes.NewReader(obj)); err != nil {
+	if err := b.Put(
+		ctx,
+		ark.Handle{Type: ark.SnapshotFile, Name: string(broken.ID)},
+		bytes.NewReader(obj),
+	); err != nil {
 		t.Fatalf("overwrite manifest: %v", err)
 	}
 
@@ -395,7 +399,7 @@ func TestScenarioForgetRemovesACorruptManifest(t *testing.T) {
 	) {
 		t.Errorf("Forget with a policy returned %v, want ErrCorruptManifest", err)
 	}
-	res, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{broken.ID, broken.ID}})
+	res, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{broken.ID, broken.ID}})
 	if err != nil {
 		t.Fatalf("Forget by id: %v", err)
 	}
@@ -418,7 +422,7 @@ func TestScenarioForgetRemovesACorruptManifest(t *testing.T) {
 	}
 }
 
-func assertCorruptManifest(t *testing.T, repo *ark.Repository, id string) {
+func assertCorruptManifest(t *testing.T, repo *ark.Repository, id ark.SnapshotID) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -435,7 +439,7 @@ func assertCorruptManifest(t *testing.T, repo *ark.Repository, id string) {
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
-	if result.SnapshotsChecked != 1 || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], id) {
+	if result.SnapshotsChecked != 1 || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], string(id)) {
 		t.Errorf("Check reports %d snapshots, errors %v, want one error naming snapshot %s",
 			result.SnapshotsChecked, result.Errors, id)
 	}
@@ -524,7 +528,7 @@ func TestScenarioCheckCoversEverySnapshot(t *testing.T) {
 	if len(result.Errors) != 2 {
 		t.Fatalf("Check reports %d errors, want 2: %v", len(result.Errors), result.Errors)
 	}
-	for _, want := range []string{pack.Name, broken.ID} {
+	for _, want := range []string{pack.Name, string(broken.ID)} {
 		if !slices.ContainsFunc(result.Errors, func(e string) bool {
 			return strings.Contains(e, want) && strings.Contains(e, chunk)
 		}) {
@@ -534,7 +538,11 @@ func TestScenarioCheckCoversEverySnapshot(t *testing.T) {
 
 	// The lost pack stays a finding once no snapshot references it: the
 	// index still lists its chunk, until a prune or a rebuild drops the entry.
-	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{broken.ID}}); err != nil {
+	if _, err := repo.Forget(
+		ctx,
+		ark.ForgetPolicy{},
+		ark.SnapshotFilter{IDs: []ark.SnapshotID{broken.ID}},
+	); err != nil {
 		t.Fatalf("Forget: %v", err)
 	}
 	result, err = repo.Check(ctx)

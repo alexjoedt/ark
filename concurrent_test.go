@@ -250,7 +250,7 @@ func runConcurrentOnce(t *testing.T, newRepo func(context.Context, *testing.T) (
 		t.Fatalf("Backup base: %v", err)
 	}
 
-	forgot, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{base.ID}})
+	forgot, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{base.ID}})
 	if err != nil {
 		t.Fatalf("Forget base: %v", err)
 	}

@@ -21,7 +21,7 @@ import (
 func importAt(t *testing.T, repo *ark.Repository, at time.Time) *ark.Snapshot {
 	t.Helper()
 	meta, err := json.Marshal(map[string]any{
-		"version": 3, "created_at": at, "source_name": "app", "source_type": ark.SourceTypeFile,
+		"version": 1, "created_at": at, "source_name": "app", "source_type": ark.SourceTypeFile,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -293,7 +293,7 @@ func TestKeepCountJSON(t *testing.T) {
 func TestForgetByTagsRefusesToEmptyASeries(t *testing.T) {
 	ctx := context.Background()
 	repo := openRepo(t, arkmem.New())
-	backup := func(name string, tags ...string) string {
+	backup := func(name string, tags ...string) ark.SnapshotID {
 		t.Helper()
 		snap, err := repo.Backup(ctx, stubSource{name: name, content: name}, ark.WithTags(tags...))
 		if err != nil {
@@ -385,24 +385,25 @@ func TestForgetSetsFutureSnapshotsAsideByTheRepositoryClock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Forget: %v", err)
 	}
-	ids := func(snaps []*ark.Snapshot) (out []string) {
+	ids := func(snaps []*ark.Snapshot) (out []ark.SnapshotID) {
 		for _, s := range snaps {
 			out = append(out, s.ID)
 		}
 		return out
 	}
 	keep, future, remove := ids(res.Keep), ids(res.Future), ids(res.Remove)
-	if !slices.Equal(keep, []string{snaps[2].ID, snaps[1].ID}) || !slices.Equal(future, []string{snaps[2].ID}) ||
-		!slices.Equal(remove, []string{snaps[0].ID}) {
+	if !slices.Equal(keep, []ark.SnapshotID{snaps[2].ID, snaps[1].ID}) ||
+		!slices.Equal(future, []ark.SnapshotID{snaps[2].ID}) ||
+		!slices.Equal(remove, []ark.SnapshotID{snaps[0].ID}) {
 		t.Fatalf("keeps %v, future %v, removes %v; want the two newest kept, the newest of them in Future",
 			keep, future, remove)
 	}
-	wantReasons := map[string][]string{snaps[2].ID: {"in the future"}, snaps[1].ID: {"last snapshot"}}
+	wantReasons := map[ark.SnapshotID][]string{snaps[2].ID: {"in the future"}, snaps[1].ID: {"last snapshot"}}
 	if !maps.EqualFunc(res.KeepReasons, wantReasons, slices.Equal) {
 		t.Errorf("reasons %v, want %v", res.KeepReasons, wantReasons)
 	}
 
-	res, err = repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{snaps[2].ID}})
+	res, err = repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{snaps[2].ID}})
 	if err != nil {
 		t.Fatalf("Forget by ID: %v", err)
 	}
@@ -435,7 +436,7 @@ func TestForgetByTagsDoesNotCountAFutureSnapshot(t *testing.T) {
 		if !errors.Is(err, ark.ErrNoSnapshotKept) || res != nil {
 			t.Fatalf("Forget = %+v, %v, want ErrNoSnapshotKept", res, err)
 		}
-		if msg := err.Error(); !strings.HasSuffix(msg, "do not count: "+future.ID[:8]) {
+		if msg := err.Error(); !strings.HasSuffix(msg, "do not count: "+string(future.ID[:8])) {
 			t.Errorf("error %q, want it to end with the short ID %s of the future snapshot", msg, future.ID[:8])
 		}
 	}

@@ -17,9 +17,8 @@ import (
 
 // repoFormatVersion is the on-disk format version this build writes and is the
 // only one it reads. Open rejects anything else with ErrUnsupportedFormat.
-// Version 2 added masterKey.ConfigHash; version 3 stores chunks and tree
-// nodes in packs behind an index, where version 2 stored one object each.
-const repoFormatVersion = 3
+// The format is frozen with v1.1.0; later changes are additive or bump it.
+const repoFormatVersion = 1
 
 // configName is the name of the single object in the config namespace.
 const configName = "config"
@@ -90,14 +89,14 @@ func WithChunkerConfig(c chunker.Config) InitOption {
 }
 
 // Init creates a repository in b: a fresh master key sealed under pw in a key
-// file, then the config object. pw is WithPassword or, explicitly,
-// WithoutPassword. The password only unlocks the master key; without it the
+// file, then the config object. pw is NewPassword or, explicitly,
+// NoPassword. The password only unlocks the master key; without it the
 // repository cannot be read, and nothing recovers it.
 //
 // It returns ErrAlreadyInitialized if b already holds a config, so a typo in a
 // repository path cannot silently create a second repository next to the first.
 // The config is written last, so a failed Init leaves no repository behind.
-func Init(ctx context.Context, b Backend, pw Passphrase, opts ...InitOption) error {
+func Init(ctx context.Context, b Backend, pw Password, opts ...InitOption) error {
 	if err := pw.validate(); err != nil {
 		return err
 	}

@@ -49,7 +49,7 @@ func TestPruneSweepsBothNamespaces(t *testing.T) {
 		t.Fatalf("second backup: %v", err)
 	}
 
-	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{first.ID}}); err != nil {
+	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{first.ID}}); err != nil {
 		t.Fatalf("Forget: %v", err)
 	}
 	result, err := repo.Prune(ctx)

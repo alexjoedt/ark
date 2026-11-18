@@ -401,7 +401,7 @@ func TestCheckFileRefusesAForeignOwner(t *testing.T) {
 	}
 }
 
-func TestPassphrase(t *testing.T) {
+func TestPassword(t *testing.T) {
 	dir := t.TempDir()
 	pwFile := writeFile(t, filepath.Join(dir, "pw"), "secret\r\n", 0o600)
 	emptyFile := writeFile(t, filepath.Join(dir, "empty"), "\n", 0o600)
@@ -413,43 +413,43 @@ func TestPassphrase(t *testing.T) {
 	tests := []struct {
 		name    string
 		p       arkprofile.Profile
-		want    ark.Passphrase
+		want    ark.Password
 		wantErr string
 	}{
-		{"file", arkprofile.Profile{PasswordFile: pwFile}, ark.WithPassword("secret"), ""},
-		{"env", arkprofile.Profile{PasswordEnv: "DOCS_PW"}, ark.WithPassword("from-env"), ""},
-		{"insecure", arkprofile.Profile{InsecureNoPassword: true}, ark.WithoutPassword(), ""},
-		{"empty file", arkprofile.Profile{PasswordFile: emptyFile}, ark.Passphrase{}, "is empty"},
+		{"file", arkprofile.Profile{PasswordFile: pwFile}, ark.NewPassword("secret"), ""},
+		{"env", arkprofile.Profile{PasswordEnv: "DOCS_PW"}, ark.NewPassword("from-env"), ""},
+		{"insecure", arkprofile.Profile{InsecureNoPassword: true}, ark.NoPassword(), ""},
+		{"empty file", arkprofile.Profile{PasswordFile: emptyFile}, ark.Password{}, "is empty"},
 		{
 			"unset env",
 			arkprofile.Profile{PasswordEnv: "NO_SUCH_PW"},
-			ark.Passphrase{},
+			ark.Password{},
 			"variable NO_SUCH_PW is not set",
 		},
-		{"empty env", arkprofile.Profile{PasswordEnv: "EMPTY_PW"}, ark.Passphrase{}, "variable EMPTY_PW is not set"},
+		{"empty env", arkprofile.Profile{PasswordEnv: "EMPTY_PW"}, ark.Password{}, "variable EMPTY_PW is not set"},
 		{
 			"conflict",
 			arkprofile.Profile{PasswordEnv: "DOCS_PW", InsecureNoPassword: true},
-			ark.Passphrase{},
+			ark.Password{},
 			"conflicts",
 		},
-		{"none ignores ARK_ variables", arkprofile.Profile{}, ark.Passphrase{}, arkprofile.ErrNoPassword.Error()},
+		{"none ignores ARK_ variables", arkprofile.Profile{}, ark.Password{}, arkprofile.ErrNoPassword.Error()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pw, err := tt.p.Passphrase()
+			pw, err := tt.p.Password()
 			if tt.wantErr == "" {
 				if err != nil || pw != tt.want {
-					t.Fatalf("Passphrase = %v, %v; want %v", pw, err, tt.want)
+					t.Fatalf("Password = %v, %v; want %v", pw, err, tt.want)
 				}
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("Passphrase error = %v, want %q", err, tt.wantErr)
+				t.Fatalf("Password error = %v, want %q", err, tt.wantErr)
 			}
 		})
 	}
-	if _, err := (&arkprofile.Profile{}).Passphrase(); !errors.Is(err, arkprofile.ErrNoPassword) {
+	if _, err := (&arkprofile.Profile{}).Password(); !errors.Is(err, arkprofile.ErrNoPassword) {
 		t.Errorf("no source: %v, want ErrNoPassword", err)
 	}
 }

@@ -85,7 +85,7 @@ func TestTamperedObjectsAreRejected(t *testing.T) {
 // a tamper too: the version is only trusted once the hash matches.
 func TestTamperedConfigIsRejected(t *testing.T) {
 	ctx := context.Background()
-	pw := ark.WithPassword("changed password")
+	pw := ark.NewPassword("changed password")
 	cells := []struct {
 		name   string
 		mutate func(t *testing.T, cfg []byte) []byte
@@ -422,7 +422,7 @@ var tamperNamespaces = []tamperNamespace{
 		typ: ark.KeyFile,
 		setup: func(t *testing.T, f *tamperFixture) (string, string) {
 			victim, body := onlyKeyFile(t, f.b)
-			if err := f.repo.ChangePassword(context.Background(), ark.WithPassword("second password")); err != nil {
+			if err := f.repo.ChangePassword(context.Background(), ark.NewPassword("second password")); err != nil {
 				t.Fatalf("ChangePassword: %v", err)
 			}
 			other, _ := onlyKeyFile(t, f.b)
@@ -474,13 +474,13 @@ var tamperNamespaces = []tamperNamespace{
 		rejected: func(t *testing.T, f *tamperFixture, _ string) {
 			assertRestoreFails(t, f, ark.ErrCorruptTree)
 			assertVerifyFails(t, f, ark.ErrCorruptTree)
-			assertCheckError(t, f, f.victim.ID)
+			assertCheckError(t, f, string(f.victim.ID))
 		},
 	},
 	{
 		typ: ark.SnapshotFile,
 		setup: func(_ *testing.T, f *tamperFixture) (string, string) {
-			return f.victim.ID, f.other.ID
+			return string(f.victim.ID), string(f.other.ID)
 		},
 		accepted: acceptedSnapshot,
 		rejected: func(t *testing.T, f *tamperFixture, _ string) {
@@ -490,7 +490,7 @@ var tamperNamespaces = []tamperNamespace{
 			}
 			assertRestoreFails(t, f, ark.ErrCorruptManifest)
 			assertVerifyFails(t, f, ark.ErrCorruptManifest)
-			assertCheckError(t, f, f.victim.ID)
+			assertCheckError(t, f, string(f.victim.ID))
 		},
 	},
 	{
@@ -566,7 +566,7 @@ func missingTree(t *testing.T, f *tamperFixture, _ string) {
 	t.Helper()
 	assertRestoreFails(t, f, ark.ErrNotFound)
 	assertVerifyFails(t, f, ark.ErrNotFound)
-	assertCheckError(t, f, f.victim.ID)
+	assertCheckError(t, f, string(f.victim.ID))
 }
 
 // packTableRow is the row of the blob table in the packs that hold blobs.
@@ -626,7 +626,7 @@ func packTableRow(
 	}
 }
 
-func snapshotTree(t *testing.T, f *tamperFixture, id string) string {
+func snapshotTree(t *testing.T, f *tamperFixture, id ark.SnapshotID) string {
 	t.Helper()
 	tree, err := ark.RootTree(context.Background(), f.repo, id)
 	if err != nil {

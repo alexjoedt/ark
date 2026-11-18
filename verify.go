@@ -32,7 +32,7 @@ const (
 // snapshot, so a chunk several snapshots share is read once.
 func (r *Repository) runVerify(
 	ctx context.Context,
-	snapshotID string,
+	snapshotID SnapshotID,
 	chunks, trees *objectStore,
 	settled map[[sha256.Size]byte]chunkVerdict,
 	progress ProgressFunc,
@@ -67,7 +67,9 @@ func (r *Repository) runVerify(
 	})
 	if err == nil {
 		err = verifyChunks(ctx, chunks, refs, settled, result, func(done int) {
-			progress(ProgressEvent{Phase: PhaseFetch, CurrentPath: snapshotID, ChunksDone: done, ChunksTotal: total})
+			progress(ProgressEvent{
+				Phase: PhaseFetch, CurrentPath: string(snapshotID), ChunksDone: done, ChunksTotal: total,
+			})
 		})
 	}
 	// verifyChunks records chunk failures, so an error here wrapping

@@ -149,7 +149,8 @@ func (e *Engine) BackupVolume(ctx context.Context, volume string, opts ...ark.Ba
 // snapshot of another source type fails with ark.ErrIncompatibleSourceType.
 func (e *Engine) RestoreVolume(
 	ctx context.Context,
-	snapshotID, volume string,
+	snapshotID ark.SnapshotID,
+	volume string,
 	opts ...ark.RestoreOption,
 ) (*ark.RestoreResult, error) {
 	unlock := e.lockVolume(volume)
@@ -193,7 +194,7 @@ func (e *Engine) GetVolume(ctx context.Context, name string) (*VolumeInfo, error
 // DryRunVolumeResult describes what a restore would do without executing it.
 type DryRunVolumeResult struct {
 	TargetVolume       string
-	SnapshotID         string
+	SnapshotID         ark.SnapshotID
 	SourceName         string
 	ContainersAffected []string
 	WillEraseData      bool
@@ -203,7 +204,11 @@ type DryRunVolumeResult struct {
 // DryRunVolume analyses a restore without making any changes.
 // It checks whether the target volume exists, which containers use it, and
 // whether any data would be erased — all without touching the CAS.
-func (e *Engine) DryRunVolume(ctx context.Context, snapshotID, targetVolume string) (*DryRunVolumeResult, error) {
+func (e *Engine) DryRunVolume(
+	ctx context.Context,
+	snapshotID ark.SnapshotID,
+	targetVolume string,
+) (*DryRunVolumeResult, error) {
 	snap, err := e.repo.Snapshot(ctx, snapshotID)
 	if err != nil {
 		return nil, fmt.Errorf("arkdocker: failed to load snapshot %s: %w", snapshotID, err)

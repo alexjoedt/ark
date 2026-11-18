@@ -69,7 +69,7 @@ var (
 	// profile: a decode error, a bad name or conflicting password sources.
 	ErrInvalid = errors.New("arkprofile: invalid profile")
 
-	// ErrNoPassword is returned by [Profile.Passphrase] when the profile names
+	// ErrNoPassword is returned by [Profile.Password] when the profile names
 	// no password source, so the caller can fall back to its own.
 	ErrNoPassword = errors.New("arkprofile: no password source")
 )
@@ -227,30 +227,30 @@ func (p *Profile) checkPassword() error {
 	return nil
 }
 
-// Passphrase reads the password from password-file, else from the variable
+// Password reads the password from password-file, else from the variable
 // password-env names. insecure-no-password gives a repository without one.
 // A profile without any of them returns [ErrNoPassword].
-func (p *Profile) Passphrase() (ark.Passphrase, error) {
+func (p *Profile) Password() (ark.Password, error) {
 	if err := p.checkPassword(); err != nil {
-		return ark.Passphrase{}, err
+		return ark.Password{}, err
 	}
 	switch {
 	case p.InsecureNoPassword:
-		return ark.WithoutPassword(), nil
+		return ark.NoPassword(), nil
 	case p.PasswordFile != "":
 		pw, err := ReadPasswordFile(p.PasswordFile)
 		if err != nil {
-			return ark.Passphrase{}, err
+			return ark.Password{}, err
 		}
-		return ark.WithPassword(pw), nil
+		return ark.NewPassword(pw), nil
 	case p.PasswordEnv != "":
 		pw := os.Getenv(p.PasswordEnv)
 		if pw == "" {
-			return ark.Passphrase{}, fmt.Errorf("password-env: variable %s is not set or empty", p.PasswordEnv)
+			return ark.Password{}, fmt.Errorf("password-env: variable %s is not set or empty", p.PasswordEnv)
 		}
-		return ark.WithPassword(pw), nil
+		return ark.NewPassword(pw), nil
 	}
-	return ark.Passphrase{}, ErrNoPassword
+	return ark.Password{}, ErrNoPassword
 }
 
 // ReadPasswordFile returns the file's contents without one trailing line

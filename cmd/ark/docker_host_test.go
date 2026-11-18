@@ -91,7 +91,7 @@ func TestDockerBackupRecordsTheHostAndParentsPerHost(t *testing.T) {
 	if a2.ParentID != a1.ID {
 		t.Errorf("second backup on a: parent %q, want %q", a2.ParentID, a1.ID)
 	}
-	if d1 := backup("d", "--parent", b1.ID); d1.ParentID != b1.ID {
+	if d1 := backup("d", "--parent", string(b1.ID)); d1.ParentID != b1.ID {
 		t.Errorf("backup with --parent: parent %q, want %q", d1.ParentID, b1.ID)
 	}
 }

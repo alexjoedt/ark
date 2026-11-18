@@ -40,7 +40,7 @@ func (r *Repository) runBackup(
 		createdAt = opts.time
 	}
 	m := &manifest{
-		Version:    manifestVersion3,
+		Version:    manifestVersion,
 		ID:         newSnapshotID(),
 		ParentID:   parentID,
 		CreatedAt:  createdAt.UTC(),
@@ -325,7 +325,7 @@ func unstoredChunk(ctx context.Context, s *objectStore, chunks []chunkRef) (bool
 // pack holds is left out, so the backup reads it again; checked reports that
 // this was done.
 func (r *Repository) parentFiles(
-	ctx context.Context, session *packSession, id string, source SourceMeta,
+	ctx context.Context, session *packSession, id SnapshotID, source SourceMeta,
 ) (files map[string]fileEntry, checked bool, err error) {
 	if id == "" {
 		return map[string]fileEntry{}, false, nil

@@ -204,7 +204,7 @@ func TestDurabilityBarriers(t *testing.T) {
 		t.Fatalf("Snapshots = %v, %v", snaps, err)
 	}
 	b.take()
-	_, err = repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{snap.ID, snaps[0].ID}})
+	_, err = repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{snap.ID, snaps[0].ID}})
 	if err != nil {
 		t.Fatalf("Forget: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestDurabilityBarriers(t *testing.T) {
 		t.Fatalf("idle Prune synced %v, want once", s)
 	}
 
-	if err := repo.ChangePassword(ctx, ark.WithPassword("another one")); err != nil {
+	if err := repo.ChangePassword(ctx, ark.NewPassword("another one")); err != nil {
 		t.Fatalf("ChangePassword: %v", err)
 	}
 	if s := b.take(); len(s) != 1 || s[0][ark.KeyFile] != 2 {

@@ -89,7 +89,7 @@ func baseFiles() map[string]statFile {
 
 // restoreAll restores snapshot id into a recording sink and returns the bytes
 // it received per path.
-func restoreAll(t *testing.T, repo *ark.Repository, id string) map[string]string {
+func restoreAll(t *testing.T, repo *ark.Repository, id ark.SnapshotID) map[string]string {
 	t.Helper()
 	sink := &recordingSink{}
 	if _, err := repo.Restore(context.Background(), id, sink); err != nil {
@@ -98,7 +98,7 @@ func restoreAll(t *testing.T, repo *ark.Repository, id string) map[string]string
 	return sink.written
 }
 
-func checkRestore(t *testing.T, repo *ark.Repository, id string, files map[string]statFile) {
+func checkRestore(t *testing.T, repo *ark.Repository, id ark.SnapshotID, files map[string]statFile) {
 	t.Helper()
 	got := restoreAll(t, repo, id)
 	for p, f := range files {
@@ -309,7 +309,11 @@ func TestForgetAndPruneOfParentDuringChildBackup(t *testing.T) {
 	wg.Go(func() { child, cerr = repo.Backup(ctx, src) })
 	<-src.walking
 
-	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{parent.ID}}); err != nil {
+	if _, err := repo.Forget(
+		ctx,
+		ark.ForgetPolicy{},
+		ark.SnapshotFilter{IDs: []ark.SnapshotID{parent.ID}},
+	); err != nil {
 		t.Fatalf("Forget of the parent: %v", err)
 	}
 	if _, err := repo.Prune(ctx); !errors.Is(err, ark.ErrRepoLocked) {
@@ -349,7 +353,7 @@ func (b *putCountingBackend) Put(ctx context.Context, h ark.Handle, r io.Reader)
 	return b.Backend.Put(ctx, h, r)
 }
 
-func rootTree(t *testing.T, repo *ark.Repository, id string) string {
+func rootTree(t *testing.T, repo *ark.Repository, id ark.SnapshotID) string {
 	t.Helper()
 	root, err := ark.RootTree(context.Background(), repo, id)
 	if err != nil {

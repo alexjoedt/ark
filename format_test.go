@@ -24,7 +24,7 @@ const formatSealed = 0x02
 // backupFixture initialises a repository in b and backs up a small tree of two
 // directories, three files and a symlink into it. It returns the open
 // repository and the snapshot id.
-func backupFixture(t *testing.T, b ark.Backend) (*ark.Repository, string) {
+func backupFixture(t *testing.T, b ark.Backend) (*ark.Repository, ark.SnapshotID) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -236,10 +236,10 @@ func TestTreeNodesLiveInTheTreesNamespace(t *testing.T) {
 	b := arkmem.New()
 	repo, id := backupFixture(t, b)
 
-	if stored := readObject(t, b, ark.SnapshotFile, id); stored[0] != formatSealed {
+	if stored := readObject(t, b, ark.SnapshotFile, string(id)); stored[0] != formatSealed {
 		t.Errorf("manifest starts with 0x%02x, want 0x%02x", stored[0], formatSealed)
 	}
-	manifest := openObject(t, repo, ark.SnapshotFile, id)
+	manifest := openObject(t, repo, ark.SnapshotFile, string(id))
 	var m struct {
 		RootTree string `json:"root_tree"`
 	}

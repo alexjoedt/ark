@@ -69,7 +69,7 @@ func findCommand() *cli.Command {
 
 			p := printer(cmd)
 			m := p.Mode()
-			var last string
+			var last ark.SnapshotID
 			err = arkfind.Find(ctx, repo, filter, patterns, func(hit arkfind.Match) error {
 				s, f := hit.Snapshot, hit.File
 				if m.JSON {
@@ -102,7 +102,7 @@ func findCommand() *cli.Command {
 
 // matchJSON is one line of ark find --json, frozen for 1.x.
 type matchJSON struct {
-	SnapshotID string            `json:"snapshot_id"`
+	SnapshotID ark.SnapshotID    `json:"snapshot_id"`
 	Path       string            `json:"path"`
 	Type       string            `json:"type"`
 	Size       int64             `json:"size"`

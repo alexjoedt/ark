@@ -54,10 +54,10 @@ func sftpVolumeEngine(t *testing.T) (*volumeDocker, *arkdocker.Engine, *ark.Repo
 			_ = b.Close()
 		}
 	})
-	if err := ark.Init(ctx, b, ark.WithoutPassword()); err != nil {
+	if err := ark.Init(ctx, b, ark.NoPassword()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if repo, err = ark.Open(ctx, b, ark.WithoutPassword()); err != nil {
+	if repo, err = ark.Open(ctx, b, ark.NoPassword()); err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	// The sleep container ignores SIGTERM, a short timeout keeps the kill quick.
@@ -336,7 +336,7 @@ func volumeRestoresAfterARepack(t *testing.T, d *volumeDocker, e *arkdocker.Engi
 		t.Fatalf("second BackupVolume: %v", err)
 	}
 
-	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{first.ID}}); err != nil {
+	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{first.ID}}); err != nil {
 		t.Fatalf("Forget: %v", err)
 	}
 	pruned, err := repo.Prune(ctx)
