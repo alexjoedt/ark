@@ -41,7 +41,8 @@ func TestForgetWarnsAboutAFutureSnapshot(t *testing.T) {
 		}
 		if n := strings.Count(logs, "warning: snapshot "); n != 1 ||
 			!strings.Contains(logs, "(2099-01-01 ") ||
-			!strings.Contains(logs, "is dated in the future; kept and ignored by the policy") {
+			!strings.Contains(logs, "is dated in the future; until that date has passed, "+
+				"forget keeps it and ignores it in the policy") {
 			t.Fatalf("%v: stderr %q", args, logs)
 		}
 	}
