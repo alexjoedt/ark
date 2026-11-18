@@ -37,7 +37,7 @@ func restoreCommand() *cli.Command {
 			if cmd.NArg() != 2 {
 				return exitcode.Usagef("usage: ark restore [options] <id> <dest>")
 			}
-			id, dest := cmd.Args().Get(0), cmd.Args().Get(1)
+			id, dest := ark.SnapshotID(cmd.Args().Get(0)), cmd.Args().Get(1)
 			cache, err := cacheSize(cmd.String("cache"))
 			if err != nil {
 				return err
@@ -124,7 +124,13 @@ func restorePaths(paths []string) []string {
 
 // dryRunRestore lists the entries a restore would write, one per line, with
 // the same prefix rule the library applies. No sink is involved.
-func dryRunRestore(ctx context.Context, repo *ark.Repository, p *out.Printer, id string, prefixes []string) error {
+func dryRunRestore(
+	ctx context.Context,
+	repo *ark.Repository,
+	p *out.Printer,
+	id ark.SnapshotID,
+	prefixes []string,
+) error {
 	keep := func(path string) bool {
 		if len(prefixes) == 0 {
 			return true

@@ -249,7 +249,7 @@ func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOptio
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
-		o.parent = parent
+		o.parent = SnapshotID(parent)
 	}
 	m, err := r.runBackup(ctx, src, meta, *o, r.writeSession())
 	if err != nil {
@@ -258,16 +258,21 @@ func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOptio
 	return manifestToSnapshot(m), nil
 }
 
-// Restore streams the snapshot into sink. id is a full snapshot id or a
-// unique prefix.
-func (r *Repository) Restore(ctx context.Context, id string, sink Sink, opts ...RestoreOption) (*RestoreResult, error) {
+// Restore streams the snapshot into sink. snapshotID is a full snapshot ID
+// or a unique prefix.
+func (r *Repository) Restore(
+	ctx context.Context,
+	snapshotID SnapshotID,
+	sink Sink,
+	opts ...RestoreOption,
+) (*RestoreResult, error) {
 	ctx, lock, err := r.acquire(ctx, false)
 	if err != nil {
 		return nil, err
 	}
 	defer lock.release(ctx)
 
-	id, err = r.resolveID(ctx, id)
+	id, err := r.resolveID(ctx, snapshotID)
 	if err != nil {
 		return nil, err
 	}
@@ -283,10 +288,11 @@ func (r *Repository) Restore(ctx context.Context, id string, sink Sink, opts ...
 	return &RestoreResult{FilesRestored: stats.FilesRestored, BytesRestored: stats.BytesRestored}, nil
 }
 
-// resolveID turns a full snapshot id or a unique prefix into the full id.
-// It returns ErrNotFound when nothing matches and ErrAmbiguousID, naming the
-// candidates, when more than one does.
-func (r *Repository) resolveID(ctx context.Context, id string) (string, error) {
+// resolveID turns a full snapshot ID or a unique prefix into the full ID,
+// the name the manifest is stored under. It returns ErrNotFound when nothing
+// matches and ErrAmbiguousID, naming the candidates, when more than one does.
+func (r *Repository) resolveID(ctx context.Context, snapshotID SnapshotID) (string, error) {
+	id := string(snapshotID)
 	if id == "" {
 		return "", fmt.Errorf("%w: empty snapshot id", ErrNotFound)
 	}
@@ -323,13 +329,13 @@ func (r *Repository) resolveID(ctx context.Context, id string) (string, error) {
 func (r *Repository) Snapshots(ctx context.Context, filter SnapshotFilter) ([]*Snapshot, error) {
 	if len(filter.IDs) > 0 {
 		// Resolve into a copy: the caller's slice stays untouched.
-		resolved := make([]string, len(filter.IDs))
+		resolved := make([]SnapshotID, len(filter.IDs))
 		for i, id := range filter.IDs {
 			full, err := r.resolveID(ctx, id)
 			if err != nil {
 				return nil, err
 			}
-			resolved[i] = full
+			resolved[i] = SnapshotID(full)
 		}
 		filter.IDs = resolved
 	}
@@ -350,9 +356,10 @@ func (r *Repository) Snapshots(ctx context.Context, filter SnapshotFilter) ([]*S
 	return out, nil
 }
 
-// Snapshot returns one snapshot. id is a full snapshot id or a unique prefix.
-func (r *Repository) Snapshot(ctx context.Context, id string) (*Snapshot, error) {
-	id, err := r.resolveID(ctx, id)
+// Snapshot returns one snapshot. snapshotID is a full snapshot ID or a
+// unique prefix.
+func (r *Repository) Snapshot(ctx context.Context, snapshotID SnapshotID) (*Snapshot, error) {
+	id, err := r.resolveID(ctx, snapshotID)
 	if err != nil {
 		return nil, err
 	}
@@ -454,7 +461,7 @@ func (r *Repository) Forget(
 	// A failed removal does not stop the others; Forget still fails.
 	var errs []error
 	for _, s := range result.Remove {
-		if err := r.deleteSnapshot(ctx, s.ID); err != nil {
+		if err := r.deleteSnapshot(ctx, string(s.ID)); err != nil {
 			errs = append(errs, err)
 			continue
 		}
@@ -490,7 +497,7 @@ func (r *Repository) forgetNamed(ctx context.Context, filter SnapshotFilter) (*F
 		seen[full] = true
 		m, err := r.loadManifest(ctx, full)
 		if errors.Is(err, ErrCorruptManifest) {
-			result.Remove = append(result.Remove, &Snapshot{ID: full})
+			result.Remove = append(result.Remove, &Snapshot{ID: SnapshotID(full)})
 			continue
 		}
 		if err != nil {
@@ -563,16 +570,16 @@ func (r *Repository) RebuildIndex(ctx context.Context) (*RebuildIndexResult, err
 	return r.runRebuildIndex(ctx)
 }
 
-// Export writes a portable tar.gz archive of one snapshot to w. id is a full
-// snapshot id or a unique prefix.
-func (r *Repository) Export(ctx context.Context, id string, w io.Writer) error {
+// Export writes a portable tar.gz archive of one snapshot to w. snapshotID
+// is a full snapshot ID or a unique prefix.
+func (r *Repository) Export(ctx context.Context, snapshotID SnapshotID, w io.Writer) error {
 	ctx, lock, err := r.acquire(ctx, false)
 	if err != nil {
 		return err
 	}
 	defer lock.release(ctx)
 
-	id, err = r.resolveID(ctx, id)
+	id, err := r.resolveID(ctx, snapshotID)
 	if err != nil {
 		return err
 	}
@@ -597,8 +604,8 @@ func (r *Repository) Import(ctx context.Context, reader io.Reader) (*Snapshot, e
 }
 
 // Verify checks one snapshot: manifest, tree and every chunk.
-// id is a full snapshot id or a unique prefix.
-func (r *Repository) Verify(ctx context.Context, id string) (*VerifyResult, error) {
+// snapshotID is a full snapshot ID or a unique prefix.
+func (r *Repository) Verify(ctx context.Context, snapshotID SnapshotID) (*VerifyResult, error) {
 	progress := r.observer(OperationVerify, nil)
 	progress(ProgressEvent{Phase: PhaseLoad})
 
@@ -608,7 +615,7 @@ func (r *Repository) Verify(ctx context.Context, id string) (*VerifyResult, erro
 	}
 	defer lock.release(ctx)
 
-	id, err = r.resolveID(ctx, id)
+	id, err := r.resolveID(ctx, snapshotID)
 	if err != nil {
 		return nil, err
 	}
@@ -702,19 +709,19 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 }
 
 // Walk calls fn for every entry of a snapshot in tree order, parents before
-// children, without materialising the list. id is a full snapshot id or a
-// unique prefix. An error from fn ends the walk and is returned.
+// children, without materialising the list. snapshotID is a full snapshot
+// ID or a unique prefix. An error from fn ends the walk and is returned.
 //
 // Directory paths carry a trailing slash, the way tar names them; every other
 // entry carries the plain path a Source yielded.
-func (r *Repository) Walk(ctx context.Context, id string, fn func(FileInfo) error) error {
+func (r *Repository) Walk(ctx context.Context, snapshotID SnapshotID, fn func(FileInfo) error) error {
 	ctx, lock, err := r.acquire(ctx, false)
 	if err != nil {
 		return err
 	}
 	defer lock.release(ctx)
 
-	id, err = r.resolveID(ctx, id)
+	id, err := r.resolveID(ctx, snapshotID)
 	if err != nil {
 		return err
 	}

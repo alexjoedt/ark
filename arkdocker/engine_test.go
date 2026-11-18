@@ -262,7 +262,11 @@ func TestVolumeRestoresAfterARepack(t *testing.T) {
 			t.Fatalf("second BackupVolume: %v", err)
 		}
 
-		if _, err := e.repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{first.ID}}); err != nil {
+		if _, err := e.repo.Forget(
+			ctx,
+			ark.ForgetPolicy{},
+			ark.SnapshotFilter{IDs: []ark.SnapshotID{first.ID}},
+		); err != nil {
 			t.Fatalf("Forget: %v", err)
 		}
 		pruned, err := e.repo.Prune(ctx)

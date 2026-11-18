@@ -247,7 +247,7 @@ func TestVerifyBlamesExactlyTheChunksADamageCovers(t *testing.T) {
 					len(check.Errors), len(want), check.Errors)
 			}
 			for _, chunk := range want {
-				if !naming(check.Errors, snap.ID, "corrupt chunk "+chunk) {
+				if !naming(check.Errors, string(snap.ID), "corrupt chunk "+chunk) {
 					t.Errorf("Check errors %q name no corrupt chunk %s of snapshot %s", check.Errors, chunk, snap.ID)
 				}
 			}
@@ -346,7 +346,7 @@ func TestCheckReadsAChunkSeveralSnapshotsShareOnce(t *testing.T) {
 		}
 	}
 	for _, snap := range snaps {
-		if !naming(check.Errors, "snapshot "+snap.ID, "corrupt chunk "+broken) {
+		if !naming(check.Errors, "snapshot "+string(snap.ID), "corrupt chunk "+broken) {
 			t.Errorf("Check errors %q name no corrupt chunk %s of snapshot %s", check.Errors, broken, snap.ID)
 		}
 	}
@@ -382,7 +382,7 @@ func TestCheckReportsAPackThatDisagreesWithTheIndex(t *testing.T) {
 				if err != nil {
 					t.Fatalf("BlobPlace: %v", err)
 				}
-				snaps, blobs, packs = append(snaps, snap.ID), append(blobs, blob), append(packs, pack)
+				snaps, blobs, packs = append(snaps, string(snap.ID)), append(blobs, blob), append(packs, pack)
 			}
 			first := readObject(t, b, packs[0].Type, packs[0].Name)
 			putObject(t, b, packs[0].Type, packs[0].Name, readObject(t, b, packs[1].Type, packs[1].Name))
@@ -464,7 +464,7 @@ func TestCheckWarnsAboutWhatPruneRemoves(t *testing.T) {
 	check = mustCheck(t, repo)
 	chunks := 0
 	for _, e := range check.Errors {
-		if strings.Contains(e, snap.ID) && strings.Contains(e, "missing chunk") {
+		if strings.Contains(e, string(snap.ID)) && strings.Contains(e, "missing chunk") {
 			chunks++
 		}
 	}
@@ -487,7 +487,7 @@ func TestRebuildIndexRestoresALostIndex(t *testing.T) {
 	first := smallFiles("app", 40)
 	second := smallFiles("app", 60)
 	second.files[second.order[3]] = "changed in the second backup"
-	sources := map[string]multiSource{
+	sources := map[ark.SnapshotID]multiSource{
 		mustBackup(t, repo, first).ID:  first,
 		mustBackup(t, repo, second).ID: second,
 	}
@@ -574,7 +574,7 @@ func TestRebuildIndexKeepsWhatTheOldIndexKnowsOfADamagedPack(t *testing.T) {
 	// A second pack is lost altogether: that one the rebuild forgets.
 	lost := mustBackup(t, repo, stubSource{name: "lost", content: "in a pack that goes missing"})
 	deletePackOf(t, b, repo, ark.BlobFile, ark.ObjectName(repo, []byte("in a pack that goes missing")))
-	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{lost.ID}}); err != nil {
+	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{lost.ID}}); err != nil {
 		t.Fatalf("Forget: %v", err)
 	}
 

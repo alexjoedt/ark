@@ -336,7 +336,7 @@ func volumeRestoresAfterARepack(t *testing.T, d *volumeDocker, e *arkdocker.Engi
 		t.Fatalf("second BackupVolume: %v", err)
 	}
 
-	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{first.ID}}); err != nil {
+	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{first.ID}}); err != nil {
 		t.Fatalf("Forget: %v", err)
 	}
 	pruned, err := repo.Prune(ctx)

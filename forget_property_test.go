@@ -191,7 +191,7 @@ func drawHistory(rng *rand.Rand, loc *time.Location, id string, series seriesKey
 			break
 		}
 		s := &Snapshot{
-			ID:         id + strconv.Itoa(len(snaps)),
+			ID:         SnapshotID(id + strconv.Itoa(len(snaps))),
 			SourceType: series.sourceType,
 			SourceName: series.sourceName,
 			Host:       series.host,
@@ -548,7 +548,7 @@ func TestForgetTwiceUnderAFutureSnapshot(t *testing.T) {
 		policy: ForgetPolicy{KeepWithinMonthly: Within{Months: 1}},
 	}
 	first := c.apply(c.snaps, c.policy)
-	want := map[string][]string{
+	want := map[SnapshotID][]string{
 		"future": {"in the future"},
 		"apr1":   {"monthly within 1m"},
 		"mar31":  {"monthly within 1m"},

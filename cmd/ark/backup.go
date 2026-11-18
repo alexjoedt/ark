@@ -80,7 +80,11 @@ func backupCommand() *cli.Command {
 
 				p := printer(cmd)
 				// --label adds to the profile's labels, a key in both takes the flag's value
-				bopts := append(eff.BackupOptions(), ark.WithParent(cmd.String("parent")), ark.WithLabels(labels))
+				bopts := append(
+					eff.BackupOptions(),
+					ark.WithParent(ark.SnapshotID(cmd.String("parent"))),
+					ark.WithLabels(labels),
+				)
 				bopts = append(bopts, at...)
 				// an empty --host or --comment clears the profile's value,
 				// which BackupOptions would leave out or default
@@ -105,7 +109,7 @@ func backupCommand() *cli.Command {
 				if p.Mode().JSON {
 					return p.JSON(out.NewSnapshot(snap))
 				}
-				p.Result("snapshot", snap.ID)
+				p.Result("snapshot", string(snap.ID))
 				return nil
 			})
 		},

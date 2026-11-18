@@ -188,7 +188,7 @@ func (r *Repository) readManifests(ctx context.Context) ([]*manifest, error) {
 // manifestToSnapshot converts an internal manifest to the public Snapshot type.
 func manifestToSnapshot(m *manifest) *Snapshot {
 	return &Snapshot{
-		ID:         m.ID,
+		ID:         SnapshotID(m.ID),
 		SourceName: m.SourceName,
 		SourceType: m.SourceType,
 		Labels:     maps.Clone(m.Labels),
@@ -197,7 +197,7 @@ func manifestToSnapshot(m *manifest) *Snapshot {
 		Tags:       append([]string(nil), m.Tags...),
 		Comment:    m.Comment,
 		CreatedAt:  m.CreatedAt,
-		ParentID:   m.ParentID,
+		ParentID:   SnapshotID(m.ParentID),
 		Stats:      m.Stats,
 	}
 }

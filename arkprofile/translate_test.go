@@ -91,7 +91,7 @@ func TestBackupAndForgetThroughAProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, want := ids(left), []string{otherOld.ID, otherNew.ID, last.ID}
+	got, want := ids(left), []ark.SnapshotID{otherOld.ID, otherNew.ID, last.ID}
 	slices.Sort(got)
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
@@ -277,8 +277,8 @@ func initAt(ctx context.Context, uri string) error {
 	return ark.Init(ctx, b, ark.NoPassword())
 }
 
-func ids(snaps []*ark.Snapshot) []string {
-	out := make([]string, len(snaps))
+func ids(snaps []*ark.Snapshot) []ark.SnapshotID {
+	out := make([]ark.SnapshotID, len(snaps))
 	for i, s := range snaps {
 		out[i] = s.ID
 	}

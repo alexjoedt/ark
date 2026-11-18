@@ -245,7 +245,7 @@ func dockerBackupCommand() *cli.Command {
 				ark.WithTags(cmd.StringSlice("tag")...),
 				ark.WithComment(cmd.String("comment")),
 				ark.WithHost(host),
-				ark.WithParent(cmd.String("parent")),
+				ark.WithParent(ark.SnapshotID(cmd.String("parent"))),
 				ark.WithLabels(labels),
 			)...)
 			if err != nil {
@@ -257,7 +257,7 @@ func dockerBackupCommand() *cli.Command {
 			if p.Mode().JSON {
 				return p.JSON(out.NewSnapshot(snap))
 			}
-			p.Result("snapshot", snap.ID)
+			p.Result("snapshot", string(snap.ID))
 			return nil
 		},
 	}
@@ -290,7 +290,7 @@ func dockerRestoreCommand() *cli.Command {
 			if cmd.NArg() < 1 || cmd.NArg() > 2 {
 				return exitcode.Usagef("usage: ark docker restore [options] <id> [volume]")
 			}
-			id, volume := cmd.Args().Get(0), cmd.Args().Get(1)
+			id, volume := ark.SnapshotID(cmd.Args().Get(0)), cmd.Args().Get(1)
 			paths := restorePaths(cmd.StringSlice("path"))
 
 			e, repo, err := openDocker(ctx, cmd)
@@ -365,7 +365,7 @@ func dockerRestoreCommand() *cli.Command {
 }
 
 // describeRestore is the one line the dry run prints and the prompt asks.
-func describeRestore(id, volume string, plan *arkdocker.DryRunVolumeResult) string {
+func describeRestore(id ark.SnapshotID, volume string, plan *arkdocker.DryRunVolumeResult) string {
 	switch {
 	case !plan.WillEraseData:
 		return fmt.Sprintf("restore %s into new volume %s", id, volume)

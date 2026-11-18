@@ -44,7 +44,7 @@ func (r *Repository) runVerify(
 		return nil, err
 	}
 
-	result := &VerifyResult{SnapshotID: snapshotID, OK: true}
+	result := &VerifyResult{SnapshotID: SnapshotID(snapshotID), OK: true}
 
 	logger.InfoContext(ctx, "verifying snapshot", "chunks", m.Stats.ChunksTotal)
 

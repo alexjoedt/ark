@@ -83,7 +83,7 @@ func mountCommand() *cli.Command {
 			if err != nil {
 				return err
 			}
-			root := &mountRoot{layout: buildLayout(snaps), fsys: map[string]*lazyFS{}}
+			root := &mountRoot{layout: buildLayout(snaps), fsys: map[ark.SnapshotID]*lazyFS{}}
 			for _, s := range snaps {
 				root.fsys[s.ID] = &lazyFS{rd: rd, id: s.ID, created: s.CreatedAt}
 			}
@@ -188,13 +188,13 @@ func within(p, parent string) bool {
 // vdir is a directory of the mount's fixed layout above the snapshots.
 type vdir struct {
 	dirs  map[string]*vdir
-	snaps map[string]string // entry name to snapshot ID
-	links map[string]string // entry name to symlink target
-	time  time.Time         // newest snapshot below
+	snaps map[string]ark.SnapshotID // entry name to snapshot ID
+	links map[string]string         // entry name to symlink target
+	time  time.Time                 // newest snapshot below
 }
 
 func newVdir() *vdir {
-	return &vdir{dirs: map[string]*vdir{}, snaps: map[string]string{}, links: map[string]string{}}
+	return &vdir{dirs: map[string]*vdir{}, snaps: map[string]ark.SnapshotID{}, links: map[string]string{}}
 }
 
 func (d *vdir) dir(name string) *vdir {
@@ -223,7 +223,7 @@ func buildLayout(snaps []*ark.Snapshot) *vdir {
 	for _, s := range snaps {
 		id := out.ShortID(s.ID)
 		if shorts[id] > 1 {
-			id = s.ID
+			id = string(s.ID)
 		}
 		ids.snaps[escapeName(id)] = s.ID
 		ids.touch(s.CreatedAt)
@@ -333,7 +333,7 @@ func sortByTime(list []*ark.Snapshot) []*ark.Snapshot {
 		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
 			return c
 		}
-		return strings.Compare(a.ID, b.ID)
+		return strings.Compare(string(a.ID), string(b.ID))
 	})
 }
 
@@ -409,7 +409,7 @@ func inode(parent uint64, name string) uint64 {
 type mountRoot struct {
 	gofs.Inode
 	layout *vdir
-	fsys   map[string]*lazyFS
+	fsys   map[ark.SnapshotID]*lazyFS
 }
 
 var (
@@ -475,7 +475,7 @@ func dirAttr(a *fuse.Attr, perm uint32, t time.Time) {
 // open fails alone. A failed open is retried at the next use.
 type lazyFS struct {
 	rd      *ark.Reader
-	id      string
+	id      ark.SnapshotID
 	created time.Time
 
 	mu   sync.Mutex

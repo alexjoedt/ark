@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/alexjoedt/ark"
 )
 
 // Bytes formats n in binary units with one decimal, bytes below 1 KiB as is.
@@ -60,11 +62,11 @@ func Time(t time.Time) string {
 // command taking an ID resolves that prefix; one that two snapshots share
 // fails with the ambiguous-ID error, as two legacy base32 IDs taken within
 // about a second of each other do.
-func ShortID(id string) string {
+func ShortID(id ark.SnapshotID) string {
 	if len(id) > 8 {
-		return id[:8]
+		return string(id[:8])
 	}
-	return id
+	return string(id)
 }
 
 // TimeLong renders t in local time with seconds, the inspect form.

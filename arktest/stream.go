@@ -106,7 +106,7 @@ func backupStream(t *testing.T, repo *ark.Repository, src ark.Source) *ark.Snaps
 	return snap
 }
 
-func restoreStream(t *testing.T, repo *ark.Repository, id string, newSink func(io.Writer) ark.Sink) []byte {
+func restoreStream(t *testing.T, repo *ark.Repository, id ark.SnapshotID, newSink func(io.Writer) ark.Sink) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	if _, err := repo.Restore(context.Background(), id, newSink(&buf)); err != nil {

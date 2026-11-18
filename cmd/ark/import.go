@@ -62,7 +62,7 @@ func importCommand() *cli.Command {
 			if p.Mode().JSON {
 				return p.JSON(out.NewSnapshot(snap))
 			}
-			p.Result("snapshot", snap.ID)
+			p.Result("snapshot", string(snap.ID))
 			return nil
 		},
 	}

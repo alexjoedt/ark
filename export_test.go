@@ -89,7 +89,7 @@ func TestExportMetadataIsTheSnapshotManifest(t *testing.T) {
 	if err := json.NewDecoder(tr).Decode(&meta); err != nil {
 		t.Fatalf("metadata.json is not JSON: %v", err)
 	}
-	if meta.ID != snap.ID {
+	if meta.ID != string(snap.ID) {
 		t.Errorf("metadata names snapshot %q, want %q", meta.ID, snap.ID)
 	}
 	if meta.SourceName != "app" {

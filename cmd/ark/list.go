@@ -114,7 +114,7 @@ func lsCommand() *cli.Command {
 			if cmd.NArg() < 1 || cmd.NArg() > 2 {
 				return exitcode.Usagef("usage: ark ls [options] <id> [path]")
 			}
-			id := cmd.Args().Get(0)
+			id := ark.SnapshotID(cmd.Args().Get(0))
 			prefix := strings.Trim(cmd.Args().Get(1), "/")
 			if prefix != "" {
 				prefix += "/"
@@ -180,7 +180,7 @@ func inspectCommand() *cli.Command {
 			}
 			defer repo.Close()
 
-			s, err := repo.Snapshot(ctx, cmd.Args().First())
+			s, err := repo.Snapshot(ctx, ark.SnapshotID(cmd.Args().First()))
 			if err != nil {
 				return fmt.Errorf("inspect %s: %w", cmd.Args().First(), err)
 			}
@@ -196,11 +196,11 @@ func inspectCommand() *cli.Command {
 			}
 			reused := max(st.TotalSize-st.NewChunksRawSize, 0)
 			rows := [][]string{
-				{"ID:", s.ID},
+				{"ID:", string(s.ID)},
 				{"Source:", fmt.Sprintf("%s (%s)", s.SourceName, s.SourceType)},
 				{"Host:", s.Host},
 				{"Time:", out.TimeLong(s.CreatedAt)},
-				{"Parent:", orDash(s.ParentID)},
+				{"Parent:", orDash(string(s.ParentID))},
 				{"Tags:", orDash(strings.Join(s.Tags, ", "))},
 				{"Files:", files},
 				{

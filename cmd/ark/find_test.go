@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/cmd/ark/internal/out"
 )
 
@@ -39,7 +40,7 @@ func TestFind(t *testing.T) {
 		return s
 	}
 	header := func(s snap) string {
-		return "snapshot " + out.ShortID(s.ID) + " from " + out.TimeLong(s.CreatedAt)
+		return "snapshot " + out.ShortID(ark.SnapshotID(s.ID)) + " from " + out.TimeLong(s.CreatedAt)
 	}
 	first := backup("--source", "one", "--host", "h1", "-t", "a")
 	second := backup("--source", "one", "--host", "h2", "-t", "a", "-t", "b")
@@ -106,7 +107,7 @@ func TestFind(t *testing.T) {
 		if m.Mtime.IsZero() || m.Type != "regular" || (m.Path == "keep.txt" && m.Size != int64(len("keep.txt"))) {
 			t.Fatalf("match %+v lacks mtime, type or size", m)
 		}
-		got = append(got, m.SnapshotID[:8]+" "+m.Path)
+		got = append(got, string(m.SnapshotID[:8])+" "+m.Path)
 	}
 	wantJSON := []string{
 		third.ID[:8] + " keep.txt",

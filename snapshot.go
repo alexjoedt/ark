@@ -6,9 +6,16 @@ import (
 	"time"
 )
 
+// SnapshotID names a snapshot. A full ID is 32 lowercase hex characters;
+// snapshots written before that keep 26 character base32 IDs. A method or
+// option that takes one also accepts a unique prefix of it, in upper or lower
+// case, and fails with ErrNotFound or ErrAmbiguousID when it names no
+// snapshot or more than one. Chunk names and lock names are plain strings.
+type SnapshotID string
+
 // Snapshot describes a completed backup, as returned by the public API.
 type Snapshot struct {
-	ID         string
+	ID         SnapshotID
 	SourceName string
 	SourceType SourceType
 	Labels     map[string]string // the source's labels and those of WithLabels
@@ -17,7 +24,7 @@ type Snapshot struct {
 	Tags       []string
 	Comment    string
 	CreatedAt  time.Time
-	ParentID   string
+	ParentID   SnapshotID
 	Stats      SnapshotStats
 }
 
@@ -75,7 +82,7 @@ func (s *SnapshotStats) computeRatios() {
 type SnapshotFilter struct {
 	// IDs selects exactly these snapshots. Snapshots resolves prefixes to
 	// full ids before matching, so Match itself compares them verbatim.
-	IDs []string
+	IDs []SnapshotID
 
 	// Source filters by source name (volume name, path, etc.); empty = all.
 	Source string
@@ -111,7 +118,7 @@ type backupOptions struct {
 	tags     []string
 	labels   map[string]string
 	host     string
-	parent   string
+	parent   SnapshotID
 	time     time.Time
 	timeSet  bool
 	progress ProgressFunc
@@ -181,13 +188,13 @@ func WithTime(t time.Time) BackupOption {
 	return func(o *backupOptions) { o.time, o.timeSet = t, true }
 }
 
-// WithParent names the parent snapshot explicitly, as a full id or a unique
+// WithParent names the parent snapshot explicitly, as a full ID or a unique
 // prefix. Without it the parent is the newest snapshot of the same series:
 // source type, source name and host ([WithHost], empty by default). A parent
 // of another source type or name is recorded but no file is taken from it
 // unread.
-func WithParent(id string) BackupOption {
-	return func(o *backupOptions) { o.parent = id }
+func WithParent(snapshotID SnapshotID) BackupOption {
+	return func(o *backupOptions) { o.parent = snapshotID }
 }
 
 // WithBackupProgress sets the observer for this backup, overriding the
@@ -282,7 +289,7 @@ type PruneResult struct {
 
 // VerifyResult is returned by Verify.
 type VerifyResult struct {
-	SnapshotID    string
+	SnapshotID    SnapshotID
 	ChunksChecked int
 	MissingChunks []string
 	CorruptChunks []string

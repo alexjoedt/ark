@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
 	"github.com/alexjoedt/ark/cmd/ark/internal/out"
 	"github.com/urfave/cli/v3"
@@ -24,7 +25,7 @@ func exportCommand() *cli.Command {
 			if cmd.NArg() < 1 || cmd.NArg() > 2 {
 				return exitcode.Usagef("usage: ark export <id> [file]")
 			}
-			id, file := cmd.Args().Get(0), cmd.Args().Get(1)
+			id, file := ark.SnapshotID(cmd.Args().Get(0)), cmd.Args().Get(1)
 
 			repo, err := openRepo(ctx, cmd)
 			if err != nil {

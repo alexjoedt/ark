@@ -90,7 +90,7 @@ func Find(
 // vanished reports whether err comes from a snapshot that was forgotten after
 // the list was read. A missing tree also reports ErrNotFound, so the snapshot
 // is looked up again before its error is dropped.
-func vanished(ctx context.Context, repo *ark.Repository, id string, err error) bool {
+func vanished(ctx context.Context, repo *ark.Repository, id ark.SnapshotID, err error) bool {
 	if !errors.Is(err, ark.ErrNotFound) {
 		return false
 	}

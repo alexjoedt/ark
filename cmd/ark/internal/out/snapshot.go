@@ -11,7 +11,7 @@ import (
 // library struct is mapped here so its field names can move without
 // breaking scripts.
 type Snapshot struct {
-	ID         string            `json:"id"`
+	ID         ark.SnapshotID    `json:"id"`
 	CreatedAt  time.Time         `json:"created_at"`
 	SourceName string            `json:"source_name"`
 	SourceType string            `json:"source_type"`
@@ -20,7 +20,7 @@ type Snapshot struct {
 	Comment    string            `json:"comment"`
 	Excludes   []string          `json:"excludes"`
 	Labels     map[string]string `json:"labels"`
-	ParentID   string            `json:"parent_id"`
+	ParentID   ark.SnapshotID    `json:"parent_id"`
 	Stats      ark.SnapshotStats `json:"stats"`
 }
 
@@ -74,7 +74,7 @@ type Kept struct {
 
 // KeptSnapshots maps a keep list with the reasons per snapshot ID. Neither
 // the result nor a Reasons list is null.
-func KeptSnapshots(list []*ark.Snapshot, reasons map[string][]string) []Kept {
+func KeptSnapshots(list []*ark.Snapshot, reasons map[ark.SnapshotID][]string) []Kept {
 	res := make([]Kept, 0, len(list))
 	for _, s := range list {
 		res = append(res, Kept{Snapshot: NewSnapshot(s), Reasons: orEmpty(reasons[s.ID])})

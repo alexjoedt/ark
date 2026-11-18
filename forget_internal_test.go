@@ -43,7 +43,7 @@ func forgetFixture() []*Snapshot {
 	}
 	snaps := make([]*Snapshot, len(times))
 	for i, ts := range times {
-		snaps[i] = &Snapshot{ID: fmt.Sprintf("s%d", i), CreatedAt: ts}
+		snaps[i] = &Snapshot{ID: SnapshotID(fmt.Sprintf("s%d", i)), CreatedAt: ts}
 	}
 	return snaps
 }
@@ -55,54 +55,54 @@ func TestForgetPolicyFieldsSelectTheirPeriod(t *testing.T) {
 	tests := []struct {
 		name   string
 		policy ForgetPolicy
-		keep   []string
+		keep   []SnapshotID
 	}{
 		{"zero policy keeps nothing", ForgetPolicy{}, nil},
-		{"KeepLast", ForgetPolicy{KeepLast: 3}, []string{"s0", "s1", "s2"}},
-		{"KeepHourly", ForgetPolicy{KeepHourly: 2}, []string{"s0", "s1"}},
-		{"KeepDaily", ForgetPolicy{KeepDaily: 2}, []string{"s0", "s3"}},
-		{"KeepWeekly", ForgetPolicy{KeepWeekly: 2}, []string{"s0", "s5"}},
-		{"KeepMonthly", ForgetPolicy{KeepMonthly: 2}, []string{"s0", "s6"}},
-		{"KeepYearly", ForgetPolicy{KeepYearly: 2}, []string{"s0", "s8"}},
-		{"KeepWithin", ForgetPolicy{KeepWithin: Within{Days: 1, Hours: 1}}, []string{"s0", "s1", "s2", "s3"}},
+		{"KeepLast", ForgetPolicy{KeepLast: 3}, []SnapshotID{"s0", "s1", "s2"}},
+		{"KeepHourly", ForgetPolicy{KeepHourly: 2}, []SnapshotID{"s0", "s1"}},
+		{"KeepDaily", ForgetPolicy{KeepDaily: 2}, []SnapshotID{"s0", "s3"}},
+		{"KeepWeekly", ForgetPolicy{KeepWeekly: 2}, []SnapshotID{"s0", "s5"}},
+		{"KeepMonthly", ForgetPolicy{KeepMonthly: 2}, []SnapshotID{"s0", "s6"}},
+		{"KeepYearly", ForgetPolicy{KeepYearly: 2}, []SnapshotID{"s0", "s8"}},
+		{"KeepWithin", ForgetPolicy{KeepWithin: Within{Days: 1, Hours: 1}}, []SnapshotID{"s0", "s1", "s2", "s3"}},
 		// Every window ends on a snapshot, which is exactly the window old
 		// and so outside it: s2, s4, s5, s7 and s9.
-		{"KeepWithinHourly", ForgetPolicy{KeepWithinHourly: Within{Hours: 2}}, []string{"s0", "s1"}},
-		{"KeepWithinDaily", ForgetPolicy{KeepWithinDaily: Within{Days: 2}}, []string{"s0", "s3"}},
-		{"KeepWithinWeekly", ForgetPolicy{KeepWithinWeekly: Within{Days: 9}}, []string{"s0"}},
-		{"KeepWithinWeekly a day longer", ForgetPolicy{KeepWithinWeekly: Within{Days: 10}}, []string{"s0", "s5"}},
-		{"KeepWithinMonthly", ForgetPolicy{KeepWithinMonthly: Within{Months: 2}}, []string{"s0", "s6"}},
-		{"KeepWithinYearly", ForgetPolicy{KeepWithinYearly: Within{Years: 2}}, []string{"s0", "s8"}},
+		{"KeepWithinHourly", ForgetPolicy{KeepWithinHourly: Within{Hours: 2}}, []SnapshotID{"s0", "s1"}},
+		{"KeepWithinDaily", ForgetPolicy{KeepWithinDaily: Within{Days: 2}}, []SnapshotID{"s0", "s3"}},
+		{"KeepWithinWeekly", ForgetPolicy{KeepWithinWeekly: Within{Days: 9}}, []SnapshotID{"s0"}},
+		{"KeepWithinWeekly a day longer", ForgetPolicy{KeepWithinWeekly: Within{Days: 10}}, []SnapshotID{"s0", "s5"}},
+		{"KeepWithinMonthly", ForgetPolicy{KeepWithinMonthly: Within{Months: 2}}, []SnapshotID{"s0", "s6"}},
+		{"KeepWithinYearly", ForgetPolicy{KeepWithinYearly: Within{Years: 2}}, []SnapshotID{"s0", "s8"}},
 		{
 			"a window rule with a counted rule and KeepWithin",
 			ForgetPolicy{KeepWithin: Within{Hours: 2}, KeepMonthly: 2, KeepWithinDaily: Within{Days: 2}},
-			[]string{"s0", "s1", "s3", "s6"},
+			[]SnapshotID{"s0", "s1", "s3", "s6"},
 		},
 		{
 			"fields combine",
 			ForgetPolicy{KeepLast: 1, KeepYearly: 3},
-			[]string{"s0", "s8", "s9"},
+			[]SnapshotID{"s0", "s8", "s9"},
 		},
 		{
 			"KeepLast unlimited",
 			ForgetPolicy{KeepLast: Unlimited},
-			[]string{"s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"},
+			[]SnapshotID{"s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"},
 		},
-		{"KeepHourly unlimited", ForgetPolicy{KeepHourly: Unlimited}, []string{
+		{"KeepHourly unlimited", ForgetPolicy{KeepHourly: Unlimited}, []SnapshotID{
 			"s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9",
 		}},
 		{
 			"KeepDaily unlimited",
 			ForgetPolicy{KeepDaily: Unlimited},
-			[]string{"s0", "s3", "s4", "s5", "s6", "s7", "s8", "s9"},
+			[]SnapshotID{"s0", "s3", "s4", "s5", "s6", "s7", "s8", "s9"},
 		},
 		{
 			"KeepWeekly unlimited",
 			ForgetPolicy{KeepWeekly: Unlimited},
-			[]string{"s0", "s5", "s6", "s7", "s8", "s9"},
+			[]SnapshotID{"s0", "s5", "s6", "s7", "s8", "s9"},
 		},
-		{"KeepMonthly unlimited", ForgetPolicy{KeepMonthly: Unlimited}, []string{"s0", "s6", "s7", "s8", "s9"}},
-		{"KeepYearly unlimited", ForgetPolicy{KeepYearly: Unlimited}, []string{"s0", "s8", "s9"}},
+		{"KeepMonthly unlimited", ForgetPolicy{KeepMonthly: Unlimited}, []SnapshotID{"s0", "s6", "s7", "s8", "s9"}},
+		{"KeepYearly unlimited", ForgetPolicy{KeepYearly: Unlimited}, []SnapshotID{"s0", "s8", "s9"}},
 	}
 
 	snapshots := forgetFixture()
@@ -134,42 +134,42 @@ func TestForgetReasonsNameEveryRule(t *testing.T) {
 	tests := []struct {
 		name   string
 		policy ForgetPolicy
-		want   map[string][]string
+		want   map[SnapshotID][]string
 	}{
-		{"KeepLast", ForgetPolicy{KeepLast: 2}, map[string][]string{
+		{"KeepLast", ForgetPolicy{KeepLast: 2}, map[SnapshotID][]string{
 			"s0": {"last snapshot"}, "s1": {"last snapshot"},
 		}},
-		{"KeepHourly", ForgetPolicy{KeepHourly: 2}, map[string][]string{
+		{"KeepHourly", ForgetPolicy{KeepHourly: 2}, map[SnapshotID][]string{
 			"s0": {"hourly snapshot"}, "s1": {"hourly snapshot"},
 		}},
-		{"KeepDaily", ForgetPolicy{KeepDaily: 2}, map[string][]string{
+		{"KeepDaily", ForgetPolicy{KeepDaily: 2}, map[SnapshotID][]string{
 			"s0": {"daily snapshot"}, "s3": {"daily snapshot"},
 		}},
-		{"KeepWeekly", ForgetPolicy{KeepWeekly: 2}, map[string][]string{
+		{"KeepWeekly", ForgetPolicy{KeepWeekly: 2}, map[SnapshotID][]string{
 			"s0": {"weekly snapshot"}, "s5": {"weekly snapshot"},
 		}},
-		{"KeepMonthly", ForgetPolicy{KeepMonthly: 2}, map[string][]string{
+		{"KeepMonthly", ForgetPolicy{KeepMonthly: 2}, map[SnapshotID][]string{
 			"s0": {"monthly snapshot"}, "s6": {"monthly snapshot"},
 		}},
-		{"KeepYearly", ForgetPolicy{KeepYearly: 2}, map[string][]string{
+		{"KeepYearly", ForgetPolicy{KeepYearly: 2}, map[SnapshotID][]string{
 			"s0": {"yearly snapshot"}, "s8": {"yearly snapshot"},
 		}},
-		{"KeepWithin", ForgetPolicy{KeepWithin: Within{Days: 1, Hours: 1}}, map[string][]string{
+		{"KeepWithin", ForgetPolicy{KeepWithin: Within{Days: 1, Hours: 1}}, map[SnapshotID][]string{
 			"s0": {"within 1d1h"}, "s1": {"within 1d1h"}, "s2": {"within 1d1h"}, "s3": {"within 1d1h"},
 		}},
-		{"KeepWithinHourly", ForgetPolicy{KeepWithinHourly: Within{Hours: 2}}, map[string][]string{
+		{"KeepWithinHourly", ForgetPolicy{KeepWithinHourly: Within{Hours: 2}}, map[SnapshotID][]string{
 			"s0": {"hourly within 2h"}, "s1": {"hourly within 2h"},
 		}},
-		{"KeepWithinDaily", ForgetPolicy{KeepWithinDaily: Within{Days: 2}}, map[string][]string{
+		{"KeepWithinDaily", ForgetPolicy{KeepWithinDaily: Within{Days: 2}}, map[SnapshotID][]string{
 			"s0": {"daily within 2d"}, "s3": {"daily within 2d"},
 		}},
-		{"KeepWithinWeekly", ForgetPolicy{KeepWithinWeekly: Within{Days: 10}}, map[string][]string{
+		{"KeepWithinWeekly", ForgetPolicy{KeepWithinWeekly: Within{Days: 10}}, map[SnapshotID][]string{
 			"s0": {"weekly within 10d"}, "s5": {"weekly within 10d"},
 		}},
-		{"KeepWithinMonthly", ForgetPolicy{KeepWithinMonthly: Within{Months: 2}}, map[string][]string{
+		{"KeepWithinMonthly", ForgetPolicy{KeepWithinMonthly: Within{Months: 2}}, map[SnapshotID][]string{
 			"s0": {"monthly within 2m"}, "s6": {"monthly within 2m"},
 		}},
-		{"KeepWithinYearly", ForgetPolicy{KeepWithinYearly: Within{Years: 2}}, map[string][]string{
+		{"KeepWithinYearly", ForgetPolicy{KeepWithinYearly: Within{Years: 2}}, map[SnapshotID][]string{
 			"s0": {"yearly within 2y"}, "s8": {"yearly within 2y"},
 		}},
 		{
@@ -180,7 +180,7 @@ func TestForgetReasonsNameEveryRule(t *testing.T) {
 				KeepWithinWeekly: Within{Days: 10}, KeepWithinMonthly: Within{Months: 1, Days: 1},
 				KeepWithinYearly: Within{Years: 1, Days: 1},
 			},
-			map[string][]string{
+			map[SnapshotID][]string{
 				"s0": {
 					"within 2h", "last snapshot", "monthly snapshot", "hourly within 1h", "daily within 2d",
 					"weekly within 10d", "monthly within 1m1d", "yearly within 1y1d",
@@ -195,7 +195,7 @@ func TestForgetReasonsNameEveryRule(t *testing.T) {
 		{
 			"rules combine",
 			ForgetPolicy{KeepWithin: Within{Hours: 2}, KeepLast: 1, KeepDaily: 1, KeepYearly: 2},
-			map[string][]string{
+			map[SnapshotID][]string{
 				"s0": {"within 2h", "last snapshot", "daily snapshot", "yearly snapshot"},
 				"s1": {"within 2h"},
 				"s8": {"yearly snapshot"},
@@ -228,68 +228,76 @@ func TestForgetReasonsNameEveryRule(t *testing.T) {
 func TestForgetKeepsTheOldestWhileARuleHasCountLeft(t *testing.T) {
 	series := func(source string) []*Snapshot {
 		return []*Snapshot{
-			{ID: source + "0", SourceName: source, CreatedAt: time.Date(2026, 1, 3, 10, 0, 0, 0, time.UTC)},
-			{ID: source + "1", SourceName: source, CreatedAt: time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)},
-			{ID: source + "2", SourceName: source, CreatedAt: time.Date(2026, 1, 2, 8, 0, 0, 0, time.UTC)},
+			{ID: SnapshotID(source + "0"), SourceName: source, CreatedAt: time.Date(2026, 1, 3, 10, 0, 0, 0, time.UTC)},
+			{ID: SnapshotID(source + "1"), SourceName: source, CreatedAt: time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)},
+			{ID: SnapshotID(source + "2"), SourceName: source, CreatedAt: time.Date(2026, 1, 2, 8, 0, 0, 0, time.UTC)},
 		}
 	}
 	tests := []struct {
 		name   string
 		policy ForgetPolicy
-		want   map[string][]string
+		want   map[SnapshotID][]string
 	}{
-		{"count left", ForgetPolicy{KeepDaily: 7}, map[string][]string{
+		{"count left", ForgetPolicy{KeepDaily: 7}, map[SnapshotID][]string{
 			"s0": {"daily snapshot"}, "s1": {"daily snapshot"}, "s2": {"oldest daily snapshot"},
 		}},
-		{"the last count", ForgetPolicy{KeepDaily: 3}, map[string][]string{
+		{"the last count", ForgetPolicy{KeepDaily: 3}, map[SnapshotID][]string{
 			"s0": {"daily snapshot"}, "s1": {"daily snapshot"}, "s2": {"oldest daily snapshot"},
 		}},
-		{"count used up", ForgetPolicy{KeepDaily: 2}, map[string][]string{
+		{"count used up", ForgetPolicy{KeepDaily: 2}, map[SnapshotID][]string{
 			"s0": {"daily snapshot"}, "s1": {"daily snapshot"},
 		}},
-		{"unlimited", ForgetPolicy{KeepDaily: Unlimited}, map[string][]string{
+		{"unlimited", ForgetPolicy{KeepDaily: Unlimited}, map[SnapshotID][]string{
 			"s0": {"daily snapshot"}, "s1": {"daily snapshot"}, "s2": {"oldest daily snapshot"},
 		}},
-		{"with another rule", ForgetPolicy{KeepLast: 1, KeepDaily: 5}, map[string][]string{
+		{"with another rule", ForgetPolicy{KeepLast: 1, KeepDaily: 5}, map[SnapshotID][]string{
 			"s0": {"last snapshot", "daily snapshot"}, "s1": {"daily snapshot"}, "s2": {"oldest daily snapshot"},
 		}},
 		{
 			"every rule for itself",
 			ForgetPolicy{KeepWeekly: 2, KeepMonthly: 1, KeepYearly: Unlimited},
-			map[string][]string{
+			map[SnapshotID][]string{
 				"s0": {"weekly snapshot", "monthly snapshot", "yearly snapshot"},
 				"s2": {"oldest weekly snapshot", "oldest yearly snapshot"},
 			},
 		},
-		{"an oldest that starts a period", ForgetPolicy{KeepHourly: 7}, map[string][]string{
+		{"an oldest that starts a period", ForgetPolicy{KeepHourly: 7}, map[SnapshotID][]string{
 			"s0": {"hourly snapshot"}, "s1": {"hourly snapshot"}, "s2": {"hourly snapshot"},
 		}},
-		{"KeepLast has no oldest", ForgetPolicy{KeepLast: 7}, map[string][]string{
+		{"KeepLast has no oldest", ForgetPolicy{KeepLast: 7}, map[SnapshotID][]string{
 			"s0": {"last snapshot"}, "s1": {"last snapshot"}, "s2": {"last snapshot"},
 		}},
-		{"KeepWithin has no oldest", ForgetPolicy{KeepWithin: Within{Hours: 1}}, map[string][]string{
+		{"KeepWithin has no oldest", ForgetPolicy{KeepWithin: Within{Hours: 1}}, map[SnapshotID][]string{
 			"s0": {"within 1h"},
 		}},
-		{"a window with the oldest inside", ForgetPolicy{KeepWithinDaily: Within{Days: 10}}, map[string][]string{
+		{"a window with the oldest inside", ForgetPolicy{KeepWithinDaily: Within{Days: 10}}, map[SnapshotID][]string{
 			"s0": {"daily within 10d"}, "s1": {"daily within 10d"}, "s2": {"oldest daily within 10d"},
 		}},
 		// 2026-01-02 10:00 on: s1 is inside, the oldest is not
-		{"a window ending before the oldest", ForgetPolicy{KeepWithinDaily: Within{Days: 1}}, map[string][]string{
+		{"a window ending before the oldest", ForgetPolicy{KeepWithinDaily: Within{Days: 1}}, map[SnapshotID][]string{
 			"s0": {"daily within 1d"}, "s1": {"daily within 1d"},
 		}},
-		{"a window ending on the oldest", ForgetPolicy{KeepWithinDaily: Within{Days: 1, Hours: 2}}, map[string][]string{
-			"s0": {"daily within 1d2h"}, "s1": {"daily within 1d2h"},
-		}},
-		{"a window whose oldest starts a period", ForgetPolicy{KeepWithinHourly: Within{Days: 10}}, map[string][]string{
-			"s0": {"hourly within 10d"}, "s1": {"hourly within 10d"}, "s2": {"hourly within 10d"},
-		}},
+		{
+			"a window ending on the oldest",
+			ForgetPolicy{KeepWithinDaily: Within{Days: 1, Hours: 2}},
+			map[SnapshotID][]string{
+				"s0": {"daily within 1d2h"}, "s1": {"daily within 1d2h"},
+			},
+		},
+		{
+			"a window whose oldest starts a period",
+			ForgetPolicy{KeepWithinHourly: Within{Days: 10}},
+			map[SnapshotID][]string{
+				"s0": {"hourly within 10d"}, "s1": {"hourly within 10d"}, "s2": {"hourly within 10d"},
+			},
+		},
 		{
 			"every window rule for itself",
 			ForgetPolicy{
 				KeepWithinWeekly: Within{Days: 10}, KeepWithinMonthly: Within{Days: 1},
 				KeepWithinYearly: Within{Years: 1},
 			},
-			map[string][]string{
+			map[SnapshotID][]string{
 				"s0": {"weekly within 10d", "monthly within 1d", "yearly within 1y"},
 				"s2": {"oldest weekly within 10d", "oldest yearly within 1y"},
 			},
@@ -298,7 +306,7 @@ func TestForgetKeepsTheOldestWhileARuleHasCountLeft(t *testing.T) {
 		{
 			"counted and window rule side by side",
 			ForgetPolicy{KeepDaily: 5, KeepWithinDaily: Within{Days: 10}, KeepLast: 1},
-			map[string][]string{
+			map[SnapshotID][]string{
 				"s0": {"last snapshot", "daily snapshot", "daily within 10d"},
 				"s1": {"daily snapshot", "daily within 10d"},
 				"s2": {"oldest daily snapshot", "oldest daily within 10d"},
@@ -323,7 +331,7 @@ func TestForgetKeepsTheOldestWhileARuleHasCountLeft(t *testing.T) {
 		ID: "t0", SourceName: "t", CreatedAt: time.Date(2025, 12, 1, 8, 0, 0, 0, time.UTC),
 	})
 	res := applyForgetPolicy(both, ForgetPolicy{KeepDaily: 7}, time.UTC, afterAll)
-	want := map[string][]string{
+	want := map[SnapshotID][]string{
 		"s0": {"daily snapshot"}, "s1": {"daily snapshot"}, "s2": {"oldest daily snapshot"}, "t0": {"daily snapshot"},
 	}
 	if !maps.EqualFunc(res.KeepReasons, want, slices.Equal) {
@@ -355,66 +363,73 @@ func TestKeepWithinIsACalendarWindowFromTheNewestSnapshotNotInTheFuture(t *testi
 		loc    *time.Location
 		now    time.Time
 		times  []string
-		keep   []string
+		keep   []SnapshotID
 	}{
 		{
 			"a snapshot exactly the window old is not kept",
 			Within{Days: 1}, time.UTC, afterAll,
 			[]string{"2026-03-10T12:00:00Z", "2026-03-09T12:00:01Z", "2026-03-09T12:00:00Z", "2026-01-01T00:00:00Z"},
-			[]string{"s0", "s1"},
+			[]SnapshotID{"s0", "s1"},
 		},
 		{
 			"a month back from 31 March is 3 March",
 			Within{Months: 1}, time.UTC, afterAll,
 			[]string{"2026-03-31T12:00:00Z", "2026-03-03T12:00:01Z", "2026-03-03T12:00:00Z", "2026-03-01T12:00:00Z"},
-			[]string{"s0", "s1"},
+			[]SnapshotID{"s0", "s1"},
 		},
 		{
 			"and 2 March in a leap year",
 			Within{Months: 1}, time.UTC, afterAll,
 			[]string{"2028-03-31T12:00:00Z", "2028-03-02T12:00:01Z", "2028-03-02T12:00:00Z"},
-			[]string{"s0", "s1"},
+			[]SnapshotID{"s0", "s1"},
 		},
 		{
 			"a year back from 29 February is 1 March",
 			Within{Years: 1}, time.UTC, afterAll,
 			[]string{"2028-02-29T12:00:00Z", "2027-03-01T12:00:01Z", "2027-03-01T12:00:00Z"},
-			[]string{"s0", "s1"},
+			[]SnapshotID{"s0", "s1"},
 		},
 		{
 			"the units add up",
 			Within{Years: 1, Months: 2, Days: 3, Hours: 4}, time.UTC, afterAll,
 			[]string{"2026-09-10T12:00:00Z", "2025-07-07T08:00:01Z", "2025-07-07T08:00:00Z"},
-			[]string{"s0", "s1"},
+			[]SnapshotID{"s0", "s1"},
 		},
 		{
 			"hours come off after the calendar step",
 			// the other way round the month would be taken off 28 February
 			Within{Months: 1, Hours: 2}, time.UTC, afterAll,
 			[]string{"2026-03-01T01:00:00Z", "2026-01-31T23:00:01Z", "2026-01-31T23:00:00Z"},
-			[]string{"s0", "s1"},
+			[]SnapshotID{"s0", "s1"},
 		},
-		{"a day is a calendar day in the forget zone", Within{Days: 1}, berlin, afterAll, dst, []string{"s0"}},
-		{"which is 24 hours in UTC", Within{Days: 1}, time.UTC, afterAll, dst, []string{"s0", "s1", "s2"}},
-		{"hours are elapsed time in any zone", Within{Hours: 24}, berlin, afterAll, dst, []string{"s0", "s1", "s2"}},
+		{"a day is a calendar day in the forget zone", Within{Days: 1}, berlin, afterAll, dst, []SnapshotID{"s0"}},
+		{"which is 24 hours in UTC", Within{Days: 1}, time.UTC, afterAll, dst, []SnapshotID{"s0", "s1", "s2"}},
+		{
+			"hours are elapsed time in any zone",
+			Within{Hours: 24},
+			berlin,
+			afterAll,
+			dst,
+			[]SnapshotID{"s0", "s1", "s2"},
+		},
 		{
 			"a future snapshot does not move the window, and is kept",
 			Within{Days: 7}, time.UTC, future,
 			[]string{"2027-06-01T00:00:00Z", "2026-11-10T00:00:00Z", "2026-11-05T00:00:00Z", "2026-11-01T00:00:00Z"},
-			[]string{"s0", "s1", "s2"},
+			[]SnapshotID{"s0", "s1", "s2"},
 		},
 		{
 			"a snapshot taken this instant is not in the future",
 			Within{Days: 1}, time.UTC, future,
 			// measured from s1 the window would reach s2
 			[]string{"2026-11-16T00:00:00Z", "2026-11-15T12:00:00Z", "2026-11-14T18:00:00Z"},
-			[]string{"s0", "s1"},
+			[]SnapshotID{"s0", "s1"},
 		},
 		{
 			"only future snapshots are all kept, by no rule",
 			Within{Days: 1}, time.UTC, future,
 			[]string{"2027-06-01T00:00:00Z", "2027-01-01T00:00:00Z", "2026-12-01T00:00:00Z"},
-			[]string{"s0", "s1", "s2"},
+			[]SnapshotID{"s0", "s1", "s2"},
 		},
 	}
 	for _, tc := range tests {
@@ -425,7 +440,7 @@ func TestKeepWithinIsACalendarWindowFromTheNewestSnapshotNotInTheFuture(t *testi
 				if err != nil {
 					t.Fatal(err)
 				}
-				snaps[i] = &Snapshot{ID: fmt.Sprintf("s%d", i), CreatedAt: at}
+				snaps[i] = &Snapshot{ID: SnapshotID(fmt.Sprintf("s%d", i)), CreatedAt: at}
 			}
 			res := applyForgetPolicy(snaps, ForgetPolicy{KeepWithin: tc.within}, tc.loc, tc.now)
 			if got := ids(res.Keep); !slices.Equal(got, tc.keep) {
@@ -460,7 +475,7 @@ func TestKeepWithinPeriodsAreThoseOfTheCountedRules(t *testing.T) {
 	}
 	utc := func(y int, m time.Month, d, h, minute int) *Snapshot {
 		at := time.Date(y, m, d, h, minute, 0, 0, time.UTC)
-		return &Snapshot{ID: at.Format("2006-01-02T15:04"), CreatedAt: at}
+		return &Snapshot{ID: SnapshotID(at.Format("2006-01-02T15:04")), CreatedAt: at}
 	}
 	snaps := []*Snapshot{
 		utc(2027, 1, 6, 12, 0),
@@ -505,7 +520,7 @@ func TestKeepWithinPeriodsAreThoseOfTheCountedRules(t *testing.T) {
 				t.Errorf("%s: reasons %v, want those of the counted rule: %v", name, got, want)
 			}
 			// the fixture tells every period and both zones apart
-			kept := strings.Join(slices.Sorted(maps.Keys(got)), " ")
+			kept := fmt.Sprint(slices.Sorted(maps.Keys(got)))
 			if other, dup := seen[kept]; dup {
 				t.Errorf("%s keeps what %s keeps: %s", name, other, kept)
 			}
@@ -514,11 +529,11 @@ func TestKeepWithinPeriodsAreThoseOfTheCountedRules(t *testing.T) {
 	}
 }
 
-func ids(snaps []*Snapshot) []string {
+func ids(snaps []*Snapshot) []SnapshotID {
 	if len(snaps) == 0 {
 		return nil
 	}
-	out := make([]string, len(snaps))
+	out := make([]SnapshotID, len(snaps))
 	for i, s := range snaps {
 		out[i] = s.ID
 	}
@@ -546,7 +561,7 @@ func TestForgetPolicyAppliesPerSeries(t *testing.T) {
 			}
 			res := applyForgetPolicy(snaps, ForgetPolicy{KeepLast: 1}, time.UTC, afterAll)
 
-			if keep := ids(res.Keep); !slices.Equal(keep, []string{"s0", "s1"}) {
+			if keep := ids(res.Keep); !slices.Equal(keep, []SnapshotID{"s0", "s1"}) {
 				t.Fatalf("keep = %v, want the newest of each series", keep)
 			}
 			if len(res.Remove) != 8 || res.Remove[0].ID != "s2" || res.Remove[7].ID != "s9" {
@@ -564,34 +579,34 @@ func TestKeepWeeklyAcrossYearTurns(t *testing.T) {
 	tests := []struct {
 		name  string
 		times []time.Time // newest first
-		keep  []string
+		keep  []SnapshotID
 	}{
 		{
 			"week 53 of 2026 and week 1 of 2027",
 			[]time.Time{day(2027, 1, 6), day(2026, 12, 30)},
-			[]string{"s0", "s1"},
+			[]SnapshotID{"s0", "s1"},
 		},
 		{
 			"week 53 of 2020 and week 1 of 2021",
 			[]time.Time{day(2021, 1, 6), day(2020, 12, 30)},
-			[]string{"s0", "s1"},
+			[]SnapshotID{"s0", "s1"},
 		},
 		{
 			"week 53 of 2020 spans the year turn",
 			[]time.Time{day(2021, 1, 3), day(2020, 12, 28), day(2020, 12, 27)},
-			[]string{"s0", "s2"},
+			[]SnapshotID{"s0", "s2"},
 		},
 		{
 			"a year starting on Monday",
 			[]time.Time{day(2024, 1, 1), day(2023, 12, 31), day(2023, 12, 25)},
-			[]string{"s0", "s1"},
+			[]SnapshotID{"s0", "s1"},
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			snaps := make([]*Snapshot, len(tc.times))
 			for i, ts := range tc.times {
-				snaps[i] = &Snapshot{ID: fmt.Sprintf("s%d", i), CreatedAt: ts}
+				snaps[i] = &Snapshot{ID: SnapshotID(fmt.Sprintf("s%d", i)), CreatedAt: ts}
 			}
 			got := ids(applyForgetPolicy(snaps, ForgetPolicy{KeepWeekly: 2}, time.UTC, afterAll).Keep)
 			if !slices.Equal(got, tc.keep) {
@@ -627,7 +642,7 @@ func TestPeriodKeysIgnoreLocationIdentity(t *testing.T) {
 	for name, policy := range policies {
 		t.Run(name, func(t *testing.T) {
 			got := ids(applyForgetPolicy(snaps, policy, zone(), afterAll).Keep)
-			if !slices.Equal(got, []string{"s0", "s2"}) {
+			if !slices.Equal(got, []SnapshotID{"s0", "s2"}) {
 				t.Errorf("keeps %v, want [s0 s2]", got)
 			}
 		})
@@ -649,8 +664,8 @@ func TestPeriodsAreCutInTheGivenLocation(t *testing.T) {
 		name     string
 		policy   ForgetPolicy
 		times    []time.Time // newest first
-		inBerlin []string
-		inUTC    []string
+		inBerlin []SnapshotID
+		inUTC    []SnapshotID
 	}{
 		{
 			"midnight splits two days",
@@ -659,8 +674,8 @@ func TestPeriodsAreCutInTheGivenLocation(t *testing.T) {
 				utc(2026, 1, 14, 23, 30), // 01-15 00:30 CET
 				utc(2026, 1, 14, 22, 30), // 01-14 23:30 CET
 			},
-			[]string{"s0", "s1"},
-			[]string{"s0"},
+			[]SnapshotID{"s0", "s1"},
+			[]SnapshotID{"s0"},
 		},
 		{
 			"the 25 hours of the day summer time ends are one day",
@@ -671,8 +686,8 @@ func TestPeriodsAreCutInTheGivenLocation(t *testing.T) {
 				utc(2026, 10, 24, 22, 0),  // 10-25 00:00 CEST
 				utc(2026, 10, 24, 21, 59), // 10-24 23:59 CEST
 			},
-			[]string{"s0", "s1", "s3"},
-			[]string{"s0", "s2"},
+			[]SnapshotID{"s0", "s1", "s3"},
+			[]SnapshotID{"s0", "s2"},
 		},
 		{
 			"the 23 hours of the day summer time starts are one day",
@@ -683,8 +698,8 @@ func TestPeriodsAreCutInTheGivenLocation(t *testing.T) {
 				utc(2026, 3, 28, 23, 0),  // 03-29 00:00 CET
 				utc(2026, 3, 28, 22, 59), // 03-28 23:59 CET
 			},
-			[]string{"s0", "s1", "s3"},
-			[]string{"s0", "s2"},
+			[]SnapshotID{"s0", "s1", "s3"},
+			[]SnapshotID{"s0", "s2"},
 		},
 		{
 			"the hour the clock shows twice is one hour",
@@ -694,8 +709,8 @@ func TestPeriodsAreCutInTheGivenLocation(t *testing.T) {
 				utc(2026, 10, 25, 0, 30),  // 02:30 CEST
 				utc(2026, 10, 24, 23, 30), // 01:30 CEST
 			},
-			[]string{"s0", "s2"},
-			[]string{"s0", "s1"},
+			[]SnapshotID{"s0", "s2"},
+			[]SnapshotID{"s0", "s1"},
 		},
 		{
 			"Monday starts a week at local midnight",
@@ -704,8 +719,8 @@ func TestPeriodsAreCutInTheGivenLocation(t *testing.T) {
 				utc(2026, 1, 11, 23, 30), // Monday 01-12 00:30 CET
 				utc(2026, 1, 11, 22, 30), // Sunday 01-11 23:30 CET
 			},
-			[]string{"s0", "s1"},
-			[]string{"s0"},
+			[]SnapshotID{"s0", "s1"},
+			[]SnapshotID{"s0"},
 		},
 		{
 			"a month starts at local midnight",
@@ -714,8 +729,8 @@ func TestPeriodsAreCutInTheGivenLocation(t *testing.T) {
 				utc(2026, 6, 30, 22, 30), // 07-01 00:30 CEST
 				utc(2026, 6, 30, 21, 30), // 06-30 23:30 CEST
 			},
-			[]string{"s0", "s1"},
-			[]string{"s0"},
+			[]SnapshotID{"s0", "s1"},
+			[]SnapshotID{"s0"},
 		},
 		{
 			"a year starts at local midnight",
@@ -724,15 +739,15 @@ func TestPeriodsAreCutInTheGivenLocation(t *testing.T) {
 				utc(2026, 12, 31, 23, 30), // 2027-01-01 00:30 CET
 				utc(2026, 12, 31, 22, 30), // 2026-12-31 23:30 CET
 			},
-			[]string{"s0", "s1"},
-			[]string{"s0"},
+			[]SnapshotID{"s0", "s1"},
+			[]SnapshotID{"s0"},
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			snaps := make([]*Snapshot, len(tc.times))
 			for i, ts := range tc.times {
-				snaps[i] = &Snapshot{ID: fmt.Sprintf("s%d", i), CreatedAt: ts}
+				snaps[i] = &Snapshot{ID: SnapshotID(fmt.Sprintf("s%d", i)), CreatedAt: ts}
 			}
 			got := newestOfPeriods(applyForgetPolicy(snaps, tc.policy, berlin, afterAll))
 			if !slices.Equal(got, tc.inBerlin) {
@@ -749,8 +764,8 @@ func TestPeriodsAreCutInTheGivenLocation(t *testing.T) {
 // newestOfPeriods lists the snapshots a rule keeps as the newest of a period,
 // leaving out one kept only as the oldest of its series, which says nothing
 // about where a period starts.
-func newestOfPeriods(result *ForgetResult) []string {
-	var out []string
+func newestOfPeriods(result *ForgetResult) []SnapshotID {
+	var out []SnapshotID
 	for _, s := range result.Keep {
 		plain := func(reason string) bool { return !strings.HasPrefix(reason, "oldest ") }
 		if slices.ContainsFunc(result.KeepReasons[s.ID], plain) {
@@ -770,7 +785,7 @@ func TestPeriodsIgnoreTheZoneASnapshotCarries(t *testing.T) {
 	for name, policy := range map[string]ForgetPolicy{"hourly": {KeepHourly: 2}, "daily": {KeepDaily: 2}} {
 		t.Run(name, func(t *testing.T) {
 			got := ids(applyForgetPolicy(snaps, policy, time.UTC, afterAll).Keep)
-			if !slices.Equal(got, []string{"s0", "s1"}) {
+			if !slices.Equal(got, []SnapshotID{"s0", "s1"}) {
 				t.Errorf("keeps %v, want [s0 s1]", got)
 			}
 		})
@@ -828,7 +843,7 @@ func taggedFixture() []*Snapshot {
 	snaps := make([]*Snapshot, len(tags))
 	for i := range tags {
 		at := time.Date(2026, 1, 5-i, 12, 0, 0, 0, time.UTC)
-		snaps[i] = &Snapshot{ID: fmt.Sprintf("s%d", i), CreatedAt: at, Tags: tags[i]}
+		snaps[i] = &Snapshot{ID: SnapshotID(fmt.Sprintf("s%d", i)), CreatedAt: at, Tags: tags[i]}
 	}
 	return snaps
 }
@@ -840,29 +855,29 @@ func TestForgetKeepTags(t *testing.T) {
 	tests := []struct {
 		name   string
 		policy ForgetPolicy
-		want   map[string][]string
+		want   map[SnapshotID][]string
 	}{
-		{"one tag", ForgetPolicy{KeepTags: [][]string{{"a"}}}, map[string][]string{
+		{"one tag", ForgetPolicy{KeepTags: [][]string{{"a"}}}, map[SnapshotID][]string{
 			"s0": {a}, "s1": {a}, "s4": {a},
 		}},
-		{"two lists, any of them", ForgetPolicy{KeepTags: [][]string{{"a"}, {"b"}}}, map[string][]string{
+		{"two lists, any of them", ForgetPolicy{KeepTags: [][]string{{"a"}, {"b"}}}, map[SnapshotID][]string{
 			"s0": {a, b}, "s1": {a}, "s2": {b}, "s4": {a, b},
 		}},
-		{"one list, all of its tags", ForgetPolicy{KeepTags: [][]string{{"a", "b"}}}, map[string][]string{
+		{"one list, all of its tags", ForgetPolicy{KeepTags: [][]string{{"a", "b"}}}, map[SnapshotID][]string{
 			"s0": {ab}, "s4": {ab},
 		}},
-		{"a tag no snapshot has", ForgetPolicy{KeepTags: [][]string{{"zz"}}}, map[string][]string{}},
-		{"the empty tag is no tag", ForgetPolicy{KeepTags: [][]string{{""}}}, map[string][]string{
+		{"a tag no snapshot has", ForgetPolicy{KeepTags: [][]string{{"zz"}}}, map[SnapshotID][]string{}},
+		{"the empty tag is no tag", ForgetPolicy{KeepTags: [][]string{{""}}}, map[SnapshotID][]string{
 			"s3": {"has tags []"},
 		}},
 		{"the empty tag first decides for an untagged snapshot", ForgetPolicy{KeepTags: [][]string{{"", "a"}}},
-			map[string][]string{"s3": {"has tags [, a]"}}},
+			map[SnapshotID][]string{"s3": {"has tags [, a]"}}},
 		{"the empty tag after a tag is never reached", ForgetPolicy{KeepTags: [][]string{{"a", ""}}},
-			map[string][]string{}},
+			map[SnapshotID][]string{}},
 		{"a tagged snapshot uses a KeepLast slot", ForgetPolicy{KeepLast: 3, KeepTags: [][]string{{"a"}}},
-			map[string][]string{"s0": {a, last}, "s1": {a, last}, "s2": {last}, "s4": {a}}},
+			map[SnapshotID][]string{"s0": {a, last}, "s1": {a, last}, "s2": {last}, "s4": {a}}},
 		{"tags come before within", ForgetPolicy{KeepWithin: Within{Hours: 36}, KeepTags: [][]string{{"b"}}},
-			map[string][]string{"s0": {b, "within 36h"}, "s1": {"within 36h"}, "s2": {b}, "s4": {b}}},
+			map[SnapshotID][]string{"s0": {b, "within 36h"}, "s1": {"within 36h"}, "s2": {b}, "s4": {b}}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -897,75 +912,75 @@ func TestForgetKeepsFutureSnapshotsOutOfTheRules(t *testing.T) {
 		name    string
 		policy  ForgetPolicy
 		snaps   []snap
-		want    map[string][]string
-		futures []string
+		want    map[SnapshotID][]string
+		futures []SnapshotID
 	}{
 		{
 			"three days of KeepDaily go to the three real days",
 			ForgetPolicy{KeepDaily: 3},
 			[]snap{{at: "2099-01-01T00:00:00Z"}, {at: "2026-03-10T10:00:00Z"}, {at: "2026-03-09T10:00:00Z"},
 				{at: "2026-03-08T10:00:00Z"}},
-			map[string][]string{"s0": {future}, "s1": {daily}, "s2": {daily}, "s3": {daily}},
-			[]string{"s0"},
+			map[SnapshotID][]string{"s0": {future}, "s1": {daily}, "s2": {daily}, "s3": {daily}},
+			[]SnapshotID{"s0"},
 		},
 		{
 			"and a fourth real day is still removed",
 			ForgetPolicy{KeepDaily: 3},
 			[]snap{{at: "2099-01-01T00:00:00Z"}, {at: "2026-03-10T10:00:00Z"}, {at: "2026-03-09T10:00:00Z"},
 				{at: "2026-03-08T10:00:00Z"}, {at: "2026-03-07T10:00:00Z"}},
-			map[string][]string{"s0": {future}, "s1": {daily}, "s2": {daily}, "s3": {daily}},
-			[]string{"s0"},
+			map[SnapshotID][]string{"s0": {future}, "s1": {daily}, "s2": {daily}, "s3": {daily}},
+			[]SnapshotID{"s0"},
 		},
 		{
 			"a future snapshot of today does not take the day",
 			ForgetPolicy{KeepDaily: 3},
 			[]snap{{at: "2026-03-10T18:00:00Z"}, {at: "2026-03-10T10:00:00Z"}, {at: "2026-03-09T10:00:00Z"},
 				{at: "2026-03-08T10:00:00Z"}},
-			map[string][]string{"s0": {future}, "s1": {daily}, "s2": {daily}, "s3": {daily}},
-			[]string{"s0"},
+			map[SnapshotID][]string{"s0": {future}, "s1": {daily}, "s2": {daily}, "s3": {daily}},
+			[]SnapshotID{"s0"},
 		},
 		{
 			"a snapshot of this instant is not in the future, one a second later is",
 			ForgetPolicy{KeepLast: 1},
 			[]snap{{at: "2026-03-10T12:00:01Z"}, {at: "2026-03-10T12:00:00Z"}, {at: "2026-03-10T11:00:00Z"}},
-			map[string][]string{"s0": {future}, "s1": {last}},
-			[]string{"s0"},
+			map[SnapshotID][]string{"s0": {future}, "s1": {last}},
+			[]SnapshotID{"s0"},
 		},
 		{
 			"the newest real snapshot is the first of the series, the oldest its last",
 			ForgetPolicy{KeepDaily: 5},
 			[]snap{{at: "2026-03-10T18:00:00Z"}, {at: "2026-03-10T11:00:00Z"}, {at: "2026-03-10T10:00:00Z"}},
-			map[string][]string{"s0": {future}, "s1": {daily}, "s2": {"oldest daily snapshot"}},
-			[]string{"s0"},
+			map[SnapshotID][]string{"s0": {future}, "s1": {daily}, "s2": {"oldest daily snapshot"}},
+			[]SnapshotID{"s0"},
 		},
 		{
 			"a period inside a window is not taken either",
 			ForgetPolicy{KeepWithinDaily: Within{Days: 2}},
 			[]snap{{at: "2026-03-10T18:00:00Z"}, {at: "2026-03-10T10:00:00Z"}, {at: "2026-03-09T10:00:00Z"},
 				{at: "2026-03-08T10:00:00Z"}},
-			map[string][]string{"s0": {future}, "s1": {"daily within 2d"}, "s2": {"daily within 2d"}},
-			[]string{"s0"},
+			map[SnapshotID][]string{"s0": {future}, "s1": {"daily within 2d"}, "s2": {"daily within 2d"}},
+			[]SnapshotID{"s0"},
 		},
 		{
 			"a matching tag adds no reason",
 			ForgetPolicy{KeepLast: 1, KeepTags: [][]string{{"x"}}},
 			[]snap{{"2099-01-01T00:00:00Z", []string{"x"}}, {"2026-03-10T10:00:00Z", nil},
 				{"2026-03-09T10:00:00Z", []string{"x"}}, {"2026-03-08T10:00:00Z", nil}},
-			map[string][]string{"s0": {future}, "s1": {last}, "s2": {"has tags [x]"}},
-			[]string{"s0"},
+			map[SnapshotID][]string{"s0": {future}, "s1": {last}, "s2": {"has tags [x]"}},
+			[]SnapshotID{"s0"},
 		},
 		{
 			"a series of future snapshots is kept whole, whatever the policy",
 			ForgetPolicy{KeepLast: 1, KeepWithin: Within{Hours: 1}, KeepTags: [][]string{{"x"}}},
 			[]snap{{at: "2099-01-01T00:00:00Z"}, {at: "2027-01-01T00:00:00Z"}, {at: "2026-03-10T12:00:01Z"}},
-			map[string][]string{"s0": {future}, "s1": {future}, "s2": {future}},
-			[]string{"s0", "s1", "s2"},
+			map[SnapshotID][]string{"s0": {future}, "s1": {future}, "s2": {future}},
+			[]SnapshotID{"s0", "s1", "s2"},
 		},
 		{
 			"without one, Future is empty",
 			ForgetPolicy{KeepLast: 1},
 			[]snap{{at: "2026-03-10T12:00:00Z"}, {at: "2026-03-09T10:00:00Z"}},
-			map[string][]string{"s0": {last}},
+			map[SnapshotID][]string{"s0": {last}},
 			nil,
 		},
 	}
@@ -977,7 +992,7 @@ func TestForgetKeepsFutureSnapshotsOutOfTheRules(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				snaps[i] = &Snapshot{ID: fmt.Sprintf("s%d", i), CreatedAt: at, Tags: s.tags}
+				snaps[i] = &Snapshot{ID: SnapshotID(fmt.Sprintf("s%d", i)), CreatedAt: at, Tags: s.tags}
 			}
 			res := applyForgetPolicy(snaps, tc.policy, time.UTC, now)
 			if !maps.EqualFunc(res.KeepReasons, tc.want, slices.Equal) {
@@ -1001,7 +1016,7 @@ func TestForgetKeepsFutureSnapshotsOutOfTheRules(t *testing.T) {
 // snapshots of that series, by eight characters of the ID, and no others.
 func TestForgetSeriesCheckPassesOverFutureSnapshots(t *testing.T) {
 	now := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
-	snap := func(id, source string, at time.Time, tags ...string) *Snapshot {
+	snap := func(id SnapshotID, source string, at time.Time, tags ...string) *Snapshot {
 		return &Snapshot{ID: id, SourceType: SourceTypeFile, SourceName: source, Host: "h", CreatedAt: at, Tags: tags}
 	}
 	snaps := []*Snapshot{
@@ -1013,10 +1028,19 @@ func TestForgetSeriesCheckPassesOverFutureSnapshots(t *testing.T) {
 		snap("db-plain", "db", now.Add(-2*time.Hour)),
 	}
 	res := applyForgetPolicy(snaps, ForgetPolicy{KeepTags: [][]string{{"x"}}}, time.UTC, now)
-	if got, want := ids(res.Future), []string{"aaaaaaaa11111111", "bbbbbbbb22222222", "cc"}; !slices.Equal(got, want) {
+	if got, want := ids(
+		res.Future,
+	), []SnapshotID{
+		"aaaaaaaa11111111",
+		"bbbbbbbb22222222",
+		"cc",
+	}; !slices.Equal(
+		got,
+		want,
+	) {
 		t.Errorf("Future = %v, want %v, newest first across the series", got, want)
 	}
-	if got, want := ids(res.Remove), []string{"app-real", "db-plain"}; !slices.Equal(got, want) {
+	if got, want := ids(res.Remove), []SnapshotID{"app-real", "db-plain"}; !slices.Equal(got, want) {
 		t.Errorf("removes %v, want %v", got, want)
 	}
 

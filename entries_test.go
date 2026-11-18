@@ -52,7 +52,7 @@ func roundTrip(t *testing.T, root string) (*ark.Repository, *ark.Snapshot, strin
 }
 
 // entriesOf lists the snapshot entries by path.
-func entriesOf(t *testing.T, repo *ark.Repository, id string) map[string]ark.FileInfo {
+func entriesOf(t *testing.T, repo *ark.Repository, id ark.SnapshotID) map[string]ark.FileInfo {
 	t.Helper()
 	byPath := make(map[string]ark.FileInfo)
 	if err := repo.Walk(context.Background(), id, func(f ark.FileInfo) error {

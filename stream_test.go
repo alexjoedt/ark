@@ -140,7 +140,7 @@ func TestStreamSinkTakesOneRegularFile(t *testing.T) {
 func TestChangedStreamReusesChunks(t *testing.T) {
 	ctx := context.Background()
 	repo := openRepo(t, arkmem.New())
-	restore := func(id string) []byte {
+	restore := func(id ark.SnapshotID) []byte {
 		t.Helper()
 		var buf bytes.Buffer
 		if _, err := repo.Restore(ctx, id, ark.NewStreamSink(&buf)); err != nil {

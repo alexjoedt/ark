@@ -100,9 +100,9 @@ func (c resticCase) decide() (keep []int, reasons [][]string, refused bool, err 
 		return nil, nil, false, err
 	}
 	snapshots := make([]*Snapshot, len(c.Times))
-	index := make(map[string]int)
+	index := make(map[SnapshotID]int)
 	for i, at := range c.Times {
-		s := &Snapshot{ID: strconv.Itoa(i), SourceName: "s", CreatedAt: time.Unix(at, 0).UTC()}
+		s := &Snapshot{ID: SnapshotID(strconv.Itoa(i)), SourceName: "s", CreatedAt: time.Unix(at, 0).UTC()}
 		if c.Tags != nil && c.Tags[i] != "" {
 			s.Tags = strings.Split(c.Tags[i], ",")
 		}

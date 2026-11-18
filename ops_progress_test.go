@@ -173,7 +173,7 @@ func TestForgetReportsProgress(t *testing.T) {
 			opts = append(opts, ark.WithForgetDryRun())
 		}
 		_, err := repo.Forget(context.Background(), ark.ForgetPolicy{},
-			ark.SnapshotFilter{IDs: []string{snaps[0].ID}}, opts...)
+			ark.SnapshotFilter{IDs: []ark.SnapshotID{snaps[0].ID}}, opts...)
 		if err != nil {
 			t.Fatalf("Forget (dry %v): %v", dry, err)
 		}
@@ -191,7 +191,11 @@ func TestPruneReportsProgress(t *testing.T) {
 	for _, dry := range []bool{false, true} {
 		repo, rec, snaps := openRecorded(t)
 		ctx := context.Background()
-		if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{snaps[0].ID}}); err != nil {
+		if _, err := repo.Forget(
+			ctx,
+			ark.ForgetPolicy{},
+			ark.SnapshotFilter{IDs: []ark.SnapshotID{snaps[0].ID}},
+		); err != nil {
 			t.Fatalf("Forget: %v", err)
 		}
 		rec.reset()
@@ -261,7 +265,7 @@ func TestVerifyReportsProgress(t *testing.T) {
 		t.Errorf("load event carries CurrentPath %q, want none before the prefix is resolved", got[0].CurrentPath)
 	}
 	for _, e := range got[1:] {
-		if e.CurrentPath != snaps[1].ID {
+		if e.CurrentPath != string(snaps[1].ID) {
 			t.Errorf("%s event carries CurrentPath %q, want the resolved snapshot ID", e.Phase, e.CurrentPath)
 		}
 	}
@@ -320,7 +324,7 @@ func TestFailedOperationsReportNoFinalize(t *testing.T) {
 		run func() error
 	}{
 		{ark.OperationForget, func() error {
-			_, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{snaps[0].ID}})
+			_, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{snaps[0].ID}})
 			return err
 		}},
 		{ark.OperationPrune, func() error { _, err := repo.Prune(ctx); return err }},
@@ -379,7 +383,7 @@ func TestBackendFaultsFailTheOperation(t *testing.T) {
 	t.Run("forget", func(t *testing.T) {
 		repo, rec, snaps, fail := openFaulty(t)
 		fail(ark.SnapshotFile)
-		_, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{snaps[0].ID}})
+		_, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{snaps[0].ID}})
 		if !errors.Is(err, errInjected) {
 			t.Fatalf("Forget with a failing delete: %v, want the backend error", err)
 		}
@@ -401,7 +405,11 @@ func TestBackendFaultsFailTheOperation(t *testing.T) {
 
 	t.Run("prune", func(t *testing.T) {
 		repo, _, snaps, fail := openFaulty(t)
-		if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{snaps[0].ID}}); err != nil {
+		if _, err := repo.Forget(
+			ctx,
+			ark.ForgetPolicy{},
+			ark.SnapshotFilter{IDs: []ark.SnapshotID{snaps[0].ID}},
+		); err != nil {
 			t.Fatalf("Forget: %v", err)
 		}
 		before, err := repo.Prune(ctx, ark.WithPruneDryRun())

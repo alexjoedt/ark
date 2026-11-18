@@ -14,7 +14,7 @@ import (
 // first. The period rules count in loc; a snapshot after now is in the future
 // and is kept without a rule seeing it.
 func applyForgetPolicy(snapshots []*Snapshot, policy ForgetPolicy, loc *time.Location, now time.Time) *ForgetResult {
-	result := &ForgetResult{KeepReasons: make(map[string][]string)}
+	result := &ForgetResult{KeepReasons: make(map[SnapshotID][]string)}
 	groups := make(map[seriesKey][]*Snapshot)
 	var order []seriesKey
 	for _, s := range snapshots {
@@ -220,7 +220,7 @@ func checkSeriesKept(snapshots []*Snapshot, res *ForgetResult) error {
 		for _, f := range res.Future {
 			if f.series() == s.series() {
 				// the eight characters the CLI lists a snapshot by
-				ids = append(ids, f.ID[:min(len(f.ID), 8)])
+				ids = append(ids, string(f.ID[:min(len(f.ID), 8)]))
 			}
 		}
 		if len(ids) == 0 {

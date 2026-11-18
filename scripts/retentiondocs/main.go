@@ -269,7 +269,7 @@ func forget(ctx context.Context, history []snap, policies ...ark.ForgetPolicy) (
 	// by side, each through its own Repository like separate processes.
 	// Closing one must not empty the shared arkmem backend, nor may a dry
 	// run; forget closes it on return.
-	ids := make([]string, len(history))
+	ids := make([]ark.SnapshotID, len(history))
 	errs := make([]error, len(history))
 	var wg sync.WaitGroup
 	for i, h := range history {
@@ -286,7 +286,7 @@ func forget(ctx context.Context, history []snap, policies ...ark.ForgetPolicy) (
 		if err != nil {
 			return nil, err
 		}
-		kept := make(map[string]bool, len(result.Keep))
+		kept := make(map[ark.SnapshotID]bool, len(result.Keep))
 		for _, k := range result.Keep {
 			kept[k.ID] = true
 		}
@@ -305,7 +305,7 @@ type keepOpen struct{ ark.Backend }
 
 func (keepOpen) Close() error { return nil }
 
-func backup(ctx context.Context, b ark.Backend, h snap) (id string, err error) {
+func backup(ctx context.Context, b ark.Backend, h snap) (id ark.SnapshotID, err error) {
 	repo, err := ark.Open(ctx, b, ark.NoPassword())
 	if err != nil {
 		return "", fmt.Errorf("opening the repository: %w", err)

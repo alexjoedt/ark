@@ -204,7 +204,7 @@ func TestDurabilityBarriers(t *testing.T) {
 		t.Fatalf("Snapshots = %v, %v", snaps, err)
 	}
 	b.take()
-	_, err = repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []string{snap.ID, snaps[0].ID}})
+	_, err = repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{snap.ID, snaps[0].ID}})
 	if err != nil {
 		t.Fatalf("Forget: %v", err)
 	}

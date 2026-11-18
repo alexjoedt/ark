@@ -354,9 +354,9 @@ func idPrefixTime(t *testing.T, id string) time.Time {
 
 // hexIDPrefixTime reads the first 6 bytes of a hex snapshot ID as
 // milliseconds since the epoch, the layout of a timestamped ID.
-func hexIDPrefixTime(t *testing.T, id string) time.Time {
+func hexIDPrefixTime(t *testing.T, id ark.SnapshotID) time.Time {
 	t.Helper()
-	b, err := hex.DecodeString(id)
+	b, err := hex.DecodeString(string(id))
 	if err != nil || len(b) != 16 {
 		t.Fatalf("id %q is not 32 hex characters", id)
 	}
@@ -373,13 +373,13 @@ func hexIDPrefixTime(t *testing.T, id string) time.Time {
 func TestSnapshotIDsCarryNoTimestamp(t *testing.T) {
 	ctx := context.Background()
 	repo := openRepo(t, arkmem.New())
-	var prev string
+	var prev ark.SnapshotID
 	for i := range 5 {
 		snap, err := repo.Backup(ctx, stubSource{name: "app", content: fmt.Sprint("contents ", i)})
 		if err != nil {
 			t.Fatalf("Backup: %v", err)
 		}
-		if len(snap.ID) != 32 || strings.ToLower(snap.ID) != snap.ID {
+		if len(snap.ID) != 32 || strings.ToLower(string(snap.ID)) != string(snap.ID) {
 			t.Errorf("snapshot ID %q is not 32 lowercase hex characters", snap.ID)
 		}
 		if d := hexIDPrefixTime(t, snap.ID).Sub(snap.CreatedAt).Abs(); d < 24*time.Hour {
@@ -415,10 +415,11 @@ func TestBase32SnapshotIDsStillWork(t *testing.T) {
 	if err != nil || len(all) != 2 {
 		t.Fatalf("Snapshots = %d, %v, want 2", len(all), err)
 	}
-	upper := strings.ToUpper(hexSnap.ID)
-	for _, ref := range []string{oldID, oldID[:8], hexSnap.ID, hexSnap.ID[:8], upper, upper[:8]} {
+	upper := ark.SnapshotID(strings.ToUpper(string(hexSnap.ID)))
+	for _, ref := range []ark.SnapshotID{oldID, oldID[:8], hexSnap.ID, hexSnap.ID[:8], upper, upper[:8]} {
 		got, err := repo.Snapshot(ctx, ref)
-		if err != nil || (got.ID != oldID && got.ID != hexSnap.ID) || !strings.HasPrefix(got.ID, strings.ToLower(ref)) {
+		if err != nil || (got.ID != oldID && got.ID != hexSnap.ID) ||
+			!strings.HasPrefix(string(got.ID), strings.ToLower(string(ref))) {
 			t.Errorf("Snapshot(%q) = %v, %v", ref, got, err)
 		}
 	}
@@ -436,7 +437,7 @@ func TestBase32SnapshotIDsStillWork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
-	if len(imported.ID) != 32 || strings.ToLower(imported.ID) != imported.ID {
+	if len(imported.ID) != 32 || strings.ToLower(string(imported.ID)) != string(imported.ID) {
 		t.Errorf("imported ID %q is not 32 lowercase hex characters", imported.ID)
 	}
 	if _, err := target.Import(ctx, bytes.NewReader(archive.Bytes())); err == nil {

@@ -158,10 +158,10 @@ func runKillHarness(
 	}
 	st := &killState{
 		want:     map[string]map[string]string{},
-		restored: map[string]bool{},
+		restored: map[ark.SnapshotID]bool{},
 		must:     map[string]bool{},
 		gone:     map[string]bool{},
-		ids:      map[string]string{},
+		ids:      map[string]ark.SnapshotID{},
 	}
 	ceil := map[string]time.Duration{} // kill delay ceiling per op and start of the delay
 	runsOf, kills := map[string]int{}, map[string]int{}
@@ -229,7 +229,7 @@ func runKillHarness(
 		case "forget":
 			ids := make([]string, len(targets))
 			for j, tg := range targets {
-				ids[j] = st.ids[tg]
+				ids[j] = string(st.ids[tg])
 			}
 			env = append(env, killEnvIDs+"="+strings.Join(ids, ","))
 		}
@@ -366,10 +366,10 @@ const killRepoSpan = 25
 // killState is what the parent expects of the repository.
 type killState struct {
 	want     map[string]map[string]string // tag -> tree the snapshot was taken of
-	restored map[string]bool              // snapshot ids already compared
+	restored map[ark.SnapshotID]bool      // snapshot ids already compared
 	must     map[string]bool              // tags that have to be present
 	gone     map[string]bool              // tags a forget removed
-	ids      map[string]string            // tag -> snapshot id, as of the last check
+	ids      map[string]ark.SnapshotID    // tag -> snapshot id, as of the last check
 }
 
 // forgetTargets picks one to three tags to forget, always leaving one
@@ -446,7 +446,10 @@ func TestKillHarnessChild(t *testing.T) {
 			return err
 		}
 	case "forget":
-		ids := strings.Split(os.Getenv(killEnvIDs), ",")
+		var ids []ark.SnapshotID
+		for id := range strings.SplitSeq(os.Getenv(killEnvIDs), ",") {
+			ids = append(ids, ark.SnapshotID(id))
+		}
 		run = func() error {
 			_, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: ids})
 			return err

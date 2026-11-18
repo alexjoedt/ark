@@ -25,7 +25,7 @@ func storedLabels(t *testing.T, repo, id string) map[string]string {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	snap, err := r.Snapshot(context.Background(), id)
+	snap, err := r.Snapshot(context.Background(), ark.SnapshotID(id))
 	if err != nil {
 		t.Fatal(err)
 	}
