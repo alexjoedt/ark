@@ -20,7 +20,7 @@ func (r *Repository) runBackup(
 	start := time.Now()
 
 	logger := r.logger.With("component", "backup", "source", meta.Name, "host", opts.host)
-	parentID := string(opts.parent)
+	parentID := opts.parent
 	if parentID == "" {
 		var err error
 		parentID, err = r.latestSnapshotID(ctx, seriesKey{meta.Type, meta.Name, opts.host})
@@ -325,7 +325,7 @@ func unstoredChunk(ctx context.Context, s *objectStore, chunks []chunkRef) (bool
 // pack holds is left out, so the backup reads it again; checked reports that
 // this was done.
 func (r *Repository) parentFiles(
-	ctx context.Context, session *packSession, id string, source SourceMeta,
+	ctx context.Context, session *packSession, id SnapshotID, source SourceMeta,
 ) (files map[string]fileEntry, checked bool, err error) {
 	if id == "" {
 		return map[string]fileEntry{}, false, nil

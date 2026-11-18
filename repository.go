@@ -249,7 +249,7 @@ func (r *Repository) Backup(ctx context.Context, src Source, opts ...BackupOptio
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
-		o.parent = SnapshotID(parent)
+		o.parent = parent
 	}
 	m, err := r.runBackup(ctx, src, meta, *o, r.writeSession())
 	if err != nil {
@@ -291,7 +291,7 @@ func (r *Repository) Restore(
 // resolveID turns a full snapshot ID or a unique prefix into the full ID,
 // the name the manifest is stored under. It returns ErrNotFound when nothing
 // matches and ErrAmbiguousID, naming the candidates, when more than one does.
-func (r *Repository) resolveID(ctx context.Context, snapshotID SnapshotID) (string, error) {
+func (r *Repository) resolveID(ctx context.Context, snapshotID SnapshotID) (SnapshotID, error) {
 	id := string(snapshotID)
 	if id == "" {
 		return "", fmt.Errorf("%w: empty snapshot id", ErrNotFound)
@@ -300,7 +300,7 @@ func (r *Repository) resolveID(ctx context.Context, snapshotID SnapshotID) (stri
 	// An exact hit costs one Stat; only a prefix needs the full listing.
 	lower := strings.ToLower(id)
 	if _, err := r.backend.Stat(ctx, Handle{Type: SnapshotFile, Name: lower}); err == nil {
-		return lower, nil
+		return SnapshotID(lower), nil
 	}
 
 	var matches []string
@@ -318,7 +318,7 @@ func (r *Repository) resolveID(ctx context.Context, snapshotID SnapshotID) (stri
 	case 0:
 		return "", fmt.Errorf("%w: %s", ErrNotFound, id)
 	case 1:
-		return matches[0], nil
+		return SnapshotID(matches[0]), nil
 	default:
 		sort.Strings(matches)
 		return "", fmt.Errorf("%w: %s matches %s", ErrAmbiguousID, id, strings.Join(matches, ", "))
@@ -335,7 +335,7 @@ func (r *Repository) Snapshots(ctx context.Context, filter SnapshotFilter) ([]*S
 			if err != nil {
 				return nil, err
 			}
-			resolved[i] = SnapshotID(full)
+			resolved[i] = full
 		}
 		filter.IDs = resolved
 	}
@@ -373,8 +373,8 @@ func (r *Repository) Snapshot(ctx context.Context, snapshotID SnapshotID) (*Snap
 // deleteSnapshot removes one manifest. Its objects stay in the CAS until
 // Prune sweeps them, which is why this is not part of the public surface:
 // callers go through Forget.
-func (r *Repository) deleteSnapshot(ctx context.Context, id string) error {
-	if err := r.backend.Delete(ctx, Handle{Type: SnapshotFile, Name: id}); err != nil {
+func (r *Repository) deleteSnapshot(ctx context.Context, id SnapshotID) error {
+	if err := r.backend.Delete(ctx, Handle{Type: SnapshotFile, Name: string(id)}); err != nil {
 		return fmt.Errorf("ark: failed to delete snapshot %s: %w", id, err)
 	}
 	return nil
@@ -461,7 +461,7 @@ func (r *Repository) Forget(
 	// A failed removal does not stop the others; Forget still fails.
 	var errs []error
 	for _, s := range result.Remove {
-		if err := r.deleteSnapshot(ctx, string(s.ID)); err != nil {
+		if err := r.deleteSnapshot(ctx, s.ID); err != nil {
 			errs = append(errs, err)
 			continue
 		}
@@ -485,7 +485,7 @@ func (r *Repository) forgetNamed(ctx context.Context, filter SnapshotFilter) (*F
 	rest := filter
 	rest.IDs = nil
 	result := &ForgetResult{}
-	seen := make(map[string]bool, len(filter.IDs))
+	seen := make(map[SnapshotID]bool, len(filter.IDs))
 	for _, id := range filter.IDs {
 		full, err := r.resolveID(ctx, id)
 		if err != nil {
@@ -497,7 +497,7 @@ func (r *Repository) forgetNamed(ctx context.Context, filter SnapshotFilter) (*F
 		seen[full] = true
 		m, err := r.loadManifest(ctx, full)
 		if errors.Is(err, ErrCorruptManifest) {
-			result.Remove = append(result.Remove, &Snapshot{ID: SnapshotID(full)})
+			result.Remove = append(result.Remove, &Snapshot{ID: full})
 			continue
 		}
 		if err != nil {
@@ -624,7 +624,7 @@ func (r *Repository) Verify(ctx context.Context, snapshotID SnapshotID) (*Verify
 	if err != nil {
 		return result, err
 	}
-	progress(ProgressEvent{Phase: PhaseFinalize, CurrentPath: id})
+	progress(ProgressEvent{Phase: PhaseFinalize, CurrentPath: string(id)})
 	return result, nil
 }
 
@@ -645,15 +645,16 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 
 	// Names, not manifests: a manifest that does not open is a finding of the
 	// check, not a reason to stop it.
-	var ids []string
+	var ids []SnapshotID
 	err = r.backend.List(ctx, SnapshotFile, func(info BlobInfo) error {
-		ids = append(ids, info.Name)
+		ids = append(ids, SnapshotID(info.Name))
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ark: failed to list snapshots: %w", err)
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(ids)))
+	slices.Sort(ids)
+	slices.Reverse(ids)
 
 	_, unreadable, err := r.loadLocks(ctx)
 	if err != nil {
@@ -687,7 +688,7 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 		if ctx.Err() != nil {
 			return nil, ctx.Err() //nolint:wrapcheck // the caller's own cancellation
 		}
-		progress(ProgressEvent{Phase: PhaseFetch, CurrentPath: id, FilesDone: i + 1, FilesTotal: len(ids)})
+		progress(ProgressEvent{Phase: PhaseFetch, CurrentPath: string(id), FilesDone: i + 1, FilesTotal: len(ids)})
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("snapshot %s: %v", id, err))
 			continue

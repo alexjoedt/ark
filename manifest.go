@@ -19,8 +19,8 @@ const manifestVersion = 1
 // Only v1 manifests are written; all other versions are rejected.
 type manifest struct {
 	Version    int               `json:"version"`
-	ID         string            `json:"id"`
-	ParentID   string            `json:"parent_id,omitempty"`
+	ID         SnapshotID        `json:"id"`
+	ParentID   SnapshotID        `json:"parent_id,omitempty"`
 	CreatedAt  time.Time         `json:"created_at"`
 	SourceName string            `json:"source_name"`
 	SourceType SourceType        `json:"source_type"`
@@ -133,7 +133,7 @@ func (r *Repository) saveManifest(ctx context.Context, m *manifest) error {
 	if err := r.backend.Sync(ctx); err != nil {
 		return fmt.Errorf("manifest: failed to sync objects: %w", err)
 	}
-	if err := r.putSealed(ctx, Handle{Type: SnapshotFile, Name: m.ID}, data); err != nil {
+	if err := r.putSealed(ctx, Handle{Type: SnapshotFile, Name: string(m.ID)}, data); err != nil {
 		return err
 	}
 	if err := r.backend.Sync(ctx); err != nil {
@@ -144,8 +144,8 @@ func (r *Repository) saveManifest(ctx context.Context, m *manifest) error {
 
 // loadManifest reads and opens a manifest. One that was changed or moved
 // from another snapshot id fails with ErrCorruptManifest.
-func (r *Repository) loadManifest(ctx context.Context, id string) (*manifest, error) {
-	data, err := r.getSealed(ctx, Handle{Type: SnapshotFile, Name: id})
+func (r *Repository) loadManifest(ctx context.Context, id SnapshotID) (*manifest, error) {
+	data, err := r.getSealed(ctx, Handle{Type: SnapshotFile, Name: string(id)})
 	if errors.Is(err, errSealBroken) {
 		return nil, fmt.Errorf("%w: snapshot %s: %w", ErrCorruptManifest, id, err)
 	}
@@ -168,7 +168,7 @@ func (r *Repository) loadManifest(ctx context.Context, id string) (*manifest, er
 func (r *Repository) readManifests(ctx context.Context) ([]*manifest, error) {
 	var manifests []*manifest
 	err := r.backend.List(ctx, SnapshotFile, func(info BlobInfo) error {
-		m, err := r.loadManifest(ctx, info.Name)
+		m, err := r.loadManifest(ctx, SnapshotID(info.Name))
 		if err != nil {
 			return fmt.Errorf("snapshot %s: %w", info.Name, err)
 		}
@@ -180,7 +180,7 @@ func (r *Repository) readManifests(ctx context.Context) ([]*manifest, error) {
 	}
 	// Snapshot IDs are random, so only CreatedAt orders them.
 	slices.SortFunc(manifests, func(a, b *manifest) int {
-		return cmp.Or(b.CreatedAt.Compare(a.CreatedAt), strings.Compare(b.ID, a.ID))
+		return cmp.Or(b.CreatedAt.Compare(a.CreatedAt), strings.Compare(string(b.ID), string(a.ID)))
 	})
 	return manifests, nil
 }
@@ -188,7 +188,7 @@ func (r *Repository) readManifests(ctx context.Context) ([]*manifest, error) {
 // manifestToSnapshot converts an internal manifest to the public Snapshot type.
 func manifestToSnapshot(m *manifest) *Snapshot {
 	return &Snapshot{
-		ID:         SnapshotID(m.ID),
+		ID:         m.ID,
 		SourceName: m.SourceName,
 		SourceType: m.SourceType,
 		Labels:     maps.Clone(m.Labels),
@@ -197,7 +197,7 @@ func manifestToSnapshot(m *manifest) *Snapshot {
 		Tags:       append([]string(nil), m.Tags...),
 		Comment:    m.Comment,
 		CreatedAt:  m.CreatedAt,
-		ParentID:   SnapshotID(m.ParentID),
+		ParentID:   m.ParentID,
 		Stats:      m.Stats,
 	}
 }
@@ -260,7 +260,7 @@ func walkSnapshot(
 //
 // The manifests are the only record of what a source last backed up; there is
 // no pointer object that can drift from them.
-func (r *Repository) latestSnapshotID(ctx context.Context, series seriesKey) (string, error) {
+func (r *Repository) latestSnapshotID(ctx context.Context, series seriesKey) (SnapshotID, error) {
 	manifests, err := r.readManifests(ctx)
 	if err != nil {
 		return "", err

@@ -61,7 +61,7 @@ func xattrsFromPAX(records map[string]string) map[string][]byte {
 	return xattrs
 }
 
-func (r *Repository) runExport(ctx context.Context, snapshotID string, w io.Writer) error {
+func (r *Repository) runExport(ctx context.Context, snapshotID SnapshotID, w io.Writer) error {
 	logger := r.logger.With("component", "export", "snapshot", snapshotID)
 
 	m, err := r.loadManifest(ctx, snapshotID)
@@ -194,7 +194,7 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader, session *p
 				return nil, err
 			}
 			m.ID = importedSnapshotID(m.ID)
-			exists, err := r.backend.Exists(ctx, Handle{Type: SnapshotFile, Name: m.ID})
+			exists, err := r.backend.Exists(ctx, Handle{Type: SnapshotFile, Name: string(m.ID)})
 			if err != nil {
 				return nil, fmt.Errorf("import: failed to check snapshot %s: %w", m.ID, err)
 			}
@@ -326,8 +326,8 @@ func maybeGunzip(reader io.Reader) (io.Reader, func(), error) {
 // that survive a re-chunking import are read; everything else about the
 // snapshot is rebuilt from the archive itself.
 type legacyMetadata struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        SnapshotID `json:"id"`
+	CreatedAt time.Time  `json:"created_at"`
 	Source    struct {
 		Volume string            `json:"volume"`
 		Labels map[string]string `json:"labels"`

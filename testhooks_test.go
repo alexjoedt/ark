@@ -50,7 +50,7 @@ func ObjectName(r *Repository, data []byte) string { return keyedName(r.key.IDKe
 
 // RootTree returns the root tree hash of snapshot id.
 func RootTree(ctx context.Context, r *Repository, id SnapshotID) (string, error) {
-	m, err := r.loadManifest(ctx, string(id))
+	m, err := r.loadManifest(ctx, id)
 	if err != nil {
 		return "", err
 	}
@@ -159,14 +159,14 @@ func SetPackLimits(r *Repository, packBytes, checkpointBlobs int) {
 // Crockford base32 name, the form snapshots had before hex IDs, and returns
 // that name.
 func WriteBase32Snapshot(ctx context.Context, r *Repository, id SnapshotID) (SnapshotID, error) {
-	m, err := r.loadManifest(ctx, string(id))
+	m, err := r.loadManifest(ctx, id)
 	if err != nil {
 		return "", err
 	}
 	b := make([]byte, 16)
 	_, _ = cryptorand.Read(b)
-	m.ID = encodeBase32(b)
-	return SnapshotID(m.ID), r.saveManifest(ctx, m)
+	m.ID = SnapshotID(encodeBase32(b))
+	return m.ID, r.saveManifest(ctx, m)
 }
 
 // ChunkOffsets returns where each chunk of the regular file name of s starts,
