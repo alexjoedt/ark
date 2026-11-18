@@ -68,10 +68,14 @@ func importCommand() *cli.Command {
 	}
 }
 
-// warnFuture tells the user that a snapshot is dated after now: forget keeps
-// it and leaves it out of every policy rule, so a wrong clock on the machine
-// that wrote it stays visible.
+// warnFuture tells the user that a snapshot is dated after now: while that
+// date is still ahead of its clock, forget keeps it and leaves it out of every
+// policy rule, so a wrong clock on the machine that wrote it stays visible.
 func warnFuture(p *out.Printer, s *ark.Snapshot) {
-	p.Warnf("snapshot %s (%s, host %s) is dated in the future; forget keeps it and ignores it in the policy, check that machine's clock",
-		out.ShortID(s.ID), out.Time(s.CreatedAt), s.Host)
+	where := out.Time(s.CreatedAt)
+	if s.Host != "" {
+		where += ", host " + s.Host
+	}
+	p.Warnf("snapshot %s (%s) is dated in the future; until that date has passed, forget keeps it and ignores it in the policy, check the clock of the machine that wrote it",
+		out.ShortID(s.ID), where)
 }

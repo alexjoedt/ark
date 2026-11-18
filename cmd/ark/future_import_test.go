@@ -12,11 +12,11 @@ import (
 	"time"
 )
 
-// futureArchive writes an export archive of a fresh one-file snapshot whose
+// archiveDatedAt writes an export archive of a fresh one-file snapshot whose
 // created_at is replaced by at, and returns its path. ark backup --time
 // refuses a future time, so this is the way to get such a snapshot into a
 // repository.
-func futureArchive(t *testing.T, at time.Time) string {
+func archiveDatedAt(t *testing.T, at time.Time) string {
 	t.Helper()
 	repo := initRepo(t)
 	src := t.TempDir()
@@ -81,9 +81,9 @@ func futureArchive(t *testing.T, at time.Time) string {
 
 func TestImportWarnsAboutAFutureSnapshot(t *testing.T) {
 	t.Setenv("ARK_REPOSITORY", "")
-	target := initRepo(t)
+	archive := archiveDatedAt(t, time.Date(2099, 6, 15, 12, 0, 0, 0, time.UTC))
 
-	code, out, logs := runCaptureAll(t, "--json", "-r", target, "import", futureArchive(t, time.Date(2099, 1, 1, 10, 0, 0, 0, time.UTC)))
+	code, out, logs := runCaptureAll(t, "--json", "-r", initRepo(t), "import", archive)
 	if code != 0 {
 		t.Fatalf("import exit %d, stderr %q", code, logs)
 	}
@@ -91,12 +91,15 @@ func TestImportWarnsAboutAFutureSnapshot(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &snap); err != nil || snap.ID == "" {
 		t.Fatalf("stdout is not a snapshot: %q", out)
 	}
+	if len(snap.ID) < 8 {
+		t.Fatalf("snapshot ID %q is shorter than 8 characters", snap.ID)
+	}
 	want := "warning: snapshot " + snap.ID[:8] + " (2099-"
 	if !strings.Contains(logs, want) || !strings.Contains(logs, "is dated in the future") {
 		t.Fatalf("stderr %q lacks %q", logs, want)
 	}
 
-	code, _, logs = runCaptureAll(t, "--quiet", "-r", initRepo(t), "import", futureArchive(t, time.Date(2099, 1, 1, 10, 0, 0, 0, time.UTC)))
+	code, _, logs = runCaptureAll(t, "--quiet", "-r", initRepo(t), "import", archive)
 	if code != 0 || strings.Contains(logs, "dated in the future") {
 		t.Fatalf("--quiet: exit %d, stderr %q", code, logs)
 	}
@@ -104,7 +107,7 @@ func TestImportWarnsAboutAFutureSnapshot(t *testing.T) {
 
 func TestImportOfAPastSnapshotDoesNotWarn(t *testing.T) {
 	t.Setenv("ARK_REPOSITORY", "")
-	code, _, logs := runCaptureAll(t, "-r", initRepo(t), "import", futureArchive(t, time.Date(2020, 1, 1, 10, 0, 0, 0, time.UTC)))
+	code, _, logs := runCaptureAll(t, "-r", initRepo(t), "import", archiveDatedAt(t, time.Date(2020, 1, 1, 10, 0, 0, 0, time.UTC)))
 	if code != 0 || strings.Contains(logs, "dated in the future") {
 		t.Fatalf("exit %d, stderr %q", code, logs)
 	}
