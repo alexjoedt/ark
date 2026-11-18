@@ -380,7 +380,7 @@ Docker volumes live under `ark docker`. The daemon comes from `--docker-host ADD
 
 | Command | Purpose |
 |---|---|
-| `ark docker volumes [--host NAME]` | list the volumes with driver, mountpoint and last snapshot |
+| `ark docker volumes [--host NAME]` | list the volumes with driver and mountpoint, and the last snapshot when a repository is configured |
 | `ark docker backup [options] <volume>` | stop the containers using the volume, back it up, restart them |
 | `ark docker restore [options] <id> [volume]` | restore into `volume`, default the snapshot's source name; creates it if missing, replaces its contents if present |
 
@@ -391,7 +391,7 @@ replaced), `--yes`, `--no-stop` and `--stop-timeout`, and refuses snapshots whos
 `docker-volume`.
 
 ```bash
-ark docker volumes
+ark docker volumes                     # needs no repository or password, just the daemon
 ark docker backup postgres_data --comment "before upgrade"  # --host NAME overrides the host
 ark snapshots --type docker-volume    # only volume snapshots, file backups have type file
 ark docker restore <id>                # into the volume it came from

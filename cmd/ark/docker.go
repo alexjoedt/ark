@@ -72,51 +72,84 @@ func dockerVolumesCommand() *cli.Command {
 			if cmd.NArg() != 0 {
 				return exitcode.Usagef("usage: ark docker volumes")
 			}
-			e, repo, err := openDocker(ctx, cmd)
+			vols, last, err := listVolumes(ctx, cmd)
 			if err != nil {
 				return err
 			}
-			defer repo.Close()
-			defer e.Close()
-
-			host, err := dockerSeriesHost(ctx, cmd, e)
-			if err != nil {
-				return fmt.Errorf("docker volumes: %w", err)
-			}
-			vols, err := e.ListVolumes(ctx)
-			if err != nil {
-				return fmt.Errorf("docker volumes: %w", err)
-			}
-			snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{Type: arkdocker.SourceTypeDockerVolume})
-			if err != nil {
-				return fmt.Errorf("docker volumes: %w", err)
-			}
-			last := lastVolumeSnapshots(snaps, host)
-
-			p := printer(cmd)
-			if p.Mode().JSON {
-				list := make([]volumeJSON, 0, len(vols))
-				for _, v := range vols {
-					j := volumeJSON{Name: v.Name, Driver: v.Driver, Mountpoint: v.Mountpoint}
-					if t, ok := last[v.Name]; ok {
-						j.LastSnapshot = &t
-					}
-					list = append(list, j)
-				}
-				return p.JSON(list)
-			}
-			rows := make([][]string, 0, len(vols))
-			for _, v := range vols {
-				when := "-"
-				if t, ok := last[v.Name]; ok {
-					when = out.TimeLong(t)
-				}
-				rows = append(rows, []string{v.Name, v.Driver, v.Mountpoint, when})
-			}
-			p.Table([]string{"NAME", "DRIVER", "MOUNTPOINT", "LAST SNAPSHOT"}, rows)
-			return nil
+			return printVolumes(printer(cmd), vols, last)
 		},
 	}
+}
+
+// listVolumes asks the daemon for the volumes. The repository feeds only the
+// last snapshot map, which stays nil when none is configured.
+func listVolumes(ctx context.Context, cmd *cli.Command) ([]arkdocker.VolumeInfo, map[string]time.Time, error) {
+	if uri, _ := repoSetting(cmd.Root(), profileFrom(ctx)); uri == "" {
+		c, err := arkdocker.NewClient(cmd.String("docker-host"))
+		if err != nil {
+			return nil, nil, fmt.Errorf("docker volumes: %w", err)
+		}
+		defer c.Close()
+		vols, err := c.ListVolumes(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("docker volumes: %w", err)
+		}
+		return vols, nil, nil
+	}
+	e, repo, err := openDocker(ctx, cmd)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer repo.Close()
+	defer e.Close()
+
+	host, err := dockerSeriesHost(ctx, cmd, e)
+	if err != nil {
+		return nil, nil, fmt.Errorf("docker volumes: %w", err)
+	}
+	vols, err := e.ListVolumes(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("docker volumes: %w", err)
+	}
+	snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{Type: arkdocker.SourceTypeDockerVolume})
+	if err != nil {
+		return nil, nil, fmt.Errorf("docker volumes: %w", err)
+	}
+	return vols, lastVolumeSnapshots(snaps, host), nil
+}
+
+// printVolumes lists vols. last is nil without a repository: the LAST
+// SNAPSHOT column is then left out of the table.
+func printVolumes(p *out.Printer, vols []arkdocker.VolumeInfo, last map[string]time.Time) error {
+	if p.Mode().JSON {
+		list := make([]volumeJSON, 0, len(vols))
+		for _, v := range vols {
+			j := volumeJSON{Name: v.Name, Driver: v.Driver, Mountpoint: v.Mountpoint}
+			if t, ok := last[v.Name]; ok {
+				j.LastSnapshot = &t
+			}
+			list = append(list, j)
+		}
+		return p.JSON(list)
+	}
+	header := []string{"NAME", "DRIVER", "MOUNTPOINT"}
+	if last != nil {
+		header = append(header, "LAST SNAPSHOT")
+	}
+	rows := make([][]string, 0, len(vols))
+	for _, v := range vols {
+		row := []string{v.Name, v.Driver, v.Mountpoint}
+		if last != nil {
+			when := "-"
+			if t, ok := last[v.Name]; ok {
+				when = out.TimeLong(t)
+			}
+			row = append(row, when)
+		}
+		rows = append(rows, row)
+	}
+	p.Table(header, rows)
+	return nil
 }
 
 // hostFlag is --host of the docker commands. Its default is computed by

@@ -32,7 +32,7 @@ func forgetListRepo(t *testing.T, n int) (repo string, ids []string) {
 
 func countLines(out, prefix string) int {
 	n := 0
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if strings.HasPrefix(l, prefix) {
 			n++
 		}
