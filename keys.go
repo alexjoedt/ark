@@ -247,7 +247,7 @@ func loadMasterKey(
 		case mk.ConfigHash == hash:
 			return mk, name, nil
 		case mk.ConfigHash == "":
-			legacy = fmt.Errorf("%w (key file %s has no config binding)", errFormatVersion(stored.Version), name)
+			legacy = fmt.Errorf("%w: key file %s has no config binding, an older repository format wrote it", ErrUnsupportedFormat, name)
 		case mk.RepositoryID == stored.ID:
 			changed = fmt.Errorf("%w: the config was changed after Init", ErrCorruptConfig)
 		default:

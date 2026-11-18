@@ -165,7 +165,7 @@ func TestOpenDefaultRepositoryUsesTheWrittenDefaults(t *testing.T) {
 }
 
 // TestOpenRejectsTheFormatBeforePacks opens a repository as the build before
-// packs wrote it: format version 2, its key bound to that config. Its chunks
+// packs wrote it: format version 3, its key bound to that config. Its chunks
 // and tree nodes are one object each, which this build does not read, so
 // Open refuses it and names both versions.
 func TestOpenRejectsTheFormatBeforePacks(t *testing.T) {
@@ -224,7 +224,7 @@ func rebindConfig(t *testing.T, b Backend, change func(*repositoryConfig)) {
 }
 
 // TestOpenRejectsAMasterKeyWithoutConfigHash pins that there is no legacy
-// path: a master key that carries no config_hash, as format version 1 wrote
+// path: a master key that carries no config_hash, as an older format wrote
 // it, does not open the repository and reports the older format.
 func TestOpenRejectsAMasterKeyWithoutConfigHash(t *testing.T) {
 	ctx := context.Background()

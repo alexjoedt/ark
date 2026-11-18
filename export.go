@@ -27,7 +27,7 @@ const (
 	legacyMetadataName = "manifest.json"
 
 	// gzipMagic opens every gzip stream. Import sniffs it to stay compatible
-	// with the archives the v1.1.0 binary compressed.
+	// with the archives the pre-v1 binary compressed.
 	gzipMagic = "\x1f\x8b"
 )
 
@@ -304,7 +304,7 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader, session *p
 
 // maybeGunzip returns reader as it is, or wrapped in a gzip reader when the
 // stream starts with the gzip magic. ark writes plain tar since v1, and the
-// archives the v1.1.0 binary wrote are gzipped.
+// archives the pre-v1 binary wrote are gzipped.
 func maybeGunzip(reader io.Reader) (io.Reader, func(), error) {
 	br := bufio.NewReader(reader)
 	magic, err := br.Peek(len(gzipMagic))
@@ -322,7 +322,7 @@ func maybeGunzip(reader io.Reader) (io.Reader, func(), error) {
 	return gr, func() { _ = gr.Close() }, nil
 }
 
-// legacyMetadata is the metadata.json the v1.1.0 binary wrote. Only the fields
+// legacyMetadata is the metadata.json the pre-v1 binary wrote. Only the fields
 // that survive a re-chunking import are read; everything else about the
 // snapshot is rebuilt from the archive itself.
 type legacyMetadata struct {
@@ -338,7 +338,7 @@ type legacyMetadata struct {
 }
 
 // parseArchiveMetadata reads the archive's metadata entry, in this version's
-// shape or in the one the v1.1.0 binary wrote.
+// shape or in the one the pre-v1 binary wrote.
 func parseArchiveMetadata(data []byte) (*manifest, error) {
 	var m manifest
 	if err := json.Unmarshal(data, &m); err != nil {

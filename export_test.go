@@ -134,7 +134,7 @@ func TestImportRechunksIntoANewSnapshot(t *testing.T) {
 	}
 }
 
-// legacyArchive builds what the released v1.1.0 binary wrote: a gzipped tar
+// legacyArchive builds what the pre-v1 binary wrote: a gzipped tar
 // whose metadata.json is the old backup metadata, not an ark manifest.
 func legacyArchive(t *testing.T) []byte {
 	t.Helper()
@@ -188,13 +188,13 @@ func legacyArchive(t *testing.T) []byte {
 	return raw.Bytes()
 }
 
-func TestImportAcceptsAnArchiveFromTheV110Binary(t *testing.T) {
+func TestImportAcceptsAnArchiveFromThePreV1Binary(t *testing.T) {
 	ctx := context.Background()
 	repo := openRepo(t, arkmem.New())
 
 	imported, err := repo.Import(ctx, bytes.NewReader(legacyArchive(t)))
 	if err != nil {
-		t.Fatalf("Import of a v1.1.0 archive: %v", err)
+		t.Fatalf("Import of a pre-v1 archive: %v", err)
 	}
 
 	if imported.SourceName != "pgdata" {
