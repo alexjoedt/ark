@@ -206,11 +206,12 @@ summed over the snapshots and not deduplicated: a file in ten snapshots counts t
 ratio grows with every unchanged backup. It reads the snapshot list and the object sizes the
 backend lists, no data, and takes no lock.
 
-`--exact` adds the bytes no snapshot uses that a prune would leave in place, from a prune dry run:
+`--exact` adds the bytes no snapshot uses and how many of them a prune frees, from a prune dry run:
 it reads every tree and index and takes the exclusive lock, so it waits for or fails on a running
-backup like prune does. `--json` prints one object with `snapshots`, `total_size`, `stored_size`,
-`stored` (bytes per kind: `datapacks`, `treepacks`, `indexes`, `snapshots`, `keys`, `other`) and,
-with `--exact`, `bytes_unused`.
+backup like prune does. A ratio below 0.05 prints as `<0.1x`. `--json` prints one object with
+`snapshots`, `total_size`, `stored_size`, `stored` (bytes per kind: `datapacks`, `treepacks`,
+`indexes`, `snapshots`, `keys`, `other`) and, with `--exact`, `bytes_freed` (what a prune deletes)
+and `bytes_unused` (what it leaves in place).
 
 ## forget
 

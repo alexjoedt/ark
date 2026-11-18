@@ -203,6 +203,7 @@ no matches
 === --json info --exact (exit 0)
 --- stdout
 {
+  "bytes_freed": 0,
   "bytes_unused": 0,
   "snapshots": 1,
   "stored": {

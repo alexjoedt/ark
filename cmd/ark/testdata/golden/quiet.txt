@@ -50,7 +50,7 @@ Stored:        <bytes>
   snapshots:   <bytes>
   keys:        <bytes>
   other:       <bytes>
-Ratio:         0.0x (total size over stored)
+Ratio:         <0.1x (total size over stored)
 --- stderr
 === --quiet info --exact (exit 0)
 --- stdout
@@ -63,6 +63,6 @@ Stored:        <bytes>
   snapshots:   <bytes>
   keys:        <bytes>
   other:       <bytes>
-Ratio:         0.0x (total size over stored)
-Unused:        0 B
+Ratio:         <0.1x (total size over stored)
+Unused:        0 B (a prune frees 0 B)
 --- stderr

@@ -47,14 +47,14 @@ Besides backup and restore, a `*ark.Repository` lists snapshots (`Snapshots`, `W
 
 ## Repository size
 
-`repo.Info` counts the snapshots, sums their `Stats.TotalSize` and adds up the object sizes the backend lists per namespace in `Stored` (data packs, tree packs, indexes, snapshots, keys, other); `Stored.Total()` is the size of the repository. The summed total size is not deduplicated: a file in ten snapshots counts ten times. `Info` reads the snapshot manifests and no pack or index, and takes no lock. With `ark.WithInfoExact()` it runs a prune dry run and fills `BytesUnused`, the bytes no snapshot uses that a prune would leave in place; that reads every tree and index, holds the exclusive lock like `Prune` and reports progress as a prune.
+`repo.Info` counts the snapshots, sums their `Stats.TotalSize` and adds up the object sizes the backend lists per namespace in `Stored` (data packs, tree packs, indexes, snapshots, keys, other); `Stored.Total()` is the size of the repository. The summed total size is not deduplicated: a file in ten snapshots counts ten times. `Info` reads the snapshot manifests and no pack or index, and takes no lock. A manifest deleted while it runs is left out. With `ark.WithInfoExact()` it runs a prune dry run and fills `BytesFreed`, the bytes no snapshot uses that a prune deletes, and `BytesUnused`, those it leaves in place; together they are all the unused space. That reads every tree and index, holds the exclusive lock like `Prune` and reports progress as a prune.
 
 ```go
 info, err := repo.Info(ctx, ark.WithInfoExact())
 if err != nil {
 	return err
 }
-fmt.Printf("%d snapshots, %d of %d bytes unused\n", info.Snapshots, info.BytesUnused, info.Stored.Total())
+fmt.Printf("%d snapshots, %d of %d bytes unused\n", info.Snapshots, info.BytesFreed+info.BytesUnused, info.Stored.Total())
 ```
 
 ## Packages

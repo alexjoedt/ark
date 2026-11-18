@@ -15,11 +15,15 @@ type RepositoryInfo struct {
 	// Stored is the size of the stored objects per namespace, as the
 	// backend lists them.
 	Stored StoredSizes
-	// Exact is set when the call ran with WithInfoExact; only then is
-	// BytesUnused filled.
+	// Exact is set when the call ran with WithInfoExact; only then are
+	// BytesFreed and BytesUnused filled.
 	Exact bool
+	// BytesFreed is PruneResult.BytesFreed of a prune dry run: the stored
+	// bytes no snapshot uses that a prune deletes.
+	BytesFreed int64
 	// BytesUnused is PruneResult.BytesUnused of a prune dry run: the stored
-	// bytes no snapshot uses that a prune would leave in place.
+	// bytes no snapshot uses that a prune leaves in place. BytesFreed plus
+	// BytesUnused is all the unused space.
 	BytesUnused int64
 }
 
@@ -44,21 +48,23 @@ type infoConfig struct{ exact bool }
 // InfoOption configures an Info call.
 type InfoOption func(*infoConfig)
 
-// WithInfoExact makes Info run a prune dry run to fill BytesUnused. That
-// reads every snapshot's trees and every index, holds the exclusive lock like
-// Prune and reports progress as a Prune does.
+// WithInfoExact makes Info run a prune dry run to fill BytesFreed and
+// BytesUnused. That reads every snapshot's trees and every index, holds the
+// exclusive lock like Prune and reports progress as a Prune does.
 func WithInfoExact() InfoOption { return func(c *infoConfig) { c.exact = true } }
 
 // Info reports how many snapshots the repository holds, how many bytes they
 // cover and how much the repository stores per namespace. It lists every
-// namespace and reads the snapshot manifests, no pack or index object. With
-// WithInfoExact it adds the unused bytes a prune dry run finds.
+// namespace and reads the snapshot manifests, no pack or index object. A
+// manifest deleted while Info runs is left out. With WithInfoExact it adds
+// the unused bytes a prune dry run finds.
 func (r *Repository) Info(ctx context.Context, opts ...InfoOption) (*RepositoryInfo, error) {
 	cfg := &infoConfig{}
 	for _, o := range opts {
 		o(cfg)
 	}
 	progress := nopProgress
+	var ownLock string
 	if cfg.exact {
 		progress = r.observer(OperationPrune, nil)
 		progress(ProgressEvent{Phase: PhaseLoad})
@@ -69,26 +75,32 @@ func (r *Repository) Info(ctx context.Context, opts ...InfoOption) (*RepositoryI
 			return nil, err
 		}
 		defer lock.release(ctx)
+		ownLock = lock.name
 	}
 
-	info := &RepositoryInfo{Exact: cfg.exact}
-	err := r.backend.List(ctx, SnapshotFile, func(b BlobInfo) error {
-		m, err := r.loadManifest(ctx, SnapshotID(b.Name))
-		if err != nil {
-			return fmt.Errorf("snapshot %s: %w", b.Name, err)
-		}
-		info.Snapshots++
-		info.TotalSize += m.Stats.TotalSize
-		info.Stored.Snapshots += b.Size
-		return nil
-	})
+	manifests, err := r.readManifests(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list snapshots: %w", err)
+		return nil, err
 	}
+	info := &RepositoryInfo{Exact: cfg.exact, Snapshots: len(manifests)}
+	for _, m := range manifests {
+		info.TotalSize += m.Stats.TotalSize
+	}
+	if cfg.exact {
+		res, err := r.runGC(ctx, manifests, true, progress)
+		if err != nil {
+			return nil, err
+		}
+		info.BytesFreed, info.BytesUnused = res.BytesFreed, res.BytesUnused
+	}
+
+	// Listed after the dry run, which may store the lost-pack marker; the
+	// lock Info holds itself is left out.
 	sizes := []struct {
 		t   HandleType
 		sum *int64
 	}{
+		{SnapshotFile, &info.Stored.Snapshots},
 		{DataPackFile, &info.Stored.DataPacks},
 		{TreePackFile, &info.Stored.TreePacks},
 		{DataIndexFile, &info.Stored.Indexes},
@@ -100,20 +112,15 @@ func (r *Repository) Info(ctx context.Context, opts ...InfoOption) (*RepositoryI
 	}
 	for _, s := range sizes {
 		err := r.backend.List(ctx, s.t, func(b BlobInfo) error {
+			if s.t == LockFile && b.Name == ownLock {
+				return nil
+			}
 			*s.sum += b.Size
 			return nil
 		})
 		if err != nil {
 			return nil, fmt.Errorf("list %s: %w", s.t, err)
 		}
-	}
-
-	if cfg.exact {
-		res, err := r.runGC(ctx, true, progress)
-		if err != nil {
-			return nil, err
-		}
-		info.BytesUnused = res.BytesUnused
 	}
 	return info, nil
 }

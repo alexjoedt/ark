@@ -547,7 +547,11 @@ func (r *Repository) Prune(ctx context.Context, opts ...PruneOption) (*PruneResu
 	}
 	defer lock.release(ctx)
 
-	return r.runGC(ctx, cfg.dryRun, progress)
+	manifests, err := r.readManifests(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("gc: failed to list manifests: %w", err)
+	}
+	return r.runGC(ctx, manifests, cfg.dryRun, progress)
 }
 
 // RebuildIndex replaces the index of the repository with what the stored

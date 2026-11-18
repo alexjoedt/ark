@@ -18,10 +18,10 @@ func infoCommand() *cli.Command {
    Counts the snapshots, sums the size of the files they cover (not deduplicated:
    a file in ten snapshots counts ten times) and lists what the repository stores
    per kind of object. Reads the snapshot list and no data. --exact adds the bytes
-   no snapshot uses, from a prune dry run: it reads every tree and index and
-   takes the exclusive lock.`,
+   no snapshot uses and how many of them a prune frees, from a prune dry run: it
+   reads every tree and index and takes the exclusive lock.`,
 		Flags: []cli.Flag{
-			&cli.BoolFlag{Name: "exact", Usage: "add the unused bytes (prune dry run, exclusive lock)"},
+			&cli.BoolFlag{Name: "exact", Usage: "add the unused bytes and what a prune frees (prune dry run, exclusive lock)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			repo, err := openRepo(ctx, cmd)
@@ -65,13 +65,18 @@ func printInfo(p *out.Printer, info *ark.RepositoryInfo) error {
 			},
 		}
 		if info.Exact {
+			v["bytes_freed"] = info.BytesFreed
 			v["bytes_unused"] = info.BytesUnused
 		}
 		return p.JSON(v)
 	}
 	ratio := "-"
 	if st.Total() > 0 {
-		ratio = fmt.Sprintf("%.1fx", float64(info.TotalSize)/float64(st.Total()))
+		r := float64(info.TotalSize) / float64(st.Total())
+		ratio = fmt.Sprintf("%.1fx", r)
+		if r > 0 && r < 0.05 {
+			ratio = "<0.1x"
+		}
 	}
 	rows := [][]string{
 		{"Snapshots:", out.Count(info.Snapshots)},
@@ -86,7 +91,10 @@ func printInfo(p *out.Printer, info *ark.RepositoryInfo) error {
 		{"Ratio:", ratio + " (total size over stored)"},
 	}
 	if info.Exact {
-		rows = append(rows, []string{"Unused:", out.Bytes(info.BytesUnused)})
+		rows = append(rows, []string{
+			"Unused:",
+			out.Bytes(info.BytesFreed+info.BytesUnused) + " (a prune frees " + out.Bytes(info.BytesFreed) + ")",
+		})
 	}
 	p.Table(nil, rows)
 	return nil

@@ -67,13 +67,12 @@ type prunePlan struct {
 // left over. A kill before it leaves blobs listed in an old pack and a new
 // one, of which the next prune keeps the new one (liveCopy), once it has read
 // it (reads).
-func (r *Repository) runGC(ctx context.Context, dryRun bool, progress ProgressFunc) (*PruneResult, error) {
+//
+// manifests are all of the repository's, read under the exclusive lock.
+func (r *Repository) runGC(
+	ctx context.Context, manifests []*manifest, dryRun bool, progress ProgressFunc,
+) (*PruneResult, error) {
 	logger := r.logger.With("component", "gc")
-
-	manifests, err := r.readManifests(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("gc: failed to list manifests: %w", err)
-	}
 
 	// A snapshot whose tree cannot be read stops the prune: an incomplete
 	// live set would delete its objects.

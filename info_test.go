@@ -96,11 +96,50 @@ func TestInfoReportsSnapshotsAndStoredSizes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Info exact: %v", err)
 	}
-	if !exact.Exact || exact.BytesUnused == 0 || exact.BytesUnused != dry.BytesUnused {
-		t.Errorf("exact: Exact %v, BytesUnused %d, want the dry run's %d (non-zero)",
-			exact.Exact, exact.BytesUnused, dry.BytesUnused)
+	if !exact.Exact || exact.BytesUnused == 0 || exact.BytesUnused != dry.BytesUnused ||
+		exact.BytesFreed != dry.BytesFreed {
+		t.Errorf("exact: Exact %v, BytesUnused %d, BytesFreed %d; want the dry run's %d (non-zero), %d",
+			exact.Exact, exact.BytesUnused, exact.BytesFreed, dry.BytesUnused, dry.BytesFreed)
+	}
+	if exact.Stored != info.Stored {
+		t.Errorf("exact Stored = %+v, want the plain call's %+v", exact.Stored, info.Stored)
 	}
 	if exclusive != 1 {
 		t.Errorf("exact Info took %d exclusive locks, want 1", exclusive)
+	}
+}
+
+// ghostSnapshot lists a snapshot whose manifest is gone, as a forget that
+// deletes it between the listing and the read leaves it.
+type ghostSnapshot struct{ ark.Backend }
+
+func (b ghostSnapshot) List(ctx context.Context, t ark.HandleType, fn func(ark.BlobInfo) error) error {
+	if t == ark.SnapshotFile {
+		if err := fn(ark.BlobInfo{Name: strings.Repeat("0", 64), Size: 1}); err != nil {
+			return err
+		}
+	}
+	return b.Backend.List(ctx, t, fn)
+}
+
+func TestInfoSkipsManifestDeletedWhileListing(t *testing.T) {
+	ctx := context.Background()
+	b := newOpCountingBackend()
+	if err := ark.Init(ctx, b, testPassword); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	repo, err := ark.Open(ctx, ghostSnapshot{b}, testPassword)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	mustBackup(t, repo, smallFiles("kept", 3))
+
+	info, err := repo.Info(ctx)
+	if err != nil {
+		t.Fatalf("Info: %v", err)
+	}
+	if info.Snapshots != 1 {
+		t.Errorf("Snapshots = %d, want 1", info.Snapshots)
 	}
 }

@@ -37,6 +37,7 @@ func checkInfo(t *testing.T, repo string) {
 		StoredSize  int64            `json:"stored_size"`
 		Stored      map[string]int64 `json:"stored"`
 		BytesUnused *int64           `json:"bytes_unused"`
+		BytesFreed  *int64           `json:"bytes_freed"`
 	}
 	for _, exact := range []bool{false, true} {
 		args := []string{"--json", "-r", repo, "info"}
@@ -61,8 +62,9 @@ func checkInfo(t *testing.T, repo string) {
 		if len(got.Stored) != 6 || got.Stored["datapacks"] == 0 || got.Stored["keys"] == 0 || sum != got.StoredSize {
 			t.Errorf("%v: stored %v, stored_size %d", args, got.Stored, got.StoredSize)
 		}
-		if (got.BytesUnused != nil) != exact {
-			t.Errorf("%v: bytes_unused present %v, want %v", args, got.BytesUnused != nil, exact)
+		if (got.BytesUnused != nil) != exact || (got.BytesFreed != nil) != exact {
+			t.Errorf("%v: bytes_unused present %v, bytes_freed present %v, want %v",
+				args, got.BytesUnused != nil, got.BytesFreed != nil, exact)
 		}
 
 		code, stdout = runCapture(t, args[1:]...)
