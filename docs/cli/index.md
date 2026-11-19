@@ -20,7 +20,13 @@ neither a repository nor a password.
 | Form | Backend |
 |---|---|
 | `/srv/ark` or `local:///srv/ark` | a local directory |
-| `sftp://user@host:22/srv/ark` | a directory over SFTP |
+| `sftp://host/srv/ark` | a directory over SFTP, user and port from `~/.ssh/config` or the defaults (current user, 22) |
+| `sftp://user@host/srv/ark` | a directory over SFTP as `user`, port from `~/.ssh/config` or 22 |
+| `sftp://user@host:2222/srv/ark` | user and port in the URI |
+
+The path after the host is absolute on the server: `sftp://host/srv/ark` is `/srv/ark`, not a path
+below the login directory. There is no scp form: `host:path` names a local directory and
+`sftp:host:/path` is rejected, so write `sftp://host/path`.
 
 An SFTP repository takes its non-secret options as query parameters: `known_hosts=FILE` (default
 `~/.ssh/known_hosts`), `identity=FILE` and `insecure=1`, which skips the host key check. Secrets never
