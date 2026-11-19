@@ -26,8 +26,9 @@ show the last snapshot of each volume.
 | `sftp://user@host:2222/srv/ark` | user and port in the URI |
 
 The path after the host is absolute on the server: `sftp://host/srv/ark` is `/srv/ark`, not a path
-below the login directory. There is no scp form: `host:path` names a local directory and
-`sftp:host:/path` is rejected, so write `sftp://host/path`.
+below the login directory. There is no scp form: `host:path`, `user@host:path` and `sftp:host:/path` are rejected, so write
+`sftp://host/path`. A colon before the first `/` makes a location remote, so a local path that
+contains a colon needs a slash in front of it, such as `./host:path` or `/srv/a:b`.
 
 An SFTP repository takes its non-secret options as query parameters: `known_hosts=FILE` (default
 `~/.ssh/known_hosts`), `identity=FILE` and `insecure=1`, which skips the host key check. Secrets never

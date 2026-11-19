@@ -22,7 +22,7 @@ hosts, or the same name as a file source and as a Docker volume, are different s
 - **Parent.** A backup takes the newest snapshot of its series as its parent and reuses the files
   that did not change. A snapshot of another host or source type is never taken on its own.
   `--parent <id>` names one explicitly; its files are used when type and source name match, the host
-  is not checked.
+  is not checked. When the parent cannot be used, the backup reads every file and records no parent.
 - **Forget.** A keep policy (`--keep-daily`, `--keep-last` and the others) applies once per series
   among the snapshots the filters match. `ark forget --keep-last 1` without a filter keeps the
   newest snapshot of every series, so one machine cannot remove another machine's last backup.

@@ -2,6 +2,7 @@ package arkuri
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -35,6 +36,31 @@ func TestOpenBarePath(t *testing.T) {
 func TestOpenLocalURI(t *testing.T) {
 	dir := t.TempDir()
 	openLocal(t, "local://"+dir, dir)
+}
+
+func TestOpenLocalPathWithAColon(t *testing.T) {
+	t.Chdir(t.TempDir())
+	abs := t.TempDir() + "/a:b"
+	openLocal(t, abs, abs)
+	openLocal(t, "./host:path", "./host:path")
+}
+
+func TestScpFormTouchesNoDisk(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	for _, s := range []string{"host:/srv/ark", "host:path", "user@host:path"} {
+		if _, ok := LocalPath(s); ok {
+			t.Errorf("LocalPath(%q) ok, want false", s)
+		}
+		if b, err := Open(t.Context(), s); err == nil {
+			_ = b.Close()
+			t.Errorf("Open(%q) succeeded", s)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 0 {
+		t.Errorf("working directory = %v, %v; want empty", entries, err)
+	}
 }
 
 func TestOpenRelativePath(t *testing.T) {
@@ -114,10 +140,16 @@ func TestOpenRejects(t *testing.T) {
 		{"sftp without path", "sftp://host", "needs a repository path"},
 		{"sftp without host", "sftp:///srv/ark", "needs a host"},
 		{"bad insecure value", "sftp://host/srv/ark?insecure=maybe", "want 1 or 0"},
-		{"scp form", "sftp:box:/home/ark-test", "write sftp://box/home/ark-test"},
-		{"scp form with user", "sftp:ark@box:srv/ark", "write sftp://ark@box/srv/ark"},
+		{"scp form", "sftp:box:/home/ark-test", "not a URI"},
+		{"scp form with user", "sftp:ark@box:srv/ark", "not a URI"},
 		{"sftp without slashes", "sftp:/srv/ark", "not a URI"},
 		{"local without slashes", "local:/srv/ark", "not a URI"},
+		{"scp host and absolute path", "host:/srv/ark", "scp form"},
+		{"scp host and relative path", "host:path", "scp form"},
+		{"scp user host and path", "user@host:path", "scp form"},
+		{"scp form with password", "ark:pw@box:srv", "scp form"},
+		{"scp empty host", ":repo", "scp form"},
+		{"scp ipv6 literal", "[::1]:/srv/ark", "scp form"},
 	}
 
 	for _, tc := range tests {
@@ -151,6 +183,8 @@ func TestOpenNeverEchoesAPassword(t *testing.T) {
 		"sftp://ark:hunter2@host/srv/ark",
 		"sftp://ark:hunter2@host:notaport/srv/ark",
 		"local://ark:hunter2@host/srv/ark",
+		"ark:hunter2@host:srv/ark",
+		"sftp:ark:hunter2@host:/srv/ark",
 	} {
 		b, err := Open(t.Context(), uri)
 		if err == nil {
