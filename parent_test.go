@@ -270,3 +270,42 @@ func TestBackupRefusesAZeroOrFutureTime(t *testing.T) {
 		t.Errorf("a refused backup left %d snapshots, %v", len(snaps), err)
 	}
 }
+
+// A snapshot names a parent only when the backup took files from it: a parent
+// of another source or one that cannot be loaded is read around and left out.
+func TestBackupRecordsOnlyAParentItUsed(t *testing.T) {
+	ctx := context.Background()
+	b := arkmem.New()
+	repo := openRepo(t, b)
+
+	other, err := repo.Backup(ctx, stubSource{name: "other", content: "one"})
+	if err != nil {
+		t.Fatalf("backup of the other source: %v", err)
+	}
+	foreign, err := repo.Backup(ctx, stubSource{name: "app", content: "one"}, ark.WithParent(other.ID))
+	if err != nil {
+		t.Fatalf("backup with a foreign parent: %v", err)
+	}
+	if foreign.ParentID != "" {
+		t.Errorf("a foreign parent was recorded: %q", foreign.ParentID)
+	}
+
+	used, err := repo.Backup(ctx, stubSource{name: "app", content: "two"})
+	if err != nil {
+		t.Fatalf("backup with a usable parent: %v", err)
+	}
+	if used.ParentID != foreign.ID {
+		t.Errorf("parent is %q, want the one the backup used, %q", used.ParentID, foreign.ID)
+	}
+
+	for _, name := range blobNames(t, repo, ark.TreeFile) {
+		deletePackOf(t, b, repo, ark.TreeFile, name)
+	}
+	broken, err := repo.Backup(ctx, stubSource{name: "app", content: "three"})
+	if err != nil {
+		t.Fatalf("backup with an unloadable parent: %v", err)
+	}
+	if broken.ParentID != "" {
+		t.Errorf("an unloadable parent was recorded: %q", broken.ParentID)
+	}
+}
