@@ -54,13 +54,8 @@ func findCommand() *cli.Command {
 				Labels: labels,
 			}
 			if lp := profileFrom(ctx); lp != nil && cmd.String("source") == "" && profileNamesSnapshots(lp) {
-				pf, err := lp.Filter()
-				if err != nil {
-					return exitcode.Usagef("profile %s: %w", lp.Name, err)
-				}
-				filter.Source = pf.Source
-				if !cmd.IsSet("type") {
-					filter.Type = pf.Type
+				if _, err := profileScope(cmd, lp, &filter); err != nil {
+					return err
 				}
 			}
 

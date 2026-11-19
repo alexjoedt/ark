@@ -114,7 +114,7 @@ func listVolumes(ctx context.Context, cmd *cli.Command) ([]arkdocker.VolumeInfo,
 	}
 	defer c.Close()
 
-	host, err := dockerSeriesHost(ctx, cmd, c)
+	host, err := dockerSeriesHost(ctx, cmd, c.DaemonName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("docker volumes: %w", err)
 	}
@@ -188,8 +188,13 @@ func hostFlag() cli.Flag {
 // hostname of the machine the volumes live on. That is this machine for a
 // local daemon and the daemon's own name for a remote one, so the same
 // volume name on two daemons is two series. A local daemon is not asked,
-// Docker Desktop names itself docker-desktop on every machine.
-func dockerSeriesHost(ctx context.Context, cmd *cli.Command, c *arkdocker.Client) (string, error) {
+// Docker Desktop names itself docker-desktop on every machine; daemonName is
+// called only for a remote one.
+func dockerSeriesHost(
+	ctx context.Context,
+	cmd *cli.Command,
+	daemonName func(context.Context) (string, error),
+) (string, error) {
 	if cmd.IsSet("host") {
 		return cmd.String("host"), checkHostFlag(cmd)
 	}
@@ -197,7 +202,7 @@ func dockerSeriesHost(ctx context.Context, cmd *cli.Command, c *arkdocker.Client
 		return lp.Backup.Host, nil
 	}
 	if remoteDaemon(dockerHost(ctx, cmd)) {
-		return c.DaemonName(ctx)
+		return daemonName(ctx)
 	}
 	h, err := os.Hostname()
 	if err != nil {
@@ -318,7 +323,7 @@ func dockerBackupCommand() *cli.Command {
 				defer repo.Close()
 				defer e.Close()
 
-				host, err := dockerSeriesHost(ctx, cmd, e.Client())
+				host, err := dockerSeriesHost(ctx, cmd, e.Client().DaemonName)
 				if err != nil {
 					return fmt.Errorf("docker backup %s: %w", volume, err)
 				}

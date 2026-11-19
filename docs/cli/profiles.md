@@ -47,7 +47,7 @@ forget:
 
 ```bash
 ark docker backup -P db         # backup.volume on db1's daemon, filed under the host db1
-ark snapshots -P db             # only the docker-volume snapshots of pgdata
+ark snapshots -P db             # the docker-volume snapshots of pgdata, from every host
 ark forget -P db --yes          # the policy on the pgdata series of host db1
 ```
 
@@ -82,7 +82,8 @@ the load.
   [Password](index.md#password).
 - The snapshot's source is the absolute `backup.path`, the name `ark backup <path>` stores, unless
   `backup.source` says otherwise; the profile's name never names snapshots. `ark forget -P`,
-  `ark snapshots -P` and `ark find -P` select that source, forget also only this host's snapshots. For
+  `ark snapshots -P` and `ark find -P` select that source's file snapshots, forget also only this
+  host's snapshots; `--source` replaces source and type, `--type` and `--host` the one they name. For
   a profile with neither `backup.source` nor `backup.path` `ark forget -P` exits 2, while
   `ark snapshots -P` and `ark find -P` search every snapshot. Two profiles of the same `backup.path`
   without `backup.source` share one series: each one's forget policy removes the other's snapshots
@@ -94,7 +95,7 @@ the load.
 - A profile with `backup.volume` selects the docker-volume series of that name, never a file series
   of the same name. `ark forget -P` takes the host `ark docker backup -P` files it under:
   `backup.host`, else this machine's hostname, and for a remote daemon in `$DOCKER_HOST` the
-  daemon's own name, which `forget` asks the daemon for. `backup.volume` excludes `backup.path` and
+  daemon's own name, which `forget` asks the daemon for unless `--host` names it. `backup.volume` excludes `backup.path` and
   `backup.source`; a remote `docker-host` needs `backup.host`.
 - `backup.label` sets labels as a map, `label: {app: docs}`; a `--label` flag adds to them and wins
   for a key in both. See [Labels](../LABELS.md).

@@ -75,6 +75,12 @@ func TestVolumeProfileSelectsItsSeries(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &res); err != nil || len(res.Remove) != 1 || res.Remove[0].ID != old {
 		t.Fatalf("forget -P db removes %+v, want only %s: %s (%v)", res.Remove, old, out, err)
 	}
+
+	// --source replaces the profile's series, its type included
+	code, out = runCapture(t, "--json", "forget", "-P", "db", "--source", "pgdata", "--dry-run")
+	if code != 0 || !strings.Contains(out, file) {
+		t.Fatalf("forget -P db --source pgdata: exit %d, want the file snapshot %s removed: %s", code, file, out)
+	}
 }
 
 // Without backup.host a remote $DOCKER_HOST files the volume under the
@@ -88,5 +94,9 @@ func TestVolumeProfileForgetAsksARemoteDaemon(t *testing.T) {
 	code, _, o := runCaptureAll(t, "forget", "-P", "db", "--dry-run")
 	if code != 1 || !strings.Contains(o, "127.0.0.1:1") {
 		t.Fatalf("exit %d, output %q: want exit 1 naming the daemon address", code, o)
+	}
+	// --host names the series, the daemon is not needed
+	if code, _, o := runCaptureAll(t, "forget", "-P", "db", "--host", "db1", "--dry-run"); code != 0 {
+		t.Fatalf("forget -P db --host db1: exit %d, output %q", code, o)
 	}
 }

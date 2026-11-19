@@ -29,27 +29,42 @@ func profileNamesSnapshots(lp *loadedProfile) bool {
 	return lp.Backup.Source != "" || lp.Backup.Path != "" || lp.Backup.Volume != ""
 }
 
-// profileFilter is the series the profile backs up: its source name and type,
-// and the host the backup files it under. For a volume profile on a remote
-// daemon without backup.host that is the daemon's name, as dockerSeriesHost
-// records it, so it takes a call to the daemon.
-func profileFilter(ctx context.Context, cmd *cli.Command, lp *loadedProfile) (ark.SnapshotFilter, error) {
+// profileScope narrows filter to the series the profile backs up, its source
+// name and type, unless --source names another source; --type still wins.
+// It returns the profile's filter.
+func profileScope(cmd *cli.Command, lp *loadedProfile, filter *ark.SnapshotFilter) (ark.SnapshotFilter, error) {
 	pf, err := lp.Filter()
 	if err != nil {
 		return pf, exitcode.Usagef("profile %s: %w", lp.Name, err)
 	}
-	if lp.Backup.Volume == "" || lp.Backup.Host != "" || !remoteDaemon(dockerHost(ctx, cmd)) {
-		return pf, nil
-	}
-	c, err := arkdocker.NewClient(dockerHost(ctx, cmd))
-	if err != nil {
-		return pf, fmt.Errorf("profile %s: %w", lp.Name, err)
-	}
-	defer c.Close()
-	if pf.Host, err = dockerSeriesHost(ctx, cmd, c); err != nil {
-		return pf, fmt.Errorf("profile %s: %w", lp.Name, err)
+	if cmd.String("source") == "" {
+		filter.Source = pf.Source
+		if !cmd.IsSet("type") {
+			filter.Type = pf.Type
+		}
 	}
 	return pf, nil
+}
+
+// profileHost is the host the profile's backups are filed under. For a
+// volume profile that is the host ark docker backup -P records, which is the
+// daemon's own name for a remote $DOCKER_HOST without backup.host.
+func profileHost(ctx context.Context, cmd *cli.Command, lp *loadedProfile, pf ark.SnapshotFilter) (string, error) {
+	if lp.Backup.Volume == "" {
+		return pf.Host, nil
+	}
+	host, err := dockerSeriesHost(ctx, cmd, func(ctx context.Context) (name string, err error) {
+		c, err := arkdocker.NewClient(dockerHost(ctx, cmd))
+		if err != nil {
+			return "", err
+		}
+		defer func() { err = errors.Join(err, c.Close()) }()
+		return c.DaemonName(ctx)
+	})
+	if err != nil {
+		return "", fmt.Errorf("profile %s: %w; set backup.host to select the series without the daemon", lp.Name, err)
+	}
+	return host, nil
 }
 
 // profileFrom returns the profile loaded for this run, nil without one.
