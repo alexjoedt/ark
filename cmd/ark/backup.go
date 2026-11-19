@@ -55,6 +55,10 @@ func backupCommand() *cli.Command {
 				return err
 			}
 			lp := profileFrom(ctx)
+			if lp != nil && lp.Backup.Volume != "" {
+				return exitcode.Usagef("profile %s backs up docker volume %s, use ark docker backup %s",
+					lp.Name, lp.Backup.Volume, profileArg(cmd))
+			}
 			eff := backupProfile(cmd, lp)
 			if cmd.NArg() > 1 || eff.Backup.Path == "" {
 				return exitcode.Usagef("usage: ark backup [options] <path>, or -P NAME with a backup.path")
@@ -159,10 +163,11 @@ func backupProfile(cmd *cli.Command, lp *loadedProfile) arkprofile.Profile {
 
 // checkOtherPath refuses a path on the command line that is not the profile's
 // backup.path unless --source names its snapshots: filed under the profile's
-// name, it would become the parent of the profile's next backup and fall
-// under the profile's forget policy.
+// backup.source, it would become the parent of the profile's next backup and
+// fall under the profile's forget policy. Without backup.source the other path
+// names its own snapshots, as a plain backup of it does.
 func checkOtherPath(cmd *cli.Command, lp *loadedProfile) error {
-	if lp == nil || cmd.NArg() != 1 || cmd.String("source") != "" {
+	if lp == nil || lp.Backup.Source == "" || cmd.NArg() != 1 || cmd.String("source") != "" {
 		return nil
 	}
 	arg, err := filepath.Abs(cmd.Args().First())

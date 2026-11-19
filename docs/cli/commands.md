@@ -61,7 +61,7 @@ Backs up the directory at `<path>` as one snapshot.
 |---|---|
 | `--tag TAG`, `-t` | add a tag, repeatable |
 | `--comment TEXT`, `-c` | free text stored with the snapshot |
-| `--source NAME`, `-s` | the source name, default the absolute path (with `-P` the profile's name) |
+| `--source NAME`, `-s` | the source name, default the absolute path (with `-P` `backup.source` if set) |
 | `--host NAME` | the host, default the machine's hostname |
 | `--label KEY=VALUE` | record a label, repeatable, the value may hold commas |
 | `--parent ID` | an explicit parent snapshot |
@@ -338,6 +338,10 @@ Each of these changed after v0.3.0. Builds up to v0.3.0:
   one more snapshot per rule than before.
 - Counted a snapshot dated in the future like any other, as restic does. It is now kept and used by
   no rule, and `ark forget` warns about it.
+- Named the snapshots of a profile without `backup.source` after the profile, not the absolute
+  `backup.path`. `ark forget -P` no longer selects such an old series, so it is never pruned, and the
+  first backup after the upgrade has no parent. Set `backup.source` to the profile's name to continue
+  the old series, or give it a policy of its own with `ark forget --source NAME`.
 
 The first `ark forget` after an upgrade can keep other snapshots than the last one did: run it once
 with `--dry-run`.
@@ -395,7 +399,8 @@ Removes stale locks. `--force` removes every lock, stale or not; make sure no ar
 
 ## docker
 
-Docker volumes live under `ark docker`. The daemon comes from `--docker-host ADDR` or `DOCKER_HOST`.
+Docker volumes live under `ark docker`. The daemon comes from `--docker-host ADDR`, else a
+profile's `docker-host`, else `DOCKER_HOST`.
 
 | Command | Purpose |
 |---|---|
@@ -417,10 +422,24 @@ ark docker restore <id>                # into the volume it came from
 ark docker restore <id> postgres_copy  # or into another one, created if missing
 ```
 
+With `-P NAME` (or `-f FILE`) of a profile with `backup.volume`, `ark docker backup` takes no volume
+argument: it backs up `backup.volume` on the profile's `docker-host`, with the profile's tags, labels,
+comment and `backup.host`, flags winning as for `ark backup`, and runs the profile's backup hooks
+around it. A volume argument other than `backup.volume` is a usage error, and so are
+`ark docker backup -P` on a profile with `backup.path` or `backup.source` and `ark backup -P` on a
+volume profile, which points to `ark docker backup -P`. `ark docker restore -P NAME <id>` restores
+into `backup.volume` unless a volume is given, and refuses a snapshot of another volume without one;
+`<id>` stays required.
+
+```bash
+ark docker backup -P db                # backup.volume of profile db, on its docker-host
+ark docker restore -P db <id>          # back into backup.volume
+```
+
 A volume is one [series](../SERIES.md) per host: the parent of a backup, `ark forget` and the LAST
 SNAPSHOT of `ark docker volumes` only see the snapshots of the same host. The host is this machine's
 hostname for a local daemon and the daemon's own name for a remote `--docker-host` (`tcp://`,
-`ssh://`), unless `--host` sets it. Volume snapshots written before the host was recorded have none:
+`ssh://`), unless `--host` or the `backup.host` of a volume or repository-only profile sets it. Volume snapshots written before the host was recorded have none:
 `ark docker volumes` shows them until the host has its own, and the first backup after the update has
 no parent and reads the volume once, unless `--parent <id>` names the last of them.
 

@@ -100,9 +100,10 @@ forget:
 	t.Setenv("ARK_REPOSITORY", other)
 
 	first := profileBackup(t, "-P", "docs")
-	if first.Name != "docs" || !slices.Equal(first.Tags, []string{"docs", "daily"}) ||
+	// the path names the snapshot, as a plain backup of it does
+	if first.Name != docs || !slices.Equal(first.Tags, []string{"docs", "daily"}) ||
 		!slices.Equal(first.Excludes, []string{"*.tmp"}) {
-		t.Fatalf("snapshot %+v, want name docs, tags [docs daily], excludes [*.tmp]", first)
+		t.Fatalf("snapshot %+v, want name %s, tags [docs daily], excludes [*.tmp]", first, docs)
 	}
 	if paths := lsPaths(t, shared, first.ID); slices.Contains(paths, "skip.tmp") {
 		t.Fatalf("excluded file stored: %q", paths)
@@ -136,11 +137,11 @@ forget:
 		t.Fatalf("removed %+v, want only the older docs snapshot %s", forget.Remove, first.ID)
 	}
 	list := snapshotsJSON(t, "-r", shared)
-	if got := names(list); !slices.Equal(got, []string{"docs", "photos", "photos"}) {
-		t.Fatalf("left %q, want one docs and both photos", got)
+	if got, want := names(list), []string{docs, photos, photos}; !slices.Equal(got, want) {
+		t.Fatalf("left %q, want one docs and both photos %q", got, want)
 	}
 	for _, s := range list {
-		if s.Name == "docs" && s.ID != second.ID {
+		if s.Name == docs && s.ID != second.ID {
 			t.Fatalf("kept %s, want the newer %s", s.ID, second.ID)
 		}
 	}
@@ -165,8 +166,8 @@ func TestProfileFlagsWin(t *testing.T) {
 	}
 
 	outside := writeProfile(t, t.TempDir(), "elsewhere", "repo: "+other+"\nbackup:\n  path: "+src+"\n")
-	if s := profileBackup(t, "-f", outside); s.Name != "elsewhere" {
-		t.Fatalf("-f snapshot named %q, want elsewhere", s.Name)
+	if s := profileBackup(t, "-f", outside); s.Name != src {
+		t.Fatalf("-f snapshot named %q, want %s", s.Name, src)
 	}
 	if code, _ := runCapture(t, "backup", "-P", "docs", "-f", outside); code != 2 {
 		t.Fatalf("-P with -f: exit %d, want 2", code)
@@ -186,10 +187,12 @@ func TestProfilePasswordOrder(t *testing.T) {
 		return p
 	}
 	right, wrong := pwFile("right.pw", "right"), pwFile("wrong.pw", "wrong")
-	withFile := writeProfile(t, dir, "file", "repo: "+repo+"\npassword-file: right.pw\n")
-	withEnv := writeProfile(t, dir, "env", "repo: "+repo+"\npassword-env: DOCS_PW\n")
-	bare := writeProfile(t, dir, "bare", "repo: "+repo+"\n")
-	insecure := writeProfile(t, dir, "insecure", "repo: "+repo+"\ninsecure-no-password: true\n")
+	// profiles with repository settings only: snapshots -P lists every snapshot
+	head := "repo: " + repo + "\n"
+	withFile := writeProfile(t, dir, "file", head+"password-file: right.pw\n")
+	withEnv := writeProfile(t, dir, "env", head+"password-env: DOCS_PW\n")
+	bare := writeProfile(t, dir, "bare", head)
+	insecure := writeProfile(t, dir, "insecure", head+"insecure-no-password: true\n")
 	t.Setenv("DOCS_PW", "right")
 
 	for _, tt := range []struct {
@@ -275,6 +278,23 @@ func TestProfileErrorsExit2(t *testing.T) {
 	if code, _ := runCapture(t, "backup", "-P", "../x"); code != 2 {
 		t.Errorf("-P ../x: exit %d, want 2", code)
 	}
+	// the profile's name never stands in for a source: forget refuses, snapshots
+	// and find do not narrow
+	held := initRepo(t)
+	writeProfile(t, dir, "nosrc", "repo: "+held+"\nforget:\n  keep-last: 1\n")
+	if code, out := runCapture(t, "backup", "-r", held, src); code != 0 {
+		t.Fatalf("backup %s: exit %d: %s", src, code, out)
+	}
+	if code, out := runCapture(t, "--json", "forget", "-P", "nosrc"); code != 2 ||
+		!strings.Contains(out, "backup.path, backup.source or backup.volume") {
+		t.Errorf("forget without a source: exit %d, want 2 naming both keys: %s", code, out)
+	}
+	if list := snapshotsJSON(t, "-P", "nosrc"); len(list) == 0 {
+		t.Errorf("snapshots -P nosrc listed nothing, want every snapshot")
+	}
+	if code, out := runCapture(t, "find", "-P", "nosrc", "x"); code != 0 {
+		t.Errorf("find -P nosrc: exit %d: %s", code, out)
+	}
 
 	// a failing run-before skips the backup and runs run-after-fail
 	hooks := writeProfile(t, dir, "hooks", "repo: "+repo+"\nbackup:\n  path: "+src+`
@@ -311,20 +331,29 @@ forget:
   run-after: touch forgot.txt
 `)
 
-	// another directory is not filed under the profile's name
-	if code, _ := runCapture(t, "backup", "-P", "docs", other); code != 2 {
-		t.Fatalf("backup -P docs with another path: exit %d, want 2", code)
+	// without backup.source another directory names its own snapshots, as a
+	// plain backup of it would, and stays out of the profile's scope
+	if s := profileBackup(t, "-P", "docs", other); s.Name != other {
+		t.Fatalf("backup -P docs %s: snapshot named %q, want the path", other, s.Name)
 	}
-	if s := profileBackup(t, "-P", "docs", "--source", "other", other); s.Name != "other" {
+	if list := snapshotsJSON(t, "-P", "docs"); len(list) != 0 {
+		t.Fatalf("snapshots -P docs listed %+v, want none of the other path", list)
+	}
+	// with backup.source it would be filed under the profile's source
+	writeProfile(t, dir, "named", "repo: "+repo+"\nbackup:\n  path: "+docs+"\n  source: named\n")
+	if code, _ := runCapture(t, "backup", "-P", "named", other); code != 2 {
+		t.Fatalf("backup -P named with another path: exit %d, want 2", code)
+	}
+	if s := profileBackup(t, "-P", "named", "--source", "other", other); s.Name != "other" {
 		t.Fatalf("snapshot named %q, want other", s.Name)
+	}
+	// an empty --source keeps the profile's source scope
+	if code, _ := runCapture(t, "backup", "-P", "named", "--source", "", other); code != 2 {
+		t.Fatalf("backup -P named --source '' with another path: exit %d, want 2", code)
 	}
 	own := profileBackup(t, "-P", "docs")
 	foreign := profileBackup(t, "-r", repo, "--host", "elsewhere", other)
 
-	// an empty --source keeps the profile's source scope
-	if code, _ := runCapture(t, "backup", "-P", "docs", "--source", "", other); code != 2 {
-		t.Fatalf("backup -P docs --source '' with another path: exit %d, want 2", code)
-	}
 	if code, out := runCapture(t, "--json", "snapshots", "-P", "docs", "-s", ""); code != 0 ||
 		strings.Contains(out, foreign.ID) || !strings.Contains(out, own.ID) {
 		t.Fatalf("snapshots -P docs -s '': exit %d, %s", code, out)
@@ -373,7 +402,7 @@ func TestProfileShowSources(t *testing.T) {
 	t.Setenv("ARK_REPOSITORY", "/env/repo")
 	t.Setenv("ARK_INSECURE_NO_PASSWORD", "")
 	t.Setenv("SHOW_SECRET", "hunter2-secret")
-	writeProfile(t, dir, "docs", "password-env: SHOW_SECRET\nlock-wait: 10s\nbackup:\n  path: /data\n  tag: [a, b]\n")
+	writeProfile(t, dir, "docs", "password-env: SHOW_SECRET\nlock-wait: 10s\nbackup:\n  path: /data/\n  tag: [a, b]\n")
 
 	type result struct {
 		Profile string
@@ -389,7 +418,7 @@ func TestProfileShowSources(t *testing.T) {
 			t.Fatalf("the password leaked: %s", out)
 		}
 		var r result
-		if err := json.Unmarshal([]byte(out), &r); err != nil || r.Profile != "docs" {
+		if err := json.Unmarshal([]byte(out), &r); err != nil || r.Profile == "" {
 			t.Fatalf("not a show result: %q", out)
 		}
 		got := map[string][2]string{}
@@ -403,8 +432,8 @@ func TestProfileShowSources(t *testing.T) {
 		"concurrency":   {"3", "cli"},
 		"lock-wait":     {"10s", "profile"},
 		"backup.tag":    {"a, b", "profile"},
-		"backup.path":   {"/data", "profile"},
-		"backup.source": {"docs", "default"},
+		"backup.path":   {"/data/", "profile"},
+		"backup.source": {"/data", "default"},
 		"password":      {"variable SHOW_SECRET", "profile"},
 		"forget.prune":  {"false", "default"},
 	}
@@ -420,14 +449,34 @@ func TestProfileShowSources(t *testing.T) {
 			}
 		}
 	}
-	// every forget key of a profile is shown, so one added to arkprofile.Forget cannot miss it
+	// every backup and forget key of a profile is shown, so one added to
+	// arkprofile cannot miss it
 	got := show("profile", "show", "docs")
-	ft := reflect.TypeFor[arkprofile.Forget]()
-	for f := range ft.Fields() {
-		if key, _, _ := strings.Cut(f.Tag.Get("yaml"), ","); key != "" {
-			if _, ok := got["forget."+key]; !ok {
-				t.Errorf("profile show lacks forget.%s", key)
+	for prefix, st := range map[string]reflect.Type{
+		"":        reflect.TypeFor[arkprofile.Profile](),
+		"backup.": reflect.TypeFor[arkprofile.Backup](),
+		"forget.": reflect.TypeFor[arkprofile.Forget](),
+	} {
+		for f := range st.Fields() {
+			key, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
+			if key == "" || key == "-" || key == "backup" || key == "forget" || key == "password-file" ||
+				key == "password-env" || key == "insecure-no-password" {
+				continue
 			}
+			if _, ok := got[prefix+key]; !ok {
+				t.Errorf("profile show lacks %s%s", prefix, key)
+			}
+		}
+	}
+	writeProfile(t, dir, "db", "docker-host: unix:///run/docker.sock\nbackup:\n  volume: pgdata\n")
+	vol := show("profile", "show", "db")
+	for k, w := range map[string][2]string{
+		"docker-host":   {"unix:///run/docker.sock", "profile"},
+		"backup.volume": {"pgdata", "profile"},
+		"backup.source": {"", "default"},
+	} {
+		if vol[k] != w {
+			t.Errorf("volume profile: %s = %v, want %v", k, vol[k], w)
 		}
 	}
 	t.Setenv("ARK_PASSWORD", "x")

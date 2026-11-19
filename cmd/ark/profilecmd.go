@@ -191,6 +191,10 @@ func profileBool(key string, b bool) profileValue {
 func effectiveValues(root *cli.Command, lp *loadedProfile) []profileValue {
 	host, _ := os.Hostname()
 	b, f := lp.Backup, lp.Forget
+	var source string
+	if pf, err := lp.Filter(); err == nil && b.Volume == "" {
+		source = pf.Source
+	}
 	repo, repoFrom := repoSetting(root, lp)
 	lockWait, lockWaitFrom := lockWaitSetting(root, lp)
 	conc, concFrom := concurrencySetting(root, lp)
@@ -199,14 +203,16 @@ func effectiveValues(root *cli.Command, lp *loadedProfile) []profileValue {
 		passwordValue(root, lp.Profile),
 		{"lock-wait", lockWait.String(), lockWaitFrom},
 		{"concurrency", strconv.Itoa(conc), concFrom},
+		profileOnly("docker-host", lp.DockerHost, ""),
 		profileOnly("backup.path", b.Path, ""),
+		profileOnly("backup.volume", b.Volume, ""),
 		profileOnly("backup.tag", strings.Join(b.Tags, ", "), ""),
 		profileOnly("backup.exclude", strings.Join(b.Excludes, ", "), ""),
 		profileOnly("backup.exclude-file", strings.Join(b.ExcludeFiles, ", "), ""),
 		profileBool("backup.exclude-cloud-files", b.ExcludeCloudFiles),
 		profileOnly("backup.host", b.Host, host),
 		profileOnly("backup.comment", b.Comment, ""),
-		profileOnly("backup.source", b.Source, lp.Name),
+		profileOnly("backup.source", b.Source, source),
 		profileOnly("backup.label", labelList(b.Labels), ""),
 	}
 	values = append(values, hookValues("backup", b.Hooks)...)

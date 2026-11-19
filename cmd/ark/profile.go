@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	ark "github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/arkdocker"
 	"github.com/alexjoedt/ark/arkprofile"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
 	"github.com/urfave/cli/v3"
@@ -20,6 +21,50 @@ type profileKey struct{}
 type loadedProfile struct {
 	*arkprofile.Profile
 	dir string
+}
+
+// profileNamesSnapshots reports whether the profile names a source, so that
+// snapshots and find narrow to it; forget refuses a profile that names none.
+func profileNamesSnapshots(lp *loadedProfile) bool {
+	return lp.Backup.Source != "" || lp.Backup.Path != "" || lp.Backup.Volume != ""
+}
+
+// profileScope narrows filter to the series the profile backs up, its source
+// name and type, unless --source names another source; --type still wins.
+// It returns the profile's filter.
+func profileScope(cmd *cli.Command, lp *loadedProfile, filter *ark.SnapshotFilter) (ark.SnapshotFilter, error) {
+	pf, err := lp.Filter()
+	if err != nil {
+		return pf, exitcode.Usagef("profile %s: %w", lp.Name, err)
+	}
+	if cmd.String("source") == "" {
+		filter.Source = pf.Source
+		if !cmd.IsSet("type") {
+			filter.Type = pf.Type
+		}
+	}
+	return pf, nil
+}
+
+// profileHost is the host the profile's backups are filed under. For a
+// volume profile that is the host ark docker backup -P records, which is the
+// daemon's own name for a remote $DOCKER_HOST without backup.host.
+func profileHost(ctx context.Context, cmd *cli.Command, lp *loadedProfile, pf ark.SnapshotFilter) (string, error) {
+	if lp.Backup.Volume == "" {
+		return pf.Host, nil
+	}
+	host, err := dockerSeriesHost(ctx, cmd, func(ctx context.Context) (name string, err error) {
+		c, err := arkdocker.NewClient(dockerHost(ctx, cmd))
+		if err != nil {
+			return "", err
+		}
+		defer func() { err = errors.Join(err, c.Close()) }()
+		return c.DaemonName(ctx)
+	})
+	if err != nil {
+		return "", fmt.Errorf("profile %s: %w; set backup.host to select the series without the daemon", lp.Name, err)
+	}
+	return host, nil
 }
 
 // profileFrom returns the profile loaded for this run, nil without one.
@@ -76,6 +121,15 @@ func loadProfileFile(file string) (*loadedProfile, error) {
 		return nil, fmt.Errorf("profile %s: %w", file, err)
 	}
 	return &loadedProfile{p, filepath.Dir(abs)}, nil
+}
+
+// profileArg is the -P NAME or -f FILE the profile was given with, for a
+// message that names the command to run instead.
+func profileArg(cmd *cli.Command) string {
+	if name := cmd.Root().String("profile"); name != "" {
+		return "-P " + name
+	}
+	return "-f " + cmd.Root().String("profile-file")
 }
 
 // profileDir is $XDG_CONFIG_HOME/ark/profiles, else ~/.config/ark/profiles,

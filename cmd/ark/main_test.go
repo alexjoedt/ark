@@ -781,10 +781,9 @@ func (volumeSource) Walk(_ context.Context, fn ark.WalkFunc) error {
 		func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(body)), nil })
 }
 
-func TestRestoreRefusesVolumeSnapshot(t *testing.T) {
-	repo := initRepo(t)
-	t.Setenv("ARK_REPOSITORY", "")
-
+// volumeSnapshot writes a volumeSource snapshot into repo and returns its id.
+func volumeSnapshot(t *testing.T, repo string) string {
+	t.Helper()
 	b, err := arklocal.New(repo)
 	if err != nil {
 		t.Fatal(err)
@@ -798,9 +797,16 @@ func TestRestoreRefusesVolumeSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return string(snap.ID)
+}
+
+func TestRestoreRefusesVolumeSnapshot(t *testing.T) {
+	repo := initRepo(t)
+	t.Setenv("ARK_REPOSITORY", "")
+	id := volumeSnapshot(t, repo)
 
 	dest := filepath.Join(t.TempDir(), "out")
-	code, out := runCapture(t, "--json", "-r", repo, "restore", string(snap.ID), dest)
+	code, out := runCapture(t, "--json", "-r", repo, "restore", id, dest)
 	if code != 1 || !strings.Contains(out, "ark docker restore") || !strings.Contains(out, "tar x") {
 		t.Fatalf("exit %d, stdout %q", code, out)
 	}
@@ -945,6 +951,66 @@ func TestDockerRoundTrip(t *testing.T) {
 		dockerclient.VolumeInspectOptions{},
 	); err != nil {
 		t.Fatalf("restored volume missing: %v", err)
+	}
+
+	// a profile names the volume, the daemon and the snapshot's settings;
+	// DOCKER_HOST points nowhere, so only the profile's docker-host works
+	dir := profileDirFor(t)
+	marker := filepath.Join(t.TempDir(), "hooks")
+	writeProfile(t, dir, "vol", "repo: "+repo+"\ndocker-host: "+moby.DaemonHost()+`
+backup:
+  volume: `+vol+`
+  host: profile-host
+  tag: [p]
+  comment: from the profile
+  label:
+    app: db
+  run-before: echo before >> `+marker+`
+  run-after: echo after >> `+marker+`
+`)
+	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:1")
+	code, out = runCapture(t, "--json", "docker", "backup", "-P", "vol", "--label", "env=prod")
+	if code != 0 {
+		t.Fatalf("docker backup -P exit %d: %s", code, out)
+	}
+	var ps struct {
+		ID         string            `json:"id"`
+		SourceName string            `json:"source_name"`
+		Host       string            `json:"host"`
+		Tags       []string          `json:"tags"`
+		Comment    string            `json:"comment"`
+		Labels     map[string]string `json:"labels"`
+	}
+	if err := json.Unmarshal([]byte(out), &ps); err != nil || ps.SourceName != vol || ps.Host != "profile-host" ||
+		!slices.Equal(ps.Tags, []string{"p"}) || ps.Comment != "from the profile" ||
+		ps.Labels["app"] != "db" || ps.Labels["env"] != "prod" {
+		t.Fatalf("docker backup -P: stdout %q, %v", out, err)
+	}
+	if b, err := os.ReadFile(marker); err != nil || string(b) != "before\nafter\n" {
+		t.Fatalf("hooks wrote %q, %v", b, err)
+	}
+	code, out = runCapture(t, "--json", "docker", "backup", "-P", "vol", "-t", "f", "-c", "", "--host", "h2")
+	if code != 0 || !strings.Contains(out, `"host": "h2"`) || !strings.Contains(out, `"tags": [`+"\n"+`    "f"`) ||
+		strings.Contains(out, "from the profile") {
+		t.Fatalf("flags over the profile: exit %d, stdout %q", code, out)
+	}
+	code, out = runCapture(t, "--json", "docker", "restore", "-P", "vol", "-n", ps.ID)
+	if code != 0 || !strings.Contains(out, `"volume": "`+vol+`"`) {
+		t.Fatalf("docker restore -P dry run: exit %d, stdout %q", code, out)
+	}
+	// a profile of another volume refuses the snapshot unless the volume is named
+	writeProfile(
+		t,
+		dir,
+		"copy",
+		"repo: "+repo+"\ndocker-host: "+moby.DaemonHost()+"\nbackup:\n  volume: "+vol+"-copy\n",
+	)
+	if code, out = runCapture(t, "docker", "restore", "-P", "copy", "-n", ps.ID); code != 2 {
+		t.Fatalf("docker restore -P of another volume: exit %d, stdout %q", code, out)
+	}
+	code, out = runCapture(t, "--json", "docker", "restore", "-P", "copy", "-n", ps.ID, vol+"-copy")
+	if code != 0 || !strings.Contains(out, `"volume": "`+vol+`-copy"`) {
+		t.Fatalf("docker restore -P into a named volume: exit %d, stdout %q", code, out)
 	}
 }
 

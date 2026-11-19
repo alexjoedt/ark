@@ -259,6 +259,8 @@ if p.Forget.Prune {
 }
 ```
 
+`Source` names the snapshots `Backup.Source`, else the absolute `Backup.Path`, the name `arkfs.NewSource` gives that path, and `Filter` selects the same source; `Name` names no snapshots.
+
 The counted rules of an `ark.ForgetPolicy`, `KeepLast` to `KeepYearly`, are of type `ark.KeepCount`: a number, or `ark.Unlimited` to keep every snapshot (`KeepLast`) or the newest of every period. `Forget` refuses any other negative count with `ark.ErrInvalidPolicy`. `ark.ParseKeepCount` reads the text form a profile and the CLI use, a whole number or `unlimited`. In JSON a count is a number and `ark.Unlimited` the string `"unlimited"`.
 
 `KeepWithin` is an `ark.Within`, a window of calendar `Years`, `Months` and `Days` plus `Hours`: `ark.Within{Days: 30}` keeps every snapshot of a series less than 30 days older than its newest one that is not dated in the future. Years, months and days are stepped back on the calendar of the forget zone, hours are elapsed time. `ark.ParseWithin` reads the text form a profile and the CLI use, `30d`, `72h` or `1y6m`, where `m` counts months; earlier versions took a `time.Duration`. `Forget` refuses a negative number, more than 11 months (18 months are `ark.Within{Years: 1, Months: 6}`) and a number above a million with `ark.ErrInvalidPolicy`, the bounds of the text form. In JSON a window is that text, `"30d"`.

@@ -12,20 +12,30 @@ import (
 	"github.com/alexjoedt/ark/arkuri"
 )
 
-// sourceName is the source name of the profile's snapshots: backup.source,
-// else the profile's name, else the absolute backup.path as arkfs names it.
-func (p *Profile) sourceName() string {
+// sourceTypeDockerVolume is arkdocker.SourceTypeDockerVolume, which
+// arkprofile cannot import without the Docker SDK; a test in cmd/ark pins the
+// two together.
+const sourceTypeDockerVolume ark.SourceType = "docker-volume"
+
+// sourceName is the source name of the profile's snapshots: backup.volume,
+// else backup.source, else the absolute backup.path as [arkfs.NewSource]
+// names it, the name a plain backup of that path stores. None set gives "".
+// It cannot ask arkfs, which needs the directory to exist, and a forget must
+// work without it; TestSourceNames pins the two names together.
+func (p *Profile) sourceName() (string, error) {
 	switch {
+	case p.Backup.Volume != "":
+		return p.Backup.Volume, nil
 	case p.Backup.Source != "":
-		return p.Backup.Source
-	case p.Name != "", p.Backup.Path == "":
-		return p.Name
+		return p.Backup.Source, nil
+	case p.Backup.Path == "":
+		return "", nil
 	}
 	abs, err := filepath.Abs(p.Backup.Path)
 	if err != nil {
-		return p.Backup.Path
+		return "", fmt.Errorf("resolve backup.path %q: %w", p.Backup.Path, err)
 	}
-	return abs
+	return abs, nil
 }
 
 // host is the host the profile's snapshots record: backup.host, else the
@@ -39,14 +49,21 @@ func (p *Profile) host() string {
 }
 
 // Source returns the arkfs source of backup.path with the profile's excludes,
-// exclude files and cloud-file option, named backup.source, else the profile's
-// name, else the absolute backup.path.
+// exclude files and cloud-file option, named backup.source, else the absolute
+// backup.path. A volume profile has no arkfs source and fails; its caller
+// builds the source with arkdocker.
 func (p *Profile) Source() (ark.Source, error) {
 	b := p.Backup
+	if b.Volume != "" {
+		return nil, invalidf("backup.volume %s: a docker volume source comes from arkdocker, not from Source", b.Volume)
+	}
 	if b.Path == "" {
 		return nil, invalidf("backup.path is empty")
 	}
-	opts := []arkfs.SourceOption{arkfs.WithName(p.sourceName())}
+	var opts []arkfs.SourceOption
+	if b.Source != "" {
+		opts = append(opts, arkfs.WithName(b.Source))
+	}
 	if len(b.Excludes) > 0 {
 		opts = append(opts, arkfs.WithExclude(b.Excludes...))
 	}
@@ -61,7 +78,7 @@ func (p *Profile) Source() (ark.Source, error) {
 
 // BackupOptions returns the tags, labels, host and comment of the backup section. The
 // host defaults to the machine's hostname, so machines sharing a repository
-// and a profile name keep apart: each one's parent and forget see only its
+// and a source name keep apart: each one's parent and forget see only its
 // own snapshots.
 func (p *Profile) BackupOptions() []ark.BackupOption {
 	b := p.Backup
@@ -106,16 +123,28 @@ func (p *Profile) ForgetPolicy() ark.ForgetPolicy {
 	return policy
 }
 
-// Filter selects the snapshots [Profile.Source] names from the host
-// [Profile.BackupOptions] records, so a forget through it leaves other sources
-// and other machines alone. It fails on a profile without a name and without
-// backup.path, which names no snapshots, rather than select every one.
+// Filter selects the snapshots the profile's backups store: source type
+// docker-volume and the volume for backup.volume, else type file and the name
+// [Profile.Source] gives, from the host [Profile.BackupOptions] records, so a
+// forget through it leaves other sources, a directory and a volume of the
+// same name, and other machines alone. It fails on a profile with none of
+// backup.volume, backup.source and backup.path, which names no snapshots,
+// rather than select every one. A volume profile without docker-host leaves
+// the daemon to the caller; a caller that picks a remote one, from
+// DOCKER_HOST say, sets the filter's Host to that machine itself.
 func (p *Profile) Filter() (ark.SnapshotFilter, error) {
-	source := p.sourceName()
-	if source == "" {
-		return ark.SnapshotFilter{}, invalidf("no source name: set the profile's name, backup.source or backup.path")
+	source, err := p.sourceName()
+	if err != nil {
+		return ark.SnapshotFilter{}, err
 	}
-	return ark.SnapshotFilter{Source: source, Host: p.host()}, nil
+	if source == "" {
+		return ark.SnapshotFilter{}, invalidf("no source name: set backup.path, backup.source or backup.volume")
+	}
+	typ := ark.SourceTypeFile
+	if p.Backup.Volume != "" {
+		typ = sourceTypeDockerVolume
+	}
+	return ark.SnapshotFilter{Source: source, Type: typ, Host: p.host()}, nil
 }
 
 // Open opens the repository at repo through [arkuri.Open] with pw, applying

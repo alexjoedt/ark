@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/arkfs"
 	"github.com/alexjoedt/ark/arkmem"
 	"github.com/alexjoedt/ark/arkprofile"
 	"github.com/alexjoedt/ark/arkuri"
@@ -44,7 +46,8 @@ func TestBackupAndForgetThroughAProfile(t *testing.T) {
 		},
 		Forget: arkprofile.Forget{KeepLast: 1},
 	}
-	other := &arkprofile.Profile{Name: "other", Backup: arkprofile.Backup{Path: dir}}
+	// other backs up the same directory under a source of its own
+	other := &arkprofile.Profile{Name: "other", Backup: arkprofile.Backup{Path: dir, Source: "other"}}
 
 	backup := func(p *arkprofile.Profile) *ark.Snapshot {
 		t.Helper()
@@ -65,7 +68,7 @@ func TestBackupAndForgetThroughAProfile(t *testing.T) {
 	otherNew := backup(other)
 	last := backup(docs)
 
-	if first.SourceName != "docs" || first.Host != "laptop" || first.Comment != "nightly" ||
+	if first.SourceName != dir || first.Host != "laptop" || first.Comment != "nightly" ||
 		!reflect.DeepEqual(first.Tags, []string{"daily"}) || !reflect.DeepEqual(first.Excludes, []string{"*.tmp"}) ||
 		first.Labels["app"] != "docs" {
 		t.Fatalf("snapshot = %+v", first)
@@ -101,14 +104,19 @@ func TestBackupAndForgetThroughAProfile(t *testing.T) {
 
 func TestSourceNames(t *testing.T) {
 	dir := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name string
 		p    arkprofile.Profile
 		want string
 	}{
-		{"profile name", arkprofile.Profile{Name: "docs", Backup: arkprofile.Backup{Path: dir}}, "docs"},
-		{"backup.source wins", arkprofile.Profile{Name: "docs", Backup: arkprofile.Backup{Path: dir, Source: "d"}}, "d"},
+		{"path, not the profile name", arkprofile.Profile{Name: "docs", Backup: arkprofile.Backup{Path: dir}}, dir},
+		{"source wins", arkprofile.Profile{Name: "docs", Backup: arkprofile.Backup{Path: dir, Source: "d"}}, "d"},
 		{"no name keeps the path", arkprofile.Profile{Backup: arkprofile.Backup{Path: dir}}, dir},
+		{"relative path made absolute", arkprofile.Profile{Name: "docs", Backup: arkprofile.Backup{Path: "."}}, wd},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -118,6 +126,16 @@ func TestSourceNames(t *testing.T) {
 			}
 			if got := src.Meta().Name; got != tt.want {
 				t.Errorf("source name = %q, want %q", got, tt.want)
+			}
+			// without backup.source the name is the one a plain backup of the path stores
+			if tt.p.Backup.Source == "" {
+				plain, err := arkfs.NewSource(tt.p.Backup.Path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if plain.Meta().Name != tt.want {
+					t.Errorf("plain backup name = %q, want %q", plain.Meta().Name, tt.want)
+				}
 			}
 			f, err := tt.p.Filter()
 			if err != nil {
@@ -130,10 +148,111 @@ func TestSourceNames(t *testing.T) {
 	}
 }
 
+// The profile's name never stands in for a missing backup.source and
+// backup.path.
 func TestFilterWithoutASourceFails(t *testing.T) {
-	p := &arkprofile.Profile{Forget: arkprofile.Forget{KeepLast: 1}}
-	if _, err := p.Filter(); !errors.Is(err, arkprofile.ErrInvalid) {
+	p := &arkprofile.Profile{Name: "docs", Forget: arkprofile.Forget{KeepLast: 1}}
+	_, err := p.Filter()
+	if !errors.Is(err, arkprofile.ErrInvalid) {
 		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+	for _, key := range []string{"backup.path", "backup.source", "backup.volume"} {
+		if !strings.Contains(err.Error(), key) {
+			t.Fatalf("err = %v, want %s named", err, key)
+		}
+	}
+}
+
+// A volume profile selects the volume's docker-volume series, never a
+// directory backed up under the same source name, and a path profile only
+// file snapshots.
+func TestFilterSelectsTheSourceType(t *testing.T) {
+	ctx := context.Background()
+	b := arkmem.New()
+	if err := ark.Init(ctx, b, ark.NoPassword()); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := ark.Open(ctx, b, ark.NoPassword())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "a.txt"), "a", 0o600)
+	files := &arkprofile.Profile{Name: "files", Backup: arkprofile.Backup{Path: dir, Source: "pgdata", Host: "db1"}}
+	src, err := files.Source()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Backup(ctx, src, files.BackupOptions()...); err != nil {
+		t.Fatal(err)
+	}
+
+	vol := &arkprofile.Profile{Name: "db", Backup: arkprofile.Backup{Volume: "pgdata", Host: "db1"}}
+	f, err := vol.Filter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Source != "pgdata" || f.Type != "docker-volume" || f.Host != "db1" {
+		t.Fatalf("volume filter = %+v", f)
+	}
+	snaps, err := repo.Snapshots(ctx, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snaps) != 0 {
+		t.Fatalf("volume filter selects %d file snapshots", len(snaps))
+	}
+
+	ff, err := files.Filter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ff.Type != ark.SourceTypeFile {
+		t.Fatalf("path filter type = %q, want %q", ff.Type, ark.SourceTypeFile)
+	}
+	if snaps, err := repo.Snapshots(ctx, ff); err != nil || len(snaps) != 1 {
+		t.Fatalf("path filter selects %d snapshots, err %v; want 1", len(snaps), err)
+	}
+}
+
+// The volume source needs the Docker SDK, which arkprofile does not import.
+func TestVolumeProfileHasNoSource(t *testing.T) {
+	p := &arkprofile.Profile{Name: "db", Backup: arkprofile.Backup{Volume: "pgdata"}}
+	if _, err := p.Source(); !errors.Is(err, arkprofile.ErrInvalid) || !strings.Contains(err.Error(), "arkdocker") {
+		t.Fatalf("Source = %v, want ErrInvalid pointing to arkdocker", err)
+	}
+}
+
+func TestNoDockerSDK(t *testing.T) {
+	gobin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("no go command")
+	}
+	out, err := exec.CommandContext(t.Context(), gobin, "list", "-deps", ".").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for dep := range strings.FieldsSeq(string(out)) {
+		if strings.HasPrefix(dep, "github.com/docker/") || strings.HasPrefix(dep, "github.com/moby/") ||
+			strings.HasSuffix(dep, "/arkdocker") {
+			t.Errorf("arkprofile depends on %s", dep)
+		}
+	}
+}
+
+// A relative backup.path that cannot be made absolute fails the filter rather
+// than select a source name no backup stores.
+func TestFilterReportsAnUnresolvablePath(t *testing.T) {
+	gone := t.TempDir()
+	t.Chdir(gone)
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	p := &arkprofile.Profile{Backup: arkprofile.Backup{Path: "docs"}}
+	if f, err := p.Filter(); err == nil {
+		t.Fatalf("filter = %+v, want an error", f)
 	}
 }
 

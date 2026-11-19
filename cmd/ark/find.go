@@ -53,12 +53,10 @@ func findCommand() *cli.Command {
 				Host:   cmd.String("host"),
 				Labels: labels,
 			}
-			if lp := profileFrom(ctx); lp != nil && cmd.String("source") == "" {
-				pf, err := lp.Filter()
-				if err != nil {
-					return exitcode.Usagef("profile %s: %w", lp.Name, err)
+			if lp := profileFrom(ctx); lp != nil && cmd.String("source") == "" && profileNamesSnapshots(lp) {
+				if _, err := profileScope(cmd, lp, &filter); err != nil {
+					return err
 				}
-				filter.Source = pf.Source
 			}
 
 			repo, err := openRepo(ctx, cmd)

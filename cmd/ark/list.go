@@ -46,13 +46,12 @@ func snapshotsCommand() *cli.Command {
 				Host:   cmd.String("host"),
 				Labels: labels,
 			}
-			// A profile narrows the list to its snapshots, on every host.
-			if lp := profileFrom(ctx); lp != nil && cmd.String("source") == "" {
-				pf, err := lp.Filter()
-				if err != nil {
-					return exitcode.Usagef("profile %s: %w", lp.Name, err)
+			// A profile narrows the list to its snapshots, on every host; one with only
+			// repository settings names none and lists them all.
+			if lp := profileFrom(ctx); lp != nil && cmd.String("source") == "" && profileNamesSnapshots(lp) {
+				if _, err := profileScope(cmd, lp, &filter); err != nil {
+					return err
 				}
-				filter.Source = pf.Source
 			}
 			snaps, err := repo.Snapshots(ctx, filter)
 			if err != nil {

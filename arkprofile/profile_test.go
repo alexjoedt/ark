@@ -19,6 +19,7 @@ const fullProfile = `repo: /srv/ark
 password-file: /etc/ark/docs.pw
 lock-wait: 30s
 concurrency: 4
+docker-host: unix:///run/docker.sock
 backup:
   path: /home/me/Documents
   tag: [docs, daily]
@@ -55,6 +56,7 @@ func TestDecodeFillsEveryField(t *testing.T) {
 		PasswordFile: "/etc/ark/docs.pw",
 		LockWait:     30 * time.Second,
 		Concurrency:  4,
+		DockerHost:   "unix:///run/docker.sock",
 		Backup: arkprofile.Backup{
 			Path:              "/home/me/Documents",
 			Tags:              []string{"docs", "daily"},
@@ -199,6 +201,26 @@ func TestDecodeRejects(t *testing.T) {
 		{"null document", "~\n", "empty profile"},
 		{"not a mapping", "- repo\n", "line 1: profile: want a mapping of keys"},
 		{"section not a mapping", "backup: /data\n", "line 1: backup: want a mapping of keys"},
+		{
+			"volume and path",
+			"backup:\n  path: /p\n  volume: v\n",
+			"line 3: backup.volume: excludes backup.path at line 2",
+		},
+		{
+			"volume and a later source",
+			"backup:\n  volume: v\n  source: s\n",
+			"line 2: backup.volume: excludes backup.source at line 3",
+		},
+		{
+			"volume and an exclude",
+			"backup:\n  volume: v\n  exclude: ['*.tmp']\n",
+			"line 2: backup.volume: excludes backup.exclude at line 3",
+		},
+		{
+			"volume and a merged exclude-file",
+			"backup:\n  volume: v\n  <<: {exclude-file: [x]}\n",
+			"line 2: backup.volume: excludes backup.exclude-file at line 3",
+		},
 		{"wrong kind", "concurrency: three\n", "line 1: concurrency: want a whole number"},
 		{
 			"keep count not a number",
@@ -315,6 +337,25 @@ func TestValidate(t *testing.T) {
 		{"keep-tag only commas", func(p *arkprofile.Profile) { p.Forget.KeepTags = []string{" , "} }},
 		{"bad label key", func(p *arkprofile.Profile) { p.Backup.Labels = map[string]string{"-app": "x"} }},
 		{"reserved label", func(p *arkprofile.Profile) { p.Backup.Labels = map[string]string{"ark/path": "/x"} }},
+		{"volume and backup.path", func(p *arkprofile.Profile) { p.Backup.Volume = "v" }},
+		{"volume and backup.exclude", func(p *arkprofile.Profile) {
+			p.Backup.Path, p.Backup.Volume, p.Backup.Excludes = "", "v", []string{"*.tmp"}
+		}},
+		{"volume and backup.exclude-file", func(p *arkprofile.Profile) {
+			p.Backup.Path, p.Backup.Volume, p.Backup.ExcludeFiles = "", "v", []string{"/x"}
+		}},
+		{"volume and backup.exclude-cloud-files", func(p *arkprofile.Profile) {
+			p.Backup.Path, p.Backup.Volume, p.Backup.ExcludeCloudFiles = "", "v", true
+		}},
+		{"volume and backup.source", func(p *arkprofile.Profile) {
+			p.Backup.Path, p.Backup.Volume, p.Backup.Source = "", "v", "s"
+		}},
+		{"remote docker-host without backup.host", func(p *arkprofile.Profile) {
+			p.Backup.Path, p.Backup.Volume, p.DockerHost = "", "v", "tcp://db1:2376"
+		}},
+		{"ssh docker-host without backup.host", func(p *arkprofile.Profile) {
+			p.Backup.Path, p.Backup.Volume, p.DockerHost = "", "v", "ssh://admin@db1"
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -328,10 +369,45 @@ func TestValidate(t *testing.T) {
 				!strings.Contains(err.Error(), "forget.keep-"+key) {
 				t.Errorf("Validate = %v, want the key forget.keep-%s named", err, key)
 			}
+			if key, ok := strings.CutPrefix(tt.name, "volume and "); ok &&
+				!strings.Contains(err.Error(), "backup.volume and "+key) {
+				t.Errorf("Validate = %v, want backup.volume and %s named", err, key)
+			}
+			if strings.Contains(tt.name, "docker-host") && !strings.Contains(err.Error(), "set backup.host") {
+				t.Errorf("Validate = %v, want the backup.host fix named", err)
+			}
 			if strings.Contains(tt.name, "label") && !errors.Is(err, ark.ErrInvalidLabel) {
 				t.Errorf("Validate = %v, want ark.ErrInvalidLabel too", err)
 			}
 		})
+	}
+}
+
+func TestValidateAcceptsVolumeProfiles(t *testing.T) {
+	for _, p := range []arkprofile.Profile{
+		{Name: "db", Backup: arkprofile.Backup{Volume: "pgdata"}},
+		{Name: "db", DockerHost: "unix:///run/docker.sock", Backup: arkprofile.Backup{Volume: "pgdata"}},
+		{Name: "db", DockerHost: "npipe:////./pipe/docker_engine", Backup: arkprofile.Backup{Volume: "pgdata"}},
+		{Name: "db", DockerHost: "ssh://admin@db1", Backup: arkprofile.Backup{Volume: "pgdata", Host: "db1"}},
+		// docker-host only names the host of a volume backup
+		{Name: "db", DockerHost: "tcp://db1:2375", Backup: arkprofile.Backup{Path: "/data"}},
+	} {
+		if err := p.Validate(); err != nil {
+			t.Errorf("Validate(%+v) = %v", p, err)
+		}
+	}
+}
+
+// Decode refuses what Validate refuses: a key beside the volume only when it
+// is set, so an empty or false one passes both.
+func TestDecodeVolumeBesideUnsetKeys(t *testing.T) {
+	p := arkprofile.Profile{Name: "db"}
+	in := "backup:\n  volume: v\n  path: ''\n  exclude: []\n  exclude-cloud-files: false\n  source: ''\n"
+	if err := arkprofile.Decode(strings.NewReader(in), &p, "/etc/ark"); err != nil {
+		t.Fatalf("Decode = %v", err)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("Validate = %v", err)
 	}
 }
 
@@ -460,20 +536,40 @@ func TestPackageDocExampleIsValid(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc, _, _ := strings.Cut(string(data), "\npackage ")
+	// Each run of indented lines is one example profile.
+	var examples []string
 	var b strings.Builder
 	for l := range strings.Lines(doc) {
 		if s, ok := strings.CutPrefix(l, "//\t"); ok {
 			b.WriteString(s)
+		} else if b.Len() > 0 {
+			examples = append(examples, b.String())
+			b.Reset()
 		}
 	}
-	p := arkprofile.Profile{Name: "docs"}
-	if err := arkprofile.Decode(strings.NewReader(b.String()), &p, "/etc/ark"); err != nil {
-		t.Fatal(err)
+	var got []arkprofile.Profile
+	for _, ex := range examples {
+		p := arkprofile.Profile{Name: "docs"}
+		if err := arkprofile.Decode(strings.NewReader(ex), &p, "/etc/ark"); err != nil {
+			t.Fatalf("%v in\n%s", err, ex)
+		}
+		if err := p.Validate(); err != nil {
+			t.Fatalf("%v in\n%s", err, ex)
+		}
+		got = append(got, p)
 	}
-	if err := p.Validate(); err != nil {
-		t.Fatal(err)
+	if len(got) != 2 || got[0].Forget.RunAfter == "" || got[0].Backup.RunAfterFail == "" ||
+		got[1].Backup.Volume == "" || got[1].DockerHost == "" {
+		t.Fatalf("examples lost keys: %+v", got)
 	}
-	if p.Forget.RunAfter == "" || p.Backup.RunAfterFail == "" {
-		t.Fatalf("example lost keys: %+v", p)
+}
+
+func TestDecodeRefusesAConflictsTagOfNoKey(t *testing.T) {
+	var v struct {
+		A string `yaml:"a" conflicts:"b"`
+	}
+	err := arkprofile.Decode(strings.NewReader("a: x\n"), &v, "/etc/ark")
+	if err == nil || !strings.Contains(err.Error(), `conflicts with "b", which is no key`) {
+		t.Fatalf("Decode = %v, want the stray conflicts tag named", err)
 	}
 }

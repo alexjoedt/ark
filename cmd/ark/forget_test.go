@@ -55,6 +55,9 @@ func TestForgetCutsPeriodsInTheZoneOfTZ(t *testing.T) {
 	}
 }
 
+// appSource scopes a profile to the snapshots importEmptySnapshot stores.
+const appSource = "\nbackup:\n  source: app\n"
+
 // importEmptySnapshot imports an archive of no files whose metadata carries
 // the creation time, an RFC 3339 string, and the tags.
 func importEmptySnapshot(t *testing.T, repo, createdAt string, tags ...string) {
@@ -96,7 +99,7 @@ func TestForgetTakesUnlimitedCounts(t *testing.T) {
 	} {
 		importEmptySnapshot(t, repo, at)
 	}
-	profile := writeProfile(t, t.TempDir(), "app", "repo: "+repo+"\nforget:\n  keep-yearly: unlimited\n")
+	profile := writeProfile(t, t.TempDir(), "app", "repo: "+repo+appSource+"forget:\n  keep-yearly: unlimited\n")
 
 	for _, args := range [][]string{
 		{"-r", repo, "forget", "--keep-yearly", "unlimited"},
@@ -146,7 +149,7 @@ func TestForgetKeepTag(t *testing.T) {
 	importEmptySnapshot(t, repo, "2026-01-02T12:00:00Z")
 	importEmptySnapshot(t, repo, "2026-01-03T12:00:00Z", "b")
 	importEmptySnapshot(t, repo, "2026-01-04T12:00:00Z", "a")
-	profile := writeProfile(t, t.TempDir(), "app", "repo: "+repo+"\nforget:\n  keep-tag: [\"a, b\", \"\"]\n")
+	profile := writeProfile(t, t.TempDir(), "app", "repo: "+repo+appSource+"forget:\n  keep-tag: [\"a, b\", \"\"]\n")
 
 	const a, b, ab, none, last = "has tags [a]", "has tags [b]", "has tags [a, b]", "has tags []", "last snapshot"
 	tests := []struct {
@@ -238,7 +241,7 @@ func TestForgetKeepWithinPeriods(t *testing.T) {
 		importEmptySnapshot(t, repo, day+"T12:00:00Z")
 	}
 	// the imported snapshots carry no host, the profile would ask for this machine's
-	profile := writeProfile(t, t.TempDir(), "app", "repo: "+repo+"\nforget:\n  keep-within-monthly: 1y\n")
+	profile := writeProfile(t, t.TempDir(), "app", "repo: "+repo+appSource+"forget:\n  keep-within-monthly: 1y\n")
 	fromProfile := []string{"forget", "-f", profile, "--host", ""}
 
 	monthly := map[string][]string{

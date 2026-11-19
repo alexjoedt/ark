@@ -12,7 +12,7 @@ A series is the set of snapshots that share all three of:
 | Field | Set by | Example |
 |---|---|---|
 | source type | the source: `file`, `docker-volume`, `stream` | `file` |
-| source name | `--source`, else the absolute path of the directory; with `-P` `backup.source`, else the profile's name; the volume name for Docker | `/home/alex` |
+| source name | `--source`, else the absolute path of the directory; with `-P` `backup.source`, else the absolute `backup.path`, the same name a plain backup of it stores; the volume name for Docker, with `-P` `backup.volume` | `/home/alex` |
 | host | `--host`, else the machine's hostname | `laptop` |
 
 The fields are compared verbatim as the manifest stores them. The same path backed up from two
@@ -44,7 +44,7 @@ The `ark` CLI sets the host itself: the machine's hostname for `ark backup`, and
 
 ## Changing the source name
 
-A different `--source` or a profile whose name changed starts a new series, with no parent, so its
+A different `--source`, a changed `backup.source` or a moved `backup.path` starts a new series, with no parent, so its
 first backup reads and hashes every file again. `--parent` cannot bridge the rename: a parent of
 another source name is refused with a warning and the backup runs without one. Chunks the old series
 stored are still not uploaded twice.
