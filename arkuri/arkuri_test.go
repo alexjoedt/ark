@@ -2,6 +2,7 @@ package arkuri
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -35,6 +36,31 @@ func TestOpenBarePath(t *testing.T) {
 func TestOpenLocalURI(t *testing.T) {
 	dir := t.TempDir()
 	openLocal(t, "local://"+dir, dir)
+}
+
+func TestOpenLocalPathWithAColon(t *testing.T) {
+	t.Chdir(t.TempDir())
+	abs := t.TempDir() + "/a:b"
+	openLocal(t, abs, abs)
+	openLocal(t, "./host:path", "./host:path")
+}
+
+func TestScpFormTouchesNoDisk(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	for _, s := range []string{"host:/srv/ark", "host:path", "user@host:path"} {
+		if _, ok := LocalPath(s); ok {
+			t.Errorf("LocalPath(%q) ok, want false", s)
+		}
+		if b, err := Open(t.Context(), s); err == nil {
+			_ = b.Close()
+			t.Errorf("Open(%q) succeeded", s)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 0 {
+		t.Errorf("working directory = %v, %v; want empty", entries, err)
+	}
 }
 
 func TestOpenRelativePath(t *testing.T) {
@@ -118,6 +144,9 @@ func TestOpenRejects(t *testing.T) {
 		{"scp form with user", "sftp:ark@box:srv/ark", "write sftp://ark@box/srv/ark"},
 		{"sftp without slashes", "sftp:/srv/ark", "not a URI"},
 		{"local without slashes", "local:/srv/ark", "not a URI"},
+		{"scp host and absolute path", "host:/srv/ark", "write sftp://host/srv/ark"},
+		{"scp host and relative path", "host:path", "write sftp://host/path"},
+		{"scp user host and path", "user@host:path", "write sftp://user@host/path"},
 	}
 
 	for _, tc := range tests {

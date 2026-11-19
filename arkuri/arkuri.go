@@ -111,8 +111,10 @@ func parse(s string) (string, *url.URL, error) {
 func hasScheme(s string) bool { return strings.Contains(s, "://") }
 
 // schemeWithoutSlashes rejects a known scheme written without "//", such as
-// the scp form sftp:host:/path, which would otherwise become a local
-// directory named after the whole string.
+// sftp:host:/path, and the scp form host:path, which would otherwise become a
+// local directory named after the whole string. Like rsync, a colon before the
+// first slash makes a location remote; a local path with a colon writes it
+// after a slash, such as ./host:path.
 func schemeWithoutSlashes(s string) error {
 	if rest, ok := strings.CutPrefix(s, SchemeSFTP+":"); ok {
 		if host, path, ok := strings.Cut(rest, ":"); ok && host != "" {
@@ -122,6 +124,11 @@ func schemeWithoutSlashes(s string) error {
 	}
 	if strings.HasPrefix(s, SchemeLocal+":") {
 		return fmt.Errorf("arkuri: not a URI, %s", supportedForms())
+	}
+	if host, path, ok := strings.Cut(s, ":"); ok && !strings.Contains(host, "/") {
+		return fmt.Errorf("arkuri: %q looks like an scp location, write sftp://%s/%s "+
+			"(a local path with a colon needs a slash before it, such as ./%s)",
+			s, host, strings.TrimPrefix(path, "/"), s)
 	}
 	return nil
 }
