@@ -112,6 +112,31 @@ func workModules(t *testing.T) []string {
 func definedTests(t *testing.T, modules []string) map[string]bool {
 	t.Helper()
 	defined := map[string]bool{}
+	walkModules(t, modules, func(path string) error {
+		if !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		ok, err := build.Default.MatchFile(filepath.Dir(path), filepath.Base(path))
+		if err != nil || !ok {
+			return err
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, m := range definedTest.FindAllSubmatch(src, -1) {
+			defined[string(m[1])] = true
+		}
+		return nil
+	})
+	return defined
+}
+
+// walkModules calls fn for every .go file of the go.work modules, leaving out
+// testdata, vendor, node_modules, dot and underscore directories and nested
+// modules outside go.work.
+func walkModules(t *testing.T, modules []string, fn func(path string) error) {
+	t.Helper()
 	for _, root := range modules {
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -131,27 +156,15 @@ func definedTests(t *testing.T, modules []string) map[string]bool {
 				}
 				return nil
 			}
-			if !strings.HasSuffix(path, "_test.go") {
+			if !strings.HasSuffix(path, ".go") {
 				return nil
 			}
-			ok, err := build.Default.MatchFile(filepath.Dir(path), d.Name())
-			if err != nil || !ok {
-				return err
-			}
-			src, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			for _, m := range definedTest.FindAllSubmatch(src, -1) {
-				defined[string(m[1])] = true
-			}
-			return nil
+			return fn(path)
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	return defined
 }
 
 // bullets returns the list items of the "## " section, each joined with the
