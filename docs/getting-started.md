@@ -16,7 +16,7 @@ go install github.com/alexjoedt/ark/cmd/ark@latest
 
 ## Choose a repository and a password
 
-Every command needs a repository, taken from `--repo`, a profile's `repo` or `ARK_REPOSITORY`, in this order. There is no default path. A repository is a local directory or an SFTP location:
+Every command that works on a repository needs one, taken from `--repo`, a profile's `repo` or `ARK_REPOSITORY`, in this order. There is no default path. A repository is a local directory or an SFTP location:
 
 ```bash
 export ARK_REPOSITORY=/srv/ark                  # or sftp://backup@nas/srv/ark

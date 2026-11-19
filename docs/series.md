@@ -43,7 +43,8 @@ The `ark` CLI sets the host itself: the machine's hostname for `ark backup`, and
 
 ## Changing the source name
 
-A different `--source`, a changed `backup.source` or a moved `backup.path` starts a new series, with no parent, so its
-first backup reads and hashes every file again. `--parent` cannot bridge the rename: a parent of
-another source name is refused with a warning and the backup runs without one. Chunks the old series
-stored are still not uploaded twice.
+A different `--source`, a changed `backup.source` or a moved `backup.path` of a profile without
+`backup.source` starts a new series, with no parent, so its first backup reads and hashes every file
+again. `--parent` cannot bridge the rename: the files of a parent of another source name are not
+used, the backup warns and reads every file, and the snapshot still records that parent. Chunks the
+old series stored are still not uploaded twice.
