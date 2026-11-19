@@ -43,7 +43,7 @@ _, err = arkfs.Restore(ctx, repo, snap.ID, "/tmp/docs")
 
 `arkfs.Backup` and `arkfs.Restore` are `repo.Backup(ctx, source)` and `repo.Restore(ctx, snapshotID, sink)` with a directory as source and sink. A snapshot ID has its own type, `ark.SnapshotID`; `Snapshot.ID` is one, and `Restore`, `Snapshot`, `Verify`, `Walk`, `Export`, `Reader.FS`, `WithParent`, and `SnapshotFilter.IDs` passed to `Snapshots` or `Forget`, take a full ID or a unique prefix of one, in upper or lower case. A prefix that matches no snapshot wraps `ark.ErrNotFound`, one that matches several wraps `ark.ErrAmbiguousID`. `SnapshotFilter.Match` resolves nothing: called on its own, it compares `IDs` with the full, lower-case `Snapshot.ID` exactly. A literal converts as it is, `ark.SnapshotID("3f9a")`. Restore and export stream the snapshot: memory stays at the chunk cache plus one chunk per worker, no matter how large the snapshot is. The cache is 256 MiB; `ark.WithRestoreCache` changes it for a restore, export always uses the default. Verify reads pack by pack instead and holds about 150 bytes per distinct chunk of the snapshot plus one pack range of up to about 20 MiB, so its memory grows with the snapshot.
 
-Besides backup and restore, a `*ark.Repository` lists snapshots (`Snapshots`, `Walk`), reports its size (`Info`), forgets and prunes (`Forget`, `Prune`), checks (`Verify`, `Check`), exports and imports, changes the password and lists locks.
+Besides backup and restore, a `*ark.Repository` lists snapshots (`Snapshots`, `Walk`), reports its size (`Info`), forgets and prunes (`Forget`, `Prune`), checks (`Verify`, `Check`), reads snapshots as file systems (`OpenReader`), rebuilds the index (`RebuildIndex`), exports and imports, changes the password, and lists and removes locks (`Locks`, `Unlock`).
 
 ## Repository size
 
@@ -73,7 +73,7 @@ fmt.Printf("%d snapshots, %d of %d bytes unused\n", info.Snapshots, info.BytesFr
 | [`arkfs`](https://pkg.go.dev/github.com/alexjoedt/ark/arkfs) | A local directory, with hardlinks, xattrs and excludes |
 | [`arkdocker`](https://pkg.go.dev/github.com/alexjoedt/ark/arkdocker) | A Docker volume, and an `Engine` that stops and restarts the containers using it |
 | **Tools on top** | |
-| [`arkprofile`](https://pkg.go.dev/github.com/alexjoedt/ark/arkprofile) | Profiles: a stored repository, directory and forget policy, in code or YAML |
+| [`arkprofile`](https://pkg.go.dev/github.com/alexjoedt/ark/arkprofile) | Profiles: a stored repository, directory or Docker volume and forget policy, in code or YAML |
 | [`arkfind`](https://pkg.go.dev/github.com/alexjoedt/ark/arkfind) | Searches snapshots for paths that match a pattern |
 | [`arkglob`](https://pkg.go.dev/github.com/alexjoedt/ark/arkglob) | Matches snapshot paths against exclude patterns with restic's rules |
 | **Testing** | |
@@ -153,7 +153,7 @@ _, err = repo.Restore(ctx, snap.ID, ark.NewStreamSink(os.Stdout))
 
 ## Host, series and labels
 
-The core library records no host unless you pass `ark.WithHost`; it never reads the machine's hostname. The `ark` CLI always records one, and so does `arkprofile`: without `backup.host`, a profile's `BackupOptions` and `Filter` use the machine's hostname. In a container whose hostname changes on every deploy, set `backup.host`, or each deploy starts a new series and `Forget` no longer sees the older snapshots. Source type, source name and host make up a snapshot's series: a backup takes the newest snapshot of its series as its parent, and `Forget` applies a keep policy once per series. Embedders that share one repository between machines should set a host. [Series](series.md) has the details.
+The core library records no host unless you pass `ark.WithHost`; it reads the machine's hostname only for the locks it writes. The `ark` CLI always records one, and so does `arkprofile`: without `backup.host`, a profile's `BackupOptions` and `Filter` use the machine's hostname. In a container whose hostname changes on every deploy, set `backup.host`, or each deploy starts a new series and `Forget` no longer sees the older snapshots. Source type, source name and host make up a snapshot's series: a backup takes the newest snapshot of its series as its parent, and `Forget` applies a keep policy once per series. Embedders that share one repository between machines should set a host. [Series](series.md) has the details.
 
 Labels are key-value pairs stored with a snapshot, set at backup with `ark.WithLabels` and matched with `SnapshotFilter.Labels`. Keys that start with `ark/` belong to ark's own sources, and a backup that sets one fails with `ark.ErrInvalidLabel`. [Labels](labels.md) has the key rules and the reserved keys.
 
@@ -173,7 +173,7 @@ snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{
 
 ## Encryption
 
-Every repository is encrypted and authenticated. The password unlocks a random master key stored in `keys/`; chunks, trees, snapshot manifests and locks are sealed with XChaCha20-Poly1305 and named by an HMAC, so the backend sees neither contents nor file names. A changed object fails to open instead of restoring garbage.
+Every repository is encrypted and authenticated. The password unlocks a random master key stored in `keys/`; chunks, trees, indexes, snapshot manifests and locks are sealed with XChaCha20-Poly1305, and no object is named after a file or its plain contents, so the backend sees neither contents nor file names. A changed object fails to open instead of restoring garbage.
 
 - A lost password is lost data. There is no recovery and no backdoor.
 - `ark.NoPassword()` creates or opens a repository without one. The format is the same, but the master key is stored unprotected: anyone with access to the backend can read it. `Init` records the choice, and `Open` holds to it: `NoPassword` on a protected repository fails with `ark.ErrPasswordRequired`, a password on an unprotected one with `ark.ErrNotPasswordProtected`.
@@ -217,7 +217,7 @@ Concurrent operations call the progress function concurrently, so it must not bl
 
 ## Profiles
 
-`arkprofile` is the profile format of the CLI as a package: one repository, one directory to back up and one forget policy, built in code or decoded from YAML. The keys are the CLI's flag names, listed in [Profiles](cli/profiles.md).
+`arkprofile` is the profile format of the CLI as a package: one repository, one directory or Docker volume to back up and one forget policy, built in code or decoded from YAML. The keys are the CLI's flag names, listed in [Profiles](cli/profiles.md).
 
 ```go
 p := &arkprofile.Profile{
@@ -259,7 +259,7 @@ if p.Forget.Prune {
 }
 ```
 
-`Source` names the snapshots `Backup.Source`, else the absolute `Backup.Path`, the name `arkfs.NewSource` gives that path, and `Filter` selects the same source; `Name` names no snapshots.
+`Source` names the snapshots `Backup.Source`, else the absolute `Backup.Path`, the name `arkfs.NewSource` gives that path, and `Filter` selects the same source; `Name` names no snapshots. A volume profile has no `Source`: the call fails, and the program backs up `Backup.Volume` with `arkdocker` and `BackupOptions`, named after the volume, which `Filter` then selects.
 
 The counted rules of an `ark.ForgetPolicy`, `KeepLast` to `KeepYearly`, are of type `ark.KeepCount`: a number, or `ark.Unlimited` to keep every snapshot (`KeepLast`) or the newest of every period. `Forget` refuses any other negative count with `ark.ErrInvalidPolicy`. `ark.ParseKeepCount` reads the text form a profile and the CLI use, a whole number or `unlimited`. In JSON a count is a number and `ark.Unlimited` the string `"unlimited"`.
 

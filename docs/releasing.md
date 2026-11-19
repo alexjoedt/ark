@@ -1,8 +1,8 @@
 # Releasing
 
 ark ships three modules under one version number: `github.com/alexjoedt/ark` (the library),
-`arkdocker` and `cmd/ark`. A release is three tags on `main`, plus the CLI archives built from the
-`cmd/ark` tag.
+`arkdocker` and `cmd/ark`. A release is three tags, the root one on the tip of `main`, plus the CLI
+archives built from the `cmd/ark` tag.
 
 ## Versioning: v0.x
 
@@ -31,7 +31,7 @@ reads it. Dependency versions, including the Docker SDK, are not covered.
 |---|---|---|
 | 1 | `vX.Y.Z` | The library requires nothing from the other two. |
 | 2 | `arkdocker/vX.Y.Z` | Requires the root at `vX.Y.Z`; its tidy fetches that tag from the remote. |
-| 3 | `cmd/ark/vX.Y.Z` | Requires both. The tag triggers the release build. |
+| 3 | `cmd/ark/vX.Y.Z` | Requires both. The CLI archives are built from it. |
 
 Every bump is its own commit, so the three tags sit on three different commits. `main` is
 protected (pull requests and status checks, admins may bypass), so the bump commits never land on

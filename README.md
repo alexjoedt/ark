@@ -18,8 +18,8 @@ ark backs up anything you can walk as a tree of files: a directory, a Docker vol
 an API export. Content is split with FastCDC, stored once, compressed with zstd and encrypted.
 
 - `github.com/alexjoedt/ark` is the library module: the core package `ark`, the backends `arklocal`,
-  `arksftp` and `arkmem`, `arkuri`, `arkfs` for directories, `arkprofile`, `arkfind`, `arkglob`, the
-  test suites in `arktest` and `chunker`.
+  `arksftp` and `arkmem`, `arkuri`, `arkfs` for directories, `arkprofile`, `arkfind`, `arkglob`, `chunker`
+  and the conformance suites in `arktest`.
 - `github.com/alexjoedt/ark/arkdocker` adds Docker volumes, in its own module so the Docker SDK stays
   out of the core.
 - `github.com/alexjoedt/ark/cmd/ark` is the `ark` binary, a restic-style CLI.
