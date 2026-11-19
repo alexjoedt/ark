@@ -19,7 +19,7 @@
 //	  exclude-cloud-files: true      # leave out files that exist only in the cloud
 //	  host: laptop                   # host recorded in the snapshot
 //	  comment: nightly
-//	  source: documents              # source name, default: the profile's name
+//	  source: documents              # source name, default: the absolute path
 //	  label: {app: docs}             # labels recorded in the snapshot
 //	  run-before: mount /mnt/docs    # hooks, each run through sh -c
 //	  run-after: echo stored
@@ -77,7 +77,8 @@ var (
 // Profile is one stored backup configuration.
 type Profile struct {
 	// Name is the profile's name, set by [Load] from the file's base name. It
-	// defaults the source name and the source filter of forget.
+	// names the profile in messages and hooks; the snapshots' source name
+	// comes from backup.source or backup.path, never from Name.
 	Name string `yaml:"-"`
 
 	Repo               string        `yaml:"repo"                 ark:"location"`
@@ -100,7 +101,8 @@ type Backup struct {
 	ExcludeCloudFiles bool     `yaml:"exclude-cloud-files"`
 	Host              string   `yaml:"host"`
 	Comment           string   `yaml:"comment"`
-	// Source is the snapshot's source name; empty means the profile's name.
+	// Source is the snapshot's source name; empty means the absolute Path,
+	// the name a plain backup of that path stores.
 	Source string `yaml:"source"`
 	// Labels are recorded in the snapshot; their keys follow [ark.ValidateLabels].
 	Labels map[string]string `yaml:"label"`

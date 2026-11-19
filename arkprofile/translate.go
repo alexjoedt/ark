@@ -13,13 +13,14 @@ import (
 )
 
 // sourceName is the source name of the profile's snapshots: backup.source,
-// else the profile's name, else the absolute backup.path as arkfs names it.
+// else the absolute backup.path as arkfs names it, the name a plain backup of
+// that path stores. Neither set gives "".
 func (p *Profile) sourceName() string {
 	switch {
 	case p.Backup.Source != "":
 		return p.Backup.Source
-	case p.Name != "", p.Backup.Path == "":
-		return p.Name
+	case p.Backup.Path == "":
+		return ""
 	}
 	abs, err := filepath.Abs(p.Backup.Path)
 	if err != nil {
@@ -39,8 +40,8 @@ func (p *Profile) host() string {
 }
 
 // Source returns the arkfs source of backup.path with the profile's excludes,
-// exclude files and cloud-file option, named backup.source, else the profile's
-// name, else the absolute backup.path.
+// exclude files and cloud-file option, named backup.source, else the absolute
+// backup.path.
 func (p *Profile) Source() (ark.Source, error) {
 	b := p.Backup
 	if b.Path == "" {
@@ -61,7 +62,7 @@ func (p *Profile) Source() (ark.Source, error) {
 
 // BackupOptions returns the tags, labels, host and comment of the backup section. The
 // host defaults to the machine's hostname, so machines sharing a repository
-// and a profile name keep apart: each one's parent and forget see only its
+// and a source name keep apart: each one's parent and forget see only its
 // own snapshots.
 func (p *Profile) BackupOptions() []ark.BackupOption {
 	b := p.Backup
@@ -108,12 +109,12 @@ func (p *Profile) ForgetPolicy() ark.ForgetPolicy {
 
 // Filter selects the snapshots [Profile.Source] names from the host
 // [Profile.BackupOptions] records, so a forget through it leaves other sources
-// and other machines alone. It fails on a profile without a name and without
-// backup.path, which names no snapshots, rather than select every one.
+// and other machines alone. It fails on a profile with neither backup.source
+// nor backup.path, which names no snapshots, rather than select every one.
 func (p *Profile) Filter() (ark.SnapshotFilter, error) {
 	source := p.sourceName()
 	if source == "" {
-		return ark.SnapshotFilter{}, invalidf("no source name: set the profile's name, backup.source or backup.path")
+		return ark.SnapshotFilter{}, invalidf("no source name: set backup.source or backup.path")
 	}
 	return ark.SnapshotFilter{Source: source, Host: p.host()}, nil
 }

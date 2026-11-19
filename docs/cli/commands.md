@@ -61,7 +61,7 @@ Backs up the directory at `<path>` as one snapshot.
 |---|---|
 | `--tag TAG`, `-t` | add a tag, repeatable |
 | `--comment TEXT`, `-c` | free text stored with the snapshot |
-| `--source NAME`, `-s` | the source name, default the absolute path (with `-P` the profile's name) |
+| `--source NAME`, `-s` | the source name, default the absolute path (with `-P` `backup.source` if set) |
 | `--host NAME` | the host, default the machine's hostname |
 | `--label KEY=VALUE` | record a label, repeatable, the value may hold commas |
 | `--parent ID` | an explicit parent snapshot |

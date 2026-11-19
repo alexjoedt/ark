@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/arkfs"
 	"github.com/alexjoedt/ark/arkmem"
 	"github.com/alexjoedt/ark/arkprofile"
 	"github.com/alexjoedt/ark/arkuri"
@@ -44,7 +45,8 @@ func TestBackupAndForgetThroughAProfile(t *testing.T) {
 		},
 		Forget: arkprofile.Forget{KeepLast: 1},
 	}
-	other := &arkprofile.Profile{Name: "other", Backup: arkprofile.Backup{Path: dir}}
+	// other backs up the same directory under a source of its own
+	other := &arkprofile.Profile{Name: "other", Backup: arkprofile.Backup{Path: dir, Source: "other"}}
 
 	backup := func(p *arkprofile.Profile) *ark.Snapshot {
 		t.Helper()
@@ -65,7 +67,7 @@ func TestBackupAndForgetThroughAProfile(t *testing.T) {
 	otherNew := backup(other)
 	last := backup(docs)
 
-	if first.SourceName != "docs" || first.Host != "laptop" || first.Comment != "nightly" ||
+	if first.SourceName != dir || first.Host != "laptop" || first.Comment != "nightly" ||
 		!reflect.DeepEqual(first.Tags, []string{"daily"}) || !reflect.DeepEqual(first.Excludes, []string{"*.tmp"}) ||
 		first.Labels["app"] != "docs" {
 		t.Fatalf("snapshot = %+v", first)
@@ -101,14 +103,19 @@ func TestBackupAndForgetThroughAProfile(t *testing.T) {
 
 func TestSourceNames(t *testing.T) {
 	dir := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name string
 		p    arkprofile.Profile
 		want string
 	}{
-		{"profile name", arkprofile.Profile{Name: "docs", Backup: arkprofile.Backup{Path: dir}}, "docs"},
-		{"backup.source wins", arkprofile.Profile{Name: "docs", Backup: arkprofile.Backup{Path: dir, Source: "d"}}, "d"},
+		{"path, not the profile name", arkprofile.Profile{Name: "docs", Backup: arkprofile.Backup{Path: dir}}, dir},
+		{"source wins", arkprofile.Profile{Name: "docs", Backup: arkprofile.Backup{Path: dir, Source: "d"}}, "d"},
 		{"no name keeps the path", arkprofile.Profile{Backup: arkprofile.Backup{Path: dir}}, dir},
+		{"relative path made absolute", arkprofile.Profile{Name: "docs", Backup: arkprofile.Backup{Path: "."}}, wd},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -118,6 +125,16 @@ func TestSourceNames(t *testing.T) {
 			}
 			if got := src.Meta().Name; got != tt.want {
 				t.Errorf("source name = %q, want %q", got, tt.want)
+			}
+			// without backup.source the name is the one a plain backup of the path stores
+			if tt.p.Backup.Source == "" {
+				plain, err := arkfs.NewSource(tt.p.Backup.Path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if plain.Meta().Name != tt.want {
+					t.Errorf("plain backup name = %q, want %q", plain.Meta().Name, tt.want)
+				}
 			}
 			f, err := tt.p.Filter()
 			if err != nil {
@@ -130,10 +147,16 @@ func TestSourceNames(t *testing.T) {
 	}
 }
 
+// The profile's name never stands in for a missing backup.source and
+// backup.path.
 func TestFilterWithoutASourceFails(t *testing.T) {
-	p := &arkprofile.Profile{Forget: arkprofile.Forget{KeepLast: 1}}
-	if _, err := p.Filter(); !errors.Is(err, arkprofile.ErrInvalid) {
+	p := &arkprofile.Profile{Name: "docs", Forget: arkprofile.Forget{KeepLast: 1}}
+	_, err := p.Filter()
+	if !errors.Is(err, arkprofile.ErrInvalid) {
 		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+	if !strings.Contains(err.Error(), "backup.source or backup.path") {
+		t.Fatalf("err = %v, want both keys named", err)
 	}
 }
 

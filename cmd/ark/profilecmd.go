@@ -206,7 +206,7 @@ func effectiveValues(root *cli.Command, lp *loadedProfile) []profileValue {
 		profileBool("backup.exclude-cloud-files", b.ExcludeCloudFiles),
 		profileOnly("backup.host", b.Host, host),
 		profileOnly("backup.comment", b.Comment, ""),
-		profileOnly("backup.source", b.Source, lp.Name),
+		profileOnly("backup.source", b.Source, b.Path),
 		profileOnly("backup.label", labelList(b.Labels), ""),
 	}
 	values = append(values, hookValues("backup", b.Hooks)...)

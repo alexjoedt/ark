@@ -22,9 +22,9 @@ forget:
 ```
 
 ```bash
-ark backup -P docs              # source docs, the profile's tags and excludes
-ark forget -P docs --yes        # the policy on the docs snapshots of this host, then prune
-ark snapshots -P docs           # only the docs snapshots
+ark backup -P docs              # source ~/Documents as an absolute path, the profile's tags and excludes
+ark forget -P docs --yes        # the policy on this host's ~/Documents snapshots, then prune
+ark snapshots -P docs           # only the ~/Documents snapshots
 ark backup -P docs -t manual    # a flag beats the profile, a list flag replaces its list
 ark profile list                # every profile with its repo and backup path
 ark profile show docs           # each effective value and its source: cli, profile, env or default
@@ -59,11 +59,14 @@ the load.
   environment beats the default. No password is the exception: `insecure-no-password` on any layer
   together with a password source on any other exits 2, nothing is overridden, see
   [Password](index.md#password).
-- The snapshot's source is the profile's name unless `backup.source` says otherwise; `ark forget -P`
-  and `ark snapshots -P` select that source, forget also only this host's snapshots. A path on the
-  command line other than `backup.path` needs `--source`, so it never lands under the profile's
-  source. Snapshot ids given to `ark forget -P` are removed as named, without the profile's policy or
-  source filter. See [Series](../SERIES.md).
+- The snapshot's source is the absolute `backup.path`, the name `ark backup <path>` stores, unless
+  `backup.source` says otherwise; the profile's name never names snapshots. `ark forget -P`,
+  `ark snapshots -P` and `ark find -P` select that source, forget also only this host's snapshots. A
+  profile with neither `backup.source` nor `backup.path` exits 2 there. A path on the command line
+  other than `backup.path` names its own snapshots by its absolute path; with `backup.source` set it
+  needs `--source`, so it never lands under the profile's source. Snapshot ids given to
+  `ark forget -P` are removed as named, without the profile's policy or source filter. See
+  [Series](../SERIES.md).
 - `backup.label` sets labels as a map, `label: {app: docs}`; a `--label` flag adds to them and wins
   for a key in both. See [Labels](../LABELS.md).
 - `$VAR` and `${VAR}` expand in every value but the hooks; an unset variable exits 2. `~` and

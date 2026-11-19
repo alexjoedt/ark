@@ -84,7 +84,8 @@ func TestFind(t *testing.T) {
 	if got := text("--type", "docker-volume", "keep.txt"); got != "" {
 		t.Fatalf("--type docker-volume:\n%s", got)
 	}
-	writeProfile(t, profileDirFor(t), "two", "backup:\n  path: "+src+"\n")
+	profiles := profileDirFor(t)
+	writeProfile(t, profiles, "two", "backup:\n  path: "+src+"\n  source: two\n")
 	if got := text("-P", "two", "keep.txt"); got != group(third, "keep.txt") {
 		t.Fatalf("-P two:\n%s", got)
 	}
@@ -126,6 +127,13 @@ func TestFind(t *testing.T) {
 	}
 	if code, stdout, stderr := find("-q", "find", "nothing-here"); code != 0 || stdout != "" || stderr != "" {
 		t.Fatalf("-q no match: exit %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+
+	// a profile without backup.source finds what a plain backup of its path stored
+	plain := backup("--host", "h3")
+	writeProfile(t, profiles, "plain", "backup:\n  path: "+src+"\n")
+	if got := text("-P", "plain", "keep.txt"); got != group(plain, "keep.txt") {
+		t.Fatalf("-P plain:\n%s", got)
 	}
 
 	// usage errors come before the repository is opened
