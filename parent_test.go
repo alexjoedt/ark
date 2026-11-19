@@ -23,7 +23,6 @@ type stubSource struct {
 	name    string
 	content string
 	typ     ark.SourceType
-	modTime time.Time
 }
 
 func (s stubSource) Meta() ark.SourceMeta {
@@ -37,7 +36,6 @@ func (s stubSource) Walk(_ context.Context, fn ark.WalkFunc) error {
 		Mode: 0o644,
 		Type: ark.FileTypeRegular,
 	}
-	info.ModTime = s.modTime
 	return fn(info, openReader(strings.NewReader(s.content)))
 }
 
@@ -309,24 +307,5 @@ func TestBackupRecordsOnlyAParentItUsed(t *testing.T) {
 	}
 	if broken.ParentID != "" {
 		t.Errorf("an unloadable parent was recorded: %q", broken.ParentID)
-	}
-}
-
-// A parent whose files the backup cannot take, here because their mtime is too
-// close to the parent's start, is not recorded either.
-func TestBackupRecordsNoParentItTookNothingFrom(t *testing.T) {
-	ctx := context.Background()
-	repo := openRepo(t, arkmem.New())
-
-	first, err := repo.Backup(ctx, stubSource{name: "app", content: "one", modTime: time.Now()})
-	if err != nil {
-		t.Fatalf("first backup: %v", err)
-	}
-	second, err := repo.Backup(ctx, stubSource{name: "app", content: "one", modTime: time.Now()})
-	if err != nil {
-		t.Fatalf("second backup: %v", err)
-	}
-	if second.ParentID != "" {
-		t.Errorf("parent %q was recorded though every file of %q was racy", second.ParentID, first.ID)
 	}
 }

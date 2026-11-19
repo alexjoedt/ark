@@ -33,8 +33,6 @@ func (r *Repository) runBackup(
 	if err != nil {
 		logger.WarnContext(ctx, "failed to load the parent snapshot, reading every file",
 			"parent", parentID, "error", err)
-	}
-	if err != nil || len(parent) == 0 {
 		parentID = ""
 	}
 
