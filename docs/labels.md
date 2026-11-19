@@ -19,7 +19,7 @@ and never change afterwards.
 | Key | Recorded by | Value |
 |---|---|---|
 | `ark/path` | directory backups | the absolute path that was backed up, also when `--source` names it differently |
-| `ark/docker-host` | Docker volume backups | the Docker host the engine talks to (`--docker-host`, a profile's `docker-host` or `DOCKER_HOST`), left out when none is set |
+| `ark/docker-host` | Docker volume backups | the Docker host the engine talks to: in the CLI `--docker-host`, a profile's `docker-host` or `DOCKER_HOST`; in the library only the address passed to `arkdocker.NewClient`, not `DOCKER_HOST`. Left out when none is set |
 | `ark/container.N.name`, `.image`, `.image_id`, `.state`, `.compose_project`, `.compose_service` | Docker volume backups | the containers that used the volume, N counts from 0 in the order of their names; empty values are left out |
 
 ## Set and filter
