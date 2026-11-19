@@ -90,6 +90,9 @@ func decodeStruct(n *yaml.Node, v reflect.Value, path, dir string) error {
 	if err != nil {
 		return err
 	}
+	if err := checkConflicts(pairs, fields, path); err != nil {
+		return err
+	}
 	for _, kv := range pairs {
 		k, val := kv[0], kv[1]
 		p := joinPath(path, k.Value)
@@ -210,10 +213,30 @@ func joinPath(path, key string) string {
 
 // field is a struct field a yaml key decodes into; raw skips variable
 // expansion (`ark:"raw"`), path resolves the value as a path (`ark:"path"`),
-// location as a path unless it is a URI (`ark:"location"`).
+// location as a path unless it is a URI (`ark:"location"`). conflicts lists
+// the keys of the same mapping it cannot stand beside (`conflicts:"a b"`).
 type field struct {
 	v                   reflect.Value
 	raw, path, location bool
+	conflicts           []string
+}
+
+// checkConflicts refuses a key next to one its field conflicts with, naming
+// both and their lines, so a merged key shows where it came from too.
+func checkConflicts(pairs [][2]*yaml.Node, fields map[string]field, path string) error {
+	lines := make(map[string]int, len(pairs))
+	for _, kv := range pairs {
+		lines[kv[0].Value] = kv[0].Line
+	}
+	for _, kv := range pairs {
+		for _, c := range fields[kv[0].Value].conflicts {
+			if l, ok := lines[c]; ok {
+				return fieldErrorf(kv[0].Line, joinPath(path, kv[0].Value),
+					"excludes %s at line %d", joinPath(path, c), l)
+			}
+		}
+	}
+	return nil
 }
 
 // collectFields maps the yaml keys of v's fields to the fields, with the
@@ -247,10 +270,11 @@ func collectFields(v reflect.Value, out map[string]field) error {
 			return fmt.Errorf("decode a profile: key %q is used by two fields, the second in %s", name, t)
 		}
 		out[name] = field{
-			v:        v.Field(i),
-			raw:      hasOption(sf.Tag.Get("ark"), "raw"),
-			path:     hasOption(sf.Tag.Get("ark"), "path"),
-			location: hasOption(sf.Tag.Get("ark"), "location"),
+			v:         v.Field(i),
+			raw:       hasOption(sf.Tag.Get("ark"), "raw"),
+			path:      hasOption(sf.Tag.Get("ark"), "path"),
+			location:  hasOption(sf.Tag.Get("ark"), "location"),
+			conflicts: strings.Fields(sf.Tag.Get("conflicts")),
 		}
 	}
 	return nil

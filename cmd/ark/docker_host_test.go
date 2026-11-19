@@ -10,6 +10,7 @@ import (
 
 	ark "github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkdocker"
+	"github.com/alexjoedt/ark/arkprofile"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
 	"github.com/alexjoedt/ark/cmd/ark/internal/out"
 )
@@ -48,6 +49,23 @@ func TestRemoteDaemon(t *testing.T) {
 		if got := remoteDaemon(addr); got != want {
 			t.Errorf("remoteDaemon(%q) = %v, want %v", addr, got, want)
 		}
+		// A profile asks for backup.host exactly where the series host is the daemon's.
+		p := arkprofile.Profile{Name: "db", DockerHost: addr, Backup: arkprofile.Backup{Volume: "pgdata"}}
+		if err := p.Validate(); (err != nil) != want {
+			t.Errorf("profile with docker-host %q: Validate = %v, want an error %v", addr, err, want)
+		}
+	}
+}
+
+// arkprofile cannot import arkdocker; its volume filter names the same type.
+func TestVolumeProfileFilterIsOfTheVolumeType(t *testing.T) {
+	p := arkprofile.Profile{Name: "db", Backup: arkprofile.Backup{Volume: "pgdata", Host: "db1"}}
+	f, err := p.Filter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Type != arkdocker.SourceTypeDockerVolume {
+		t.Fatalf("filter type = %q, want %q", f.Type, arkdocker.SourceTypeDockerVolume)
 	}
 }
 

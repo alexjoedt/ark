@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -155,8 +156,89 @@ func TestFilterWithoutASourceFails(t *testing.T) {
 	if !errors.Is(err, arkprofile.ErrInvalid) {
 		t.Fatalf("err = %v, want ErrInvalid", err)
 	}
-	if !strings.Contains(err.Error(), "backup.source or backup.path") {
-		t.Fatalf("err = %v, want both keys named", err)
+	for _, key := range []string{"backup.path", "backup.source", "backup.volume"} {
+		if !strings.Contains(err.Error(), key) {
+			t.Fatalf("err = %v, want %s named", err, key)
+		}
+	}
+}
+
+// A volume profile selects the volume's docker-volume series, never a
+// directory backed up under the same source name, and a path profile only
+// file snapshots.
+func TestFilterSelectsTheSourceType(t *testing.T) {
+	ctx := context.Background()
+	b := arkmem.New()
+	if err := ark.Init(ctx, b, ark.NoPassword()); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := ark.Open(ctx, b, ark.NoPassword())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "a.txt"), "a", 0o600)
+	files := &arkprofile.Profile{Name: "files", Backup: arkprofile.Backup{Path: dir, Source: "pgdata", Host: "db1"}}
+	src, err := files.Source()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Backup(ctx, src, files.BackupOptions()...); err != nil {
+		t.Fatal(err)
+	}
+
+	vol := &arkprofile.Profile{Name: "db", Backup: arkprofile.Backup{Volume: "pgdata", Host: "db1"}}
+	f, err := vol.Filter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Source != "pgdata" || f.Type != "docker-volume" || f.Host != "db1" {
+		t.Fatalf("volume filter = %+v", f)
+	}
+	snaps, err := repo.Snapshots(ctx, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snaps) != 0 {
+		t.Fatalf("volume filter selects %d file snapshots", len(snaps))
+	}
+
+	ff, err := files.Filter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ff.Type != ark.SourceTypeFile {
+		t.Fatalf("path filter type = %q, want %q", ff.Type, ark.SourceTypeFile)
+	}
+	if snaps, err := repo.Snapshots(ctx, ff); err != nil || len(snaps) != 1 {
+		t.Fatalf("path filter selects %d snapshots, err %v; want 1", len(snaps), err)
+	}
+}
+
+// The volume source needs the Docker SDK, which arkprofile does not import.
+func TestVolumeProfileHasNoSource(t *testing.T) {
+	p := &arkprofile.Profile{Name: "db", Backup: arkprofile.Backup{Volume: "pgdata"}}
+	if _, err := p.Source(); !errors.Is(err, arkprofile.ErrInvalid) || !strings.Contains(err.Error(), "arkdocker") {
+		t.Fatalf("Source = %v, want ErrInvalid pointing to arkdocker", err)
+	}
+}
+
+func TestNoDockerSDK(t *testing.T) {
+	gobin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("no go command")
+	}
+	out, err := exec.CommandContext(t.Context(), gobin, "list", "-deps", ".").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for dep := range strings.FieldsSeq(string(out)) {
+		if strings.HasPrefix(dep, "github.com/docker/") || strings.HasPrefix(dep, "github.com/moby/") ||
+			strings.HasSuffix(dep, "/arkdocker") {
+			t.Errorf("arkprofile depends on %s", dep)
+		}
 	}
 }
 

@@ -1,5 +1,5 @@
 // Package arkprofile reads and checks profiles: stored backup configurations
-// of one repository, one directory and one forget policy, written by hand as
+// of one repository, one directory or docker volume and one forget policy, written by hand as
 // one YAML file per profile. The CLI fills the flags of its commands from a
 // profile; an embedder such as a scheduler builds a Profile in code or embeds
 // it in its own configuration struct and decodes that with [Decode].
@@ -39,6 +39,17 @@
 //	  prune: true                    # prune after the forget
 //	  run-after: echo forgotten      # the same four hooks as backup
 //
+// A volume profile backs up a docker volume instead of a directory. It takes
+// the backup keys above but path, exclude, exclude-file, exclude-cloud-files
+// and source; the volume names the snapshots:
+//
+//	repo: /srv/ark
+//	docker-host: ssh://admin@db1     # the daemon, default: DOCKER_HOST, else the local one
+//	backup:
+//	  volume: pgdata                 # the docker volume to back up
+//	  host: db1                      # needed with a remote docker-host
+//	  tag: [db]
+//
 // $VAR and ${VAR} expand in every value but the hooks. In repo (unless it is a
 // URI), password-file, backup.path and backup.exclude-file, ~ is the home
 // directory and a relative path is taken relative to the profile's directory.
@@ -46,7 +57,9 @@
 //
 // [Profile.Open], [Profile.Source], [Profile.BackupOptions],
 // [Profile.ForgetPolicy] and [Profile.Filter] translate a profile onto the
-// ark API; running backup, forget and prune stays with the caller.
+// ark API; running backup, forget and prune stays with the caller, and so
+// does the source of a volume profile: arkprofile does not import the Docker
+// SDK, the caller builds it with arkdocker from backup.volume and docker-host.
 package arkprofile
 
 import (
@@ -87,6 +100,9 @@ type Profile struct {
 	InsecureNoPassword bool          `yaml:"insecure-no-password"`
 	LockWait           time.Duration `yaml:"lock-wait"`
 	Concurrency        int           `yaml:"concurrency"`
+	// DockerHost is the docker daemon of a volume profile, as DOCKER_HOST
+	// takes it; empty leaves the choice to the caller.
+	DockerHost string `yaml:"docker-host"`
 
 	Backup Backup `yaml:"backup"`
 	Forget Forget `yaml:"forget"`
@@ -94,7 +110,11 @@ type Profile struct {
 
 // Backup holds the flags of a backup.
 type Backup struct {
-	Path              string   `yaml:"path"                ark:"path"`
+	Path string `yaml:"path" ark:"path"`
+	// Volume is the docker volume to back up instead of Path. [Decode] and
+	// Validate refuse it beside the keys its conflicts tag lists.
+	Volume string `yaml:"volume" conflicts:"path exclude exclude-file exclude-cloud-files source"`
+
 	Tags              []string `yaml:"tag"`
 	Excludes          []string `yaml:"exclude"`
 	ExcludeFiles      []string `yaml:"exclude-file"        ark:"path"`
@@ -152,7 +172,10 @@ var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 // count other than [ark.Unlimited], a backup label that
 // [ark.ValidateLabels] refuses, a keep-within window that [ark.ParseWithin]
 // refuses and a keep-tag list with an empty tag next to others, as a stray
-// comma leaves one. Every error matches [ErrInvalid].
+// comma leaves one. It refuses backup.volume beside backup.path, an exclude
+// key or backup.source, and a remote docker-host (not unix:// or npipe://)
+// without backup.host, since the snapshots record the daemon's machine. Every
+// error matches [ErrInvalid].
 func (p *Profile) Validate() error {
 	if !validName.MatchString(p.Name) {
 		return invalidf(
@@ -165,6 +188,9 @@ func (p *Profile) Validate() error {
 	}
 	if p.LockWait < 0 {
 		return invalidf("lock-wait %s: want 0 or more", p.LockWait)
+	}
+	if err := p.checkVolume(); err != nil {
+		return err
 	}
 	if err := ark.ValidateLabels(p.Backup.Labels); err != nil {
 		return invalidf("backup.label: %w", err)
@@ -217,6 +243,39 @@ func (p *Profile) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (p *Profile) checkVolume() error {
+	b := p.Backup
+	if remoteDockerHost(p.DockerHost) && b.Host == "" {
+		return invalidf("docker-host %s is a remote daemon: set backup.host to the name of its machine, "+
+			"the host its snapshots record", p.DockerHost)
+	}
+	if b.Volume == "" {
+		return nil
+	}
+	for _, k := range []struct {
+		key string
+		set bool
+	}{
+		{"backup.path", b.Path != ""},
+		{"backup.exclude", len(b.Excludes) > 0},
+		{"backup.exclude-file", len(b.ExcludeFiles) > 0},
+		{"backup.exclude-cloud-files", b.ExcludeCloudFiles},
+		{"backup.source", b.Source != ""},
+	} {
+		if k.set {
+			return invalidf("backup.volume and %s exclude each other: a volume backup takes "+
+				"no path, excludes or source name", k.key)
+		}
+	}
+	return nil
+}
+
+// remoteDockerHost reports whether the daemon address is on another machine:
+// set and neither a unix socket nor a windows pipe, as the CLI tells it.
+func remoteDockerHost(addr string) bool {
+	return addr != "" && !strings.HasPrefix(addr, "unix://") && !strings.HasPrefix(addr, "npipe://")
 }
 
 func (p *Profile) checkPassword() error {

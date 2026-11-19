@@ -286,7 +286,7 @@ func TestProfileErrorsExit2(t *testing.T) {
 		t.Fatalf("backup %s: exit %d: %s", src, code, out)
 	}
 	if code, out := runCapture(t, "--json", "forget", "-P", "nosrc"); code != 2 ||
-		!strings.Contains(out, "backup.source or backup.path") {
+		!strings.Contains(out, "backup.path, backup.source or backup.volume") {
 		t.Errorf("forget without a source: exit %d, want 2 naming both keys: %s", code, out)
 	}
 	if list := snapshotsJSON(t, "-P", "nosrc"); len(list) == 0 {
