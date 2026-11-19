@@ -191,6 +191,10 @@ func profileBool(key string, b bool) profileValue {
 func effectiveValues(root *cli.Command, lp *loadedProfile) []profileValue {
 	host, _ := os.Hostname()
 	b, f := lp.Backup, lp.Forget
+	var source string
+	if pf, err := lp.Filter(); err == nil {
+		source = pf.Source
+	}
 	repo, repoFrom := repoSetting(root, lp)
 	lockWait, lockWaitFrom := lockWaitSetting(root, lp)
 	conc, concFrom := concurrencySetting(root, lp)
@@ -206,7 +210,7 @@ func effectiveValues(root *cli.Command, lp *loadedProfile) []profileValue {
 		profileBool("backup.exclude-cloud-files", b.ExcludeCloudFiles),
 		profileOnly("backup.host", b.Host, host),
 		profileOnly("backup.comment", b.Comment, ""),
-		profileOnly("backup.source", b.Source, b.Path),
+		profileOnly("backup.source", b.Source, source),
 		profileOnly("backup.label", labelList(b.Labels), ""),
 	}
 	values = append(values, hookValues("backup", b.Hooks)...)

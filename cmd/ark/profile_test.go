@@ -187,8 +187,8 @@ func TestProfilePasswordOrder(t *testing.T) {
 		return p
 	}
 	right, wrong := pwFile("right.pw", "right"), pwFile("wrong.pw", "wrong")
-	// snapshots -P needs a source to list
-	head := "repo: " + repo + "\nbackup:\n  source: pw\n"
+	// profiles with repository settings only: snapshots -P lists every snapshot
+	head := "repo: " + repo + "\n"
 	withFile := writeProfile(t, dir, "file", head+"password-file: right.pw\n")
 	withEnv := writeProfile(t, dir, "env", head+"password-env: DOCS_PW\n")
 	bare := writeProfile(t, dir, "bare", head)
@@ -278,17 +278,22 @@ func TestProfileErrorsExit2(t *testing.T) {
 	if code, _ := runCapture(t, "backup", "-P", "../x"); code != 2 {
 		t.Errorf("-P ../x: exit %d, want 2", code)
 	}
-	// the profile's name never stands in for a source
-	writeProfile(t, dir, "nosrc", "repo: "+repo+"\nforget:\n  keep-last: 1\n")
-	for _, cmd := range []string{"forget", "snapshots", "find"} {
-		args := []string{"--json", cmd, "-P", "nosrc"}
-		if cmd == "find" {
-			args = append(args, "x")
-		}
-		code, out := runCapture(t, args...)
-		if code != 2 || !strings.Contains(out, "backup.source or backup.path") {
-			t.Errorf("%s without a source: exit %d, want 2 naming both keys: %s", cmd, code, out)
-		}
+	// the profile's name never stands in for a source: forget refuses, snapshots
+	// and find do not narrow
+	held := initRepo(t)
+	writeProfile(t, dir, "nosrc", "repo: "+held+"\nforget:\n  keep-last: 1\n")
+	if code, out := runCapture(t, "backup", "-r", held, src); code != 0 {
+		t.Fatalf("backup %s: exit %d: %s", src, code, out)
+	}
+	if code, out := runCapture(t, "--json", "forget", "-P", "nosrc"); code != 2 ||
+		!strings.Contains(out, "backup.source or backup.path") {
+		t.Errorf("forget without a source: exit %d, want 2 naming both keys: %s", code, out)
+	}
+	if list := snapshotsJSON(t, "-P", "nosrc"); len(list) == 0 {
+		t.Errorf("snapshots -P nosrc listed nothing, want every snapshot")
+	}
+	if code, out := runCapture(t, "find", "-P", "nosrc", "x"); code != 0 {
+		t.Errorf("find -P nosrc: exit %d: %s", code, out)
 	}
 
 	// a failing run-before skips the backup and runs run-after-fail
@@ -397,7 +402,7 @@ func TestProfileShowSources(t *testing.T) {
 	t.Setenv("ARK_REPOSITORY", "/env/repo")
 	t.Setenv("ARK_INSECURE_NO_PASSWORD", "")
 	t.Setenv("SHOW_SECRET", "hunter2-secret")
-	writeProfile(t, dir, "docs", "password-env: SHOW_SECRET\nlock-wait: 10s\nbackup:\n  path: /data\n  tag: [a, b]\n")
+	writeProfile(t, dir, "docs", "password-env: SHOW_SECRET\nlock-wait: 10s\nbackup:\n  path: /data/\n  tag: [a, b]\n")
 
 	type result struct {
 		Profile string
@@ -427,7 +432,7 @@ func TestProfileShowSources(t *testing.T) {
 		"concurrency":   {"3", "cli"},
 		"lock-wait":     {"10s", "profile"},
 		"backup.tag":    {"a, b", "profile"},
-		"backup.path":   {"/data", "profile"},
+		"backup.path":   {"/data/", "profile"},
 		"backup.source": {"/data", "default"},
 		"password":      {"variable SHOW_SECRET", "profile"},
 		"forget.prune":  {"false", "default"},

@@ -53,7 +53,7 @@ func findCommand() *cli.Command {
 				Host:   cmd.String("host"),
 				Labels: labels,
 			}
-			if lp := profileFrom(ctx); lp != nil && cmd.String("source") == "" {
+			if lp := profileFrom(ctx); lp != nil && cmd.String("source") == "" && profileNamesSnapshots(lp) {
 				pf, err := lp.Filter()
 				if err != nil {
 					return exitcode.Usagef("profile %s: %w", lp.Name, err)

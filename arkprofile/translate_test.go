@@ -160,6 +160,20 @@ func TestFilterWithoutASourceFails(t *testing.T) {
 	}
 }
 
+// A relative backup.path that cannot be made absolute fails the filter rather
+// than select a source name no backup stores.
+func TestFilterReportsAnUnresolvablePath(t *testing.T) {
+	gone := t.TempDir()
+	t.Chdir(gone)
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	p := &arkprofile.Profile{Backup: arkprofile.Backup{Path: "docs"}}
+	if f, err := p.Filter(); err == nil {
+		t.Fatalf("filter = %+v, want an error", f)
+	}
+}
+
 // A profile without backup.host records the machine's hostname and filters on
 // it, so another machine's snapshots of the same name are neither its parent
 // nor forgotten by it.

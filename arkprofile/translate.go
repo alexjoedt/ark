@@ -13,20 +13,22 @@ import (
 )
 
 // sourceName is the source name of the profile's snapshots: backup.source,
-// else the absolute backup.path as arkfs names it, the name a plain backup of
-// that path stores. Neither set gives "".
-func (p *Profile) sourceName() string {
+// else the absolute backup.path as [arkfs.NewSource] names it, the name a
+// plain backup of that path stores. Neither set gives "". It cannot ask arkfs,
+// which needs the directory to exist, and a forget must work without it;
+// TestSourceNames pins the two names together.
+func (p *Profile) sourceName() (string, error) {
 	switch {
 	case p.Backup.Source != "":
-		return p.Backup.Source
+		return p.Backup.Source, nil
 	case p.Backup.Path == "":
-		return ""
+		return "", nil
 	}
 	abs, err := filepath.Abs(p.Backup.Path)
 	if err != nil {
-		return p.Backup.Path
+		return "", fmt.Errorf("resolve backup.path %q: %w", p.Backup.Path, err)
 	}
-	return abs
+	return abs, nil
 }
 
 // host is the host the profile's snapshots record: backup.host, else the
@@ -47,7 +49,10 @@ func (p *Profile) Source() (ark.Source, error) {
 	if b.Path == "" {
 		return nil, invalidf("backup.path is empty")
 	}
-	opts := []arkfs.SourceOption{arkfs.WithName(p.sourceName())}
+	var opts []arkfs.SourceOption
+	if b.Source != "" {
+		opts = append(opts, arkfs.WithName(b.Source))
+	}
 	if len(b.Excludes) > 0 {
 		opts = append(opts, arkfs.WithExclude(b.Excludes...))
 	}
@@ -112,7 +117,10 @@ func (p *Profile) ForgetPolicy() ark.ForgetPolicy {
 // and other machines alone. It fails on a profile with neither backup.source
 // nor backup.path, which names no snapshots, rather than select every one.
 func (p *Profile) Filter() (ark.SnapshotFilter, error) {
-	source := p.sourceName()
+	source, err := p.sourceName()
+	if err != nil {
+		return ark.SnapshotFilter{}, err
+	}
 	if source == "" {
 		return ark.SnapshotFilter{}, invalidf("no source name: set backup.source or backup.path")
 	}

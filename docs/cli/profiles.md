@@ -61,11 +61,14 @@ the load.
   [Password](index.md#password).
 - The snapshot's source is the absolute `backup.path`, the name `ark backup <path>` stores, unless
   `backup.source` says otherwise; the profile's name never names snapshots. `ark forget -P`,
-  `ark snapshots -P` and `ark find -P` select that source, forget also only this host's snapshots. A
-  profile with neither `backup.source` nor `backup.path` exits 2 there. A path on the command line
-  other than `backup.path` names its own snapshots by its absolute path; with `backup.source` set it
-  needs `--source`, so it never lands under the profile's source. Snapshot ids given to
-  `ark forget -P` are removed as named, without the profile's policy or source filter. See
+  `ark snapshots -P` and `ark find -P` select that source, forget also only this host's snapshots. For
+  a profile with neither `backup.source` nor `backup.path` `ark forget -P` exits 2, while
+  `ark snapshots -P` and `ark find -P` search every snapshot. Two profiles of the same `backup.path`
+  without `backup.source` share one series: each one's forget policy removes the other's snapshots
+  and each one's backup is the other's parent, so give each its own `backup.source`. A path on the
+  command line other than `backup.path` names its own snapshots by its absolute path; with
+  `backup.source` set it needs `--source`, so it never lands under the profile's source. Snapshot ids
+  given to `ark forget -P` are removed as named, without the profile's policy or source filter. See
   [Series](../SERIES.md).
 - `backup.label` sets labels as a map, `label: {app: docs}`; a `--label` flag adds to them and wins
   for a key in both. See [Labels](../LABELS.md).

@@ -22,6 +22,12 @@ type loadedProfile struct {
 	dir string
 }
 
+// profileNamesSnapshots reports whether the profile names a source, so that
+// snapshots and find narrow to it; forget refuses a profile that names none.
+func profileNamesSnapshots(lp *loadedProfile) bool {
+	return lp.Backup.Source != "" || lp.Backup.Path != ""
+}
+
 // profileFrom returns the profile loaded for this run, nil without one.
 func profileFrom(ctx context.Context) *loadedProfile {
 	lp, _ := ctx.Value(profileKey{}).(*loadedProfile)
