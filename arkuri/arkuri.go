@@ -11,6 +11,10 @@
 //	sftp://host/srv/ark                 over SFTP
 //	sftp://user@host:2222/srv/ark       over SFTP with user and port
 //
+// A colon before the first slash makes a location remote, so the scp form
+// host:path is rejected; a local path with a colon writes it after a slash,
+// such as ./host:path.
+//
 // Non-secret sftp options ride as query parameters: known_hosts, identity and
 // insecure. Secrets never appear in a URI; see [arksftp] for the environment
 // variables that carry them.
@@ -114,21 +118,17 @@ func hasScheme(s string) bool { return strings.Contains(s, "://") }
 // sftp:host:/path, and the scp form host:path, which would otherwise become a
 // local directory named after the whole string. Like rsync, a colon before the
 // first slash makes a location remote; a local path with a colon writes it
-// after a slash, such as ./host:path.
+// after a slash, such as ./host:path. The errors never echo s, which may carry
+// a password, and do not guess a rewrite: a relative scp path and an absolute
+// sftp path name different directories.
 func schemeWithoutSlashes(s string) error {
-	if rest, ok := strings.CutPrefix(s, SchemeSFTP+":"); ok {
-		if host, path, ok := strings.Cut(rest, ":"); ok && host != "" {
-			return fmt.Errorf("arkuri: not a URI, write sftp://%s/%s", host, strings.TrimPrefix(path, "/"))
-		}
+	if strings.HasPrefix(s, SchemeSFTP+":") || strings.HasPrefix(s, SchemeLocal+":") {
 		return fmt.Errorf("arkuri: not a URI, %s", supportedForms())
 	}
-	if strings.HasPrefix(s, SchemeLocal+":") {
-		return fmt.Errorf("arkuri: not a URI, %s", supportedForms())
-	}
-	if host, path, ok := strings.Cut(s, ":"); ok && !strings.Contains(host, "/") {
-		return fmt.Errorf("arkuri: %q looks like an scp location, write sftp://%s/%s "+
-			"(a local path with a colon needs a slash before it, such as ./%s)",
-			s, host, strings.TrimPrefix(path, "/"), s)
+	if host, _, ok := strings.Cut(s, ":"); ok && !strings.Contains(host, "/") {
+		return errors.New("arkuri: the location looks like an scp form, which is not supported: " +
+			"write sftp://[user@]host/path, the path absolute on the server " +
+			"(a local path with a colon needs a slash before it, such as ./name:x)")
 	}
 	return nil
 }
