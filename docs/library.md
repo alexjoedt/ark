@@ -43,7 +43,7 @@ _, err = arkfs.Restore(ctx, repo, snap.ID, "/tmp/docs")
 
 `arkfs.Backup` and `arkfs.Restore` are `repo.Backup(ctx, source)` and `repo.Restore(ctx, snapshotID, sink)` with a directory as source and sink. A snapshot ID has its own type, `ark.SnapshotID`; `Snapshot.ID` is one, and `Restore`, `Snapshot`, `Verify`, `Walk`, `Export`, `Reader.FS`, `WithParent`, and `SnapshotFilter.IDs` passed to `Snapshots` or `Forget`, take a full ID or a unique prefix of one, in upper or lower case. A prefix that matches no snapshot wraps `ark.ErrNotFound`, one that matches several wraps `ark.ErrAmbiguousID`. `SnapshotFilter.Match` resolves nothing: called on its own, it compares `IDs` with the full, lower-case `Snapshot.ID` exactly. A literal converts as it is, `ark.SnapshotID("3f9a")`. Restore and export stream the snapshot: memory stays at the chunk cache plus one chunk per worker, no matter how large the snapshot is. The cache is 256 MiB; `ark.WithRestoreCache` changes it for a restore, export always uses the default. Verify reads pack by pack instead and holds about 150 bytes per distinct chunk of the snapshot plus one pack range of up to about 20 MiB, so its memory grows with the snapshot.
 
-Besides backup and restore, a `*ark.Repository` lists snapshots (`Snapshots`, `Walk`), reports its size (`Info`), forgets and prunes (`Forget`, `Prune`), checks (`Verify`, `Check`), exports and imports, changes the password and lists locks.
+Besides backup and restore, a `*ark.Repository` lists snapshots (`Snapshots`, `Walk`), reports its size (`Info`), forgets and prunes (`Forget`, `Prune`), checks (`Verify`, `Check`), reads snapshots as file systems (`OpenReader`), rebuilds the index (`RebuildIndex`), exports and imports, changes the password, and lists and removes locks (`Locks`, `Unlock`).
 
 ## Repository size
 
@@ -73,7 +73,7 @@ fmt.Printf("%d snapshots, %d of %d bytes unused\n", info.Snapshots, info.BytesFr
 | [`arkfs`](https://pkg.go.dev/github.com/alexjoedt/ark/arkfs) | A local directory, with hardlinks, xattrs and excludes |
 | [`arkdocker`](https://pkg.go.dev/github.com/alexjoedt/ark/arkdocker) | A Docker volume, and an `Engine` that stops and restarts the containers using it |
 | **Tools on top** | |
-| [`arkprofile`](https://pkg.go.dev/github.com/alexjoedt/ark/arkprofile) | Profiles: a stored repository, directory and forget policy, in code or YAML |
+| [`arkprofile`](https://pkg.go.dev/github.com/alexjoedt/ark/arkprofile) | Profiles: a stored repository, directory or Docker volume and forget policy, in code or YAML |
 | [`arkfind`](https://pkg.go.dev/github.com/alexjoedt/ark/arkfind) | Searches snapshots for paths that match a pattern |
 | [`arkglob`](https://pkg.go.dev/github.com/alexjoedt/ark/arkglob) | Matches snapshot paths against exclude patterns with restic's rules |
 | **Testing** | |
@@ -93,7 +93,7 @@ b, err := arkuri.Open(ctx, "sftp://backup@nas/srv/ark") // or "/srv/ark", "local
 b := arkmem.New() // its objects are gone on Close
 ```
 
-`arksftp` reads `~/.ssh/config`, so a `Host` alias works. It authenticates with ssh-agent, then `IdentityFile` or the default keys in `~/.ssh`, then the password in `ARK_SFTP_PASSWORD`. An encrypted key file is unlocked with `ARK_SFTP_KEY_PASSPHRASE`. Secrets never go into `Config` or a URI. `arkuri` takes the non-secret options as query parameters: `known_hosts`, `identity` and `insecure`.
+`arksftp` reads `~/.ssh/config`, so a `Host` alias works. It authenticates with ssh-agent, then `IdentityFile` or the default keys in `~/.ssh`, then the password in `ARK_SFTP_PASSWORD`. An encrypted key file is unlocked with `ARK_SFTP_KEY_PASSPHRASE`. Secrets never go into `Config` or a URI. `arkuri` takes the non-secret options as query parameters: `known_hosts`, `identity` and `insecure`. User and port are optional in an `sftp://` URI, and the path after the host is absolute on the server. [`arkuri.Open`](https://pkg.go.dev/github.com/alexjoedt/ark/arkuri#Open) rejects the scp form `sftp:host:/path`.
 
 Anything else, such as S3 or a NAS API, is an `ark.Backend`: nine methods (`Put`, `Get`, `GetRange`, `Exists`, `Delete`, `Sync`, `List`, `Stat`, `Close`). The suite in `arktest` checks the same contract the built-in backends pass:
 
@@ -153,9 +153,9 @@ _, err = repo.Restore(ctx, snap.ID, ark.NewStreamSink(os.Stdout))
 
 ## Host, series and labels
 
-The core library records no host unless you pass `ark.WithHost`; it never reads the machine's hostname. The `ark` CLI always records one, and so does `arkprofile`: without `backup.host`, a profile's `BackupOptions` and `Filter` use the machine's hostname. In a container whose hostname changes on every deploy, set `backup.host`, or each deploy starts a new series and `Forget` no longer sees the older snapshots. Source type, source name and host make up a snapshot's series: a backup takes the newest snapshot of its series as its parent, and `Forget` applies a keep policy once per series. Embedders that share one repository between machines should set a host. [Series](SERIES.md) has the details.
+The core library records no host unless you pass `ark.WithHost`; it reads the machine's hostname only for locks, to stamp the ones it writes and to clear at once a lock of this hostname whose process is gone; any other lock is cleared once it is 30 minutes old. The `ark` CLI always records one, and so does `arkprofile`: without `backup.host`, a profile's `BackupOptions` and `Filter` use the machine's hostname. In a container whose hostname changes on every deploy, set `backup.host`, or each deploy starts a new series and `Forget` no longer sees the older snapshots. Source type, source name and host make up a snapshot's series: a backup takes the newest snapshot of its series as its parent, and `Forget` applies a keep policy once per series. Embedders that share one repository between machines should set a host. [Series](series.md) has the details.
 
-Labels are key-value pairs stored with a snapshot, set at backup with `ark.WithLabels` and matched with `SnapshotFilter.Labels`. Keys that start with `ark/` belong to ark's own sources, and a backup that sets one fails with `ark.ErrInvalidLabel`. [Labels](LABELS.md) has the key rules and the reserved keys.
+Labels are key-value pairs stored with a snapshot, set at backup with `ark.WithLabels` and matched with `SnapshotFilter.Labels`. Keys that start with `ark/` belong to ark's own sources, and a backup that sets one fails with `ark.ErrInvalidLabel`. [Labels](labels.md) has the key rules and the reserved keys.
 
 ```go
 snap, err := arkfs.Backup(ctx, repo, "/home/me/docs",
@@ -173,7 +173,7 @@ snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{
 
 ## Encryption
 
-Every repository is encrypted and authenticated. The password unlocks a random master key stored in `keys/`; chunks, trees, snapshot manifests and locks are sealed with XChaCha20-Poly1305 and named by an HMAC, so the backend sees neither contents nor file names. A changed object fails to open instead of restoring garbage.
+Every repository is encrypted and authenticated. The password unlocks a random master key stored in `keys/`; chunks, trees, indexes, snapshot manifests, locks and the lost-pack marker are sealed with XChaCha20-Poly1305, and no object is named after a file or its plain contents, so the backend sees neither contents nor file names. Lock names and 26 character base32 snapshot IDs do show a creation time. A changed object fails to open instead of restoring garbage.
 
 - A lost password is lost data. There is no recovery and no backdoor.
 - `ark.NoPassword()` creates or opens a repository without one. The format is the same, but the master key is stored unprotected: anyone with access to the backend can read it. `Init` records the choice, and `Open` holds to it: `NoPassword` on a protected repository fails with `ark.ErrPasswordRequired`, a password on an unprotected one with `ark.ErrNotPasswordProtected`.
@@ -181,7 +181,7 @@ Every repository is encrypted and authenticated. The password unlocks a random m
 - `repo.ChangePassword` seals the same master key under a new password. It does not revoke a key that already leaked.
 - `Init`, `Open` and `ChangePassword` derive the key with argon2id and need 64 MiB of memory for it. Size containers accordingly.
 
-The threat model, the accepted risks and how to report a vulnerability: [Security](SECURITY.md).
+The threat model, the accepted risks and how to report a vulnerability: [Security](security.md).
 
 ## Watching operations
 
@@ -217,7 +217,7 @@ Concurrent operations call the progress function concurrently, so it must not bl
 
 ## Profiles
 
-`arkprofile` is the profile format of the CLI as a package: one repository, one directory to back up and one forget policy, built in code or decoded from YAML. The keys are the CLI's flag names, listed in [Profiles](cli/profiles.md).
+`arkprofile` is the profile format of the CLI as a package: one repository, one directory or Docker volume to back up and one forget policy, built in code or decoded from YAML. The keys are the CLI's flag names, listed in [Profiles](cli/profiles.md).
 
 ```go
 p := &arkprofile.Profile{
@@ -259,19 +259,19 @@ if p.Forget.Prune {
 }
 ```
 
-`Source` names the snapshots `Backup.Source`, else the absolute `Backup.Path`, the name `arkfs.NewSource` gives that path, and `Filter` selects the same source; `Name` names no snapshots.
+`Source` names the snapshots `Backup.Source`, else the absolute `Backup.Path`, the name `arkfs.NewSource` gives that path, and `Filter` selects the same source; `Name` names no snapshots. A volume profile has no `Source`: the call fails, and the program backs up `Backup.Volume` with an `arkdocker.Engine` opened with `arkdocker.WithDockerHost(p.DockerHost)` and `BackupVolume` called with `BackupOptions`. Without that option the engine uses `DOCKER_HOST` or the local daemon and backs up another machine's volume under the profile's host. The snapshot is named after the volume, which `Filter` then selects.
 
 The counted rules of an `ark.ForgetPolicy`, `KeepLast` to `KeepYearly`, are of type `ark.KeepCount`: a number, or `ark.Unlimited` to keep every snapshot (`KeepLast`) or the newest of every period. `Forget` refuses any other negative count with `ark.ErrInvalidPolicy`. `ark.ParseKeepCount` reads the text form a profile and the CLI use, a whole number or `unlimited`. In JSON a count is a number and `ark.Unlimited` the string `"unlimited"`.
 
-`KeepWithin` is an `ark.Within`, a window of calendar `Years`, `Months` and `Days` plus `Hours`: `ark.Within{Days: 30}` keeps every snapshot of a series less than 30 days older than its newest one that is not dated in the future. Years, months and days are stepped back on the calendar of the forget zone, hours are elapsed time. `ark.ParseWithin` reads the text form a profile and the CLI use, `30d`, `72h` or `1y6m`, where `m` counts months; earlier versions took a `time.Duration`. `Forget` refuses a negative number, more than 11 months (18 months are `ark.Within{Years: 1, Months: 6}`) and a number above a million with `ark.ErrInvalidPolicy`, the bounds of the text form. In JSON a window is that text, `"30d"`.
+`KeepWithin` is an `ark.Within`, a window of calendar `Years`, `Months` and `Days` plus `Hours`: `ark.Within{Days: 30}` keeps every snapshot of a series less than 30 days older than its newest one that is not dated in the future. Years, months and days are stepped back on the calendar of the forget zone, hours are elapsed time. `ark.ParseWithin` reads the text form a profile and the CLI use, `30d`, `72h` or `1y6m`, where `m` counts months. `Forget` refuses a negative number, more than 11 months (18 months are `ark.Within{Years: 1, Months: 6}`) and a number above a million with `ark.ErrInvalidPolicy`, the bounds of the text form. In JSON a window is that text, `"30d"`.
 
 `KeepWithinHourly`, `KeepWithinDaily`, `KeepWithinWeekly`, `KeepWithinMonthly` and `KeepWithinYearly` are windows too, each for a period rule without a count: `KeepWithinDaily: ark.Within{Days: 14}` keeps the newest snapshot of every day inside the window, which is measured as the one of `KeepWithin`. The oldest snapshot of a series is kept in addition when it lies inside the window. The reasons in `ForgetResult.KeepReasons` read `daily within 14d` and `oldest daily within 14d`.
 
 `KeepTags` keeps by tag: it holds lists of tags, and a snapshot that carries all tags of one of the lists is kept; the empty tag stands for no tag, so `[][]string{{""}}` keeps the untagged snapshots. `ark.ParseTagList` reads the text form of one list, `db,prod`. Blanks around a tag do not count. A list with the empty tag next to others, as a stray comma leaves one, matches no snapshot, and `Forget` refuses it with `ark.ErrInvalidPolicy`. The rule has no count and can match nothing: when a policy keeps no snapshot of one of the series, `Forget` removes nothing at all and returns `ark.ErrNoSnapshotKept`. With this field a `ForgetPolicy` holds a slice, so two policies compare with `reflect.DeepEqual`, not with `==`; `policy.Empty()` tells whether a policy has a rule that keeps a snapshot.
 
-A snapshot dated after the time of the run, as a machine with a wrong clock leaves it, is kept whatever the policy says, and a snapshot dated exactly at that time is not one of these. No rule sees it: it uses no count, takes no period, moves no window and is not matched by `KeepTags`, so the other snapshots are decided as if it was not there. Its one reason in `ForgetResult.KeepReasons` is `in the future`, and it does not count as the snapshot that keeps its series, so a policy that keeps nothing else of the series still returns `ark.ErrNoSnapshotKept`. `ForgetResult.Future` lists these snapshots, newest first, each of them also in `Keep`, so a program can warn about them as `ark forget` does. `Future` is nil when there is none and when `Forget` removes named IDs without a policy, which removes such a snapshot like any other; see [the decision](adr/0028-forget-keeps-future-snapshots-out-of-its-rules.md).
+A snapshot dated after the time of the run, as a machine with a wrong clock leaves it, is kept whatever the policy says, and a snapshot dated exactly at that time is not one of these. No rule sees it: it uses no count, takes no period, moves no window and is not matched by `KeepTags`, so the other snapshots are decided as if it was not there. Its one reason in `ForgetResult.KeepReasons` is `in the future`, and it does not count as the snapshot that keeps its series, so a policy that keeps nothing else of the series still returns `ark.ErrNoSnapshotKept`. `ForgetResult.Future` lists these snapshots, newest first, each of them also in `Keep`, so a program can warn about them as `ark forget` does. `Future` is nil when there is none and when `Forget` removes named IDs without a policy, which removes such a snapshot like any other.
 
-`Forget` counts the hours, days, weeks, months and years of a policy in `time.Local`; `ark.WithForgetLocation` names another zone. Earlier versions counted in UTC. The result depends on the zone of the machine, so a program that has to keep the same snapshots wherever it runs passes a fixed zone, for example `ark.WithForgetLocation(time.UTC)`.
+`Forget` counts the hours, days, weeks, months and years of a policy in `time.Local`; `ark.WithForgetLocation` names another zone. The result depends on the zone of the machine, so a program that has to keep the same snapshots wherever it runs passes a fixed zone, for example `ark.WithForgetLocation(time.UTC)`.
 
 These calls apply neither the profile's hooks nor `forget.prune` on their own. Read `p.Forget.Prune` as above, and run each step inside `p.Backup.Hooks.Run` or `p.Forget.Hooks.Run` with an `arkprofile.HookEnv`, as the CLI does; a profile with `run-before` or `run-after` hooks otherwise behaves differently in your program than under `ark`.
 

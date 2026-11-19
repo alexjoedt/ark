@@ -4,7 +4,8 @@
 
 # ark
 
-Deduplicated backups as a Go library, with a CLI on top.
+Deduplicated, compressed and encrypted backups of directories and Docker volumes in a local or SFTP
+repository, as a Go library with a CLI on top. A Go program can plug in its own Source or Sink.
 
 **Documentation: <https://alexjoedt.github.io/ark/>**
 
@@ -17,8 +18,8 @@ ark backs up anything you can walk as a tree of files: a directory, a Docker vol
 an API export. Content is split with FastCDC, stored once, compressed with zstd and encrypted.
 
 - `github.com/alexjoedt/ark` is the library module: the core package `ark`, the backends `arklocal`,
-  `arksftp` and `arkmem`, `arkuri`, `arkfs` for directories, `arkprofile`, `arkfind`, `arkglob`, the
-  test suites in `arktest` and `chunker`.
+  `arksftp` and `arkmem`, `arkuri`, `arkfs` for directories, `arkprofile`, `arkfind`, `arkglob`, `chunker`
+  and the conformance suites in `arktest`.
 - `github.com/alexjoedt/ark/arkdocker` adds Docker volumes, in its own module so the Docker SDK stays
   out of the core.
 - `github.com/alexjoedt/ark/cmd/ark` is the `ark` binary, a restic-style CLI.
@@ -82,9 +83,9 @@ _, err = arkfs.Restore(ctx, repo, snap.ID, "/tmp/docs")
 - [Getting started](https://alexjoedt.github.io/ark/getting-started): repository, password, first backup, restore, retention
 - [CLI](https://alexjoedt.github.io/ark/cli/): every command and flag, [profiles](https://alexjoedt.github.io/ark/cli/profiles), exit codes
 - [Library](https://alexjoedt.github.io/ark/library): packages, backends, sources and sinks, encryption, examples
-- [Mount](https://alexjoedt.github.io/ark/MOUNT), [Series](https://alexjoedt.github.io/ark/SERIES), [Labels](https://alexjoedt.github.io/ark/LABELS)
-- [Repository format](https://alexjoedt.github.io/ark/FORMAT) and [Security](https://alexjoedt.github.io/ark/SECURITY)
-- [Architecture decisions](https://alexjoedt.github.io/ark/adr/) and [Releasing](https://alexjoedt.github.io/ark/RELEASING)
+- [Mount](https://alexjoedt.github.io/ark/mount), [Series](https://alexjoedt.github.io/ark/series), [Labels](https://alexjoedt.github.io/ark/labels)
+- [Repository format](https://alexjoedt.github.io/ark/format) and [Security](https://alexjoedt.github.io/ark/security)
+- [Releasing](https://alexjoedt.github.io/ark/releasing)
 
 The same pages are in [docs/](docs/).
 

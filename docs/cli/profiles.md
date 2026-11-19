@@ -65,9 +65,8 @@ Each key means what the flag of the same name means, see [CLI](index.md#global-f
 A keep count is a whole number or `unlimited`, as on the command line: `keep-yearly: unlimited`
 keeps the newest snapshot of every year. A negative count fails the load.
 `keep-within` is a duration as `--keep-within` takes it, `30d`, `72h` or `1y6m`, where `m` counts
-months; one that flag would refuse fails the load. `keep-within-hourly` to `keep-within-yearly`
-take the same durations. A profile written when `m` counted minutes
-still loads with `1m` to `11m` and then keeps months: see
+months, so `5m` keeps five months and not five minutes; one that flag would refuse fails the load.
+`keep-within-hourly` to `keep-within-yearly` take the same durations, see
 [`ark forget`](commands.md#forget).
 `keep-tag` is a list with one entry per tag list, each written as `--keep-tag` takes it:
 `keep-tag: [pinned, "db,prod"]` keeps what is tagged `pinned`, and what is tagged `db` and `prod`;
@@ -91,14 +90,16 @@ the load.
   command line other than `backup.path` names its own snapshots by its absolute path; with
   `backup.source` set it needs `--source`, so it never lands under the profile's source. Snapshot ids
   given to `ark forget -P` are removed as named, without the profile's policy or source filter. See
-  [Series](../SERIES.md).
+  [Series](../series.md).
 - A profile with `backup.volume` selects the docker-volume series of that name, never a file series
   of the same name. `ark forget -P` takes the host `ark docker backup -P` files it under:
   `backup.host`, else this machine's hostname, and for a remote daemon in `$DOCKER_HOST` the
-  daemon's own name, which `forget` asks the daemon for unless `--host` names it. `backup.volume` excludes `backup.path` and
-  `backup.source`; a remote `docker-host` needs `backup.host`.
+  daemon's own name, which `forget` asks the daemon for unless `--host` names it. The load fails
+  for `backup.volume` next to `backup.path`, `backup.source`, `backup.exclude`,
+  `backup.exclude-file` or `backup.exclude-cloud-files`, and for a remote `docker-host` without
+  `backup.host`.
 - `backup.label` sets labels as a map, `label: {app: docs}`; a `--label` flag adds to them and wins
-  for a key in both. See [Labels](../LABELS.md).
+  for a key in both. See [Labels](../labels.md).
 - `$VAR` and `${VAR}` expand in every value but the hooks; an unset variable exits 2. `~` and
   relative paths in `repo`, `password-file`, `backup.path` and `backup.exclude-file` are taken from
   the home directory and the profile's directory. A profile never holds a password: a `password:` key

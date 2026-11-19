@@ -36,7 +36,7 @@ sources/
 
 - `<type>` is the source type plus `s`: `files`, `docker-volumes`, `streams`.
 - `<source path>` nests: `/home/alex` is `home/alex/`, so `/home` and `/home/alex` share `home/`.
-  The sources of one [series](SERIES.md) are one directory, so `latest` is per series.
+  The sources of one [series](series.md) are one directory, so `latest` is per series.
 - An empty host is `_`.
 - A `/` in a host becomes `_`. A host or path element that is empty, `latest`, shaped like a time
   or starts with `.` or `_` gets a `_` in front.

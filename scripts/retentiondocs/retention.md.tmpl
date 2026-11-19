@@ -113,7 +113,7 @@ Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keep
 
 ## Keep tag
 
-`--keep-tag TAG` keeps every snapshot that carries the tag, whatever its age. It has no count and no period, and on its own it keeps nothing else, not even the newest snapshot. The history is a week of daily backups, some of them tagged `release`.
+`--keep-tag TAG` keeps every snapshot that carries the tag, whatever its age. It has no count and no period, and on its own it keeps nothing else, not even the newest snapshot. When that would leave a series with no snapshot, forget removes nothing at all and exits 1, naming the series; `--dry-run` fails the same way and prints no list. A snapshot kept only for being dated in the future does not count as kept. The history is a week of daily backups, some of them tagged `release`.
 {{with scenario "keep-tag"}}
 {{template "example" .}}
 {{- end}}

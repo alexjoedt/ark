@@ -17,13 +17,13 @@ var (
 	workUse     = regexp.MustCompile(`(?s)\nuse \((.*?)\)`)
 )
 
-// TestSecurityDocCitesDefinedTests keeps docs/SECURITY.md and the tests in
+// TestSecurityDocCitesDefinedTests keeps docs/security.md and the tests in
 // step: every cited test is defined in a go.work module and builds without
 // extra tags, every guarantee and accepted risk cites one, and the CI step and
 // the module list of Dependency scanning match go.yml, Taskfile.yml and go.work.
 func TestSecurityDocCitesDefinedTests(t *testing.T) {
 	modules := workModules(t)
-	doc, err := os.ReadFile("docs/SECURITY.md")
+	doc, err := os.ReadFile("docs/security.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,22 +31,22 @@ func TestSecurityDocCitesDefinedTests(t *testing.T) {
 	defined := definedTests(t, modules)
 	cited := citedTest.FindAllSubmatch(doc, -1)
 	if len(cited) == 0 {
-		t.Fatal("docs/SECURITY.md cites no test")
+		t.Fatal("docs/security.md cites no test")
 	}
 	for _, m := range cited {
 		if !defined[string(m[1])] {
-			t.Errorf("docs/SECURITY.md cites %s, which no _test.go of a go.work module defines", m[1])
+			t.Errorf("docs/security.md cites %s, which no _test.go of a go.work module defines", m[1])
 		}
 	}
 
 	for _, section := range []string{"Guarantees at rest", "Guarantees in transit", "Accepted risks"} {
 		items := bullets(string(doc), section)
 		if len(items) == 0 {
-			t.Errorf("docs/SECURITY.md: section %q is missing or has no bullets", section)
+			t.Errorf("docs/security.md: section %q is missing or has no bullets", section)
 		}
 		for _, b := range items {
 			if !endsInTest.MatchString(b) {
-				t.Errorf("docs/SECURITY.md, %s: bullet does not end with a cited test: %q", section, b)
+				t.Errorf("docs/security.md, %s: bullet does not end with a cited test: %q", section, b)
 			}
 		}
 	}
@@ -57,7 +57,7 @@ func TestSecurityDocCitesDefinedTests(t *testing.T) {
 	}
 	if !strings.Contains(string(doc), "`Vulnerability check`") ||
 		!strings.Contains(string(workflow), "name: Vulnerability check\n") {
-		t.Error("docs/SECURITY.md and go.yml must both name the step Vulnerability check")
+		t.Error("docs/security.md and go.yml must both name the step Vulnerability check")
 	}
 
 	loop := "for dir in " + strings.Join(modules, " ") + ";"
@@ -79,7 +79,7 @@ func TestSecurityDocCitesDefinedTests(t *testing.T) {
 	}
 	names := strings.Join(labels, ", ")
 	if !strings.Contains(string(doc), "("+names+")") {
-		t.Errorf("docs/SECURITY.md: Dependency scanning must list the go.work modules as (%s)", names)
+		t.Errorf("docs/security.md: Dependency scanning must list the go.work modules as (%s)", names)
 	}
 }
 
@@ -112,6 +112,31 @@ func workModules(t *testing.T) []string {
 func definedTests(t *testing.T, modules []string) map[string]bool {
 	t.Helper()
 	defined := map[string]bool{}
+	walkModules(t, modules, func(path string) error {
+		if !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		ok, err := build.Default.MatchFile(filepath.Dir(path), filepath.Base(path))
+		if err != nil || !ok {
+			return err
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, m := range definedTest.FindAllSubmatch(src, -1) {
+			defined[string(m[1])] = true
+		}
+		return nil
+	})
+	return defined
+}
+
+// walkModules calls fn for every .go file of the go.work modules, leaving out
+// testdata, vendor, node_modules, dot and underscore directories and nested
+// modules outside go.work.
+func walkModules(t *testing.T, modules []string, fn func(path string) error) {
+	t.Helper()
 	for _, root := range modules {
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -131,27 +156,15 @@ func definedTests(t *testing.T, modules []string) map[string]bool {
 				}
 				return nil
 			}
-			if !strings.HasSuffix(path, "_test.go") {
+			if !strings.HasSuffix(path, ".go") {
 				return nil
 			}
-			ok, err := build.Default.MatchFile(filepath.Dir(path), d.Name())
-			if err != nil || !ok {
-				return err
-			}
-			src, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			for _, m := range definedTest.FindAllSubmatch(src, -1) {
-				defined[string(m[1])] = true
-			}
-			return nil
+			return fn(path)
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	return defined
 }
 
 // bullets returns the list items of the "## " section, each joined with the

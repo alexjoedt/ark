@@ -3,13 +3,12 @@
 The threat model of an ark repository at rest and in transit. Every guarantee and every accepted
 risk ends with the test that pins it; the tests carry the detail. `TestSecurityDocCitesDefinedTests`
 fails when a cited test does not exist or a guarantee or risk cites none.
-The reasoning behind the boundaries is in `docs/adr/0006-threat-model-boundaries.md`.
 
 ## Assets
 
 - File contents, and the metadata trees record for them: paths, file and directory names, symlink
   targets, xattrs, sizes, modes, owners and times.
-- Snapshot metadata: host, tags, comment, source name, creation time and statistics.
+- Snapshot metadata: host, tags, labels, comment, source name, creation time and statistics.
 - The passphrase and the master key it unlocks.
 - The integrity of a restore: the bytes that come back are the bytes that were backed up.
 
@@ -37,13 +36,13 @@ writer, every accepted risk included.
 - Chunks and trees are stored inside pack objects: each one sealed on its own as above, followed
   by a sealed table of their names and lengths that is bound to the SHA-256 of the bytes before
   it. A pack is named by the SHA-256 of its bytes, which are ciphertext throughout. The layout
-  of packs and index objects is in [FORMAT.md](FORMAT.md).
+  of packs and index objects is in [format.md](format.md).
 - Chunk, tree and index names are the hex HMAC-SHA256 of their plaintext under the repository's ID
   key, the lost-pack marker's that of its namespace name, manifests and locks are sealed under
-  chosen names: snapshot IDs are 128 random bits in 32 lowercase hex characters (a repository
-  written earlier keeps its 26 character Crockford base32 IDs, which still resolve; an import of
-  one names the copy by the first 128 bits of the SHA-256 of that ID), lock names a
-  millisecond timestamp plus 80 random bits:
+  chosen names: snapshot IDs are 128 random bits in 32 lowercase hex characters, lock names a
+  millisecond timestamp plus 80 random bits. A repository may also hold snapshots under 26
+  character Crockford base32 IDs, which ark resolves but does not write; an import of an archive
+  whose ID has another form names the copy by the first 128 bits of the SHA-256 of that ID:
   `TestChunksAndTreesAreSealedUnderKeyedNames`, `TestSnapshotIDsCarryNoTimestamp`,
   `TestBase32SnapshotIDsStillWork`.
 - The master key holds the data key, the ID key, the chunker seed (which keys the chunk boundaries),
@@ -66,7 +65,8 @@ writer, every accepted risk included.
 - Object names are keyed: the same files in two repositories share no name in any namespace, and no
   chunk is named by the SHA-256 of its content: `TestSameFilesInTwoRepositoriesShareNoNames`,
   `TestChunksAndTreesAreSealedUnderKeyedNames`.
-- Snapshot IDs carry no timestamp; prefix resolution still works: `TestSnapshotIDsCarryNoTimestamp`.
+- The snapshot IDs ark writes carry no timestamp; prefix resolution still works:
+  `TestSnapshotIDsCarryNoTimestamp`.
 - A wrong passphrase fails with `ErrWrongPassword` after reading only the config and the key files:
   `TestOpenChecksThePassword`, `TestWrongPasswordReadsOnlyConfigAndKeys`.
 - Every key file, chunk, tree and snapshot that is flipped in its format byte, nonce, ciphertext or
@@ -120,7 +120,9 @@ writer, every accepted risk included.
 - A passphrase never travels in a URI: arkuri rejects `user:pass@` with an error naming
   `ARK_SFTP_PASSWORD`, and no parse error echoes the URI: `TestOpenRejects`, `TestOpenNeverEchoesAPassword`.
 - No command takes a passphrase as a flag, so it never lands in argv; the inputs are `ARK_PASSWORD`,
-  `--password-file` or `ARK_PASSWORD_FILE`, and the prompt: `TestNoPasswordFlag`.
+  `--password-file` or `ARK_PASSWORD_FILE`, `--password-command` or `ARK_PASSWORD_COMMAND`, a
+  profile's `password-file` or `password-env`, and the prompt; `change-password` takes the new one
+  from `ARK_NEW_PASSWORD`, `--new-password-file` or its prompt: `TestNoPasswordFlag`.
 - The passphrase never appears in the library's or the CLI's logs, debug level included, during
   Init, Open, a failed Open and ChangePassword: `TestPasswordNeverInTheLogs`.
 
@@ -153,17 +155,20 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
 - The argon2id parameters and the config are plaintext: `TestInitWritesOneKeyFile`,
   `TestConfigHoldsOnlyItsPlaintextFields`.
 - Lock names carry the millisecond they were created: `TestLockNamesCarryTheirTime`.
-- `ARK_PASSWORD` is visible to every process of the same user; `--password-file` is the safer
-  input: `TestNoPasswordFlag`.
+- A 26 character base32 snapshot ID begins with the millisecond its snapshot was created in its
+  first 10 characters, so whoever can list `snapshots/` dates those snapshots:
+  `TestBase32SnapshotIDsStillWork`.
+- `ARK_PASSWORD` and `ARK_NEW_PASSWORD` are visible to every process of the same user;
+  `--password-file` and `--new-password-file` are the safer inputs: `TestNoPasswordFlag`.
 
 ## Out of scope
 
-- A compromised client holding the passphrase: it can read, forge and delete everything. An
-  append-only mode against it is a Backlog item.
+- A compromised client holding the passphrase: it can read, forge and delete everything. ark has
+  no append-only mode against it.
 - Side channels on the client host: memory, swap, core dumps and timing. Key material is not zeroed
   in memory and core dumps are not disabled.
 - A leaked master key: ChangePassword re-seals the same key, a leaked repository needs a new one.
-  Key rotation is a Backlog item.
+  ark has no key rotation.
 - Availability: a writer on the backend can delete objects; Check, Verify and Restore report what is
   missing, nothing prevents it.
 - Repositories created with `NoPassword` or `--insecure-no-password`: the master key is stored

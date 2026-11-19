@@ -15,12 +15,19 @@ A release archive holds the same binary. `ark version` (or `ark --version`) prin
 
 Every command that opens a repository takes it from `--repo`, a profile's `repo` or
 `ARK_REPOSITORY`, in this order. There is no default path. `ark profile` and `ark version` need
-neither a repository nor a password.
+neither a repository nor a password; `ark docker volumes` opens one only when it is configured, to
+show the last snapshot of each volume.
 
 | Form | Backend |
 |---|---|
 | `/srv/ark` or `local:///srv/ark` | a local directory |
-| `sftp://user@host:22/srv/ark` | a directory over SFTP |
+| `sftp://host/srv/ark` | a directory over SFTP, user and port from `~/.ssh/config` or the defaults (current user, 22) |
+| `sftp://user@host/srv/ark` | a directory over SFTP as `user`, port from `~/.ssh/config` or 22 |
+| `sftp://user@host:2222/srv/ark` | user and port in the URI |
+
+The path after the host is absolute on the server: `sftp://host/srv/ark` is `/srv/ark`, not a path
+below the login directory. There is no scp form: `host:path` names a local directory and
+`sftp:host:/path` is rejected, so write `sftp://host/path`.
 
 An SFTP repository takes its non-secret options as query parameters: `known_hosts=FILE` (default
 `~/.ssh/known_hosts`), `identity=FILE` and `insecure=1`, which skips the host key check. Secrets never
@@ -46,8 +53,9 @@ The password comes from the first source that is set, in this order:
 
 A repository without a password is not a step in this order: `--insecure-no-password`, the profile's
 `insecure-no-password: true` or `ARK_INSECURE_NO_PASSWORD=1` conflicts with every password source in
-the table, on any layer, and giving both exits 2. So do a file and a command on the same layer. The command runs with `sh -c`, shares stdin and stderr, and a non-zero exit fails the
-command.
+the table, on any layer, and giving both exits 2. So do a file and a command on the same layer.
+The command runs with `sh -c`, shares stdin and stderr, and a non-zero exit fails the command.
+Without a password source and without a terminal to prompt on, a command exits 2.
 
 There is no `--password` flag, it would show in the process list. `ark key passwd` changes the
 password, see [Commands](commands.md#key-passwd).
@@ -118,16 +126,8 @@ Without one, and always with `--json`, they exit 2 unless `--yes` is set.
 |---|---|---|
 | 0 | | success |
 | 1 | `error` | any other failure |
-| 2 | `usage` | usage error: a bad flag or argument, a conflicting password source, a forget policy without a keep rule, a missing confirmation |
+| 2 | `usage` | usage error: a bad flag or argument, a bad profile, a conflicting password source, an empty password from a file, command or prompt, passwords that do not match at the prompt, no password without a terminal, a forget policy without a keep rule, a missing confirmation |
 | 3 | `locked` | the repository is locked by another process |
 | 4 | `not_found`, `ambiguous_id` | snapshot not found, or an id prefix matches several |
 | 5 | `verify_failed` | verify or check found damage, `repair index` found an unreadable pack, or a read hit a corrupt object or config |
 | 6 | `wrong_password` | wrong password |
-
-## Upgrading from `ark serve`
-
-Builds that had `ark serve` ran a web UI with its own scheduler. It is gone, and a unit still running
-`ark serve` fails on every start. Run `systemctl disable --now ark`, remove
-`/etc/systemd/system/ark.service`, `/etc/ark/daemon.json` and `/var/lib/ark`, then write each job as
-a [profile](profiles.md). The jobs live only in the SQLite file under `/var/lib/ark`; note them down
-before deleting it. Repositories are unaffected.

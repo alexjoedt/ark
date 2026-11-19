@@ -1,8 +1,8 @@
 # Releasing
 
 ark ships three modules under one version number: `github.com/alexjoedt/ark` (the library),
-`arkdocker` and `cmd/ark`. A release is three tags on `main`, plus the CLI archives built from the
-`cmd/ark` tag.
+`arkdocker` and `cmd/ark`. A release is three tags, the root one on the tip of `main`, plus the CLI
+archives built from the `cmd/ark` tag.
 
 ## Versioning: v0.x
 
@@ -21,7 +21,7 @@ and the format had settled. The first stable release will be `v1.1.0`, and from 
 follows the Go compatibility rules for the exported API of `ark`, `arkfs`, `arkglob`, `arklocal`,
 `arksftp`, `arkuri`, `arkmem`, `arktest`, `chunker` and `arkdocker` (minors add, only a major
 removes). Every 1.x release reads the 1.x on-disk format; minors may add optional fields.
-The repository format version 1 is frozen with `v1.1.0` (see [FORMAT.md](FORMAT.md)). Flags keep
+The repository format version 1 is frozen with `v1.1.0` (see [format.md](format.md)). Flags keep
 their meaning and `--json` output only gains fields. `ark export` writes plain tar and `ark import`
 reads it. Dependency versions, including the Docker SDK, are not covered.
 
@@ -31,7 +31,7 @@ reads it. Dependency versions, including the Docker SDK, are not covered.
 |---|---|---|
 | 1 | `vX.Y.Z` | The library requires nothing from the other two. |
 | 2 | `arkdocker/vX.Y.Z` | Requires the root at `vX.Y.Z`; its tidy fetches that tag from the remote. |
-| 3 | `cmd/ark/vX.Y.Z` | Requires both. The tag triggers the release build. |
+| 3 | `cmd/ark/vX.Y.Z` | Requires both. The CLI archives are built from it. |
 
 Every bump is its own commit, so the three tags sit on three different commits. `main` is
 protected (pull requests and status checks, admins may bypass), so the bump commits never land on

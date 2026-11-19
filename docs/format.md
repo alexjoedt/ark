@@ -1,9 +1,8 @@
 # Repository format
 
 This describes what ark stores in a repository, format version 1. The byte layout is the contract
-of the version: a build reads and writes exactly this. The reasons behind the layout are in
-[docs/adr](adr/README.md) (0010 to 0015); what each object reveals to someone who can read the
-storage is in [SECURITY.md](SECURITY.md).
+of the version: a build reads and writes exactly this. What each object reveals to someone who can read the
+storage is in [security.md](security.md).
 
 ## Version
 
@@ -31,8 +30,7 @@ lostpacks/   at most one sealed marker: an index load found a listed data pack g
 file. Chunks and directory nodes are never stored alone: they live in packs, and the index finds them.
 
 A snapshot manifest holds the source type, source name, host, tags, comment, statistics and the
-snapshot labels under the key `source_meta`. The key kept its name when labels became settable at
-backup, so manifests written before read the same. See [Labels](LABELS.md) and [Series](SERIES.md).
+snapshot labels under the key `source_meta`. See [Labels](labels.md) and [Series](series.md).
 
 The directory and SFTP backends shard `datapacks/` and `treepacks/` one level deep by the first two
 characters of the name, so a pack is `datapacks/3f/3f9a...`. That is at most 256 directories per
@@ -114,7 +112,7 @@ verify, check, prune and an index rebuild log the failure and go on. A prune dry
 and writes nothing else.
 
 A backup that would take files unchanged from their parent asks for the marker with one request.
-Without it the backup reads no data index, as before. With it the backup loads the data index and
+Without it the backup reads no data index. With it the backup loads the data index and
 reads again every file of which a chunk is in no stored pack. A failed request counts as a marker.
 The walk does not wait for the backup's own load of the data index. Once that load has finished and
 found the loss, the backup reads again every file the walk reaches after it with a chunk in no
@@ -126,8 +124,10 @@ again when it loaded the index before, and then looks those files up.
 
 Only prune removes the marker, under the exclusive lock and after the new index is durable, once
 every chunk a snapshot references is listed in a stored pack. An index rebuild never removes it: a
-snapshot may still reference a chunk whose records it dropped. A build that predates the marker
-ignores it.
+snapshot may still reference a chunk whose records it dropped. A build that does not know the
+marker, such as v1.0.1, ignores it: its backup takes unchanged files from the parent without reading
+them again, so its snapshot can reference a chunk in no stored pack. Back up a repository that holds
+the marker only with a build that knows it.
 
 ## Order of writes
 
@@ -178,4 +178,4 @@ itself, like prune, and it downloads every pack. `ark repair index` runs it.
 ## Everything else
 
 The master key, the key files, the config, snapshot manifests, locks and the sealing of every
-object are as described in [SECURITY.md](SECURITY.md#format).
+object are as described in [security.md](security.md#format).

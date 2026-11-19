@@ -1,23 +1,12 @@
-import { readFileSync, readdirSync } from 'node:fs'
 import { defineConfig } from 'vitepress'
-
-const adrDir = new URL('../adr/', import.meta.url)
-
-const adrs = readdirSync(adrDir)
-  .filter((name) => /^\d{4}-.+\.md$/.test(name))
-  .sort()
-  .map((name) => ({
-    text: readFileSync(new URL(name, adrDir), 'utf8').split(/\r?\n/, 1)[0].replace(/^\uFEFF?# /, ''),
-    link: `/adr/${name.replace(/\.md$/, '')}`,
-  }))
 
 export default defineConfig({
   title: 'ark',
-  description: 'Deduplicated backups as a Go library, with a CLI on top',
+  description: 'Deduplicated, compressed and encrypted backups of directories and Docker volumes in a local or SFTP repository, as a Go library with a CLI on top. A Go program can plug in its own Source or Sink.',
   base: '/ark/',
   cleanUrls: true,
   lastUpdated: true,
-  rewrites: { 'adr/README.md': 'adr/index.md' },
+  srcExclude: ['adr/**'],
   head: [['link', { rel: 'icon', type: 'image/svg+xml', href: '/ark/ark.svg' }]],
   markdown: {
     theme: { light: 'github-light-default', dark: 'github-dark-default' },
@@ -33,18 +22,17 @@ export default defineConfig({
       { text: 'Guide', link: '/getting-started' },
       { text: 'CLI', link: '/cli/' },
       { text: 'Library', link: '/library' },
-      { text: 'Reference', link: '/FORMAT' },
-      { text: 'Decisions', link: '/adr/' },
+      { text: 'Reference', link: '/format' },
     ],
     sidebar: [
       {
         text: 'Guide',
         items: [
           { text: 'Getting started', link: '/getting-started' },
-          { text: 'Series', link: '/SERIES' },
-          { text: 'Labels', link: '/LABELS' },
+          { text: 'Series', link: '/series' },
+          { text: 'Labels', link: '/labels' },
           { text: 'Retention policies', link: '/retention' },
-          { text: 'Mount', link: '/MOUNT' },
+          { text: 'Mount', link: '/mount' },
         ],
       },
       {
@@ -62,17 +50,9 @@ export default defineConfig({
       {
         text: 'Reference',
         items: [
-          { text: 'Repository format', link: '/FORMAT' },
-          { text: 'Security', link: '/SECURITY' },
-          { text: 'Releasing', link: '/RELEASING' },
-        ],
-      },
-      {
-        text: 'Decisions',
-        collapsed: true,
-        items: [
-          { text: 'Index', link: '/adr/' },
-          ...adrs,
+          { text: 'Repository format', link: '/format' },
+          { text: 'Security', link: '/security' },
+          { text: 'Releasing', link: '/releasing' },
         ],
       },
     ],

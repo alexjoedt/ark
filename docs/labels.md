@@ -2,7 +2,7 @@
 
 A label is a key and a value stored with a snapshot. Tags are plain strings; a label carries a
 value, so `app=db` and `app=web` tell two jobs of the same source apart. Labels are set at backup
-and never change afterwards. The reasoning is in `docs/adr/0022-snapshot-labels.md`.
+and never change afterwards.
 
 ## Rules
 
@@ -19,13 +19,8 @@ and never change afterwards. The reasoning is in `docs/adr/0022-snapshot-labels.
 | Key | Recorded by | Value |
 |---|---|---|
 | `ark/path` | directory backups | the absolute path that was backed up, also when `--source` names it differently |
-| `ark/docker-host` | Docker volume backups | the Docker host the engine talks to (`DOCKER_HOST` or `--docker-host`), left out when none is set |
+| `ark/docker-host` | Docker volume backups | the Docker host the engine talks to: in the CLI `--docker-host`, a profile's `docker-host` or `DOCKER_HOST`; in the library only the address passed to `arkdocker.NewClient`, not `DOCKER_HOST`. Left out when none is set |
 | `ark/container.N.name`, `.image`, `.image_id`, `.state`, `.compose_project`, `.compose_service` | Docker volume backups | the containers that used the volume, N counts from 0 in the order of their names; empty values are left out |
-
-Docker volume snapshots of ark 1.0.1 and earlier recorded these keys without the prefix, as
-`docker_host` and `container.N.*`, and keep them, so a filter that should match old and new
-snapshots needs one run per key: `--label ark/docker-host=tcp://h:2375` finds only the new ones,
-`--label docker_host=tcp://h:2375` only the old ones.
 
 ## Set and filter
 
@@ -60,4 +55,4 @@ in `SourceMeta.Labels` on restore.
 
 ## Stored form
 
-The manifest keeps the labels under the key `source_meta`, see [FORMAT.md](FORMAT.md).
+The manifest keeps the labels under the key `source_meta`, see [format.md](format.md).

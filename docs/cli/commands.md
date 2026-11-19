@@ -1,7 +1,9 @@
 # Commands
 
 Every command takes the [global flags](index.md#global-flags). All but `ark profile` and
-`ark version` need a repository and a password as described in [CLI](index.md). A snapshot `<id>` is the full id or a unique prefix of it.
+`ark version` need a repository and a password as described in [CLI](index.md);
+`ark docker volumes` needs them only when a repository is configured. A snapshot `<id>` is the full
+id or a unique prefix of it.
 `ark <command> --help` lists every flag.
 
 ```bash
@@ -72,7 +74,7 @@ Backs up the directory at `<path>` as one snapshot.
 
 A backup is one series per source type, source and host; its parent is the newest snapshot of that
 series unless `--parent` names one. `ark snapshots`, `ark find` and `ark forget` filter on labels,
-and all given labels must match. See [Series](../SERIES.md) and [Labels](../LABELS.md).
+and all given labels must match. See [Series](../series.md) and [Labels](../labels.md).
 
 `--time` dates a backup of data as it was at an earlier time: `ark snapshots` shows that time and
 `ark forget` counts the snapshot in its hour, day, week, month and year. The parent is still the
@@ -184,7 +186,7 @@ ls /mnt/ark/ids/                  # one directory per snapshot
 The tree has `ids/<id>/`, `tags/<tag>/<time>/` and `sources/<type>/<host>/<source>/<time>/` with a
 `latest` link per series, for example `sources/files/myhost/home/alex/latest`. The mount holds a
 shared lock, so `ark prune` and `ark forget --prune` exit 3 until it is unmounted. Linux needs
-FUSE 3, macOS macFUSE. [Mount](../MOUNT.md) has the full layout, the behaviour on Ctrl-C and the
+FUSE 3, macOS macFUSE. [Mount](../mount.md) has the full layout, the behaviour on Ctrl-C and the
 platforms.
 
 ## inspect
@@ -311,8 +313,7 @@ policy that keeps nothing else of the series is still refused. A policy run warn
 each one, `--dry-run` too, but not when it is refused: the error names the snapshots instead. A
 snapshot stays until its date has passed, when the rules see it like any other, or until you remove
 it by ID. restic counts such a snapshot in its rules, so the two keep different snapshots of a
-series that holds one, see
-[the decision](../adr/0028-forget-keeps-future-snapshots-out-of-its-rules.md).
+series that holds one.
 
 Hours, days, weeks, months and years are those of the local time zone of the machine `ark forget`
 runs on, so a backup at 00:30 belongs to the new day; set `TZ` to count in another zone. A week is
@@ -320,31 +321,8 @@ an ISO week and starts on Monday. `--keep-last` does not depend on the zone, and
 duration only the hours do not.
 
 `ark forget --keep-last 1` without a filter keeps the newest snapshot of every series, see
-[Series](../SERIES.md). With `-P` the profile's `forget` section is the policy, see
+[Series](../series.md). With `-P` the profile's `forget` section is the policy, see
 [Profiles](profiles.md).
-
-### Upgrading from older builds
-
-Each of these changed after v0.3.0. Builds up to v0.3.0:
-
-- Read `--keep-within` as a Go duration, where `m` was a minute. A policy written for them has to be
-  rewritten, and not every old value fails: `1m` to `11m` are still read, without an error, and now
-  keep months of snapshots instead of minutes. Check every `--keep-within` in a script and every
-  `keep-within` in a profile after the upgrade.
-- Counted the hours, days, weeks, months and years of the period rules in UTC, not in the local
-  time zone. Setting `TZ=UTC` counts them the old way again.
-- Kept only the newest snapshot of each period. A period rule with count left now also keeps the
-  oldest snapshot of the series, with the reason `oldest daily snapshot`, so a short series keeps
-  one more snapshot per rule than before.
-- Counted a snapshot dated in the future like any other, as restic does. It is now kept and used by
-  no rule, and `ark forget` warns about it.
-- Named the snapshots of a profile without `backup.source` after the profile, not the absolute
-  `backup.path`. `ark forget -P` no longer selects such an old series, so it is never pruned, and the
-  first backup after the upgrade has no parent. Set `backup.source` to the profile's name to continue
-  the old series, or give it a policy of its own with `ark forget --source NAME`.
-
-The first `ark forget` after an upgrade can keep other snapshots than the last one did: run it once
-with `--dry-run`.
 
 ## prune
 
@@ -436,12 +414,13 @@ ark docker backup -P db                # backup.volume of profile db, on its doc
 ark docker restore -P db <id>          # back into backup.volume
 ```
 
-A volume is one [series](../SERIES.md) per host: the parent of a backup, `ark forget` and the LAST
+A volume is one [series](../series.md) per host: the parent of a backup, `ark forget` and the LAST
 SNAPSHOT of `ark docker volumes` only see the snapshots of the same host. The host is this machine's
 hostname for a local daemon and the daemon's own name for a remote `--docker-host` (`tcp://`,
-`ssh://`), unless `--host` or the `backup.host` of a volume or repository-only profile sets it. Volume snapshots written before the host was recorded have none:
-`ark docker volumes` shows them until the host has its own, and the first backup after the update has
-no parent and reads the volume once, unless `--parent <id>` names the last of them.
+`ssh://`), unless `--host` or the `backup.host` of a volume or repository-only profile sets it. A
+volume snapshot without a host shows in `ark docker volumes` only while the host has none of its
+own, and is never picked as a parent. The parent is the newest snapshot of the same volume and
+host, or the one `--parent <id>` names; without either the backup reads the whole volume.
 
 ## key passwd
 

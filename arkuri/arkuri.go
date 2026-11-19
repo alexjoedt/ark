@@ -8,7 +8,8 @@
 //
 //	/srv/ark                            a local directory
 //	local:///srv/ark                    the same, written as a URI
-//	sftp://user@host:22/srv/ark         over SFTP
+//	sftp://host/srv/ark                 over SFTP
+//	sftp://user@host:2222/srv/ark       over SFTP with user and port
 //
 // Non-secret sftp options ride as query parameters: known_hosts, identity and
 // insecure. Secrets never appear in a URI; see [arksftp] for the environment
@@ -187,5 +188,5 @@ func unsupportedScheme(scheme string) error {
 
 // supportedForms names the accepted spellings, for error messages.
 func supportedForms() string {
-	return "write /path, local:///path or sftp://user@host:port/path"
+	return "write /path, local:///path or sftp://[user@]host[:port]/path"
 }
