@@ -41,8 +41,8 @@
 // the restore cache.
 //
 // What the encryption protects against, what it leaks and which risks are
-// accepted is written down in docs/security.md
-// (https://github.com/alexjoedt/ark/blob/main/docs/security.md).
+// accepted is written down in docs/SECURITY.md
+// (https://github.com/alexjoedt/ark/blob/main/docs/SECURITY.md).
 //
 // # Writing a Source or Sink
 //

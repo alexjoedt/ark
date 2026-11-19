@@ -22,7 +22,7 @@ plaintext and unauthenticated.
 The attacker is a passive reader of the backend, an active writer on the backend and a network
 attacker between the client and an sftp server or between a browser and `ark serve` (the browser part is superseded by 0016). A compromised
 client holding the passphrase and side channels on the client host (memory, swap, timing) are out
-of scope; `docs/security.md` lists them.
+of scope; `docs/SECURITY.md` lists them.
 
 The config is bound into the master key: the key file holds the SHA-256 of the exact config bytes
 Init stored as `config_hash`, and Open rejects a config that does not match with
@@ -65,7 +65,7 @@ loopback by default and warns on a non-loopback address; TLS is a reverse proxy'
 
 ## Consequences
 
-Every guarantee and accepted risk of `docs/security.md` ends with a test that pins it, and
+Every guarantee and accepted risk of `docs/SECURITY.md` ends with a test that pins it, and
 `security_doc_test.go` fails when one cites none; the tests pin this decision:
 `TestTamperedConfigIsRejected` and `TestOpenRejectsAMasterKeyWithoutConfigHash` for the config
 hash, `TestReplayedManifestRestoresOnlyItsOwnBytes`, `TestReplayedKeyFileOpensUnderTheOldPassword`

@@ -84,7 +84,7 @@ _, err = arkfs.Restore(ctx, repo, snap.ID, "/tmp/docs")
 - [CLI](https://alexjoedt.github.io/ark/cli/): every command and flag, [profiles](https://alexjoedt.github.io/ark/cli/profiles), exit codes
 - [Library](https://alexjoedt.github.io/ark/library): packages, backends, sources and sinks, encryption, examples
 - [Mount](https://alexjoedt.github.io/ark/mount), [Series](https://alexjoedt.github.io/ark/series), [Labels](https://alexjoedt.github.io/ark/labels)
-- [Repository format](https://alexjoedt.github.io/ark/format) and [Security](https://alexjoedt.github.io/ark/security)
+- [Repository format](https://alexjoedt.github.io/ark/format) and [Security](https://alexjoedt.github.io/ark/SECURITY)
 - [Releasing](https://alexjoedt.github.io/ark/releasing)
 
 The same pages are in [docs/](docs/).

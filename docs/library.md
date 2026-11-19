@@ -181,7 +181,7 @@ Every repository is encrypted and authenticated. The password unlocks a random m
 - `repo.ChangePassword` seals the same master key under a new password. It does not revoke a key that already leaked.
 - `Init`, `Open` and `ChangePassword` derive the key with argon2id and need 64 MiB of memory for it. Size containers accordingly.
 
-The threat model, the accepted risks and how to report a vulnerability: [Security](security.md).
+The threat model, the accepted risks and how to report a vulnerability: [Security](SECURITY.md).
 
 ## Watching operations
 

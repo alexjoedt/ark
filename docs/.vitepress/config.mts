@@ -51,7 +51,7 @@ export default defineConfig({
         text: 'Reference',
         items: [
           { text: 'Repository format', link: '/format' },
-          { text: 'Security', link: '/security' },
+          { text: 'Security', link: '/SECURITY' },
           { text: 'Releasing', link: '/releasing' },
         ],
       },

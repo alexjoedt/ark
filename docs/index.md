@@ -48,5 +48,5 @@ ark keeps deduplicated, compressed and encrypted backups of directories and Dock
 - [Labels](labels.md): how labels tell jobs of one source apart.
 - [Mount](mount.md): browse every snapshot read-only through FUSE.
 - [Repository format](format.md): the byte layout of a repository.
-- [Security](security.md): the threat model.
+- [Security](SECURITY.md): the threat model.
 - [Releasing](releasing.md): versioning and how releases are cut.

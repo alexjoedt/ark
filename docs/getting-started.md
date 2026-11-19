@@ -104,4 +104,4 @@ ark check
 - [Labels](labels.md): tell jobs of one source apart and select them.
 - [Mount](mount.md): browse every snapshot read-only through FUSE.
 - [CLI reference](cli/index.md): every command, profiles, exit codes.
-- [Repository format](format.md) and [Security](security.md): the on-disk layout and the threat model.
+- [Repository format](format.md) and [Security](SECURITY.md): the on-disk layout and the threat model.

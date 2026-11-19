@@ -2,7 +2,7 @@
 
 This describes what ark stores in a repository, format version 1. The byte layout is the contract
 of the version: a build reads and writes exactly this. What each object reveals to someone who can read the
-storage is in [security.md](security.md).
+storage is in [SECURITY.md](SECURITY.md).
 
 ## Version
 
@@ -124,10 +124,7 @@ again when it loaded the index before, and then looks those files up.
 
 Only prune removes the marker, under the exclusive lock and after the new index is durable, once
 every chunk a snapshot references is listed in a stored pack. An index rebuild never removes it: a
-snapshot may still reference a chunk whose records it dropped. A build that does not know the
-marker, such as v1.0.1, ignores it: its backup takes unchanged files from the parent without reading
-them again, so its snapshot can reference a chunk in no stored pack. Back up a repository that holds
-the marker only with a build that knows it.
+snapshot may still reference a chunk whose records it dropped.
 
 ## Order of writes
 
@@ -178,4 +175,4 @@ itself, like prune, and it downloads every pack. `ark repair index` runs it.
 ## Everything else
 
 The master key, the key files, the config, snapshot manifests, locks and the sealing of every
-object are as described in [security.md](security.md#format).
+object are as described in [SECURITY.md](SECURITY.md#format).
