@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -12,18 +11,21 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-// docFlagToken matches a --flag token that is not part of a longer dash run (---, a--b).
-var docFlagToken = regexp.MustCompile(`(?:^|[^\w-])--([a-z][a-z0-9-]*[a-z0-9])`)
+// docFlagToken matches a --flag token that is not part of a longer dash run (---, a--b),
+// and the en or em dash a typographic paste makes of the two hyphens.
+var docFlagToken = regexp.MustCompile(`(?:^|[^\w-])(--|[–—])([A-Za-z](?:[\w-]*\w)?)`)
 
 // docFlagAllowed lists flags in the docs that belong to another tool or are
-// documented as absent, by file and flag, each with its reason.
-var docFlagAllowed = map[[2]string]string{
-	{"docs/getting-started.md", "password"}: "the page says there is no --password flag",
-	{"docs/cli/index.md", "password"}:       "the page says there is no --password flag",
-	{"docs/releasing.md", "push"}:           "flag of scripts/release.sh",
-	{"docs/releasing.md", "skip"}:           "goreleaser flag",
-	{"docs/cli/profiles.md", "user"}:        "systemctl flag in the timer example",
-	{"docs/cli/profiles.md", "now"}:         "systemctl flag in the timer example",
+// documented as absent. An entry covers only the lines of its file that contain
+// its line text, and every entry must still match a line.
+var docFlagAllowed = []struct{ file, flag, line, reason string }{
+	{"docs/getting-started.md", "password", "There is no `--password` flag", "documented as absent"},
+	{"docs/cli/index.md", "password", "There is no `--password` flag", "documented as absent"},
+	{"docs/releasing.md", "push", "a real run needs `--push`", "flag of scripts/release.sh"},
+	{"docs/releasing.md", "push", "scripts/release.sh --push", "flag of scripts/release.sh"},
+	{"docs/releasing.md", "skip", "`--skip=validate`", "goreleaser flag"},
+	{"docs/cli/profiles.md", "user", "`systemctl --user enable --now", "systemctl flag in the timer example"},
+	{"docs/cli/profiles.md", "now", "`systemctl --user enable --now", "systemctl flag in the timer example"},
 }
 
 // TestDocumentedFlagsExist fails on every --flag in README.md and docs/
@@ -76,24 +78,40 @@ func TestDocumentedFlagsExist(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	used := make([]bool, len(docFlagAllowed))
 	for _, file := range files {
-		f, err := os.Open(filepath.Join(root, file))
+		b, err := os.ReadFile(filepath.Join(root, file))
 		if err != nil {
 			t.Fatal(err)
 		}
-		sc := bufio.NewScanner(f)
-		for line := 1; sc.Scan(); line++ {
-			for _, m := range docFlagToken.FindAllStringSubmatch(sc.Text(), -1) {
-				flag := m[1]
-				if known[flag] || docFlagAllowed[[2]string{file, flag}] != "" {
+		for i, text := range strings.Split(string(b), "\n") {
+			for _, m := range docFlagToken.FindAllStringSubmatch(text, -1) {
+				dash, flag := m[1], m[2]
+				if dash != "--" {
+					t.Errorf("%s:%d: %s%s has a typographic dash, the CLI needs --%s", file, i+1, dash, flag, flag)
 					continue
 				}
-				t.Errorf("%s:%d: --%s is not a flag of the ark CLI", file, line, flag)
+				if known[flag] || allowDocFlag(file, flag, text, used) {
+					continue
+				}
+				t.Errorf("%s:%d: --%s is not a flag of the ark CLI", file, i+1, flag)
 			}
 		}
-		if err := sc.Err(); err != nil {
-			t.Fatalf("read %s: %v", file, err)
-		}
-		f.Close()
 	}
+	for i, a := range docFlagAllowed {
+		if !used[i] {
+			t.Errorf("allowlist entry %s --%s (%s) matches no line containing %q; drop it",
+				a.file, a.flag, a.reason, a.line)
+		}
+	}
+}
+
+func allowDocFlag(file, flag, text string, used []bool) bool {
+	for i, a := range docFlagAllowed {
+		if a.file == file && a.flag == flag && strings.Contains(text, a.line) {
+			used[i] = true
+			return true
+		}
+	}
+	return false
 }
