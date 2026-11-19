@@ -123,11 +123,3 @@ Without one, and always with `--json`, they exit 2 unless `--yes` is set.
 | 4 | `not_found`, `ambiguous_id` | snapshot not found, or an id prefix matches several |
 | 5 | `verify_failed` | verify or check found damage, `repair index` found an unreadable pack, or a read hit a corrupt object or config |
 | 6 | `wrong_password` | wrong password |
-
-## Upgrading from `ark serve`
-
-Builds that had `ark serve` ran a web UI with its own scheduler. It is gone, and a unit still running
-`ark serve` fails on every start. Run `systemctl disable --now ark`, remove
-`/etc/systemd/system/ark.service`, `/etc/ark/daemon.json` and `/var/lib/ark`, then write each job as
-a [profile](profiles.md). The jobs live only in the SQLite file under `/var/lib/ark`; note them down
-before deleting it. Repositories are unaffected.

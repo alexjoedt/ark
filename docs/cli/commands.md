@@ -322,29 +322,6 @@ duration only the hours do not.
 [Series](../series.md). With `-P` the profile's `forget` section is the policy, see
 [Profiles](profiles.md).
 
-### Upgrading from older builds
-
-Each of these changed after v0.3.0. Builds up to v0.3.0:
-
-- Read `--keep-within` as a Go duration, where `m` was a minute. A policy written for them has to be
-  rewritten, and not every old value fails: `1m` to `11m` are still read, without an error, and now
-  keep months of snapshots instead of minutes. Check every `--keep-within` in a script and every
-  `keep-within` in a profile after the upgrade.
-- Counted the hours, days, weeks, months and years of the period rules in UTC, not in the local
-  time zone. Setting `TZ=UTC` counts them the old way again.
-- Kept only the newest snapshot of each period. A period rule with count left now also keeps the
-  oldest snapshot of the series, with the reason `oldest daily snapshot`, so a short series keeps
-  one more snapshot per rule than before.
-- Counted a snapshot dated in the future like any other, as restic does. It is now kept and used by
-  no rule, and `ark forget` warns about it.
-- Named the snapshots of a profile without `backup.source` after the profile, not the absolute
-  `backup.path`. `ark forget -P` no longer selects such an old series, so it is never pruned, and the
-  first backup after the upgrade has no parent. Set `backup.source` to the profile's name to continue
-  the old series, or give it a policy of its own with `ark forget --source NAME`.
-
-The first `ark forget` after an upgrade can keep other snapshots than the last one did: run it once
-with `--dry-run`.
-
 ## prune
 
 `ark prune [--dry-run] [--yes]`
