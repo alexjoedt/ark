@@ -30,12 +30,33 @@ ark profile list                # every profile with its repo and backup path
 ark profile show docs           # each effective value and its source: cli, profile, env or default
 ```
 
+A profile can name a Docker volume instead of a directory. `ark docker backup -P db` backs it up
+on the profile's `docker-host`, and `forget`, `snapshots` and `find` select that volume's series:
+
+```yaml
+# ~/.config/ark/profiles/db.yaml
+repo: sftp://backup@nas/srv/ark
+password-file: ~/.config/ark/db.pw
+docker-host: tcp://db1:2375
+backup:
+  volume: pgdata
+  host: db1
+forget:
+  keep-daily: 7
+```
+
+```bash
+ark docker backup -P db         # backup.volume on db1's daemon, filed under the host db1
+ark snapshots -P db             # only the docker-volume snapshots of pgdata
+ark forget -P db --yes          # the policy on the pgdata series of host db1
+```
+
 ## Keys
 
 | Section | Keys |
 |---|---|
-| top level | `repo`, `password-file`, `password-env`, `insecure-no-password`, `lock-wait`, `concurrency` |
-| `backup` | `path`, `source`, `host`, `tag`, `comment`, `label`, `exclude`, `exclude-file`, `exclude-cloud-files`, hooks |
+| top level | `repo`, `password-file`, `password-env`, `insecure-no-password`, `lock-wait`, `concurrency`, `docker-host` |
+| `backup` | `path`, `source`, `volume`, `host`, `tag`, `comment`, `label`, `exclude`, `exclude-file`, `exclude-cloud-files`, hooks |
 | `forget` | `keep-last`, `keep-hourly`, `keep-daily`, `keep-weekly`, `keep-monthly`, `keep-yearly`, `keep-within`, `keep-within-hourly`, `keep-within-daily`, `keep-within-weekly`, `keep-within-monthly`, `keep-within-yearly`, `keep-tag`, `prune`, hooks |
 
 Each key means what the flag of the same name means, see [CLI](index.md#global-flags) and
@@ -70,6 +91,11 @@ the load.
   `backup.source` set it needs `--source`, so it never lands under the profile's source. Snapshot ids
   given to `ark forget -P` are removed as named, without the profile's policy or source filter. See
   [Series](../SERIES.md).
+- A profile with `backup.volume` selects the docker-volume series of that name, never a file series
+  of the same name. `ark forget -P` takes the host `ark docker backup -P` files it under:
+  `backup.host`, else this machine's hostname, and for a remote daemon in `$DOCKER_HOST` the
+  daemon's own name, which `forget` asks the daemon for. `backup.volume` excludes `backup.path` and
+  `backup.source`; a remote `docker-host` needs `backup.host`.
 - `backup.label` sets labels as a map, `label: {app: docs}`; a `--label` flag adds to them and wins
   for a key in both. See [Labels](../LABELS.md).
 - `$VAR` and `${VAR}` expand in every value but the hooks; an unset variable exits 2. `~` and

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	ark "github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/arkdocker"
 	"github.com/alexjoedt/ark/arkprofile"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
 	"github.com/urfave/cli/v3"
@@ -25,7 +26,30 @@ type loadedProfile struct {
 // profileNamesSnapshots reports whether the profile names a source, so that
 // snapshots and find narrow to it; forget refuses a profile that names none.
 func profileNamesSnapshots(lp *loadedProfile) bool {
-	return lp.Backup.Source != "" || lp.Backup.Path != ""
+	return lp.Backup.Source != "" || lp.Backup.Path != "" || lp.Backup.Volume != ""
+}
+
+// profileFilter is the series the profile backs up: its source name and type,
+// and the host the backup files it under. For a volume profile on a remote
+// daemon without backup.host that is the daemon's name, as dockerSeriesHost
+// records it, so it takes a call to the daemon.
+func profileFilter(ctx context.Context, cmd *cli.Command, lp *loadedProfile) (ark.SnapshotFilter, error) {
+	pf, err := lp.Filter()
+	if err != nil {
+		return pf, exitcode.Usagef("profile %s: %w", lp.Name, err)
+	}
+	if lp.Backup.Volume == "" || lp.Backup.Host != "" || !remoteDaemon(dockerHost(ctx, cmd)) {
+		return pf, nil
+	}
+	c, err := arkdocker.NewClient(dockerHost(ctx, cmd))
+	if err != nil {
+		return pf, fmt.Errorf("profile %s: %w", lp.Name, err)
+	}
+	defer c.Close()
+	if pf.Host, err = dockerSeriesHost(ctx, cmd, c); err != nil {
+		return pf, fmt.Errorf("profile %s: %w", lp.Name, err)
+	}
+	return pf, nil
 }
 
 // profileFrom returns the profile loaded for this run, nil without one.

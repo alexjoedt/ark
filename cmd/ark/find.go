@@ -59,6 +59,9 @@ func findCommand() *cli.Command {
 					return exitcode.Usagef("profile %s: %w", lp.Name, err)
 				}
 				filter.Source = pf.Source
+				if !cmd.IsSet("type") {
+					filter.Type = pf.Type
+				}
 			}
 
 			repo, err := openRepo(ctx, cmd)

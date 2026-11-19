@@ -93,12 +93,15 @@ func forgetCommand() *cli.Command {
 			}
 			prune := cmd.Bool("prune")
 			if scope != nil {
-				pf, err := scope.Filter()
+				pf, err := profileFilter(ctx, cmd, scope)
 				if err != nil {
-					return exitcode.Usagef("profile %s: %w", scope.Name, err)
+					return err
 				}
 				if cmd.String("source") == "" {
 					filter.Source = pf.Source
+				}
+				if !cmd.IsSet("type") {
+					filter.Type = pf.Type
 				}
 				if !cmd.IsSet("host") {
 					filter.Host = pf.Host

@@ -12,7 +12,7 @@ A series is the set of snapshots that share all three of:
 | Field | Set by | Example |
 |---|---|---|
 | source type | the source: `file`, `docker-volume`, `stream` | `file` |
-| source name | `--source`, else the absolute path of the directory; with `-P` `backup.source`, else the absolute `backup.path`, the same name a plain backup of it stores; the volume name for Docker | `/home/alex` |
+| source name | `--source`, else the absolute path of the directory; with `-P` `backup.source`, else the absolute `backup.path`, the same name a plain backup of it stores; the volume name for Docker, with `-P` `backup.volume` | `/home/alex` |
 | host | `--host`, else the machine's hostname | `laptop` |
 
 The fields are compared verbatim as the manifest stores them. The same path backed up from two
