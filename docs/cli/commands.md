@@ -72,7 +72,7 @@ Backs up the directory at `<path>` as one snapshot.
 
 A backup is one series per source type, source and host; its parent is the newest snapshot of that
 series unless `--parent` names one. `ark snapshots`, `ark find` and `ark forget` filter on labels,
-and all given labels must match. See [Series](../SERIES.md) and [Labels](../LABELS.md).
+and all given labels must match. See [Series](../series.md) and [Labels](../labels.md).
 
 `--time` dates a backup of data as it was at an earlier time: `ark snapshots` shows that time and
 `ark forget` counts the snapshot in its hour, day, week, month and year. The parent is still the
@@ -184,7 +184,7 @@ ls /mnt/ark/ids/                  # one directory per snapshot
 The tree has `ids/<id>/`, `tags/<tag>/<time>/` and `sources/<type>/<host>/<source>/<time>/` with a
 `latest` link per series, for example `sources/files/myhost/home/alex/latest`. The mount holds a
 shared lock, so `ark prune` and `ark forget --prune` exit 3 until it is unmounted. Linux needs
-FUSE 3, macOS macFUSE. [Mount](../MOUNT.md) has the full layout, the behaviour on Ctrl-C and the
+FUSE 3, macOS macFUSE. [Mount](../mount.md) has the full layout, the behaviour on Ctrl-C and the
 platforms.
 
 ## inspect
@@ -320,7 +320,7 @@ an ISO week and starts on Monday. `--keep-last` does not depend on the zone, and
 duration only the hours do not.
 
 `ark forget --keep-last 1` without a filter keeps the newest snapshot of every series, see
-[Series](../SERIES.md). With `-P` the profile's `forget` section is the policy, see
+[Series](../series.md). With `-P` the profile's `forget` section is the policy, see
 [Profiles](profiles.md).
 
 ### Upgrading from older builds
@@ -436,7 +436,7 @@ ark docker backup -P db                # backup.volume of profile db, on its doc
 ark docker restore -P db <id>          # back into backup.volume
 ```
 
-A volume is one [series](../SERIES.md) per host: the parent of a backup, `ark forget` and the LAST
+A volume is one [series](../series.md) per host: the parent of a backup, `ark forget` and the LAST
 SNAPSHOT of `ark docker volumes` only see the snapshots of the same host. The host is this machine's
 hostname for a local daemon and the daemon's own name for a remote `--docker-host` (`tcp://`,
 `ssh://`), unless `--host` or the `backup.host` of a volume or repository-only profile sets it. Volume snapshots written before the host was recorded have none:

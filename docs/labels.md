@@ -60,4 +60,4 @@ in `SourceMeta.Labels` on restore.
 
 ## Stored form
 
-The manifest keeps the labels under the key `source_meta`, see [FORMAT.md](FORMAT.md).
+The manifest keeps the labels under the key `source_meta`, see [format.md](format.md).

@@ -29,7 +29,7 @@ hosts, or the same name as a file source and as a Docker volume, are different s
   newest snapshot of every series, so one machine cannot remove another machine's last backup.
   The hours, days, weeks, months and years of a policy count in the local time of the forget run.
 - **`--last N`.** `ark snapshots --last N` prints the newest N snapshots of every series.
-- **Mount.** `ark mount` gives every series a `latest` link, see [Mount](MOUNT.md).
+- **Mount.** `ark mount` gives every series a `latest` link, see [Mount](mount.md).
 
 ## The host
 

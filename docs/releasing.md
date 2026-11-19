@@ -21,7 +21,7 @@ and the format had settled. The first stable release will be `v1.1.0`, and from 
 follows the Go compatibility rules for the exported API of `ark`, `arkfs`, `arkglob`, `arklocal`,
 `arksftp`, `arkuri`, `arkmem`, `arktest`, `chunker` and `arkdocker` (minors add, only a major
 removes). Every 1.x release reads the 1.x on-disk format; minors may add optional fields.
-The repository format version 1 is frozen with `v1.1.0` (see [FORMAT.md](FORMAT.md)). Flags keep
+The repository format version 1 is frozen with `v1.1.0` (see [format.md](format.md)). Flags keep
 their meaning and `--json` output only gains fields. `ark export` writes plain tar and `ark import`
 reads it. Dependency versions, including the Docker SDK, are not covered.
 

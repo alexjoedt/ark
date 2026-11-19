@@ -82,9 +82,9 @@ _, err = arkfs.Restore(ctx, repo, snap.ID, "/tmp/docs")
 - [Getting started](https://alexjoedt.github.io/ark/getting-started): repository, password, first backup, restore, retention
 - [CLI](https://alexjoedt.github.io/ark/cli/): every command and flag, [profiles](https://alexjoedt.github.io/ark/cli/profiles), exit codes
 - [Library](https://alexjoedt.github.io/ark/library): packages, backends, sources and sinks, encryption, examples
-- [Mount](https://alexjoedt.github.io/ark/MOUNT), [Series](https://alexjoedt.github.io/ark/SERIES), [Labels](https://alexjoedt.github.io/ark/LABELS)
-- [Repository format](https://alexjoedt.github.io/ark/FORMAT) and [Security](https://alexjoedt.github.io/ark/SECURITY)
-- [Architecture decisions](https://alexjoedt.github.io/ark/adr/) and [Releasing](https://alexjoedt.github.io/ark/RELEASING)
+- [Mount](https://alexjoedt.github.io/ark/mount), [Series](https://alexjoedt.github.io/ark/series), [Labels](https://alexjoedt.github.io/ark/labels)
+- [Repository format](https://alexjoedt.github.io/ark/format) and [Security](https://alexjoedt.github.io/ark/security)
+- [Architecture decisions](https://alexjoedt.github.io/ark/adr/) and [Releasing](https://alexjoedt.github.io/ark/releasing)
 
 The same pages are in [docs/](docs/).
 

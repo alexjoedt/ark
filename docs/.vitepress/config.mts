@@ -33,7 +33,7 @@ export default defineConfig({
       { text: 'Guide', link: '/getting-started' },
       { text: 'CLI', link: '/cli/' },
       { text: 'Library', link: '/library' },
-      { text: 'Reference', link: '/FORMAT' },
+      { text: 'Reference', link: '/format' },
       { text: 'Decisions', link: '/adr/' },
     ],
     sidebar: [
@@ -41,10 +41,10 @@ export default defineConfig({
         text: 'Guide',
         items: [
           { text: 'Getting started', link: '/getting-started' },
-          { text: 'Series', link: '/SERIES' },
-          { text: 'Labels', link: '/LABELS' },
+          { text: 'Series', link: '/series' },
+          { text: 'Labels', link: '/labels' },
           { text: 'Retention policies', link: '/retention' },
-          { text: 'Mount', link: '/MOUNT' },
+          { text: 'Mount', link: '/mount' },
         ],
       },
       {
@@ -62,9 +62,9 @@ export default defineConfig({
       {
         text: 'Reference',
         items: [
-          { text: 'Repository format', link: '/FORMAT' },
-          { text: 'Security', link: '/SECURITY' },
-          { text: 'Releasing', link: '/RELEASING' },
+          { text: 'Repository format', link: '/format' },
+          { text: 'Security', link: '/security' },
+          { text: 'Releasing', link: '/releasing' },
         ],
       },
       {

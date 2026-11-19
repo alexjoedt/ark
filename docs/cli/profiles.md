@@ -91,14 +91,14 @@ the load.
   command line other than `backup.path` names its own snapshots by its absolute path; with
   `backup.source` set it needs `--source`, so it never lands under the profile's source. Snapshot ids
   given to `ark forget -P` are removed as named, without the profile's policy or source filter. See
-  [Series](../SERIES.md).
+  [Series](../series.md).
 - A profile with `backup.volume` selects the docker-volume series of that name, never a file series
   of the same name. `ark forget -P` takes the host `ark docker backup -P` files it under:
   `backup.host`, else this machine's hostname, and for a remote daemon in `$DOCKER_HOST` the
   daemon's own name, which `forget` asks the daemon for unless `--host` names it. `backup.volume` excludes `backup.path` and
   `backup.source`; a remote `docker-host` needs `backup.host`.
 - `backup.label` sets labels as a map, `label: {app: docs}`; a `--label` flag adds to them and wins
-  for a key in both. See [Labels](../LABELS.md).
+  for a key in both. See [Labels](../labels.md).
 - `$VAR` and `${VAR}` expand in every value but the hooks; an unset variable exits 2. `~` and
   relative paths in `repo`, `password-file`, `backup.path` and `backup.exclude-file` are taken from
   the home directory and the profile's directory. A profile never holds a password: a `password:` key

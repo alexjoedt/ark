@@ -37,7 +37,7 @@ writer, every accepted risk included.
 - Chunks and trees are stored inside pack objects: each one sealed on its own as above, followed
   by a sealed table of their names and lengths that is bound to the SHA-256 of the bytes before
   it. A pack is named by the SHA-256 of its bytes, which are ciphertext throughout. The layout
-  of packs and index objects is in [FORMAT.md](FORMAT.md).
+  of packs and index objects is in [format.md](format.md).
 - Chunk, tree and index names are the hex HMAC-SHA256 of their plaintext under the repository's ID
   key, the lost-pack marker's that of its namespace name, manifests and locks are sealed under
   chosen names: snapshot IDs are 128 random bits in 32 lowercase hex characters (a repository

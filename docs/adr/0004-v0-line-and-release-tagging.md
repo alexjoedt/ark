@@ -32,6 +32,6 @@ API and the format without a deprecation cycle.
 ## Consequences
 
 Breaking changes before `v1.1.0` are cheap and need no migration code. Embedders pin a minor and
-read the release notes of the next one. `docs/RELEASING.md` carries the same rules for the person
+read the release notes of the next one. `docs/releasing.md` carries the same rules for the person
 cutting a tag, and `scripts/release.sh` tags the three modules in lockstep. The cost is that nothing is stable until `v1.1.0`, and the retracted versions stay
 visible in `go list -m -versions` for good.

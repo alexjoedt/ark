@@ -56,7 +56,7 @@ ark init
 ark backup /etc --tag daily
 ```
 
-The snapshot's [source](SERIES.md) is the absolute path of the directory unless `--source NAME` says otherwise. Later backups of the same source and host use the previous snapshot as parent and read only what changed. `--label KEY=VALUE`, repeatable, stores [labels](LABELS.md) that the listing commands filter on. Leave paths out with `--exclude PATTERN` or `--exclude-file FILE`.
+The snapshot's [source](series.md) is the absolute path of the directory unless `--source NAME` says otherwise. Later backups of the same source and host use the previous snapshot as parent and read only what changed. `--label KEY=VALUE`, repeatable, stores [labels](labels.md) that the listing commands filter on. Leave paths out with `--exclude PATTERN` or `--exclude-file FILE`.
 
 The command ends with a summary of the files, their size and what this run added to the repository.
 
@@ -78,7 +78,7 @@ To see what a snapshot holds, `ark ls <id>` lists its files, and `ark find '*.co
 ark restore <id> /tmp/etc-restore
 ```
 
-The destination is created if missing and existing files are overwritten. `--path PREFIX` restores only the entries under a prefix, `--dry-run` lists what would be restored without writing anything. To browse snapshots instead of restoring them, see [Mount](MOUNT.md).
+The destination is created if missing and existing files are overwritten. `--path PREFIX` restores only the entries under a prefix, `--dry-run` lists what would be restored without writing anything. To browse snapshots instead of restoring them, see [Mount](mount.md).
 
 ## Forget and prune
 
@@ -86,7 +86,7 @@ The destination is created if missing and existing files are overwritten. `--pat
 ark forget --keep-daily 7 --keep-weekly 4 --prune
 ```
 
-`forget` removes snapshots by id or by a retention policy (`--keep-last`, `--keep-hourly`, `--keep-daily`, `--keep-weekly`, `--keep-monthly`, `--keep-yearly`, `--keep-within`, `--keep-within-hourly` to `--keep-within-yearly`, `--keep-tag`). A policy applies per [series](SERIES.md), so each source keeps its own recent snapshots. Days, weeks and the other periods count in local time. The chunks stay in the repository until `prune` frees them; `--prune` runs it straight after. [Retention policies](retention.md) shows with timelines what each rule keeps.
+`forget` removes snapshots by id or by a retention policy (`--keep-last`, `--keep-hourly`, `--keep-daily`, `--keep-weekly`, `--keep-monthly`, `--keep-yearly`, `--keep-within`, `--keep-within-hourly` to `--keep-within-yearly`, `--keep-tag`). A policy applies per [series](series.md), so each source keeps its own recent snapshots. Days, weeks and the other periods count in local time. The chunks stay in the repository until `prune` frees them; `--prune` runs it straight after. [Retention policies](retention.md) shows with timelines what each rule keeps.
 
 Try `--dry-run` first to see which snapshots would be kept and which removed. Destructive commands ask for confirmation on a terminal and fail without one unless `--yes` is set.
 
@@ -100,8 +100,8 @@ ark check
 
 ## Where next
 
-- [Series](SERIES.md): how snapshots group into series and what `--source` and `--host` do.
-- [Labels](LABELS.md): tell jobs of one source apart and select them.
-- [Mount](MOUNT.md): browse every snapshot read-only through FUSE.
+- [Series](series.md): how snapshots group into series and what `--source` and `--host` do.
+- [Labels](labels.md): tell jobs of one source apart and select them.
+- [Mount](mount.md): browse every snapshot read-only through FUSE.
 - [CLI reference](cli/index.md): every command, profiles, exit codes.
-- [Repository format](FORMAT.md) and [Security](SECURITY.md): the on-disk layout and the threat model.
+- [Repository format](format.md) and [Security](security.md): the on-disk layout and the threat model.

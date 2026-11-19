@@ -3,7 +3,7 @@
 This describes what ark stores in a repository, format version 1. The byte layout is the contract
 of the version: a build reads and writes exactly this. The reasons behind the layout are in
 [docs/adr](adr/README.md) (0010 to 0015); what each object reveals to someone who can read the
-storage is in [SECURITY.md](SECURITY.md).
+storage is in [security.md](security.md).
 
 ## Version
 
@@ -32,7 +32,7 @@ file. Chunks and directory nodes are never stored alone: they live in packs, and
 
 A snapshot manifest holds the source type, source name, host, tags, comment, statistics and the
 snapshot labels under the key `source_meta`. The key kept its name when labels became settable at
-backup, so manifests written before read the same. See [Labels](LABELS.md) and [Series](SERIES.md).
+backup, so manifests written before read the same. See [Labels](labels.md) and [Series](series.md).
 
 The directory and SFTP backends shard `datapacks/` and `treepacks/` one level deep by the first two
 characters of the name, so a pack is `datapacks/3f/3f9a...`. That is at most 256 directories per
@@ -178,4 +178,4 @@ itself, like prune, and it downloads every pack. `ark repair index` runs it.
 ## Everything else
 
 The master key, the key files, the config, snapshot manifests, locks and the sealing of every
-object are as described in [SECURITY.md](SECURITY.md#format).
+object are as described in [security.md](security.md#format).

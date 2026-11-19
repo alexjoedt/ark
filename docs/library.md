@@ -153,9 +153,9 @@ _, err = repo.Restore(ctx, snap.ID, ark.NewStreamSink(os.Stdout))
 
 ## Host, series and labels
 
-The core library records no host unless you pass `ark.WithHost`; it never reads the machine's hostname. The `ark` CLI always records one, and so does `arkprofile`: without `backup.host`, a profile's `BackupOptions` and `Filter` use the machine's hostname. In a container whose hostname changes on every deploy, set `backup.host`, or each deploy starts a new series and `Forget` no longer sees the older snapshots. Source type, source name and host make up a snapshot's series: a backup takes the newest snapshot of its series as its parent, and `Forget` applies a keep policy once per series. Embedders that share one repository between machines should set a host. [Series](SERIES.md) has the details.
+The core library records no host unless you pass `ark.WithHost`; it never reads the machine's hostname. The `ark` CLI always records one, and so does `arkprofile`: without `backup.host`, a profile's `BackupOptions` and `Filter` use the machine's hostname. In a container whose hostname changes on every deploy, set `backup.host`, or each deploy starts a new series and `Forget` no longer sees the older snapshots. Source type, source name and host make up a snapshot's series: a backup takes the newest snapshot of its series as its parent, and `Forget` applies a keep policy once per series. Embedders that share one repository between machines should set a host. [Series](series.md) has the details.
 
-Labels are key-value pairs stored with a snapshot, set at backup with `ark.WithLabels` and matched with `SnapshotFilter.Labels`. Keys that start with `ark/` belong to ark's own sources, and a backup that sets one fails with `ark.ErrInvalidLabel`. [Labels](LABELS.md) has the key rules and the reserved keys.
+Labels are key-value pairs stored with a snapshot, set at backup with `ark.WithLabels` and matched with `SnapshotFilter.Labels`. Keys that start with `ark/` belong to ark's own sources, and a backup that sets one fails with `ark.ErrInvalidLabel`. [Labels](labels.md) has the key rules and the reserved keys.
 
 ```go
 snap, err := arkfs.Backup(ctx, repo, "/home/me/docs",
@@ -181,7 +181,7 @@ Every repository is encrypted and authenticated. The password unlocks a random m
 - `repo.ChangePassword` seals the same master key under a new password. It does not revoke a key that already leaked.
 - `Init`, `Open` and `ChangePassword` derive the key with argon2id and need 64 MiB of memory for it. Size containers accordingly.
 
-The threat model, the accepted risks and how to report a vulnerability: [Security](SECURITY.md).
+The threat model, the accepted risks and how to report a vulnerability: [Security](security.md).
 
 ## Watching operations
 
