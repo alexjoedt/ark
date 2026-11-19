@@ -55,6 +55,10 @@ func backupCommand() *cli.Command {
 				return err
 			}
 			lp := profileFrom(ctx)
+			if lp != nil && lp.Backup.Volume != "" {
+				return exitcode.Usagef("profile %s backs up docker volume %s, use ark docker backup %s",
+					lp.Name, lp.Backup.Volume, profileArg(cmd))
+			}
 			eff := backupProfile(cmd, lp)
 			if cmd.NArg() > 1 || eff.Backup.Path == "" {
 				return exitcode.Usagef("usage: ark backup [options] <path>, or -P NAME with a backup.path")

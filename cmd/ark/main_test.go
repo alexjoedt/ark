@@ -946,6 +946,59 @@ func TestDockerRoundTrip(t *testing.T) {
 	); err != nil {
 		t.Fatalf("restored volume missing: %v", err)
 	}
+
+	// a profile names the volume, the daemon and the snapshot's settings;
+	// DOCKER_HOST points nowhere, so only the profile's docker-host works
+	dir := profileDirFor(t)
+	marker := filepath.Join(t.TempDir(), "hooks")
+	writeProfile(t, dir, "vol", "repo: "+repo+"\ndocker-host: "+moby.DaemonHost()+`
+backup:
+  volume: `+vol+`
+  host: profile-host
+  tag: [p]
+  comment: from the profile
+  label:
+    app: db
+  run-before: echo before >> `+marker+`
+  run-after: echo after >> `+marker+`
+`)
+	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:1")
+	code, out = runCapture(t, "--json", "docker", "backup", "-P", "vol", "--label", "env=prod")
+	if code != 0 {
+		t.Fatalf("docker backup -P exit %d: %s", code, out)
+	}
+	var ps struct {
+		ID         string            `json:"id"`
+		SourceName string            `json:"source_name"`
+		Host       string            `json:"host"`
+		Tags       []string          `json:"tags"`
+		Comment    string            `json:"comment"`
+		Labels     map[string]string `json:"labels"`
+	}
+	if err := json.Unmarshal([]byte(out), &ps); err != nil || ps.SourceName != vol || ps.Host != "profile-host" ||
+		!slices.Equal(ps.Tags, []string{"p"}) || ps.Comment != "from the profile" ||
+		ps.Labels["app"] != "db" || ps.Labels["env"] != "prod" {
+		t.Fatalf("docker backup -P: stdout %q, %v", out, err)
+	}
+	if b, err := os.ReadFile(marker); err != nil || string(b) != "before\nafter\n" {
+		t.Fatalf("hooks wrote %q, %v", b, err)
+	}
+	code, out = runCapture(t, "--json", "docker", "backup", "-P", "vol", "-t", "f", "-c", "", "--host", "h2")
+	if code != 0 || !strings.Contains(out, `"host": "h2"`) || !strings.Contains(out, `"tags": [`+"\n"+`    "f"`) ||
+		strings.Contains(out, "from the profile") {
+		t.Fatalf("flags over the profile: exit %d, stdout %q", code, out)
+	}
+	// restore goes into the profile's volume, not the snapshot's source name
+	writeProfile(
+		t,
+		dir,
+		"copy",
+		"repo: "+repo+"\ndocker-host: "+moby.DaemonHost()+"\nbackup:\n  volume: "+vol+"-copy\n",
+	)
+	code, out = runCapture(t, "--json", "docker", "restore", "-P", "copy", "-n", ps.ID)
+	if code != 0 || !strings.Contains(out, `"volume": "`+vol+`-copy"`) {
+		t.Fatalf("docker restore -P dry run: exit %d, stdout %q", code, out)
+	}
 }
 
 func TestVersionLine(t *testing.T) {

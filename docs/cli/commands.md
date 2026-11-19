@@ -399,7 +399,8 @@ Removes stale locks. `--force` removes every lock, stale or not; make sure no ar
 
 ## docker
 
-Docker volumes live under `ark docker`. The daemon comes from `--docker-host ADDR` or `DOCKER_HOST`.
+Docker volumes live under `ark docker`. The daemon comes from `--docker-host ADDR`, else a
+profile's `docker-host`, else `DOCKER_HOST`.
 
 | Command | Purpose |
 |---|---|
@@ -421,10 +422,23 @@ ark docker restore <id>                # into the volume it came from
 ark docker restore <id> postgres_copy  # or into another one, created if missing
 ```
 
+With `-P NAME` (or `-f FILE`) of a profile with `backup.volume`, `ark docker backup` takes no volume
+argument: it backs up `backup.volume` on the profile's `docker-host`, with the profile's tags, labels,
+comment and `backup.host`, flags winning as for `ark backup`, and runs the profile's backup hooks
+around it. A volume argument other than `backup.volume` is a usage error, and so are
+`ark docker backup -P` on a profile with `backup.path` or `backup.source` and `ark backup -P` on a
+volume profile, which points to `ark docker backup -P`. `ark docker restore -P NAME <id>` restores
+into `backup.volume` unless a volume is given; `<id>` stays required.
+
+```bash
+ark docker backup -P db                # backup.volume of profile db, on its docker-host
+ark docker restore -P db <id>          # back into backup.volume
+```
+
 A volume is one [series](../SERIES.md) per host: the parent of a backup, `ark forget` and the LAST
 SNAPSHOT of `ark docker volumes` only see the snapshots of the same host. The host is this machine's
 hostname for a local daemon and the daemon's own name for a remote `--docker-host` (`tcp://`,
-`ssh://`), unless `--host` sets it. Volume snapshots written before the host was recorded have none:
+`ssh://`), unless `--host` or a profile's `backup.host` sets it. Volume snapshots written before the host was recorded have none:
 `ark docker volumes` shows them until the host has its own, and the first backup after the update has
 no parent and reads the volume once, unless `--parent <id>` names the last of them.
 

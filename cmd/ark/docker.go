@@ -10,6 +10,7 @@ import (
 
 	ark "github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkdocker"
+	"github.com/alexjoedt/ark/arkprofile"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
 	"github.com/alexjoedt/ark/cmd/ark/internal/out"
 	"github.com/urfave/cli/v3"
@@ -20,7 +21,10 @@ func dockerCommand() *cli.Command {
 		Name:  "docker",
 		Usage: "Docker volume commands",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "docker-host", Usage: "Docker daemon `ADDR`", Sources: cli.EnvVars("DOCKER_HOST")},
+			&cli.StringFlag{
+				Name:  "docker-host",
+				Usage: "Docker daemon `ADDR` (default: a profile's docker-host, else $DOCKER_HOST)",
+			},
 		},
 		Commands: []*cli.Command{
 			dockerVolumesCommand(),
@@ -39,8 +43,21 @@ func stopFlags() []cli.Flag {
 	}
 }
 
-// openDocker opens the repository and an Engine on --docker-host. The
-// daemon is not contacted until the first call. The caller closes both.
+// dockerHost is --docker-host, else the profile's docker-host, else
+// DOCKER_HOST: the profile beats the variable, as for every other key.
+func dockerHost(ctx context.Context, cmd *cli.Command) string {
+	if cmd.IsSet("docker-host") {
+		return cmd.String("docker-host")
+	}
+	if lp := profileFrom(ctx); lp != nil && lp.DockerHost != "" {
+		return lp.DockerHost
+	}
+	return os.Getenv("DOCKER_HOST")
+}
+
+// openDocker opens the repository and an Engine on the daemon dockerHost
+// names. The daemon is not contacted until the first call. The caller
+// closes both.
 func openDocker(ctx context.Context, cmd *cli.Command) (*arkdocker.Engine, *ark.Repository, error) {
 	repo, err := openRepo(ctx, cmd)
 	if err != nil {
@@ -48,7 +65,7 @@ func openDocker(ctx context.Context, cmd *cli.Command) (*arkdocker.Engine, *ark.
 	}
 	opts := []arkdocker.Option{
 		arkdocker.WithLogger(slog.Default()),
-		arkdocker.WithDockerHost(cmd.String("docker-host")),
+		arkdocker.WithDockerHost(dockerHost(ctx, cmd)),
 		arkdocker.WithStopTimeout(cmd.Duration("stop-timeout")),
 	}
 	if cmd.Bool("no-stop") {
@@ -92,7 +109,7 @@ func listVolumes(ctx context.Context, cmd *cli.Command) ([]arkdocker.VolumeInfo,
 		}
 		defer repo.Close()
 	}
-	c, err := arkdocker.NewClient(cmd.String("docker-host"))
+	c, err := arkdocker.NewClient(dockerHost(ctx, cmd))
 	if err != nil {
 		return nil, nil, fmt.Errorf("docker volumes: %w", err)
 	}
@@ -168,7 +185,7 @@ func hostFlag() cli.Flag {
 }
 
 // dockerSeriesHost is the host docker snapshots are filed under: --host if
-// set, else the hostname of the machine the volumes live on. That is this
+// set, else the profile's backup.host, else the hostname of the machine the volumes live on. That is this
 // machine for a local daemon and the daemon's own name for a remote one, so
 // the same volume name on two daemons is two series. A local daemon is not
 // asked, Docker Desktop names itself docker-desktop on every machine.
@@ -180,7 +197,10 @@ func dockerSeriesHost(ctx context.Context, cmd *cli.Command, c *arkdocker.Client
 		}
 		return h, nil
 	}
-	if remoteDaemon(cmd.String("docker-host")) {
+	if lp := profileFrom(ctx); lp != nil && lp.Backup.Host != "" {
+		return lp.Backup.Host, nil
+	}
+	if remoteDaemon(dockerHost(ctx, cmd)) {
 		return c.DaemonName(ctx)
 	}
 	h, err := os.Hostname()
@@ -244,12 +264,15 @@ func dockerBackupCommand() *cli.Command {
 		Usage:     "back up a Docker volume",
 		ArgsUsage: "<volume>",
 		UsageText: `ark docker backup [options] <volume>
+   ark docker backup -P NAME [options]
 
    Stops running containers that use <volume>, backs it up, restarts them.
    The snapshot's source name is the volume name, source type docker-volume. The
    host is this machine's hostname, or the daemon's name when --docker-host is a
    remote daemon, unless --host is set. The parent is the newest snapshot of the
-   same volume and host unless --parent is set.`,
+   same volume and host unless --parent is set. With a profile, <volume> defaults
+   to its backup.volume, any other volume is refused; its tags, labels, comment
+   and host apply unless a flag sets them, and its backup hooks run around it.`,
 		Flags: append([]cli.Flag{
 			hostFlag(),
 			&cli.StringFlag{Name: "parent", Usage: "explicit parent snapshot `ID`"},
@@ -259,10 +282,11 @@ func dockerBackupCommand() *cli.Command {
 			labelFlag("record the label `KEY=VALUE`, repeatable, the value may hold commas"),
 		}, stopFlags()...),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			if cmd.NArg() != 1 {
-				return exitcode.Usagef("usage: ark docker backup [options] <volume>")
+			lp := profileFrom(ctx)
+			volume, err := backupVolume(cmd, lp)
+			if err != nil {
+				return err
 			}
-			volume := cmd.Args().First()
 			labels, err := labelValue(cmd, false)
 			if err != nil {
 				return err
@@ -271,38 +295,52 @@ func dockerBackupCommand() *cli.Command {
 			if err != nil {
 				return err
 			}
+			var b arkprofile.Backup
+			if lp != nil {
+				b = lp.Backup
+			}
+			if cmd.IsSet("tag") {
+				b.Tags = cmd.StringSlice("tag")
+			}
+			if cmd.IsSet("comment") {
+				b.Comment = cmd.String("comment")
+			}
 
-			e, repo, err := openDocker(ctx, cmd)
-			if err != nil {
-				return err
-			}
-			defer repo.Close()
-			defer e.Close()
+			return withHooks(ctx, lp, "backup", func(ctx context.Context) error {
+				e, repo, err := openDocker(ctx, cmd)
+				if err != nil {
+					return err
+				}
+				defer repo.Close()
+				defer e.Close()
 
-			host, err := dockerSeriesHost(ctx, cmd, e.Client())
-			if err != nil {
-				return fmt.Errorf("docker backup %s: %w", volume, err)
-			}
-			p := printer(cmd)
-			pr := startProgress(p, "backup volume "+volume)
-			snap, err := e.BackupVolume(ctx, volume, append(at,
-				ark.WithTags(cmd.StringSlice("tag")...),
-				ark.WithComment(cmd.String("comment")),
-				ark.WithHost(host),
-				ark.WithParent(ark.SnapshotID(cmd.String("parent"))),
-				ark.WithLabels(labels),
-			)...)
-			if err != nil {
-				pr.Fail()
-				return fmt.Errorf("docker backup %s: %w", volume, err)
-			}
-			pr.Done(out.BackupRows(snap)...)
+				host, err := dockerSeriesHost(ctx, cmd, e.Client())
+				if err != nil {
+					return fmt.Errorf("docker backup %s: %w", volume, err)
+				}
+				p := printer(cmd)
+				pr := startProgress(p, "backup volume "+volume)
+				// --label adds to the profile's labels, a key in both takes the flag's value
+				snap, err := e.BackupVolume(ctx, volume, append(at,
+					ark.WithTags(b.Tags...),
+					ark.WithComment(b.Comment),
+					ark.WithHost(host),
+					ark.WithParent(ark.SnapshotID(cmd.String("parent"))),
+					ark.WithLabels(b.Labels),
+					ark.WithLabels(labels),
+				)...)
+				if err != nil {
+					pr.Fail()
+					return fmt.Errorf("docker backup %s: %w", volume, err)
+				}
+				pr.Done(out.BackupRows(snap)...)
 
-			if p.Mode().JSON {
-				return p.JSON(out.NewSnapshot(snap))
-			}
-			p.Result("snapshot", string(snap.ID))
-			return nil
+				if p.Mode().JSON {
+					return p.JSON(out.NewSnapshot(snap))
+				}
+				p.Result("snapshot", string(snap.ID))
+				return nil
+			})
 		},
 	}
 }
@@ -314,7 +352,8 @@ func dockerRestoreCommand() *cli.Command {
 		ArgsUsage: "<id> [volume]",
 		UsageText: `ark docker restore [options] <id> [volume]
 
-   Restores snapshot <id> into [volume] (default: the snapshot's source name).
+   Restores snapshot <id> into [volume] (default: a profile's backup.volume,
+   else the snapshot's source name).
    Creates the volume if missing, replaces its contents if present.
    Refuses snapshots whose source type is not docker-volume.`,
 		Flags: append([]cli.Flag{
@@ -355,6 +394,9 @@ func dockerRestoreCommand() *cli.Command {
 					snap.ID,
 					snap.SourceType,
 				)
+			}
+			if lp := profileFrom(ctx); volume == "" && lp != nil {
+				volume = lp.Backup.Volume
 			}
 			if volume == "" {
 				volume = snap.SourceName
@@ -406,6 +448,36 @@ func dockerRestoreCommand() *cli.Command {
 			return nil
 		},
 	}
+}
+
+// backupVolume is the volume docker backup works on: the argument, else the
+// profile's backup.volume. A profile of a path, or another volume than the
+// profile's, is refused: its snapshots would not be the profile's series.
+func backupVolume(cmd *cli.Command, lp *loadedProfile) (string, error) {
+	const usage = "usage: ark docker backup [options] <volume>, or -P NAME with a backup.volume"
+	if cmd.NArg() > 1 {
+		return "", exitcode.Usagef(usage)
+	}
+	arg := cmd.Args().First()
+	if lp == nil {
+		if arg == "" {
+			return "", exitcode.Usagef(usage)
+		}
+		return arg, nil
+	}
+	if lp.Backup.Path != "" || lp.Backup.Source != "" {
+		return "", exitcode.Usagef("profile %s backs up a path, not a docker volume, use ark backup %s",
+			lp.Name, profileArg(cmd))
+	}
+	switch {
+	case lp.Backup.Volume == "" && arg == "":
+		return "", exitcode.Usagef(usage)
+	case lp.Backup.Volume == "":
+		return arg, nil
+	case arg != "" && arg != lp.Backup.Volume:
+		return "", exitcode.Usagef("docker backup %s: not the backup.volume of profile %s", arg, lp.Name)
+	}
+	return lp.Backup.Volume, nil
 }
 
 // describeRestore is the one line the dry run prints and the prompt asks.

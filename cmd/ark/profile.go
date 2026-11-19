@@ -84,6 +84,15 @@ func loadProfileFile(file string) (*loadedProfile, error) {
 	return &loadedProfile{p, filepath.Dir(abs)}, nil
 }
 
+// profileArg is the -P NAME or -f FILE the profile was given with, for a
+// message that names the command to run instead.
+func profileArg(cmd *cli.Command) string {
+	if name := cmd.Root().String("profile"); name != "" {
+		return "-P " + name
+	}
+	return "-f " + cmd.Root().String("profile-file")
+}
+
 // profileDir is $XDG_CONFIG_HOME/ark/profiles, else ~/.config/ark/profiles,
 // on every OS.
 func profileDir() (string, error) {
