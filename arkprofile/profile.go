@@ -66,8 +66,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -172,10 +174,10 @@ var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 // count other than [ark.Unlimited], a backup label that
 // [ark.ValidateLabels] refuses, a keep-within window that [ark.ParseWithin]
 // refuses and a keep-tag list with an empty tag next to others, as a stray
-// comma leaves one. It refuses backup.volume beside backup.path, an exclude
-// key or backup.source, and a remote docker-host (not unix:// or npipe://)
-// without backup.host, since the snapshots record the daemon's machine. Every
-// error matches [ErrInvalid].
+// comma leaves one. It refuses backup.volume beside a set backup.path,
+// exclude key or backup.source, as [Decode] does, and a volume profile on a
+// remote docker-host (not unix:// or npipe://) without backup.host, since the
+// snapshots record the daemon's machine. Every error matches [ErrInvalid].
 func (p *Profile) Validate() error {
 	if !validName.MatchString(p.Name) {
 		return invalidf(
@@ -246,28 +248,21 @@ func (p *Profile) Validate() error {
 }
 
 func (p *Profile) checkVolume() error {
-	b := p.Backup
-	if remoteDockerHost(p.DockerHost) && b.Host == "" {
+	for _, sec := range []struct {
+		prefix string
+		v      reflect.Value
+	}{{"", reflect.ValueOf(*p)}, {"backup.", reflect.ValueOf(p.Backup)}, {"forget.", reflect.ValueOf(p.Forget)}} {
+		fields, err := structFields(sec.v)
+		if err != nil {
+			return err
+		}
+		if k, c, ok := conflict(fields, slices.Sorted(maps.Keys(fields))); ok {
+			return invalidf("%s%s and %s%s exclude each other", sec.prefix, k, sec.prefix, c)
+		}
+	}
+	if p.Backup.Volume != "" && remoteDockerHost(p.DockerHost) && p.Backup.Host == "" {
 		return invalidf("docker-host %s is a remote daemon: set backup.host to the name of its machine, "+
 			"the host its snapshots record", p.DockerHost)
-	}
-	if b.Volume == "" {
-		return nil
-	}
-	for _, k := range []struct {
-		key string
-		set bool
-	}{
-		{"backup.path", b.Path != ""},
-		{"backup.exclude", len(b.Excludes) > 0},
-		{"backup.exclude-file", len(b.ExcludeFiles) > 0},
-		{"backup.exclude-cloud-files", b.ExcludeCloudFiles},
-		{"backup.source", b.Source != ""},
-	} {
-		if k.set {
-			return invalidf("backup.volume and %s exclude each other: a volume backup takes "+
-				"no path, excludes or source name", k.key)
-		}
 	}
 	return nil
 }

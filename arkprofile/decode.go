@@ -82,15 +82,12 @@ func decodeStruct(n *yaml.Node, v reflect.Value, path, dir string) error {
 		return fieldErrorf(n.Line, where, "want a mapping of keys")
 	}
 
-	fields := map[string]field{}
-	if err := collectFields(v, fields); err != nil {
+	fields, err := structFields(v)
+	if err != nil {
 		return err
 	}
 	pairs, err := mappingPairs(n, path)
 	if err != nil {
-		return err
-	}
-	if err := checkConflicts(pairs, fields, path); err != nil {
 		return err
 	}
 	for _, kv := range pairs {
@@ -133,7 +130,7 @@ func decodeStruct(n *yaml.Node, v reflect.Value, path, dir string) error {
 			}
 		}
 	}
-	return nil
+	return checkConflicts(pairs, fields, path)
 }
 
 // mappingPairs returns the key-value pairs of the mapping n with the merge
@@ -221,22 +218,67 @@ type field struct {
 	conflicts           []string
 }
 
-// checkConflicts refuses a key next to one its field conflicts with, naming
-// both and their lines, so a merged key shows where it came from too.
+// checkConflicts refuses a set key next to a set key it conflicts with,
+// naming both and their lines, so a merged key shows where it came from too.
+// It runs on the decoded values, so it agrees with [conflict] in Validate.
 func checkConflicts(pairs [][2]*yaml.Node, fields map[string]field, path string) error {
 	lines := make(map[string]int, len(pairs))
-	for _, kv := range pairs {
-		lines[kv[0].Value] = kv[0].Line
+	keys := make([]string, len(pairs))
+	given := make(map[string]field, len(pairs))
+	for i, kv := range pairs {
+		keys[i], lines[kv[0].Value], given[kv[0].Value] = kv[0].Value, kv[0].Line, fields[kv[0].Value]
 	}
-	for _, kv := range pairs {
-		for _, c := range fields[kv[0].Value].conflicts {
-			if l, ok := lines[c]; ok {
-				return fieldErrorf(kv[0].Line, joinPath(path, kv[0].Value),
-					"excludes %s at line %d", joinPath(path, c), l)
+	if k, c, ok := conflict(given, keys); ok {
+		return fieldErrorf(lines[k], joinPath(path, k), "excludes %s at line %d", joinPath(path, c), lines[c])
+	}
+	return nil
+}
+
+// conflict returns the first set key in keys and a set key its conflicts tag
+// names.
+func conflict(fields map[string]field, keys []string) (key, other string, ok bool) {
+	for _, k := range keys {
+		f := fields[k]
+		if !isSet(f.v) {
+			continue
+		}
+		for _, c := range f.conflicts {
+			if isSet(fields[c].v) {
+				return k, c, true
 			}
 		}
 	}
-	return nil
+	return "", "", false
+}
+
+// isSet reports a value other than its zero value, an empty list or map
+// counting as unset.
+func isSet(v reflect.Value) bool {
+	if !v.IsValid() {
+		return false
+	}
+	if k := v.Kind(); k == reflect.Slice || k == reflect.Map {
+		return v.Len() > 0
+	}
+	return !v.IsZero()
+}
+
+// structFields collects the fields of v and fails on a conflicts tag that
+// names no key of v, which would never fire.
+func structFields(v reflect.Value) (map[string]field, error) {
+	fields := map[string]field{}
+	if err := collectFields(v, fields); err != nil {
+		return nil, err
+	}
+	for k, f := range fields {
+		for _, c := range f.conflicts {
+			if _, ok := fields[c]; !ok {
+				return nil, fmt.Errorf("decode a profile: key %q of %s conflicts with %q, which is no key",
+					k, v.Type(), c)
+			}
+		}
+	}
+	return fields, nil
 }
 
 // collectFields maps the yaml keys of v's fields to the fields, with the

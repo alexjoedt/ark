@@ -418,7 +418,7 @@ func TestProfileShowSources(t *testing.T) {
 			t.Fatalf("the password leaked: %s", out)
 		}
 		var r result
-		if err := json.Unmarshal([]byte(out), &r); err != nil || r.Profile != "docs" {
+		if err := json.Unmarshal([]byte(out), &r); err != nil || r.Profile == "" {
 			t.Fatalf("not a show result: %q", out)
 		}
 		got := map[string][2]string{}
@@ -449,14 +449,34 @@ func TestProfileShowSources(t *testing.T) {
 			}
 		}
 	}
-	// every forget key of a profile is shown, so one added to arkprofile.Forget cannot miss it
+	// every backup and forget key of a profile is shown, so one added to
+	// arkprofile cannot miss it
 	got := show("profile", "show", "docs")
-	ft := reflect.TypeFor[arkprofile.Forget]()
-	for f := range ft.Fields() {
-		if key, _, _ := strings.Cut(f.Tag.Get("yaml"), ","); key != "" {
-			if _, ok := got["forget."+key]; !ok {
-				t.Errorf("profile show lacks forget.%s", key)
+	for prefix, st := range map[string]reflect.Type{
+		"":        reflect.TypeFor[arkprofile.Profile](),
+		"backup.": reflect.TypeFor[arkprofile.Backup](),
+		"forget.": reflect.TypeFor[arkprofile.Forget](),
+	} {
+		for f := range st.Fields() {
+			key, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
+			if key == "" || key == "-" || key == "backup" || key == "forget" || key == "password-file" ||
+				key == "password-env" || key == "insecure-no-password" {
+				continue
 			}
+			if _, ok := got[prefix+key]; !ok {
+				t.Errorf("profile show lacks %s%s", prefix, key)
+			}
+		}
+	}
+	writeProfile(t, dir, "db", "docker-host: unix:///run/docker.sock\nbackup:\n  volume: pgdata\n")
+	vol := show("profile", "show", "db")
+	for k, w := range map[string][2]string{
+		"docker-host":   {"unix:///run/docker.sock", "profile"},
+		"backup.volume": {"pgdata", "profile"},
+		"backup.source": {"", "default"},
+	} {
+		if vol[k] != w {
+			t.Errorf("volume profile: %s = %v, want %v", k, vol[k], w)
 		}
 	}
 	t.Setenv("ARK_PASSWORD", "x")

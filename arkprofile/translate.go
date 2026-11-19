@@ -129,7 +129,9 @@ func (p *Profile) ForgetPolicy() ark.ForgetPolicy {
 // forget through it leaves other sources, a directory and a volume of the
 // same name, and other machines alone. It fails on a profile with none of
 // backup.volume, backup.source and backup.path, which names no snapshots,
-// rather than select every one.
+// rather than select every one. A volume profile without docker-host leaves
+// the daemon to the caller; a caller that picks a remote one, from
+// DOCKER_HOST say, sets the filter's Host to that machine itself.
 func (p *Profile) Filter() (ark.SnapshotFilter, error) {
 	source, err := p.sourceName()
 	if err != nil {

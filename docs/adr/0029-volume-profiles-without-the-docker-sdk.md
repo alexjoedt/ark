@@ -21,13 +21,16 @@ backed up under the same name.
 `Profile` gets `DockerHost` (key `docker-host`, top level, not path-resolved) and `Backup` gets
 `Volume` (key `backup.volume`). `backup.volume` excludes `backup.path`, `backup.exclude`,
 `backup.exclude-file`, `backup.exclude-cloud-files` and `backup.source`: `Decode` refuses the pair
-with both keys and their lines, `Validate` refuses it for a profile built in code. The volume
+with both keys and their lines, `Validate` refuses it for a profile built in code; both look at
+set values only, so `exclude: []` or `exclude-cloud-files: false` passes, and both read the list
+from the `conflicts` tag on `Volume`. The volume
 names the series.
 
 `Filter` keeps its signature and sets `Type`: `docker-volume` for a volume profile, `file` for a
 path profile. Its `Host` is `backup.host`, else the machine's hostname, as before. `Validate`
-refuses a remote `docker-host` (anything but `unix://` and `npipe://`) without `backup.host`, so
-`Filter` never returns the local hostname for a series the daemon's machine names.
+refuses a volume profile on a remote `docker-host` (anything but `unix://` and `npipe://`)
+without `backup.host`, so `Filter` never returns the local hostname for a series the daemon's
+machine names. With no `docker-host` the caller picks the daemon and, for a remote one, the host.
 
 `Source` stays arkfs only and fails on a volume profile; the caller builds the volume source
 with arkdocker from `backup.volume` and `docker-host`. arkprofile spells the source type

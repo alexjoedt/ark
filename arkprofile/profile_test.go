@@ -212,8 +212,8 @@ func TestDecodeRejects(t *testing.T) {
 			"line 2: backup.volume: excludes backup.source at line 3",
 		},
 		{
-			"volume and an empty exclude",
-			"backup:\n  volume: v\n  exclude: []\n",
+			"volume and an exclude",
+			"backup:\n  volume: v\n  exclude: ['*.tmp']\n",
 			"line 2: backup.volume: excludes backup.exclude at line 3",
 		},
 		{
@@ -350,8 +350,12 @@ func TestValidate(t *testing.T) {
 		{"volume and backup.source", func(p *arkprofile.Profile) {
 			p.Backup.Path, p.Backup.Volume, p.Backup.Source = "", "v", "s"
 		}},
-		{"remote docker-host without backup.host", func(p *arkprofile.Profile) { p.DockerHost = "tcp://db1:2376" }},
-		{"ssh docker-host without backup.host", func(p *arkprofile.Profile) { p.DockerHost = "ssh://admin@db1" }},
+		{"remote docker-host without backup.host", func(p *arkprofile.Profile) {
+			p.Backup.Path, p.Backup.Volume, p.DockerHost = "", "v", "tcp://db1:2376"
+		}},
+		{"ssh docker-host without backup.host", func(p *arkprofile.Profile) {
+			p.Backup.Path, p.Backup.Volume, p.DockerHost = "", "v", "ssh://admin@db1"
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -385,10 +389,25 @@ func TestValidateAcceptsVolumeProfiles(t *testing.T) {
 		{Name: "db", DockerHost: "unix:///run/docker.sock", Backup: arkprofile.Backup{Volume: "pgdata"}},
 		{Name: "db", DockerHost: "npipe:////./pipe/docker_engine", Backup: arkprofile.Backup{Volume: "pgdata"}},
 		{Name: "db", DockerHost: "ssh://admin@db1", Backup: arkprofile.Backup{Volume: "pgdata", Host: "db1"}},
+		// docker-host only names the host of a volume backup
+		{Name: "db", DockerHost: "tcp://db1:2375", Backup: arkprofile.Backup{Path: "/data"}},
 	} {
 		if err := p.Validate(); err != nil {
 			t.Errorf("Validate(%+v) = %v", p, err)
 		}
+	}
+}
+
+// Decode refuses what Validate refuses: a key beside the volume only when it
+// is set, so an empty or false one passes both.
+func TestDecodeVolumeBesideUnsetKeys(t *testing.T) {
+	p := arkprofile.Profile{Name: "db"}
+	in := "backup:\n  volume: v\n  path: ''\n  exclude: []\n  exclude-cloud-files: false\n  source: ''\n"
+	if err := arkprofile.Decode(strings.NewReader(in), &p, "/etc/ark"); err != nil {
+		t.Fatalf("Decode = %v", err)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("Validate = %v", err)
 	}
 }
 
@@ -542,5 +561,15 @@ func TestPackageDocExampleIsValid(t *testing.T) {
 	if len(got) != 2 || got[0].Forget.RunAfter == "" || got[0].Backup.RunAfterFail == "" ||
 		got[1].Backup.Volume == "" || got[1].DockerHost == "" {
 		t.Fatalf("examples lost keys: %+v", got)
+	}
+}
+
+func TestDecodeRefusesAConflictsTagOfNoKey(t *testing.T) {
+	var v struct {
+		A string `yaml:"a" conflicts:"b"`
+	}
+	err := arkprofile.Decode(strings.NewReader("a: x\n"), &v, "/etc/ark")
+	if err == nil || !strings.Contains(err.Error(), `conflicts with "b", which is no key`) {
+		t.Fatalf("Decode = %v, want the stray conflicts tag named", err)
 	}
 }

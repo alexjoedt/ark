@@ -192,7 +192,7 @@ func effectiveValues(root *cli.Command, lp *loadedProfile) []profileValue {
 	host, _ := os.Hostname()
 	b, f := lp.Backup, lp.Forget
 	var source string
-	if pf, err := lp.Filter(); err == nil {
+	if pf, err := lp.Filter(); err == nil && b.Volume == "" {
 		source = pf.Source
 	}
 	repo, repoFrom := repoSetting(root, lp)
@@ -203,7 +203,9 @@ func effectiveValues(root *cli.Command, lp *loadedProfile) []profileValue {
 		passwordValue(root, lp.Profile),
 		{"lock-wait", lockWait.String(), lockWaitFrom},
 		{"concurrency", strconv.Itoa(conc), concFrom},
+		profileOnly("docker-host", lp.DockerHost, ""),
 		profileOnly("backup.path", b.Path, ""),
+		profileOnly("backup.volume", b.Volume, ""),
 		profileOnly("backup.tag", strings.Join(b.Tags, ", "), ""),
 		profileOnly("backup.exclude", strings.Join(b.Excludes, ", "), ""),
 		profileOnly("backup.exclude-file", strings.Join(b.ExcludeFiles, ", "), ""),
