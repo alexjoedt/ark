@@ -126,7 +126,7 @@ Without one, and always with `--json`, they exit 2 unless `--yes` is set.
 |---|---|---|
 | 0 | | success |
 | 1 | `error` | any other failure |
-| 2 | `usage` | usage error: a bad flag or argument, a bad profile, a conflicting password source, no password without a terminal, a forget policy without a keep rule, a missing confirmation |
+| 2 | `usage` | usage error: a bad flag or argument, a bad profile, a conflicting password source, an empty password from a file, command or prompt, passwords that do not match at the prompt, no password without a terminal, a forget policy without a keep rule, a missing confirmation |
 | 3 | `locked` | the repository is locked by another process |
 | 4 | `not_found`, `ambiguous_id` | snapshot not found, or an id prefix matches several |
 | 5 | `verify_failed` | verify or check found damage, `repair index` found an unreadable pack, or a read hit a corrupt object or config |

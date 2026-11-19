@@ -1,8 +1,9 @@
 # Commands
 
-Every command takes the [global flags](index.md#global-flags). All but `ark profile`,
-`ark version` and `ark docker volumes` need a repository and a password as described in
-[CLI](index.md). A snapshot `<id>` is the full id or a unique prefix of it.
+Every command takes the [global flags](index.md#global-flags). All but `ark profile` and
+`ark version` need a repository and a password as described in [CLI](index.md);
+`ark docker volumes` needs them only when a repository is configured. A snapshot `<id>` is the full
+id or a unique prefix of it.
 `ark <command> --help` lists every flag.
 
 ```bash
@@ -418,8 +419,8 @@ SNAPSHOT of `ark docker volumes` only see the snapshots of the same host. The ho
 hostname for a local daemon and the daemon's own name for a remote `--docker-host` (`tcp://`,
 `ssh://`), unless `--host` or the `backup.host` of a volume or repository-only profile sets it. A
 volume snapshot without a host shows in `ark docker volumes` only while the host has none of its
-own, and is never picked as a parent: name it with `--parent <id>`, or the backup reads the whole
-volume.
+own, and is never picked as a parent. The parent is the newest snapshot of the same volume and
+host, or the one `--parent <id>` names; without either the backup reads the whole volume.
 
 ## key passwd
 
