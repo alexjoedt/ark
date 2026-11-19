@@ -66,9 +66,7 @@ A keep count is a whole number or `unlimited`, as on the command line: `keep-yea
 keeps the newest snapshot of every year. A negative count fails the load.
 `keep-within` is a duration as `--keep-within` takes it, `30d`, `72h` or `1y6m`, where `m` counts
 months; one that flag would refuse fails the load. `keep-within-hourly` to `keep-within-yearly`
-take the same durations. A profile written when `m` counted minutes
-still loads with `1m` to `11m` and then keeps months: see
-[`ark forget`](commands.md#forget).
+take the same durations, see [`ark forget`](commands.md#forget).
 `keep-tag` is a list with one entry per tag list, each written as `--keep-tag` takes it:
 `keep-tag: [pinned, "db,prod"]` keeps what is tagged `pinned`, and what is tagged `db` and `prod`;
 the entry `""` keeps the untagged snapshots. An entry with a stray comma, such as `"pinned,"`, fails
@@ -95,8 +93,9 @@ the load.
 - A profile with `backup.volume` selects the docker-volume series of that name, never a file series
   of the same name. `ark forget -P` takes the host `ark docker backup -P` files it under:
   `backup.host`, else this machine's hostname, and for a remote daemon in `$DOCKER_HOST` the
-  daemon's own name, which `forget` asks the daemon for unless `--host` names it. `backup.volume` excludes `backup.path` and
-  `backup.source`; a remote `docker-host` needs `backup.host`.
+  daemon's own name, which `forget` asks the daemon for unless `--host` names it. `backup.volume` excludes `backup.path`,
+  `backup.source`, `backup.exclude`, `backup.exclude-file` and `backup.exclude-cloud-files`; a
+  remote `docker-host` needs `backup.host`. Both fail the load.
 - `backup.label` sets labels as a map, `label: {app: docs}`; a `--label` flag adds to them and wins
   for a key in both. See [Labels](../labels.md).
 - `$VAR` and `${VAR}` expand in every value but the hooks; an unset variable exits 2. `~` and

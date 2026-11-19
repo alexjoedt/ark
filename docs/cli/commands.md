@@ -1,7 +1,8 @@
 # Commands
 
-Every command takes the [global flags](index.md#global-flags). All but `ark profile` and
-`ark version` need a repository and a password as described in [CLI](index.md). A snapshot `<id>` is the full id or a unique prefix of it.
+Every command takes the [global flags](index.md#global-flags). All but `ark profile`,
+`ark version` and `ark docker volumes` need a repository and a password as described in
+[CLI](index.md). A snapshot `<id>` is the full id or a unique prefix of it.
 `ark <command> --help` lists every flag.
 
 ```bash
@@ -415,9 +416,10 @@ ark docker restore -P db <id>          # back into backup.volume
 A volume is one [series](../series.md) per host: the parent of a backup, `ark forget` and the LAST
 SNAPSHOT of `ark docker volumes` only see the snapshots of the same host. The host is this machine's
 hostname for a local daemon and the daemon's own name for a remote `--docker-host` (`tcp://`,
-`ssh://`), unless `--host` or the `backup.host` of a volume or repository-only profile sets it. Volume snapshots written before the host was recorded have none:
-`ark docker volumes` shows them until the host has its own, and the first backup after the update has
-no parent and reads the volume once, unless `--parent <id>` names the last of them.
+`ssh://`), unless `--host` or the `backup.host` of a volume or repository-only profile sets it. A
+volume snapshot without a host shows in `ark docker volumes` only while the host has none of its
+own, and is never picked as a parent: name it with `--parent <id>`, or the backup reads the whole
+volume.
 
 ## key passwd
 

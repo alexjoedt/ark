@@ -15,7 +15,8 @@ A release archive holds the same binary. `ark version` (or `ark --version`) prin
 
 Every command that opens a repository takes it from `--repo`, a profile's `repo` or
 `ARK_REPOSITORY`, in this order. There is no default path. `ark profile` and `ark version` need
-neither a repository nor a password.
+neither a repository nor a password; `ark docker volumes` opens one only when it is configured, to
+show the last snapshot of each volume.
 
 | Form | Backend |
 |---|---|
@@ -52,8 +53,9 @@ The password comes from the first source that is set, in this order:
 
 A repository without a password is not a step in this order: `--insecure-no-password`, the profile's
 `insecure-no-password: true` or `ARK_INSECURE_NO_PASSWORD=1` conflicts with every password source in
-the table, on any layer, and giving both exits 2. So do a file and a command on the same layer. The command runs with `sh -c`, shares stdin and stderr, and a non-zero exit fails the
-command.
+the table, on any layer, and giving both exits 2. So do a file and a command on the same layer.
+The command runs with `sh -c`, shares stdin and stderr, and a non-zero exit fails the command.
+Without a password source and without a terminal to prompt on, a command exits 2.
 
 There is no `--password` flag, it would show in the process list. `ark key passwd` changes the
 password, see [Commands](commands.md#key-passwd).
@@ -124,7 +126,7 @@ Without one, and always with `--json`, they exit 2 unless `--yes` is set.
 |---|---|---|
 | 0 | | success |
 | 1 | `error` | any other failure |
-| 2 | `usage` | usage error: a bad flag or argument, a conflicting password source, a forget policy without a keep rule, a missing confirmation |
+| 2 | `usage` | usage error: a bad flag or argument, a bad profile, a conflicting password source, no password without a terminal, a forget policy without a keep rule, a missing confirmation |
 | 3 | `locked` | the repository is locked by another process |
 | 4 | `not_found`, `ambiguous_id` | snapshot not found, or an id prefix matches several |
 | 5 | `verify_failed` | verify or check found damage, `repair index` found an unreadable pack, or a read hit a corrupt object or config |
