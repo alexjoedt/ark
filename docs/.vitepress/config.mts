@@ -2,7 +2,7 @@ import { defineConfig } from 'vitepress'
 
 export default defineConfig({
   title: 'ark',
-  description: 'Deduplicated backups as a Go library, with a CLI on top',
+  description: 'Deduplicated, compressed and encrypted backups of directories and Docker volumes in a local or SFTP repository, as a Go library with a CLI on top. A Go program can plug in its own Source or Sink.',
   base: '/ark/',
   cleanUrls: true,
   lastUpdated: true,

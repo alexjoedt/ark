@@ -2,9 +2,9 @@
 layout: home
 
 landing:
-  eyebrow: [Go library, CLI, local or SFTP]
+  eyebrow: [Go library, CLI, local and SFTP, directories and Docker volumes]
   title: Every chunk, stored once.
-  tagline: ark keeps deduplicated, compressed and encrypted backups as a Go library, with a CLI on top.
+  tagline: ark keeps deduplicated, compressed and encrypted backups of directories and Docker volumes in a local or SFTP repository, as a Go library with a CLI on top. A Go program can plug in its own Source or Sink.
   install: go install github.com/alexjoedt/ark/cmd/ark@latest
   actions:
     - text: Get started
@@ -39,7 +39,7 @@ features:
     link: /format
 ---
 
-ark keeps deduplicated, compressed and encrypted backups as a Go library, with a CLI on top.
+ark keeps deduplicated, compressed and encrypted backups of directories and Docker volumes in a local or SFTP repository, as a Go library with a CLI on top. A Go program can plug in its own Source or Sink.
 
 - [Getting started](getting-started.md): install ark and make a first backup.
 - [CLI](cli/index.md): every command, the global flags, profiles and exit codes.
