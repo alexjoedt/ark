@@ -2,8 +2,7 @@
 
 A series is the run of snapshots one backup job writes. Four things work on it: the parent of the
 next backup, the keep policy of `ark forget`, `ark snapshots --last` and the `latest` links of
-`ark mount`. The reasoning is in
-`docs/adr/0021-one-series-key-type-source-host.md`.
+`ark mount`.
 
 ## The key
 

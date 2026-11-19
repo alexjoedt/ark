@@ -2,7 +2,7 @@
 
 A label is a key and a value stored with a snapshot. Tags are plain strings; a label carries a
 value, so `app=db` and `app=web` tell two jobs of the same source apart. Labels are set at backup
-and never change afterwards. The reasoning is in `docs/adr/0022-snapshot-labels.md`.
+and never change afterwards.
 
 ## Rules
 

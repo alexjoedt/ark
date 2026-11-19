@@ -1,15 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs'
 import { defineConfig } from 'vitepress'
-
-const adrDir = new URL('../adr/', import.meta.url)
-
-const adrs = readdirSync(adrDir)
-  .filter((name) => /^\d{4}-.+\.md$/.test(name))
-  .sort()
-  .map((name) => ({
-    text: readFileSync(new URL(name, adrDir), 'utf8').split(/\r?\n/, 1)[0].replace(/^\uFEFF?# /, ''),
-    link: `/adr/${name.replace(/\.md$/, '')}`,
-  }))
 
 export default defineConfig({
   title: 'ark',
@@ -17,7 +6,7 @@ export default defineConfig({
   base: '/ark/',
   cleanUrls: true,
   lastUpdated: true,
-  rewrites: { 'adr/README.md': 'adr/index.md' },
+  srcExclude: ['adr/**'],
   head: [['link', { rel: 'icon', type: 'image/svg+xml', href: '/ark/ark.svg' }]],
   markdown: {
     theme: { light: 'github-light-default', dark: 'github-dark-default' },
@@ -34,7 +23,6 @@ export default defineConfig({
       { text: 'CLI', link: '/cli/' },
       { text: 'Library', link: '/library' },
       { text: 'Reference', link: '/format' },
-      { text: 'Decisions', link: '/adr/' },
     ],
     sidebar: [
       {
@@ -65,14 +53,6 @@ export default defineConfig({
           { text: 'Repository format', link: '/format' },
           { text: 'Security', link: '/security' },
           { text: 'Releasing', link: '/releasing' },
-        ],
-      },
-      {
-        text: 'Decisions',
-        collapsed: true,
-        items: [
-          { text: 'Index', link: '/adr/' },
-          ...adrs,
         ],
       },
     ],

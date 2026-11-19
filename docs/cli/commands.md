@@ -311,8 +311,7 @@ policy that keeps nothing else of the series is still refused. A policy run warn
 each one, `--dry-run` too, but not when it is refused: the error names the snapshots instead. A
 snapshot stays until its date has passed, when the rules see it like any other, or until you remove
 it by ID. restic counts such a snapshot in its rules, so the two keep different snapshots of a
-series that holds one, see
-[the decision](../adr/0028-forget-keeps-future-snapshots-out-of-its-rules.md).
+series that holds one.
 
 Hours, days, weeks, months and years are those of the local time zone of the machine `ark forget`
 runs on, so a backup at 00:30 belongs to the new day; set `TZ` to count in another zone. A week is

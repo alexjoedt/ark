@@ -1,8 +1,7 @@
 # Repository format
 
 This describes what ark stores in a repository, format version 1. The byte layout is the contract
-of the version: a build reads and writes exactly this. The reasons behind the layout are in
-[docs/adr](adr/README.md) (0010 to 0015); what each object reveals to someone who can read the
+of the version: a build reads and writes exactly this. What each object reveals to someone who can read the
 storage is in [security.md](security.md).
 
 ## Version

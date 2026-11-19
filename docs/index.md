@@ -37,9 +37,6 @@ features:
   - title: Format and security
     details: The byte layout of a repository and the threat model it is built against.
     link: /format
-  - title: Decisions
-    details: The architecture decision records behind the format, the API and the CLI.
-    link: /adr/
 ---
 
 ark keeps deduplicated, compressed and encrypted backups as a Go library, with a CLI on top.
@@ -53,4 +50,3 @@ ark keeps deduplicated, compressed and encrypted backups as a Go library, with a
 - [Repository format](format.md): the byte layout of a repository.
 - [Security](security.md): the threat model.
 - [Releasing](releasing.md): versioning and how releases are cut.
-- [Decisions](adr/README.md): the architecture decision records.
