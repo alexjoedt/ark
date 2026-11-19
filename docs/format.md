@@ -124,7 +124,10 @@ again when it loaded the index before, and then looks those files up.
 
 Only prune removes the marker, under the exclusive lock and after the new index is durable, once
 every chunk a snapshot references is listed in a stored pack. An index rebuild never removes it: a
-snapshot may still reference a chunk whose records it dropped.
+snapshot may still reference a chunk whose records it dropped. A build that does not know the
+marker, such as v1.0.1, ignores it: its backup takes unchanged files from the parent without reading
+them again, so its snapshot can reference a chunk in no stored pack. Back up a repository that holds
+the marker only with a build that knows it.
 
 ## Order of writes
 

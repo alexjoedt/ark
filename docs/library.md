@@ -153,7 +153,7 @@ _, err = repo.Restore(ctx, snap.ID, ark.NewStreamSink(os.Stdout))
 
 ## Host, series and labels
 
-The core library records no host unless you pass `ark.WithHost`; it reads the machine's hostname only for the locks it writes. The `ark` CLI always records one, and so does `arkprofile`: without `backup.host`, a profile's `BackupOptions` and `Filter` use the machine's hostname. In a container whose hostname changes on every deploy, set `backup.host`, or each deploy starts a new series and `Forget` no longer sees the older snapshots. Source type, source name and host make up a snapshot's series: a backup takes the newest snapshot of its series as its parent, and `Forget` applies a keep policy once per series. Embedders that share one repository between machines should set a host. [Series](series.md) has the details.
+The core library records no host unless you pass `ark.WithHost`; it reads the machine's hostname only for locks, to stamp the ones it writes and to clear at once a lock of this hostname whose process is gone; any other lock is cleared once it is 30 minutes old. The `ark` CLI always records one, and so does `arkprofile`: without `backup.host`, a profile's `BackupOptions` and `Filter` use the machine's hostname. In a container whose hostname changes on every deploy, set `backup.host`, or each deploy starts a new series and `Forget` no longer sees the older snapshots. Source type, source name and host make up a snapshot's series: a backup takes the newest snapshot of its series as its parent, and `Forget` applies a keep policy once per series. Embedders that share one repository between machines should set a host. [Series](series.md) has the details.
 
 Labels are key-value pairs stored with a snapshot, set at backup with `ark.WithLabels` and matched with `SnapshotFilter.Labels`. Keys that start with `ark/` belong to ark's own sources, and a backup that sets one fails with `ark.ErrInvalidLabel`. [Labels](labels.md) has the key rules and the reserved keys.
 
@@ -173,7 +173,7 @@ snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{
 
 ## Encryption
 
-Every repository is encrypted and authenticated. The password unlocks a random master key stored in `keys/`; chunks, trees, indexes, snapshot manifests and locks are sealed with XChaCha20-Poly1305, and no object is named after a file or its plain contents, so the backend sees neither contents nor file names. A changed object fails to open instead of restoring garbage.
+Every repository is encrypted and authenticated. The password unlocks a random master key stored in `keys/`; chunks, trees, indexes, snapshot manifests, locks and the lost-pack marker are sealed with XChaCha20-Poly1305, and no object is named after a file or its plain contents, so the backend sees neither contents nor file names. Lock names and 26 character base32 snapshot IDs do show a creation time. A changed object fails to open instead of restoring garbage.
 
 - A lost password is lost data. There is no recovery and no backdoor.
 - `ark.NoPassword()` creates or opens a repository without one. The format is the same, but the master key is stored unprotected: anyone with access to the backend can read it. `Init` records the choice, and `Open` holds to it: `NoPassword` on a protected repository fails with `ark.ErrPasswordRequired`, a password on an unprotected one with `ark.ErrNotPasswordProtected`.
@@ -259,7 +259,7 @@ if p.Forget.Prune {
 }
 ```
 
-`Source` names the snapshots `Backup.Source`, else the absolute `Backup.Path`, the name `arkfs.NewSource` gives that path, and `Filter` selects the same source; `Name` names no snapshots. A volume profile has no `Source`: the call fails, and the program backs up `Backup.Volume` with `arkdocker` and `BackupOptions`, named after the volume, which `Filter` then selects.
+`Source` names the snapshots `Backup.Source`, else the absolute `Backup.Path`, the name `arkfs.NewSource` gives that path, and `Filter` selects the same source; `Name` names no snapshots. A volume profile has no `Source`: the call fails, and the program backs up `Backup.Volume` with an `arkdocker.Engine` opened with `arkdocker.WithDockerHost(p.DockerHost)` and `BackupVolume` called with `BackupOptions`. Without that option the engine uses `DOCKER_HOST` or the local daemon and backs up another machine's volume under the profile's host. The snapshot is named after the volume, which `Filter` then selects.
 
 The counted rules of an `ark.ForgetPolicy`, `KeepLast` to `KeepYearly`, are of type `ark.KeepCount`: a number, or `ark.Unlimited` to keep every snapshot (`KeepLast`) or the newest of every period. `Forget` refuses any other negative count with `ark.ErrInvalidPolicy`. `ark.ParseKeepCount` reads the text form a profile and the CLI use, a whole number or `unlimited`. In JSON a count is a number and `ark.Unlimited` the string `"unlimited"`.
 

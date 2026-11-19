@@ -39,10 +39,10 @@ writer, every accepted risk included.
   of packs and index objects is in [format.md](format.md).
 - Chunk, tree and index names are the hex HMAC-SHA256 of their plaintext under the repository's ID
   key, the lost-pack marker's that of its namespace name, manifests and locks are sealed under
-  chosen names: snapshot IDs are 128 random bits in 32 lowercase hex characters (an import of
-  an archive whose ID has another form names the copy by the first 128 bits of the SHA-256 of
-  that ID), lock names a
-  millisecond timestamp plus 80 random bits:
+  chosen names: snapshot IDs are 128 random bits in 32 lowercase hex characters, lock names a
+  millisecond timestamp plus 80 random bits. A repository may also hold snapshots under 26
+  character Crockford base32 IDs, which ark resolves but does not write; an import of an archive
+  whose ID has another form names the copy by the first 128 bits of the SHA-256 of that ID:
   `TestChunksAndTreesAreSealedUnderKeyedNames`, `TestSnapshotIDsCarryNoTimestamp`,
   `TestBase32SnapshotIDsStillWork`.
 - The master key holds the data key, the ID key, the chunker seed (which keys the chunk boundaries),
@@ -65,7 +65,8 @@ writer, every accepted risk included.
 - Object names are keyed: the same files in two repositories share no name in any namespace, and no
   chunk is named by the SHA-256 of its content: `TestSameFilesInTwoRepositoriesShareNoNames`,
   `TestChunksAndTreesAreSealedUnderKeyedNames`.
-- Snapshot IDs carry no timestamp; prefix resolution still works: `TestSnapshotIDsCarryNoTimestamp`.
+- The snapshot IDs ark writes carry no timestamp; prefix resolution still works:
+  `TestSnapshotIDsCarryNoTimestamp`.
 - A wrong passphrase fails with `ErrWrongPassword` after reading only the config and the key files:
   `TestOpenChecksThePassword`, `TestWrongPasswordReadsOnlyConfigAndKeys`.
 - Every key file, chunk, tree and snapshot that is flipped in its format byte, nonce, ciphertext or
@@ -120,7 +121,8 @@ writer, every accepted risk included.
   `ARK_SFTP_PASSWORD`, and no parse error echoes the URI: `TestOpenRejects`, `TestOpenNeverEchoesAPassword`.
 - No command takes a passphrase as a flag, so it never lands in argv; the inputs are `ARK_PASSWORD`,
   `--password-file` or `ARK_PASSWORD_FILE`, `--password-command` or `ARK_PASSWORD_COMMAND`, a
-  profile's `password-file` or `password-env`, and the prompt: `TestNoPasswordFlag`.
+  profile's `password-file` or `password-env`, and the prompt; `change-password` takes the new one
+  from `ARK_NEW_PASSWORD`, `--new-password-file` or its prompt: `TestNoPasswordFlag`.
 - The passphrase never appears in the library's or the CLI's logs, debug level included, during
   Init, Open, a failed Open and ChangePassword: `TestPasswordNeverInTheLogs`.
 
@@ -153,8 +155,11 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
 - The argon2id parameters and the config are plaintext: `TestInitWritesOneKeyFile`,
   `TestConfigHoldsOnlyItsPlaintextFields`.
 - Lock names carry the millisecond they were created: `TestLockNamesCarryTheirTime`.
-- `ARK_PASSWORD` is visible to every process of the same user; `--password-file` is the safer
-  input: `TestNoPasswordFlag`.
+- A 26 character base32 snapshot ID begins with the millisecond its snapshot was created in its
+  first 10 characters, so whoever can list `snapshots/` dates those snapshots:
+  `TestBase32SnapshotIDsStillWork`.
+- `ARK_PASSWORD` and `ARK_NEW_PASSWORD` are visible to every process of the same user;
+  `--password-file` and `--new-password-file` are the safer inputs: `TestNoPasswordFlag`.
 
 ## Out of scope
 
