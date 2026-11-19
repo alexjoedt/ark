@@ -28,6 +28,8 @@ backup:
 	writeProfile(t, dir, "files", "repo: "+repo+"\nbackup:\n  path: "+t.TempDir()+"\n")
 	writeProfile(t, dir, "named", "repo: "+repo+"\nbackup:\n  source: imported\n")
 	writeProfile(t, dir, "plain", "repo: "+repo+"\n")
+	writeProfile(t, dir, "cache", "repo: "+repo+"\nbackup:\n  volume: cache\n")
+	pg := volumeSnapshot(t, repo)
 
 	tests := []struct {
 		name string
@@ -71,7 +73,21 @@ backup:
 			1,
 			"127.0.0.1:2",
 		},
+		{"daemon address as host", []string{"docker", "backup", "-P", "db", "--host", "tcp://x"}, 2, "--docker-host"},
 		{"restore unknown id", []string{"docker", "restore", "-P", "db", "nope"}, 4, ""},
+		{"restore into backup.volume", []string{"docker", "restore", "-P", "db", "-y", pg}, 1, "127.0.0.1:3"},
+		{
+			"restore of another volume",
+			[]string{"docker", "restore", "-P", "cache", "-y", pg},
+			2,
+			"not the backup.volume cache",
+		},
+		{
+			"restore of another volume named",
+			[]string{"docker", "restore", "-P", "cache", "-y", pg, "x"},
+			1,
+			"127.0.0.1:1",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -428,7 +428,8 @@ comment and `backup.host`, flags winning as for `ark backup`, and runs the profi
 around it. A volume argument other than `backup.volume` is a usage error, and so are
 `ark docker backup -P` on a profile with `backup.path` or `backup.source` and `ark backup -P` on a
 volume profile, which points to `ark docker backup -P`. `ark docker restore -P NAME <id>` restores
-into `backup.volume` unless a volume is given; `<id>` stays required.
+into `backup.volume` unless a volume is given, and refuses a snapshot of another volume without one;
+`<id>` stays required.
 
 ```bash
 ark docker backup -P db                # backup.volume of profile db, on its docker-host
@@ -438,7 +439,7 @@ ark docker restore -P db <id>          # back into backup.volume
 A volume is one [series](../SERIES.md) per host: the parent of a backup, `ark forget` and the LAST
 SNAPSHOT of `ark docker volumes` only see the snapshots of the same host. The host is this machine's
 hostname for a local daemon and the daemon's own name for a remote `--docker-host` (`tcp://`,
-`ssh://`), unless `--host` or a profile's `backup.host` sets it. Volume snapshots written before the host was recorded have none:
+`ssh://`), unless `--host` or the `backup.host` of a volume or repository-only profile sets it. Volume snapshots written before the host was recorded have none:
 `ark docker volumes` shows them until the host has its own, and the first backup after the update has
 no parent and reads the volume once, unless `--parent <id>` names the last of them.
 

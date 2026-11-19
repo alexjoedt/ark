@@ -10,7 +10,6 @@ import (
 
 	ark "github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkdocker"
-	"github.com/alexjoedt/ark/arkprofile"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
 	"github.com/alexjoedt/ark/cmd/ark/internal/out"
 	"github.com/urfave/cli/v3"
@@ -180,24 +179,21 @@ func printVolumes(p *out.Printer, vols []arkdocker.VolumeInfo, last map[string]t
 func hostFlag() cli.Flag {
 	return &cli.StringFlag{
 		Name:  "host",
-		Usage: "host `NAME` of the snapshots (default: this machine's hostname, or a remote daemon's name)",
+		Usage: "host `NAME` of the snapshots (default: a volume profile's backup.host, else this machine's hostname, or a remote daemon's name)",
 	}
 }
 
 // dockerSeriesHost is the host docker snapshots are filed under: --host if
-// set, else the profile's backup.host, else the hostname of the machine the volumes live on. That is this
-// machine for a local daemon and the daemon's own name for a remote one, so
-// the same volume name on two daemons is two series. A local daemon is not
-// asked, Docker Desktop names itself docker-desktop on every machine.
+// set, else the backup.host of a profile that backs up no path, else the
+// hostname of the machine the volumes live on. That is this machine for a
+// local daemon and the daemon's own name for a remote one, so the same
+// volume name on two daemons is two series. A local daemon is not asked,
+// Docker Desktop names itself docker-desktop on every machine.
 func dockerSeriesHost(ctx context.Context, cmd *cli.Command, c *arkdocker.Client) (string, error) {
 	if cmd.IsSet("host") {
-		h := cmd.String("host")
-		if strings.Contains(h, "://") {
-			return "", exitcode.Usagef("--host %q is a daemon address, the daemon is set with --docker-host", h)
-		}
-		return h, nil
+		return cmd.String("host"), checkHostFlag(cmd)
 	}
-	if lp := profileFrom(ctx); lp != nil && lp.Backup.Host != "" {
+	if lp := profileFrom(ctx); lp != nil && lp.Backup.Host != "" && !pathProfile(lp) {
 		return lp.Backup.Host, nil
 	}
 	if remoteDaemon(dockerHost(ctx, cmd)) {
@@ -208,6 +204,19 @@ func dockerSeriesHost(ctx context.Context, cmd *cli.Command, c *arkdocker.Client
 		return "", fmt.Errorf("hostname: %w, set --host", err)
 	}
 	return h, nil
+}
+
+// checkHostFlag refuses a daemon address in --host, meant for --docker-host.
+func checkHostFlag(cmd *cli.Command) error {
+	if h := cmd.String("host"); strings.Contains(h, "://") {
+		return exitcode.Usagef("--host %q is a daemon address, the daemon is set with --docker-host", h)
+	}
+	return nil
+}
+
+// pathProfile reports whether the profile backs up a path, not a volume.
+func pathProfile(lp *loadedProfile) bool {
+	return lp.Backup.Path != "" || lp.Backup.Source != ""
 }
 
 // remoteDaemon reports whether the daemon address is on another machine:
@@ -295,16 +304,11 @@ func dockerBackupCommand() *cli.Command {
 			if err != nil {
 				return err
 			}
-			var b arkprofile.Backup
-			if lp != nil {
-				b = lp.Backup
+			// before the hooks: a usage error must not follow their side effects
+			if err := checkHostFlag(cmd); err != nil {
+				return err
 			}
-			if cmd.IsSet("tag") {
-				b.Tags = cmd.StringSlice("tag")
-			}
-			if cmd.IsSet("comment") {
-				b.Comment = cmd.String("comment")
-			}
+			b := backupProfile(cmd, lp).Backup
 
 			return withHooks(ctx, lp, "backup", func(ctx context.Context) error {
 				e, repo, err := openDocker(ctx, cmd)
@@ -353,7 +357,7 @@ func dockerRestoreCommand() *cli.Command {
 		UsageText: `ark docker restore [options] <id> [volume]
 
    Restores snapshot <id> into [volume] (default: a profile's backup.volume,
-   else the snapshot's source name).
+   which refuses a snapshot of another volume, else the snapshot's source name).
    Creates the volume if missing, replaces its contents if present.
    Refuses snapshots whose source type is not docker-volume.`,
 		Flags: append([]cli.Flag{
@@ -395,7 +399,16 @@ func dockerRestoreCommand() *cli.Command {
 					snap.SourceType,
 				)
 			}
-			if lp := profileFrom(ctx); volume == "" && lp != nil {
+			if lp := profileFrom(ctx); volume == "" && lp != nil && lp.Backup.Volume != "" {
+				if snap.SourceName != lp.Backup.Volume {
+					return exitcode.Usagef(
+						"docker restore %s: snapshot of volume %s, not the backup.volume %s of profile %s, name the target volume",
+						snap.ID,
+						snap.SourceName,
+						lp.Backup.Volume,
+						lp.Name,
+					)
+				}
 				volume = lp.Backup.Volume
 			}
 			if volume == "" {
@@ -465,7 +478,7 @@ func backupVolume(cmd *cli.Command, lp *loadedProfile) (string, error) {
 		}
 		return arg, nil
 	}
-	if lp.Backup.Path != "" || lp.Backup.Source != "" {
+	if pathProfile(lp) {
 		return "", exitcode.Usagef("profile %s backs up a path, not a docker volume, use ark backup %s",
 			lp.Name, profileArg(cmd))
 	}
