@@ -120,13 +120,18 @@ func TestUnchangedFileIsReadAgainOnceALoadFoundALostPack(t *testing.T) {
 			}
 		},
 		"restore": func(t *testing.T, repo *ark.Repository, snap *ark.Snapshot) {
-			if _, err := repo.Restore(ctx, snap.ID, &recordingSink{}); !errors.Is(err, ark.ErrNotFound) {
-				t.Fatalf("Restore = %v, want ErrNotFound for the lost chunk", err)
+			_, err := repo.Restore(ctx, snap.ID, &recordingSink{})
+			if !errors.Is(err, ark.ErrMissingChunk) || !errors.Is(err, ark.ErrNotFound) ||
+				strings.Contains(err.Error(), "snapshot not found") {
+				t.Fatalf(
+					"Restore = %v, want ErrMissingChunk that matches ErrNotFound and does not blame the snapshot",
+					err,
+				)
 			}
 		},
 		"export": func(t *testing.T, repo *ark.Repository, snap *ark.Snapshot) {
-			if err := repo.Export(ctx, snap.ID, io.Discard); !errors.Is(err, ark.ErrNotFound) {
-				t.Fatalf("Export = %v, want ErrNotFound for the lost chunk", err)
+			if err := repo.Export(ctx, snap.ID, io.Discard); !errors.Is(err, ark.ErrMissingChunk) {
+				t.Fatalf("Export = %v, want ErrMissingChunk for the lost chunk", err)
 			}
 		},
 		"backup": func(t *testing.T, repo *ark.Repository, _ *ark.Snapshot) {
@@ -682,7 +687,10 @@ func TestMarkerIsDurableOnceStored(t *testing.T) {
 	b := &syncRecordingBackend{Backend: arkmem.New()}
 	repo := openRepo(t, b)
 	snap := mustBackup(t, repo, smallFiles("app", 3))
-	if err := b.Delete(ctx, ark.Handle{Type: ark.DataPackFile, Name: objectNames(t, b, ark.DataPackFile)[0]}); err != nil {
+	if err := b.Delete(
+		ctx,
+		ark.Handle{Type: ark.DataPackFile, Name: objectNames(t, b, ark.DataPackFile)[0]},
+	); err != nil {
 		t.Fatalf("delete pack: %v", err)
 	}
 	b.takeEvents()
@@ -752,5 +760,42 @@ func TestMarkerThatCannotBeAskedForCounts(t *testing.T) {
 	sink := &recordingSink{}
 	if _, err := repo.Restore(ctx, snap.ID, sink); err != nil || sink.written["f"] != content {
 		t.Errorf("Restore = %q, %v; want the content", sink.written["f"], err)
+	}
+}
+
+// vanishingPacksBackend lists its data packs and fails every read of one as
+// not stored: a pack that went away after the index was loaded.
+type vanishingPacksBackend struct{ ark.Backend }
+
+func (b vanishingPacksBackend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error) {
+	if h.Type == ark.DataPackFile {
+		return nil, fmt.Errorf("%w: %s", ark.ErrNotFound, h.Name)
+	}
+	return b.Backend.Get(ctx, h)
+}
+
+func (b vanishingPacksBackend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
+	if h.Type == ark.DataPackFile {
+		return nil, fmt.Errorf("%w: %s", ark.ErrNotFound, h.Name)
+	}
+	return b.Backend.GetRange(ctx, h, offset, length)
+}
+
+// TestAPackGoneAfterTheLoadIsAMissingChunk: the restore names the chunk as
+// missing, not the snapshot, though the backend answered ErrNotFound.
+func TestAPackGoneAfterTheLoadIsAMissingChunk(t *testing.T) {
+	ctx := context.Background()
+	b := arkmem.New()
+	snap := mustBackup(t, openRepo(t, b), smallFiles("app", 3))
+
+	repo, err := ark.Open(ctx, vanishingPacksBackend{b}, testPassword)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer repo.Close()
+	_, err = repo.Restore(ctx, snap.ID, &recordingSink{})
+	if !errors.Is(err, ark.ErrMissingChunk) || !errors.Is(err, ark.ErrNotFound) || errors.Is(err, ark.ErrMissingTree) ||
+		!strings.Contains(err.Error(), "is not stored") || strings.Contains(err.Error(), "snapshot not found") {
+		t.Fatalf("Restore = %v, want ErrMissingChunk naming the pack that is not stored", err)
 	}
 }

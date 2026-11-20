@@ -68,8 +68,13 @@ var (
 	// reports the blobs only that object lists as missing.
 	ErrCorruptIndex = errors.New("ark: corrupt index object")
 
-	// ErrMissingChunk is returned when a required chunk is absent from the CAS.
-	ErrMissingChunk = errors.New("ark: missing chunk")
+	// ErrMissingChunk is returned by Restore, Export, Prune and the reads of a
+	// Reader when a chunk a snapshot needs is not stored. It matches
+	// ErrNotFound too. Verify lists such a chunk in MissingChunks.
+	ErrMissingChunk error = missingError("ark: missing chunk")
+
+	// ErrMissingTree is ErrMissingChunk for a tree object.
+	ErrMissingTree error = missingError("ark: missing tree")
 
 	// ErrRepoLocked is returned when a repo-level lock cannot be acquired.
 	ErrRepoLocked = errors.New("ark: repository is locked by another operation")
@@ -98,3 +103,12 @@ var (
 	// for a repository created with NoPassword.
 	ErrNotPasswordProtected = errors.New("ark: repository is not password protected")
 )
+
+// missingError is the error of a blob that is not stored. A read of one
+// wrapped the backend's ErrNotFound before the two had errors of their own,
+// so it still matches that.
+type missingError string
+
+func (e missingError) Error() string { return string(e) }
+
+func (missingError) Is(target error) bool { return target == ErrNotFound }

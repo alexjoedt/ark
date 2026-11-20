@@ -60,8 +60,9 @@ type packSpace struct {
 	// pack objects are stored in, index the one of the objects that say which
 	// pack holds a blob.
 	blobs, packs, index HandleType
-	// corruptErr is the sentinel a pack or blob that does not open wraps.
-	corruptErr error
+	// corruptErr is the sentinel a pack or blob that does not open wraps,
+	// missingErr the one of a blob that is not stored.
+	corruptErr, missingErr error
 }
 
 // newPackSpace returns the pack namespace of chunks (BlobFile) or tree nodes
@@ -70,9 +71,9 @@ func newPackSpace(c *objectCodec, key *masterKey, blobs HandleType) *packSpace {
 	s := &packSpace{codec: c, dataKey: (*[32]byte)(&key.DataKey), idKey: key.IDKey[:], blobs: blobs}
 	switch blobs { //nolint:exhaustive // only chunks and trees are packed
 	case BlobFile:
-		s.packs, s.index, s.corruptErr = DataPackFile, DataIndexFile, ErrCorruptChunk
+		s.packs, s.index, s.corruptErr, s.missingErr = DataPackFile, DataIndexFile, ErrCorruptChunk, ErrMissingChunk
 	case TreeFile:
-		s.packs, s.index, s.corruptErr = TreePackFile, TreeIndexFile, ErrCorruptTree
+		s.packs, s.index, s.corruptErr, s.missingErr = TreePackFile, TreeIndexFile, ErrCorruptTree, ErrMissingTree
 	default:
 		panic(fmt.Sprintf("ark: no packs for %s", blobs))
 	}

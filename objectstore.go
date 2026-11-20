@@ -305,7 +305,7 @@ func (s *objectStore) present(ctx context.Context, name string) (blob [sha256.Si
 }
 
 // Get returns the raw content of the object stored under name. An object no
-// index lists, or whose pack is gone, wraps ErrNotFound. One that was changed
+// index lists, or whose pack is gone, wraps ErrMissingChunk or ErrMissingTree. One that was changed
 // or moved from another name fails to open, with ErrCorruptChunk or
 // ErrCorruptTree by namespace.
 func (s *objectStore) Get(ctx context.Context, name string) ([]byte, error) {
@@ -323,8 +323,8 @@ func (s *objectStore) Get(ctx context.Context, name string) ([]byte, error) {
 }
 
 // locate returns the pack and the place in it of the object stored under name.
-// An object no index lists in a stored pack wraps ErrNotFound and says
-// whether a pack that is not stored lists it.
+// An object no index lists in a stored pack wraps the missing error of the
+// namespace and says whether a pack that is not stored lists it.
 func (s *objectStore) locate(ctx context.Context, name string) (string, packEntry, error) {
 	pack, e, ok, err := s.index.lookup(ctx, name)
 	if err != nil || ok {
@@ -339,7 +339,7 @@ func (s *objectStore) locate(ctx context.Context, name string) (string, packEntr
 		why = errPackLost
 	}
 	return "", packEntry{}, fmt.Errorf("ark: failed to read %s object %s: %w: %w",
-		s.space.blobs, name, ErrNotFound, why)
+		s.space.blobs, name, s.space.missingErr, why)
 }
 
 // checked is what every read does with data and err, the outcome of reading
@@ -350,6 +350,11 @@ func (s *objectStore) checked(pack string, e packEntry, data []byte, err error) 
 	if err != nil {
 		if s.suspects != nil && errors.Is(err, s.space.corruptErr) {
 			s.suspects[pack] = append(s.suspects[pack], e)
+		}
+		if errors.Is(err, ErrNotFound) {
+			// The pack was stored when the index was loaded and is gone now.
+			err = fmt.Errorf("ark: failed to read %s object %x: %w: %s object %s is not stored",
+				s.space.blobs, e.name, s.space.missingErr, s.space.packs, pack)
 		}
 		return nil, err
 	}

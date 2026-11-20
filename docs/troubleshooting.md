@@ -8,8 +8,8 @@ case by the message `ark` printed or by its exit code. Every error message start
 | 1 | a failure that has no code of its own | depends on the message |
 | 2 | wrong usage, or a missing password or confirmation | [Setup](#setup-errors), [Scripts](#cron-and-scripts) |
 | 3 | the repository is locked | [Locked repository](#locked-repository) |
-| 4 | snapshot not found; also a restore or prune that needs data that isn't stored | [Snapshot IDs](#snapshot-ids) |
-| 5 | `check` or `verify` found missing or damaged data | [Check reports problems](#check-reports-problems) |
+| 4 | snapshot not found | [Snapshot IDs](#snapshot-ids) |
+| 5 | missing or damaged data | [Check reports problems](#check-reports-problems) |
 | 6 | wrong password | [Passwords](#passwords) |
 
 ## Setup errors
@@ -101,11 +101,6 @@ data.
 No snapshot has this ID or starts with this prefix. `ark snapshots` lists the IDs. Also check that
 you're looking at the right repository.
 
-The same words and exit code 4 appear for lost data. If the message goes on with `failed to read
-chunks object` or `no index object lists it`, the snapshot exists, but a `restore` or `prune`
-needs a chunk that isn't stored. Run `ark check` and see
-[Check reports problems](#check-reports-problems).
-
 ### `snapshot id prefix is ambiguous`
 
 Several snapshots start with the prefix you gave. Add a few more characters.
@@ -169,6 +164,10 @@ as well. `ark info --exact` shows how much a prune would free.
 
 `ark check` and `ark verify` exit 5 when they find missing or damaged data. The report says what
 is wrong. Fix the errors before you prune.
+
+Other commands exit 5 when they run into the damage. A `restore` or `prune` that needs a chunk or
+tree that isn't stored fails with `missing chunk` or `missing tree`. Run `ark check` to see which
+snapshots are affected.
 
 ### Warnings only
 

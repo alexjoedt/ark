@@ -25,6 +25,8 @@ func TestOf(t *testing.T) {
 		{"empty policy", ark.ErrEmptyPolicy, Usage, KindUsage},
 		{"invalid policy", fmt.Errorf("forget: %w", ark.ErrInvalidPolicy), Usage, KindUsage},
 		{"no snapshot kept", fmt.Errorf("forget: %w", ark.ErrNoSnapshotKept), Failure, KindError},
+		{"missing chunk", fmt.Errorf("restore: %w", ark.ErrMissingChunk), VerifyFailed, KindVerifyFailed},
+		{"missing tree", fmt.Errorf("prune: %w", ark.ErrMissingTree), VerifyFailed, KindVerifyFailed},
 		{"corrupt chunk", fmt.Errorf("restore: %w", ark.ErrCorruptChunk), VerifyFailed, KindVerifyFailed},
 		{"corrupt tree", fmt.Errorf("export: %w", ark.ErrCorruptTree), VerifyFailed, KindVerifyFailed},
 		{"corrupt index", fmt.Errorf("check: %w", ark.ErrCorruptIndex), VerifyFailed, KindVerifyFailed},

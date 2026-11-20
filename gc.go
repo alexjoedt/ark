@@ -95,7 +95,7 @@ func (r *Repository) runGC(
 			return nil, fmt.Errorf("gc: %w", err)
 		}
 		if !ok {
-			err := fmt.Errorf("%w: chunk %s: %w", ErrNotFound, name, errNotIndexed)
+			err := fmt.Errorf("%w %s: %w", ErrMissingChunk, name, errNotIndexed)
 			return nil, fmt.Errorf("gc: %w", notIndexedHint(err))
 		}
 	}

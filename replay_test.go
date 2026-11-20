@@ -96,8 +96,8 @@ func TestReplayedManifestRestoresOnlyItsOwnBytes(t *testing.T) {
 		// the missing root tree.
 		assertGone := func(t *testing.T) {
 			t.Helper()
-			if got, err := restoreData(t, repo, id); !errors.Is(err, ark.ErrNotFound) || got != "" {
-				t.Errorf("Restore = %q, %v; want ErrNotFound and no bytes", got, err)
+			if got, err := restoreData(t, repo, id); !errors.Is(err, ark.ErrMissingTree) || got != "" {
+				t.Errorf("Restore = %q, %v; want ErrMissingTree and no bytes", got, err)
 			}
 			if res, err := repo.Verify(ctx, id); !errors.Is(err, ark.ErrNotFound) || (res != nil && res.OK) {
 				t.Errorf("Verify = %+v, %v; want ErrNotFound and OK false", res, err)

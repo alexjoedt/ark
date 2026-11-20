@@ -173,7 +173,7 @@ and always with `--json`, they exit 2 unless `--yes` is set.
 | 1 | `error` | any other failure |
 | 2 | `usage` | usage error, see below |
 | 3 | `locked` | the repository is locked by another process |
-| 4 | `not_found`, `ambiguous_id` | snapshot not found, or an ID prefix matches several; also a `restore` or `prune` that needs a chunk or pack that isn't stored |
+| 4 | `not_found`, `ambiguous_id` | snapshot not found, or an ID prefix matches several |
 | 5 | `verify_failed` | damage, see below |
 | 6 | `wrong_password` | wrong password |
 
@@ -193,5 +193,6 @@ Exit 5 covers:
 - `verify` or `check` found damage
 - `repair index` found an unreadable pack
 - a read hit a corrupt object or config
+- a `restore` or `prune` needs a chunk or tree that isn't stored
 
 [Troubleshooting](../troubleshooting.md) lists the common errors by message.

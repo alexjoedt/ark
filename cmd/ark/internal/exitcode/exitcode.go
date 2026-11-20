@@ -85,6 +85,9 @@ func Of(err error) (int, string) {
 	switch {
 	case errors.Is(err, ark.ErrRepoLocked):
 		return Locked, KindLocked
+	// Before ErrNotFound, which these two match as well.
+	case errors.Is(err, ark.ErrMissingChunk), errors.Is(err, ark.ErrMissingTree):
+		return VerifyFailed, KindVerifyFailed
 	case errors.Is(err, ark.ErrNotFound):
 		return NotFound, KindNotFound
 	case errors.Is(err, ark.ErrAmbiguousID):

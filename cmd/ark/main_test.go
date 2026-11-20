@@ -1202,7 +1202,9 @@ func TestRepairIndex(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("contents"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if code, out := runCapture(t, "-q", "-r", repo, "backup", src); code != 0 {
+	code, out := runCapture(t, "--json", "-r", repo, "backup", src)
+	var snap struct{ ID string }
+	if err := json.Unmarshal([]byte(out), &snap); err != nil || code != 0 {
 		t.Fatalf("backup exit %d: %s", code, out)
 	}
 	repair := func(wantCode int) (res struct {
@@ -1229,9 +1231,14 @@ func TestRepairIndex(t *testing.T) {
 			}
 		}
 	}
-	code, out := runCapture(t, "--json", "-r", repo, "prune", "--yes")
-	if code != 4 || !strings.Contains(out, "an index rebuild restores the index") {
+	code, out = runCapture(t, "--json", "-r", repo, "prune", "--yes")
+	if code != 5 || !strings.Contains(out, "an index rebuild restores the index") ||
+		strings.Contains(out, "snapshot not found") {
 		t.Fatalf("prune over a lost index: exit %d, %s", code, out)
+	}
+	code, out = runCapture(t, "--json", "-r", repo, "restore", snap.ID, filepath.Join(t.TempDir(), "out"))
+	if code != 5 || !strings.Contains(out, `"verify_failed"`) || strings.Contains(out, "snapshot not found") {
+		t.Fatalf("restore over a lost index: exit %d, %s", code, out)
 	}
 	code, out = runCapture(t, "--json", "-r", repo, "check")
 	if code != 5 || !strings.Contains(out, "an index rebuild lists them") {
