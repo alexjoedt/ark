@@ -3,7 +3,7 @@ module github.com/alexjoedt/ark/arkdocker
 go 1.27.4
 
 require (
-	github.com/alexjoedt/ark v1.0.0
+	github.com/alexjoedt/ark v0.4.0
 	github.com/containerd/errdefs v1.0.0
 	github.com/distribution/reference v0.6.0
 	github.com/moby/moby/api v1.57.0
