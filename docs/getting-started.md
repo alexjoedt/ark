@@ -1,46 +1,50 @@
 # Getting started
 
-This page takes a repository from nothing to a first backup, a restore and a retention policy. Every command is `ark <command>`; `ark <command> --help` lists all of its flags.
+This page takes you from an empty directory to a first backup, a restore, and a retention policy.
+It takes about ten minutes. You need a directory to back up and a place for the repository: a local
+path or a server you reach over SSH.
 
-## Install
+## Install ark
 
-Download the archive for your platform from the [GitHub releases](https://github.com/alexjoedt/ark/releases) (`ark_Linux_x86_64.tar.gz`, `ark_Darwin_arm64.tar.gz` and so on), unpack it and put `ark` on your `PATH`.
+Download the archive for your platform from the
+[GitHub releases](https://github.com/alexjoedt/ark/releases), for example
+`ark_Linux_x86_64.tar.gz` or `ark_Darwin_arm64.tar.gz`. Unpack it and put `ark` on your `PATH`.
 
-With Go 1.27.4 or newer, build it from source instead:
+If you have Go 1.27.4 or newer, you can build it from source instead:
 
 ```bash
 go install github.com/alexjoedt/ark/cmd/ark@latest
 ```
 
-`ark --version` prints the version.
+Check that it runs:
+
+```bash
+ark --version
+```
 
 ## Choose a repository and a password
 
-Every command that works on a repository needs one, taken from `--repo`, a profile's `repo` or `ARK_REPOSITORY`, in this order. There is no default path. A repository is a local directory or an SFTP location:
+A repository is the directory that holds your backups. ark has no default location, so tell it
+where the repository is. The examples on this page use an environment variable:
 
 ```bash
 export ARK_REPOSITORY=/srv/ark                  # or sftp://backup@nas/srv/ark
 ```
 
-The password comes from the first source that is set, checked in this order:
-
-| Source | Flag or variable |
-|---|---|
-| a file, one trailing newline stripped | `--password-file` |
-| the output of a shell command | `--password-command` |
-| the selected profile's `password-file`, then its `password-env` | profile |
-| a file, as above | `ARK_PASSWORD_FILE` |
-| the output of a shell command | `ARK_PASSWORD_COMMAND` |
-| the environment | `ARK_PASSWORD` |
-| a prompt, only on a terminal | none; every command asks, `ark init` twice |
-
-A file and a command on the same level conflict and end in a usage error. So does `--insecure-no-password` (or `ARK_INSECURE_NO_PASSWORD=1`, or the profile's `insecure-no-password`) together with any password source above; it stands for no password at all. Without a password source, every command asks on a terminal and fails without one, for example under cron.
-
-There is no `--password` flag, it would show in the process list. Without a password anyone with access to the backend can read the repository; use `--insecure-no-password` only on purpose. For the examples below:
+Every repository is encrypted with a password. On a terminal, ark asks for it. That gets tedious
+quickly, so put the password into a file that only you can read and point ark at it:
 
 ```bash
-export ARK_PASSWORD_FILE=/etc/ark/password
+mkdir -p ~/.config/ark
+(umask 077; openssl rand -base64 24 > ~/.config/ark/password)
+export ARK_PASSWORD_FILE=~/.config/ark/password
 ```
+
+Keep a copy of the password somewhere else, for example in a password manager. Without it, nobody
+can read the repository, including you. There is no recovery.
+
+[CLI overview](cli/index.md) lists the other ways to name the repository and to supply the
+password.
 
 ## Create the repository
 
@@ -48,47 +52,124 @@ export ARK_PASSWORD_FILE=/etc/ark/password
 ark init
 ```
 
-`ark init` writes the repository config and a key file sealed with the password. It fails if the target directory exists and is not empty. The chunker sizes (`--chunk-min`, `--chunk-avg`, `--chunk-max`) are stored in the repository and cannot be changed later; the defaults suit most data.
+```
+repository initialized at /srv/ark
+```
+
+`ark init` fails if the directory exists and isn't empty, so it never overwrites anything.
 
 ## Back up a directory
 
 ```bash
-ark backup /etc --tag daily
+ark backup /srv/app --tag daily
 ```
 
-The snapshot's [source](series.md) is the absolute path of the directory unless `--source NAME` says otherwise. Later backups of the same source and host use the previous snapshot as parent and read only what changed. `--label KEY=VALUE`, repeatable, stores [labels](labels.md) that the listing commands filter on. Leave paths out with `--exclude PATTERN` or `--exclude-file FILE`.
+```
+backup /srv/app  done in 290ms
+  snapshot   f3261dd9
+  files      3
+  size       293.0 KiB
+  new        293.0 KiB, stored as 293.1 KiB
+```
 
-The command ends with a summary of the files, their size and what this run added to the repository.
+Each backup creates one snapshot: the state of the directory at that moment. `size` is how much
+data the snapshot covers, and `new` is how much of it the repository didn't have yet.
 
-## List snapshots
+Run the same command again after changing a file:
+
+```
+backup /srv/app  done in 265ms
+  snapshot   15370171
+  files      3
+  size       293.0 KiB
+  new        12 B, stored as 66 B
+```
+
+The second snapshot still covers the whole directory, but only the changed data was stored. ark
+found the earlier snapshot of `/srv/app` from this machine, used it as the parent, and read only
+the files that changed.
+
+Two flags you'll want early:
+
+- `--exclude PATTERN` leaves paths out, for example `--exclude node_modules`.
+- `--tag TAG` marks a snapshot so you can find it later.
+
+## Look at your snapshots
 
 ```bash
 ark snapshots
-ark snapshots --source /etc --last 3
-ark snapshots --label app=my-app
 ```
 
-`--source`, `--type`, `--tag`, `--host` and `--label` narrow the list, `--last N` keeps the newest N per series. Use `--json` on any command for machine-readable output.
+```
+ID        TIME                 SOURCE    TYPE  HOST    SIZE       TAGS
+15370171  2026-11-20 22:02:15  /srv/app  file  laptop  293.0 KiB  daily
+f3261dd9  2026-11-20 22:02:15  /srv/app  file  laptop  293.0 KiB  daily
+```
 
-To see what a snapshot holds, `ark ls <id>` lists its files, and `ark find '*.conf'` finds a name across every snapshot, newest first. An id may be abbreviated to a unique prefix.
+Wherever a command takes a snapshot ID, the short form from this list is enough.
+
+List the files in a snapshot, or search every snapshot for a name:
+
+```bash
+ark ls 15370171
+ark find '*.conf'
+```
+
+```
+snapshot 15370171 from 2026-11-20 22:02:15
+conf/app.conf
+conf/db.conf
+
+snapshot f3261dd9 from 2026-11-20 22:02:15
+conf/app.conf
+conf/db.conf
+```
 
 ## Restore
 
 ```bash
-ark restore <id> /tmp/etc-restore
+ark restore 15370171 /tmp/app-restore
 ```
 
-The destination is created if missing and existing files are overwritten. `--path PREFIX` restores only the entries under a prefix, `--dry-run` lists what would be restored without writing anything. To browse snapshots instead of restoring them, see [Mount](mount.md).
+```
+restore 15370171  done in 208ms
+  files   3
+  size    293.0 KiB
+  into    /tmp/app-restore
+```
 
-## Forget and prune
+ark creates the destination if it's missing and overwrites files that already exist there. To get
+only part of a snapshot back, add `--path`:
+
+```bash
+ark restore --path conf 15370171 /tmp/app-restore
+```
+
+`--dry-run` lists what a restore would write without writing anything. If you'd rather browse
+snapshots like directories, see [Mount](mount.md).
+
+## Remove old snapshots
+
+Snapshots accumulate. `ark forget` removes the ones a retention policy doesn't keep:
+
+```bash
+ark forget --keep-daily 7 --keep-weekly 4 --dry-run
+```
+
+This policy keeps the newest snapshot of each of the 7 most recent days that have one, and the
+newest of each of the 4 most recent weeks. `--dry-run` shows what would be removed. When the list
+looks right, run it for real:
 
 ```bash
 ark forget --keep-daily 7 --keep-weekly 4 --prune
 ```
 
-`forget` removes snapshots by id or by a retention policy (`--keep-last`, `--keep-hourly`, `--keep-daily`, `--keep-weekly`, `--keep-monthly`, `--keep-yearly`, `--keep-within`, `--keep-within-hourly` to `--keep-within-yearly`, `--keep-tag`). A policy applies per [series](series.md), so each source keeps its own recent snapshots. Days, weeks and the other periods count in local time. The chunks stay in the repository until `prune` frees them; `--prune` runs it straight after. [Retention policies](retention.md) shows with timelines what each rule keeps.
+Forgetting a snapshot removes it from the list but leaves its data in the repository. `--prune`
+frees the space afterward. You can also run `ark prune` on its own.
 
-Try `--dry-run` first to see which snapshots would be kept and which removed. Destructive commands ask for confirmation on a terminal and fail without one unless `--yes` is set.
+On a terminal, ark asks before it removes anything. In a script, add `--yes`.
+
+[Retention policies](retention.md) shows with timelines what each rule keeps.
 
 ## Check the repository
 
@@ -96,12 +177,23 @@ Try `--dry-run` first to see which snapshots would be kept and which removed. De
 ark check
 ```
 
-`ark check` reports damage in the repository. Run it now and then, especially before relying on old snapshots.
+```
+check  done in 206ms
+  snapshots   1
+  errors      0
+  warnings    0
+1 snapshots ok
+```
 
-## Where next
+`ark check` reads every snapshot and reports missing or damaged data. Run it now and then, and
+before you rely on an old snapshot. If it reports a problem, see
+[Troubleshooting](troubleshooting.md).
 
-- [Series](series.md): how snapshots group into series and what `--source` and `--host` do.
-- [Labels](labels.md): tell jobs of one source apart and select them.
-- [Mount](mount.md): browse every snapshot read-only through FUSE.
-- [CLI reference](cli/index.md): every command, profiles, exit codes.
-- [Repository format](format.md) and [Security](SECURITY.md): the on-disk layout and the threat model.
+## Next steps
+
+- [How ark works](concepts.md) explains snapshots, deduplication, and what forget and prune do.
+- [Profiles](cli/profiles.md) store the settings of a backup in a file and show how to schedule it.
+- [Docker volumes](docker.md) covers backing up and restoring volumes.
+- [Series](series.md) and [Labels](labels.md) matter once several machines or jobs share one
+  repository.
+- [Commands](cli/commands.md) lists every command and flag.

@@ -6,7 +6,7 @@ export default defineConfig({
   base: '/ark/',
   cleanUrls: true,
   lastUpdated: true,
-  srcExclude: ['adr/**'],
+  srcExclude: ['adr/**', 'releasing.md'],
   head: [['link', { rel: 'icon', type: 'image/svg+xml', href: '/ark/ark.svg' }]],
   markdown: {
     theme: { light: 'github-light-default', dark: 'github-dark-default' },
@@ -29,10 +29,13 @@ export default defineConfig({
         text: 'Guide',
         items: [
           { text: 'Getting started', link: '/getting-started' },
+          { text: 'How ark works', link: '/concepts' },
           { text: 'Series', link: '/series' },
           { text: 'Labels', link: '/labels' },
           { text: 'Retention policies', link: '/retention' },
+          { text: 'Docker volumes', link: '/docker' },
           { text: 'Mount', link: '/mount' },
+          { text: 'Troubleshooting', link: '/troubleshooting' },
         ],
       },
       {
@@ -45,14 +48,21 @@ export default defineConfig({
       },
       {
         text: 'Library',
-        items: [{ text: 'Go library', link: '/library' }],
+        items: [
+          { text: 'Overview', link: '/library' },
+          { text: 'Backends', link: '/library/backends' },
+          { text: 'Sources and sinks', link: '/library/sources-and-sinks' },
+          { text: 'Forget policies', link: '/library/forget' },
+          { text: 'Profiles', link: '/library/profiles' },
+          { text: 'Progress and logging', link: '/library/observing' },
+        ],
       },
       {
         text: 'Reference',
         items: [
           { text: 'Repository format', link: '/format' },
           { text: 'Security', link: '/SECURITY' },
-          { text: 'Releasing', link: '/releasing' },
+          { text: 'Versioning', link: '/versioning' },
         ],
       },
     ],

@@ -1,15 +1,35 @@
 # Security
 
-The threat model of an ark repository at rest and in transit. Every guarantee and every accepted
-risk ends with the test that pins it; the tests carry the detail. `TestSecurityDocCitesDefinedTests`
-fails when a cited test does not exist or a guarantee or risk cites none.
+This page is the threat model of an ark repository, at rest and in transit: what ark protects,
+against whom, and what it knowingly doesn't protect.
+
+Every guarantee and every accepted risk ends with the name of the test that pins it. The tests
+carry the detail. `TestSecurityDocCitesDefinedTests` fails when a cited test doesn't exist, or
+when a guarantee or risk cites none.
+
+## In short
+
+For a repository that was created with a password:
+
+- **Reading the storage reveals no content.** Someone who can read every object learns no file
+  contents, no file names, and no snapshot metadata.
+- **Changing the storage can't forge a restore.** A modified, swapped, or moved object fails to
+  open. A restore returns the bytes that were backed up, or an error.
+- **The storage can still delete and roll back.** Someone who can write to the storage can remove
+  data, and can put the repository back into an older state without being detected.
+- **Sizes and timing show.** The number and size of the stored objects reveal roughly how much
+  data a backup added and when.
+- **The client is trusted.** A machine that holds the password can read, forge, and delete
+  everything.
+
+The sections below state each of these precisely.
 
 ## Assets
 
 - File contents, and the metadata trees record for them: paths, file and directory names, symlink
   targets, xattrs, sizes, modes, owners and times.
 - Snapshot metadata: host, tags, labels, comment, source name, creation time and statistics.
-- The passphrase and the master key it unlocks.
+- The password and the master key it unlocks.
 - The integrity of a restore: the bytes that come back are the bytes that were backed up.
 
 ## Attacker model
@@ -18,10 +38,10 @@ In scope are three attackers, alone or together:
 
 - A passive reader of the backend: reads every object, listing, name and size, as often as they like.
 - An active writer on the backend: modifies, truncates, swaps, moves, deletes and puts back old
-  objects, and copies objects in from another repository, also one opened with the same passphrase.
+  objects, and copies objects in from another repository, also one opened with the same password.
 - A network attacker between the client and an sftp server.
 
-The guarantees hold for a repository created with a passphrase. Data sent over sftp is already
+The guarantees hold for a repository created with a password. Data sent over sftp is already
 sealed, so a network attacker on that path gains no more than an attacker on the backend: with the
 host key verified, a passive reader of the traffic; with `insecure=1`, or as the server, an active
 writer, every accepted risk included.
@@ -36,7 +56,7 @@ writer, every accepted risk included.
 - Chunks and trees are stored inside pack objects: each one sealed on its own as above, followed
   by a sealed table of their names and lengths that is bound to the SHA-256 of the bytes before
   it. A pack is named by the SHA-256 of its bytes, which are ciphertext throughout. The layout
-  of packs and index objects is in [format.md](format.md).
+  of packs and index objects is in [Repository format](format.md).
 - Chunk, tree and index names are the hex HMAC-SHA256 of their plaintext under the repository's ID
   key, the lost-pack marker's that of its namespace name, manifests and locks are sealed under
   chosen names: snapshot IDs are 128 random bits in 32 lowercase hex characters, lock names a
@@ -47,7 +67,7 @@ writer, every accepted risk included.
   `TestBase32SnapshotIDsStillWork`.
 - The master key holds the data key, the ID key, the chunker seed (which keys the chunk boundaries),
   the repository ID and `config_hash`, the SHA-256 of the config bytes Init stored.
-- A key file seals the master key under a wrap key derived with argon2id from the passphrase and a
+- A key file seals the master key under a wrap key derived with argon2id from the password and a
   16-byte random salt: time 3, memory 64 MiB, 4 threads. Its plaintext is version, kdf, the three
   parameters, salt and the sealed key, with no hostname or username, unlike restic's key files:
   `TestInitWritesOneKeyFile`, `TestEveryFlippedKeyFileByteFailsOpen`.
@@ -59,7 +79,7 @@ writer, every accepted risk included.
 
 ## Guarantees at rest
 
-- Without the passphrase no object name, body, listing or stat reveals file contents, paths, names,
+- Without the password no object name, body, listing or stat reveals file contents, paths, names,
   symlink targets, xattrs, exclude patterns or snapshot metadata, packs and index objects included:
   `TestBackendHoldsNoPlaintext`.
 - Object names are keyed: the same files in two repositories share no name in any namespace, and no
@@ -67,7 +87,7 @@ writer, every accepted risk included.
   `TestChunksAndTreesAreSealedUnderKeyedNames`.
 - The snapshot IDs ark writes carry no timestamp; prefix resolution still works:
   `TestSnapshotIDsCarryNoTimestamp`.
-- A wrong passphrase fails with `ErrWrongPassword` after reading only the config and the key files:
+- A wrong password fails with `ErrWrongPassword` after reading only the config and the key files:
   `TestOpenChecksThePassword`, `TestWrongPasswordReadsOnlyConfigAndKeys`.
 - Every key file, chunk, tree and snapshot that is flipped in its format byte, nonce, ciphertext or
   tag, truncated, swapped, moved, copied from another namespace or replaced by the same-name object
@@ -117,13 +137,13 @@ writer, every accepted risk included.
   rejected: `TestHostKeysRejectsAnUnknownHost`, `TestHostKeysRejectsAChangedKey`,
   `TestHandshakeVerifiesTheServerHostKey`.
 - `insecure=1` accepts any host key and logs a warning once: `TestHostKeysInsecureWarnsOnce`.
-- A passphrase never travels in a URI: arkuri rejects `user:pass@` with an error naming
+- A password never travels in a URI: arkuri rejects `user:pass@` with an error naming
   `ARK_SFTP_PASSWORD`, and no parse error echoes the URI: `TestOpenRejects`, `TestOpenNeverEchoesAPassword`.
-- No command takes a passphrase as a flag, so it never lands in argv; the inputs are `ARK_PASSWORD`,
+- No command takes a password as a flag, so it never lands in argv; the inputs are `ARK_PASSWORD`,
   `--password-file` or `ARK_PASSWORD_FILE`, `--password-command` or `ARK_PASSWORD_COMMAND`, a
-  profile's `password-file` or `password-env`, and the prompt; `change-password` takes the new one
+  profile's `password-file` or `password-env`, and the prompt; `ark key passwd` takes the new one
   from `ARK_NEW_PASSWORD`, `--new-password-file` or its prompt: `TestNoPasswordFlag`.
-- The passphrase never appears in the library's or the CLI's logs, debug level included, during
+- The password never appears in the library's or the CLI's logs, debug level included, during
   Init, Open, a failed Open and ChangePassword: `TestPasswordNeverInTheLogs`.
 
 ## Accepted risks
@@ -133,7 +153,7 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
 
 - Forgotten snapshots come back when their manifests are put back, until a prune has removed their
   data: `TestReplayedManifestRestoresOnlyItsOwnBytes`.
-- ChangePassword does not revoke the old passphrase: the old key file, put back, opens the
+- ChangePassword does not revoke the old password: the old key file, put back, opens the
   repository under it again: `TestReplayedKeyFileOpensUnderTheOldPassword`.
 - An old config put back together with its old key file opens: `TestReplayedConfigOpensOnlyWithItsKeyFile`.
 - A replayed lock blocks writers until it is stale: `TestReplayedLockIsHonouredUntilItIsStale`.
@@ -163,7 +183,7 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
 
 ## Out of scope
 
-- A compromised client holding the passphrase: it can read, forge and delete everything. ark has
+- A compromised client holding the password: it can read, forge and delete everything. ark has
   no append-only mode against it.
 - Side channels on the client host: memory, swap, core dumps and timing. Key material is not zeroed
   in memory and core dumps are not disabled.

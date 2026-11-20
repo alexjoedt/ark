@@ -1,25 +1,15 @@
 # Commands
 
-Every command takes the [global flags](index.md#global-flags). All but `ark profile list`,
-`ark profile show` and `ark version` need a repository and a password as described in [CLI](index.md);
-`ark docker volumes` needs them only when a repository is configured. A snapshot `<id>` is the full
-id or a unique prefix of it.
-`ark <command> --help` lists every flag.
+This page is the reference for every `ark` command: its arguments, its flags, and what it does.
+The [global flags](index.md#global-flags) apply to all of them. `ark <command> --help` prints the
+same flags in the terminal.
 
-```bash
-export ARK_REPOSITORY=/srv/ark        # or sftp://backup@nas/srv/ark
-export ARK_PASSWORD_FILE=/etc/ark/password
+Conventions on this page:
 
-ark init
-ark backup /etc --tag daily
-ark snapshots
-ark ls <id>
-ark find '*.conf'           # every snapshot and path whose name matches, newest first
-ark restore <id> /tmp/etc-restore
-ark forget --keep-daily 7 --keep-weekly 4 --prune
-ark check
-ark repair index            # after check or prune report a lost or damaged index
-```
+- `<id>` is a snapshot ID or a unique prefix of one.
+- Every command needs a repository and a password, see [CLI overview](index.md). The exceptions
+  are `ark profile list`, `ark profile show`, `ark version`, and `ark docker volumes`, which
+  opens a repository only when one is configured.
 
 | Command | Purpose |
 |---|---|
@@ -27,88 +17,101 @@ ark repair index            # after check or prune report a lost or damaged inde
 | [`backup`](#backup) | back up a directory |
 | [`restore`](#restore) | restore a snapshot into a directory |
 | [`snapshots`](#snapshots) | list snapshots |
-| [`ls`](#ls) | list files inside a snapshot |
+| [`ls`](#ls) | list the files in a snapshot |
 | [`find`](#find) | find files in snapshots by pattern |
 | [`mount`](#mount) | serve every snapshot read-only through FUSE |
 | [`inspect`](#inspect) | show one snapshot in detail |
 | [`info`](#info) | show what a repository holds |
-| [`forget`](#forget) | remove snapshots by id or policy |
-| [`prune`](#prune) | delete packs no snapshot references |
+| [`forget`](#forget) | remove snapshots by ID or policy |
+| [`prune`](#prune) | delete packs that no snapshot references |
 | [`repair index`](#repair-index) | rebuild the index from the stored packs |
 | [`verify`](#verify) | verify one snapshot |
 | [`check`](#check) | verify every snapshot |
 | [`export`](#export) | write a snapshot as a tar archive |
-| [`import`](#import) | read a tar archive written by export as a new snapshot |
+| [`import`](#import) | read a tar archive written by `export` as a new snapshot |
 | [`unlock`](#unlock) | remove stale repository locks |
-| [`docker`](#docker) | list, back up and restore Docker volumes |
+| [`docker`](#docker) | list, back up, and restore Docker volumes |
 | [`key passwd`](#key-passwd) | change the repository password |
-| [`profile`](#profile) | list profiles, show their effective values and run their backup |
+| [`profile`](#profile) | list profiles, show their values, and run their backup |
 | `version` | print version information |
 
 ## init
 
-`ark init [--chunk-min SIZE] [--chunk-avg SIZE] [--chunk-max SIZE]`
+```
+ark init [--chunk-min SIZE] [--chunk-avg SIZE] [--chunk-max SIZE]
+```
 
-Writes the repository config and a key file sealed with the password. Fails if the repository
-directory, local or over SFTP, exists and is not empty. The chunker sizes (defaults 256KiB, 1MiB,
-4MiB) are stored in the repository and cannot be changed later.
+Writes the repository config and a key file sealed with the password.
+
+- Fails if the repository directory, local or over SFTP, exists and isn't empty.
+- The chunk sizes default to 256KiB, 1MiB, and 4MiB. They are stored in the repository and can't
+  be changed later.
 
 ## backup
 
-`ark backup [options] <path>`
+```
+ark backup [options] <path>
+```
 
-Backs up the directory at `<path>` as one snapshot.
+Backs up the directory at `<path>` as one snapshot. Prints the summary on stderr and the full
+snapshot ID on stdout.
 
 | Flag | Meaning |
 |---|---|
-| `--tag TAG`, `-t` | add a tag, repeatable |
+| `--tag TAG`, `-t` | add a tag; repeatable |
 | `--comment TEXT`, `-c` | free text stored with the snapshot |
-| `--source NAME`, `-s` | the source name, default the absolute path (with `-P` `backup.source` if set) |
-| `--host NAME` | the host, default the machine's hostname |
-| `--label KEY=VALUE` | record a label, repeatable, the value may hold commas |
-| `--parent ID` | an explicit parent snapshot |
+| `--source NAME`, `-s` | the source name; default: the absolute path, or with `-P` the profile's `backup.source` |
+| `--host NAME` | the host; default: the machine's hostname |
+| `--label KEY=VALUE` | record a label; repeatable; see [Labels](../labels.md) |
+| `--parent ID` | use this snapshot as the parent |
 | `--time TIME` | the time of the snapshot instead of now, as `"2006-01-02 15:04:05"` in local time |
-| `--exclude PATTERN`, `-e` | leave out paths matching PATTERN, repeatable |
-| `--exclude-file FILE` | read exclude patterns from FILE, repeatable |
+| `--exclude PATTERN`, `-e` | leave out paths that match PATTERN; repeatable |
+| `--exclude-file FILE` | read exclude patterns from FILE; repeatable |
 | `--exclude-cloud-files` | leave out files that exist only in the cloud |
 
-A backup is one series per source type, source and host; its parent is the newest snapshot of that
-series unless `--parent` names one. `ark snapshots`, `ark find` and `ark forget` filter on labels,
-and all given labels must match. See [Series](../series.md) and [Labels](../labels.md).
+The parent is the newest snapshot of the same [series](../series.md): the same source type, source
+name, and host. `--parent` overrides it.
 
-`--time` dates a backup of data as it was at an earlier time: `ark snapshots` shows that time and
-`ark forget` counts the snapshot in its hour, day, week, month and year. The parent is still the
-newest snapshot of the series by time, so a backup may be dated before its parent. A time in the
-future is refused, exit 2, and so is a time the local clocks skip when summer time starts. Of an
-hour they show twice when it ends, either of the two is taken; both count in the same hour.
+### Backdated snapshots
+
+`--time` dates a backup of data as it was at an earlier time.
+
+- `ark snapshots` shows this time, and `ark forget` counts the snapshot in its hour, day, week,
+  month, and year.
+- The parent is still the newest snapshot of the series by time, so a snapshot can be dated before
+  its parent.
+- A time in the future is refused. Exit 2.
+- A time that the local clocks skip when daylight saving time starts is refused. Exit 2.
+- For an hour that the clocks show twice when daylight saving time ends, either of the two is
+  taken. Both count in the same hour.
 
 ### Excludes
 
-`--exclude/-e PATTERN` and `--exclude-file FILE` leave paths out, and `--exclude-cloud-files` skips
-files that exist only in the cloud (iCloud `.name.icloud` placeholders, and on macOS every dataless
-File Provider entry), so a backup does not download a whole cloud share. The patterns are stored with
-the snapshot; `ark inspect` shows them.
-
 ```bash
-ark backup ~ -e node_modules -e '*.tmp' -e /Library --exclude-file ~/.config/ark/excludes --exclude-cloud-files
+ark backup ~ -e node_modules -e '*.tmp' -e /Library --exclude-file ~/.config/ark/excludes
 ```
 
-- Patterns use `path.Match` syntax per path component (`*`, `?`, `[...]`) plus `**` for any number of
-  components, with `/` as the separator on every OS.
-- A pattern without a leading `/` matches at any depth: `node_modules` leaves out every directory of
-  that name. A leading `/` anchors it at the backed-up directory, not at the file system root:
-  `/Library` matches only `~/Library` in the example.
+- A pattern uses `path.Match` syntax per path component (`*`, `?`, `[...]`), plus `**` for any
+  number of components. The separator is `/` on every OS.
+- A pattern without a leading `/` matches at any depth. `node_modules` leaves out every directory
+  of that name.
+- A leading `/` anchors the pattern at the backed-up directory, not at the file system root. In the
+  example, `/Library` matches only `~/Library`.
 - A matched directory is left out with everything below it.
-- A comma stays part of the pattern: `-e 'a,b'` is one pattern.
-- An exclude file holds one pattern per line; surrounding whitespace is trimmed, blank lines and
-  lines starting with `#` are skipped.
-- Differences from restic: no `!` negation, no `$VAR` expansion in exclude files (`$` stays literal),
-  and `/` anchors at the backed-up directory instead of the file system root. A bad pattern exits
-  with the usage code 2 before the repository is opened.
+- A comma stays part of the pattern. `-e 'a,b'` is one pattern.
+- An exclude file holds one pattern per line. Surrounding whitespace is trimmed. Blank lines and
+  lines that start with `#` are skipped.
+- A bad pattern exits 2 before the repository is opened.
+- The patterns are stored with the snapshot. `ark inspect` shows them.
+
+`--exclude-cloud-files` skips files that exist only in the cloud, so a backup doesn't download a
+whole cloud share. That covers iCloud `.name.icloud` placeholders, and on macOS every dataless File
+Provider entry.
+
+Differences from restic: no `!` negation, no `$VAR` expansion in exclude files (`$` stays literal),
+and `/` anchors at the backed-up directory instead of the file system root.
 
 ### Summary
-
-`ark backup` ends with a summary of what the snapshot holds and what the run added:
 
 ```
   snapshot   4f9c2a1e
@@ -117,125 +120,166 @@ ark backup ~ -e node_modules -e '*.tmp' -e /Library --exclude-file ~/.config/ark
   new        6.7 GiB, stored as 3.4 GiB
 ```
 
-- `snapshot` is the short id of the new snapshot.
+| Line | Meaning |
+|---|---|
+| `snapshot` | the short ID of the new snapshot |
+| `files` | regular files, plus every further name of a hardlinked file; the note appears when files were taken unchanged from the parent or skipped |
+| `size` | the bytes of every regular file in the tree, a file under several names counted once; unchanged files count too |
+| `new` | the raw size of the distinct chunks this run wrote |
+| `stored as` | what those chunks take in the repository, compressed and encrypted |
 
-- `files` counts regular files and every further name of a hardlinked file. The note in parentheses
-  appears when files were taken unchanged from the parent snapshot or skipped.
-- `size` is the content of the backed-up tree: the bytes of every regular file, a file under several
-  names counted once. Files taken unchanged from the parent snapshot count too.
-- `new` is the raw size of the distinct data chunks this run wrote to the repository. A chunk counts
-  once however often it occurs, so `new` stays below `size` even on an empty repository when the tree
-  holds the same content in several files. `stored as` is what those chunks take in the repository,
-  compressed and encrypted.
-- Directory and file metadata (the snapshot trees) count in neither `new` nor `stored as`.
-- Differences from restic: restic counts the bytes of a hardlinked file once per name, and its "Added
-  to the repository" includes the tree metadata and pack overhead, so both its numbers come out a
-  little higher. The chunk sizes differ as well (ark: 256 KiB to 4 MiB, restic: 512 KiB to 8 MiB),
-  which shifts the deduplication slightly.
+- A chunk counts once in `new`, however often it occurs. `new` therefore stays below `size` even
+  on an empty repository when several files hold the same content.
+- Directory and file metadata count in neither `new` nor `stored as`.
+
+Differences from restic: restic counts the bytes of a hardlinked file once per name, and its "Added
+to the repository" includes metadata and pack overhead, so its numbers come out a little higher.
+The chunk sizes differ too (ark: 256 KiB to 4 MiB, restic: 512 KiB to 8 MiB), which shifts the
+deduplication slightly.
 
 ## restore
 
-`ark restore [options] <id> <dest>`
+```
+ark restore [options] <id> <dest>
+```
 
-Restores a snapshot into `<dest>`, created if missing; existing files are overwritten.
+Restores a snapshot into `<dest>`. The directory is created if missing. Existing files are
+overwritten.
 
 | Flag | Meaning |
 |---|---|
-| `--path PREFIX`, `-p` | restore only entries under PREFIX, repeatable |
+| `--path PREFIX`, `-p` | restore only the entries under PREFIX; repeatable |
 | `--dry-run`, `-n` | list what would be restored, write nothing |
-| `--cache SIZE` | chunk cache during restore, `0` disables it (default 256MiB) |
+| `--cache SIZE` | the chunk cache during the restore; `0` disables it; default 256MiB |
 
-Docker volume snapshots are refused here. Use [`ark docker restore`](#docker), or unpack one into a
+Docker volume snapshots are refused. Use [`ark docker restore`](#docker), or unpack one into a
 directory with `ark export <id> | tar x`.
 
 ## snapshots
 
-`ark snapshots [options]`
-
-Lists snapshots, filtered by `--source NAME` (`-s`), `--type file|docker-volume|stream`, `--tag TAG`
-(`-t`), `--host NAME` and `--label KEY=VALUE`; repeated tags and labels must all match.
-`--last N` keeps the newest N of every series. With `-P` only the profile's snapshots are listed.
-
-## ls
-
-`ark ls [--long] <id> [path]`
-
-Lists the entries of a snapshot, optionally below `path`. It streams, so it works on any size.
-`--long` (`-l`) adds mode, uid, gid, size and mtime.
-
-## find
-
-`ark find [options] <pattern>...`
-
-Lists every entry whose path matches a pattern, grouped per snapshot, newest first. Patterns follow
-`--exclude`: without a `/` a base name anywhere, a leading `/` anchors at the snapshot root, and a
-matched directory lists everything below it. The filters are those of `ark snapshots` without
-`--last`.
-
-## mount
-
-`ark mount <dir>`
-
-Serves every snapshot read-only through FUSE until Ctrl-C:
-
-```bash
-ark mount /mnt/ark                # in another shell:
-ls /mnt/ark/ids/                  # one directory per snapshot
+```
+ark snapshots [options]
 ```
 
-The tree has `ids/<id>/`, `tags/<tag>/<time>/` and `sources/<type>/<host>/<source>/<time>/` with a
-`latest` link per series, for example `sources/files/myhost/home/alex/latest`. The mount holds a
-shared lock, so `ark prune` and `ark forget --prune` exit 3 until it is unmounted. Linux needs
-FUSE 3, macOS macFUSE. [Mount](../mount.md) has the full layout, the behaviour on Ctrl-C and the
-platforms.
-
-## inspect
-
-`ark inspect <id>`
-
-Shows one snapshot: source and type, host, time, parent, tags, file count, size with what was stored
-new and reused, deduplication and compression ratios, duration, comment and the exclude patterns it
-was taken with. `--json` adds the labels.
-
-## info
-
-`ark info [--exact]`
-
-Shows how many snapshots the repository holds, the total size of the files they cover and what the
-repository stores, split into data packs, tree packs, indexes, snapshots, keys and other objects
-(config, locks, the lost-pack marker), with the ratio of total size to stored size. The total size is
-summed over the snapshots and not deduplicated: a file in ten snapshots counts ten times, so the
-ratio grows with every unchanged backup. It reads the snapshot list and the object sizes the
-backend lists, no data, and takes no lock.
-
-`--exact` adds the bytes no snapshot uses and how many of them a prune frees, from a prune dry run:
-it reads every tree and index and takes the exclusive lock, so it waits for or fails on a running
-backup like prune does. A ratio below 0.05 prints as `<0.1x`. `--json` prints one object with
-`snapshots`, `total_size`, `stored_size`, `stored` (bytes per kind: `datapacks`, `treepacks`,
-`indexes`, `snapshots`, `keys`, `other`) and, with `--exact`, `bytes_freed` (what a prune deletes)
-and `bytes_unused` (what it leaves in place).
-
-## forget
-
-`ark forget [options] [<id>...]`
-
-Removes snapshots, either the named ids or those a policy does not keep. The policy applies per
-series among the snapshots the filters match. Chunks stay in the repository until a prune. See
-[Retention policies](../retention.md) for what each rule keeps, with timelines.
-
-On a terminal, `forget` lists the snapshots it will remove and then asks once. With `--prune` that
-question covers the prune too. With `--yes` it asks nothing and lists each snapshot after removing it.
+Lists snapshots, newest first.
 
 | Flag | Meaning |
 |---|---|
-| `--keep-last N` | keep the N newest; `unlimited` keeps all |
-| `--keep-hourly N`, `--keep-daily N`, `--keep-weekly N`, `--keep-monthly N`, `--keep-yearly N` | keep the newest snapshot of each of the N most recent hours, days, weeks, months, years that have a snapshot, and the series' oldest snapshot while count is left; a period without a snapshot uses no count; `unlimited` keeps the newest of every one |
-| `--keep-within DURATION` | keep everything younger than DURATION, counted in years, months, days and hours, e.g. `30d`, `72h`, `1y6m` |
-| `--keep-within-hourly DURATION`, `--keep-within-daily DURATION`, `--keep-within-weekly DURATION`, `--keep-within-monthly DURATION`, `--keep-within-yearly DURATION` | keep the newest snapshot of every hour, day, week, month, year younger than DURATION that has a snapshot, and the series' oldest snapshot if it lies inside |
-| `--keep-tag TAG[,TAG...]` | keep every snapshot that carries all tags of the list, `''` for the untagged ones; repeatable, a match of any list keeps |
-| `--all` | remove every matching snapshot; a policy that keeps nothing is refused without it |
-| `--source`, `--type`, `--tag`, `--host`, `--label` | filters, as for `ark snapshots` |
-| `--prune` | run prune afterwards |
+| `--source NAME`, `-s` | only this source name |
+| `--type TYPE` | only this source type: `file`, `docker-volume`, or `stream` |
+| `--tag TAG`, `-t` | only snapshots with this tag; repeatable, all must match |
+| `--host NAME` | only this host |
+| `--label KEY=VALUE` | only snapshots with this label; repeatable, all must match |
+| `--last N` | the newest N of every series |
+
+With `-P`, only the profile's snapshots are listed. See
+[Which snapshots a profile selects](profiles.md#which-snapshots-a-profile-selects).
+
+## ls
+
+```
+ark ls [--long] <id> [path]
+```
+
+Lists the entries of a snapshot, optionally only those below `path`. It streams, so it works on a
+snapshot of any size. `--long`, `-l` adds mode, uid, gid, size, and mtime.
+
+## find
+
+```
+ark find [options] <pattern>...
+```
+
+Lists every entry whose path matches a pattern, grouped by snapshot, newest snapshot first.
+
+- Patterns follow the rules of [`--exclude`](#excludes): without a `/`, a pattern matches a base
+  name at any depth; a leading `/` anchors it at the snapshot root; a matched directory lists
+  everything below it.
+- Several patterns are alternatives.
+- The filters are those of [`ark snapshots`](#snapshots), without `--last`.
+
+## mount
+
+```
+ark mount <dir>
+```
+
+Serves every snapshot read-only through FUSE at `<dir>` until Ctrl-C. The tree has `ids/<id>/`,
+`tags/<tag>/<time>/`, and `sources/<type>/<host>/<source>/<time>/` with a `latest` link per series.
+
+The mount holds a shared lock, so `ark prune` and `ark forget --prune` exit 3 until it's unmounted.
+Linux needs FUSE 3, macOS needs macFUSE. See [Mount](../mount.md).
+
+## inspect
+
+```
+ark inspect <id>
+```
+
+Shows one snapshot: ID, source and type, host, time, parent, tags, file count, size with what was
+stored new and what was reused, deduplication and compression ratios, duration, comment, and the
+exclude patterns. `--json` adds the labels.
+
+## info
+
+```
+ark info [--exact]
+```
+
+Shows what a repository holds:
+
+- the number of snapshots
+- the total size of the files they cover
+- the stored size, split into data packs, tree packs, indexes, snapshots, keys, and other objects
+  (config, locks, the lost-pack marker)
+- the ratio of total size to stored size
+
+The total size is summed over the snapshots and not deduplicated. A file in ten snapshots counts
+ten times, so the ratio grows with every unchanged backup. A ratio below 0.05 prints as `<0.1x`.
+
+Without `--exact`, the command reads the snapshot list and the object sizes that the backend
+lists. It reads no data and takes no lock.
+
+`--exact` adds the bytes that no snapshot uses and how many of them a prune frees. It runs a prune
+dry run: it reads every tree and index and takes the exclusive lock, so it waits for a running
+backup or fails on it, as prune does.
+
+`--json` prints one object:
+
+| Field | Meaning |
+|---|---|
+| `snapshots` | the number of snapshots |
+| `total_size` | the summed size of the files |
+| `stored_size` | the size of the repository |
+| `stored` | bytes per kind: `datapacks`, `treepacks`, `indexes`, `snapshots`, `keys`, `other` |
+| `bytes_freed` | with `--exact`: what a prune deletes |
+| `bytes_unused` | with `--exact`: unused bytes that a prune leaves in place |
+
+## forget
+
+```
+ark forget [options] [<id>...]
+```
+
+Removes snapshots: either the named IDs, or those that a policy doesn't keep. The chunks stay in
+the repository until a prune.
+
+[Retention policies](../retention.md) explains what each rule keeps, with timelines. This section
+only lists the flags and how the command behaves.
+
+| Flag | Value | Keeps |
+|---|---|---|
+| `--keep-last` | N | the N newest snapshots |
+| `--keep-hourly`, `--keep-daily`, `--keep-weekly`, `--keep-monthly`, `--keep-yearly` | N | the newest snapshot of each of the N most recent hours, days, weeks, months, or years that have one |
+| `--keep-within` | DURATION | every snapshot younger than DURATION |
+| `--keep-within-hourly`, `--keep-within-daily`, `--keep-within-weekly`, `--keep-within-monthly`, `--keep-within-yearly` | DURATION | the newest snapshot of every hour, day, week, month, or year younger than DURATION |
+| `--keep-tag` | TAG[,TAG...] | every snapshot that carries all tags of the list; repeatable |
+
+| Flag | Meaning |
+|---|---|
+| `--all` | remove every matching snapshot |
+| `--source`, `--type`, `--tag`, `--host`, `--label` | filters, as for [`ark snapshots`](#snapshots) |
+| `--prune` | run prune afterward |
 | `--dry-run`, `-n` | show the keep and remove lists, delete nothing |
 | `--yes`, `-y` | skip the confirmation prompt |
 
@@ -248,195 +292,207 @@ ark forget --keep-daily 7 --keep-yearly unlimited
 ark forget --keep-last 5 --keep-tag pinned
 ```
 
-A count is a whole number or the word `unlimited`: `--keep-yearly unlimited` keeps the newest
-snapshot of every year there is. A negative number is a usage error, exit 2; `0` switches a rule
-off, which matters over a profile that sets it.
+### Values
 
-A period rule keeps the newest snapshot of each period, newest period first, until its count is
-used up. When it reaches the oldest snapshot of a series and still has count left, it keeps that
-snapshot too, although its period is already taken: `--keep-daily 7` on a series that spans two
-days keeps the newest of each day and the oldest snapshot, which `--json` lists with the reason
-`oldest daily snapshot`. A series shorter than its policy so keeps its first snapshot until the
-policy is filled; with `unlimited` the oldest always stays. `--keep-last` and `--keep-within` have
-no such rule. restic selects the same way.
+- N is a whole number or the word `unlimited`. A negative number exits 2.
+- DURATION is whole numbers followed by `y`, `m`, `d`, or `h`, each unit at most once and in that
+  order: `30d`, `72h`, `1y6m`. `m` means months and goes up to 11. See
+  [Durations](../retention.md#durations).
+- A `--keep-tag` value is a list of tags separated by commas. `''` stands for snapshots without a
+  tag. A list with a stray comma, such as `pinned,`, exits 2.
 
-`--keep-within` takes a duration in restic's units: whole numbers followed by `y` (years), `m`
-(months), `d` (days) or `h` (hours), each unit at most once and in that order, as in `30d`, `72h` or
-`1y2m3d4h`. There are no minutes, seconds or weeks, and no fractions. `m` counts months and goes up
-to 11, so `90m` is a usage error, exit 2, and not seven and a half years; write `1y6m` for 18
-months.
+### Behavior
 
-The window ends at the newest snapshot of the series that is not in the future, not at the time of
-the run, so a series that stopped receiving backups keeps its last ones. Years, months and days are
-steps on the calendar of the local time zone, hours are elapsed time: `1m` back from 15 March is 15 February, and `1d` back across the start of summer time
-is 23 hours where `24h` is 24. A step onto a day the month lacks runs over into the next month, so
-`1m` back from 31 March is 3 March, or 2 March in a leap year. A step onto a time the clocks skip
-when summer time starts lands an hour before or after it. A snapshot exactly the duration old is
-not kept. `--json` lists the reason with the duration unit by unit, `within 72h` and not
-`within 3d`, the numbers written plainly: `030d` reads `within 30d`. restic counts and writes the
-same way.
+- **Scope.** A policy applies per [series](../series.md), among the snapshots that the filters
+  match. Without a filter, `ark forget --keep-last 1` keeps the newest snapshot of every series.
+- **Confirmation.** On a terminal, `forget` lists the snapshots it will remove and asks once. With
+  `--prune`, that question covers the prune too. With `--yes`, it asks nothing and lists each
+  snapshot after removing it.
+- **No rule.** A policy without a keep rule and without IDs exits 2. `--all` removes every
+  matching snapshot on purpose.
+- **Nothing kept.** When the policy keeps no snapshot of one series, `forget` removes nothing, of
+  no series, and exits 1 naming that series. `--dry-run` fails the same way. Only `--keep-tag` can
+  cause this; every other rule keeps at least the newest snapshot of a series.
+- **Future snapshots.** A snapshot dated after the time of the run is kept, and `forget` warns
+  about it on stderr. See
+  [Snapshots dated in the future](../retention.md#snapshots-dated-in-the-future).
+- **Time zone.** Hours, days, weeks, months, and years are counted in the local time zone of the
+  machine that runs `forget`. Set `TZ` to count in another zone.
+- **Reasons.** `--json` lists, for every kept snapshot, the reasons it was kept, such as
+  `daily snapshot` or `within 30d`.
 
-`--keep-within-hourly`, `--keep-within-daily`, `--keep-within-weekly`, `--keep-within-monthly` and
-`--keep-within-yearly` are the period rules with a duration in place of the count:
-`--keep-within-daily 14d` keeps the newest snapshot of every day of the last 14 days, however many
-days of them have one. The duration is written and measured as for `--keep-within`: back from the
-newest snapshot of the series that is not in the future, and a snapshot exactly the duration old
-is outside. The periods are those of the counted rules, cut in the local time zone. Each rule has
-its own duration and decides by itself, next to every other rule: a snapshot that any rule keeps
-stays. When the oldest snapshot of a series lies inside the window, the rule keeps it too,
-although its period is taken, as a counted rule with count left does. `--json` lists the reasons
-as `daily within 14d` and `oldest daily within 14d`. An empty value, `--keep-within-daily ''`,
-switches off a rule a profile sets. restic selects the same way.
+### With a profile
 
-`--keep-tag` keeps by tag instead of by age. One value is a list of tags separated by commas, and a
-snapshot has to carry all of them; give the flag again for another list, and a snapshot that matches
-any of the lists stays: `--keep-tag db,prod --keep-tag pinned` keeps what is tagged `db` and `prod`,
-and what is tagged `pinned`. Blanks around a tag are dropped, and `--keep-tag ''` keeps the
-snapshots without a tag. A list with a stray comma, such as `pinned,`, would match no snapshot and
-is a usage error. The rule has no count and takes none from the other rules: a tagged
-snapshot among the three newest still uses one of the three slots of `--keep-last 3`. `--json`
-lists the reason as `has tags [db, prod]`. Over a profile the flag replaces the profile's
-`keep-tag` lists.
-
-Every other rule keeps at least the newest snapshot of a series; `--keep-tag` on its own can match
-none. When the policy keeps no snapshot of one of the series, `ark forget` removes nothing, of no
-series, and exits 1 naming that series, with `--dry-run` too. Narrow the filters to the series that
-carry the tag, add a rule such as `--keep-last 1`, or remove a series on purpose with `--all` and a
-filter. restic refuses the same way.
-
-A snapshot dated after the time of the run, as a machine with a wrong clock or an imported archive
-leaves it, the time being the repository's clock that its locks use, read once per run, is kept,
-whatever the policy says. No rule counts it, no period takes it and no window starts at it, so the
-other snapshots are decided as if it was not there; its reason in `--json` is `in the future`, also
-when its tags match a `--keep-tag` list. It does not count as a kept snapshot of its series, so a
-policy that keeps nothing else of the series is still refused. A policy run warns on stderr about
-each one, `--dry-run` too, but not when it is refused: the error names the snapshots instead. A
-snapshot stays until its date has passed, when the rules see it like any other, or until you remove
-it by ID. restic counts such a snapshot in its rules, so the two keep different snapshots of a
-series that holds one.
-
-Hours, days, weeks, months and years are those of the local time zone of the machine `ark forget`
-runs on, so a backup at 00:30 belongs to the new day; set `TZ` to count in another zone. A week is
-an ISO week and starts on Monday. `--keep-last` does not depend on the zone, and of a `--keep-within`
-duration only the hours do not.
-
-`ark forget --keep-last 1` without a filter keeps the newest snapshot of every series, see
-[Series](../series.md). With `-P` the profile's `forget` section is the policy, see
+With `-P`, the profile's `forget` section is the policy, and the profile selects the series. See
 [Profiles](profiles.md).
+
+- A flag replaces the profile's value of the same name. `--keep-tag` replaces all of the
+  profile's `keep-tag` lists.
+- `0` switches off a counted rule that the profile sets.
+- An empty value, as in `--keep-within-daily ''`, switches off a duration rule that the profile
+  sets.
+- Snapshot IDs given on the command line are removed as named, without the profile's policy or
+  filter.
 
 ## prune
 
-`ark prune [--dry-run] [--yes]`
+```
+ark prune [--dry-run] [--yes]
+```
 
-Deletes the packs that hold no chunk or tree a snapshot references, and rewrites packs that hold both
-until at most 5% of the repository is unused. Takes the exclusive lock. `--dry-run` shows what would
-be freed.
+Deletes the packs that hold no chunk or tree a snapshot references. Packs that hold both used and
+unused data are rewritten until at most 5% of the repository is unused.
+
+- Takes the exclusive lock.
+- `--dry-run`, `-n` shows what would be freed.
+- `--yes`, `-y` skips the confirmation prompt.
 
 ## repair index
 
-`ark repair index`
+```
+ark repair index
+```
 
-Reads every stored pack, writes a new index of what the packs say about themselves and deletes the
-old index objects. Run it when check or prune report a lost or damaged index object, or a pack no
-index lists that a snapshot needs. A blob whose pack is lost is not brought back; check names the
-snapshots that miss it. A pack whose own table does not open is listed and exits 5; the new index
-keeps in it what the old one listed. Takes the exclusive lock.
+Reads every stored pack, writes a new index from what the packs say about themselves, and deletes
+the old index objects.
+
+- Run it when `check` or `prune` reports a lost or damaged index object, or a pack that no index
+  lists and a snapshot needs.
+- A blob whose pack is lost isn't brought back. `check` names the snapshots that miss it.
+- A pack whose own table doesn't open is listed, and the command exits 5. The new index keeps for
+  that pack what the old one listed.
+- Takes the exclusive lock, so no backup, restore, or prune can run meanwhile.
 
 ## verify
 
-`ark verify <id>`
+```
+ark verify <id>
+```
 
-Reads every chunk of one snapshot and checks its hash. Exits 5 when it finds problems.
+Reads every chunk of one snapshot and checks its hash. Exits 5 when it finds a problem.
 
 ## check
 
-`ark check`
+```
+ark check
+```
 
-Verifies every snapshot and reports missing or corrupt objects, exit 5 on problems. A pack no index
-lists, which an unfinished backup leaves, and an index object that does not open are warnings; prune
-removes both. Run it now and then, especially before relying on old snapshots.
+Verifies every snapshot and reports missing or corrupt objects. Exits 5 when it finds a problem.
+
+Two findings are warnings and don't change the exit code: a pack that no index lists, which an
+unfinished backup leaves behind, and an index object that doesn't open. Prune removes both.
 
 ## export
 
-`ark export <id> [file]`
+```
+ark export <id> [file]
+```
 
 Writes a snapshot as an uncompressed tar stream to `file` or stdout: `metadata.json` first, then
-`data/<path>`. Pipe it through gzip if wanted.
+`data/<path>`. Pipe it through `gzip` to compress it.
 
 ## import
 
-`ark import <file|->`
+```
+ark import <file|->
+```
 
 Reads a tar archive written by `ark export` from `file` or stdin and stores it as a new snapshot.
 
 ## unlock
 
-`ark unlock [--force]`
+```
+ark unlock [--force]
+```
 
-Removes stale locks. `--force` removes every lock, stale or not; make sure no ark process is running.
+Removes stale locks. `--force` removes every lock, stale or not. Make sure that no ark process is
+running before you use it.
 
 ## docker
 
-Docker volumes live under `ark docker`. The daemon comes from `--docker-host ADDR`, else a
-profile's `docker-host`, else `DOCKER_HOST`.
+```
+ark docker [--docker-host ADDR] volumes [--host NAME]
+ark docker [--docker-host ADDR] backup [options] <volume>
+ark docker [--docker-host ADDR] restore [options] <id> [volume]
+```
 
-| Command | Purpose |
+Lists, backs up, and restores Docker volumes. [Docker volumes](../docker.md) is the guide.
+
+The daemon comes from `--docker-host`, else a profile's `docker-host`, else `DOCKER_HOST`.
+
+### docker volumes
+
+Lists the volumes with driver and mount point. When a repository is configured, it adds the last
+snapshot of each volume. `--host NAME` names the host whose snapshots count.
+
+### docker backup
+
+Stops the running containers that use the volume, backs it up, and starts them again.
+
+| Flag | Meaning |
 |---|---|
-| `ark docker volumes [--host NAME]` | list the volumes with driver and mountpoint, and the last snapshot when a repository is configured (`--json`: `last_snapshot` is null for a volume never backed up, absent without a repository) |
-| `ark docker backup [options] <volume>` | stop the containers using the volume, back it up, restart them |
-| `ark docker restore [options] <id> [volume]` | restore into `volume`, default the snapshot's source name; creates it if missing, replaces its contents if present |
+| `--tag`, `--comment`, `--label`, `--host`, `--parent`, `--time` | as for [`ark backup`](#backup) |
+| `--no-stop` | don't stop the containers |
+| `--stop-timeout DURATION` | how long a container gets to stop; default 30s |
 
-`docker backup` takes `--tag`, `--comment`, `--label`, `--host`, `--parent` and `--time` like
-`ark backup`, plus `--no-stop` (leave the containers running) and `--stop-timeout DURATION`
-(graceful stop, default 30s). `docker restore` takes `--path`, `--dry-run` (show the affected containers and whether data is
-replaced), `--yes`, `--no-stop` and `--stop-timeout`, and refuses snapshots whose source type is not
-`docker-volume`.
+The host defaults to this machine's hostname, or to the daemon's own name for a remote
+`--docker-host`.
 
-```bash
-ark docker volumes                     # needs only the daemon; a configured repository must open
-ark docker backup postgres_data --comment "before upgrade"  # --host NAME overrides the host
-ark snapshots --type docker-volume    # only volume snapshots, file backups have type file
-ark docker restore <id>                # into the volume it came from
-ark docker restore <id> postgres_copy  # or into another one, created if missing
-```
+### docker restore
 
-With `-P NAME` (or `-f FILE`) of a profile with `backup.volume`, `ark docker backup` takes no volume
-argument: it backs up `backup.volume` on the profile's `docker-host`, with the profile's tags, labels,
-comment, `backup.host`, `backup.no-stop` and `backup.stop-timeout`, flags winning as for
-`ark backup`, and runs the profile's backup hooks around it. A volume argument other than
-`backup.volume` is a usage error, and so are `ark docker backup -P` on a profile with `backup.path` or
-`backup.source`, which points to `ark profile backup`, and `ark backup -P` on a volume profile, which
-points to `ark profile backup` and `ark docker backup -P`. `ark docker restore -P NAME <id>` restores
-into `backup.volume` unless a volume is given, and refuses a snapshot of another volume without one;
-`<id>` stays required.
+Restores a snapshot into `volume`. The default is the volume the snapshot came from. A missing
+volume is created. The contents of an existing one are replaced.
 
-```bash
-ark docker backup -P db                # backup.volume of profile db, on its docker-host
-ark docker restore -P db <id>          # back into backup.volume
-```
+| Flag | Meaning |
+|---|---|
+| `--path PREFIX`, `-p` | restore only the entries under PREFIX; repeatable |
+| `--dry-run`, `-n` | show the affected containers and whether data is replaced |
+| `--yes`, `-y` | skip the confirmation prompt |
+| `--no-stop` | don't stop the containers |
+| `--stop-timeout DURATION` | how long a container gets to stop; default 30s |
 
-A volume is one [series](../series.md) per host: the parent of a backup, `ark forget` and the LAST
-SNAPSHOT of `ark docker volumes` only see the snapshots of the same host. The host is this machine's
-hostname for a local daemon and the daemon's own name for a remote `--docker-host` (`tcp://`,
-`ssh://`), unless `--host` or the `backup.host` of a volume or repository-only profile sets it. A
-volume snapshot without a host shows in `ark docker volumes` only while the host has none of its
-own, and is never picked as a parent. The parent is the newest snapshot of the same volume and
-host, or the one `--parent <id>` names; without either the backup reads the whole volume.
+Refuses a snapshot whose source type isn't `docker-volume`.
+
+### With a profile
+
+For a profile with `backup.volume`:
+
+- `ark docker backup -P NAME` takes no volume argument. It backs up `backup.volume` on the
+  profile's `docker-host` with the profile's tags, labels, comment, `backup.host`,
+  `backup.no-stop`, and `backup.stop-timeout`, and runs the profile's backup hooks. A flag beats
+  the profile's value.
+- A volume argument other than `backup.volume` exits 2.
+- `ark docker restore -P NAME <id>` restores into `backup.volume` unless a volume is given.
+  Without one, it refuses a snapshot of another volume. `<id>` stays required.
+
+See [Volume profiles](profiles.md#volume-profiles).
 
 ## key passwd
 
-`ark key passwd [--new-password-file FILE | --new-insecure-no-password]`
+```
+ark key passwd [--new-password-file FILE | --new-insecure-no-password]
+```
 
-Opens the repository with the current password, then stores the master key under the new one. The
-new password comes from `--new-password-file`, then `ARK_NEW_PASSWORD`, then a prompt asked twice.
-`--new-insecure-no-password` removes the password. The master key stays the same: whoever could read
-it before still can.
+Opens the repository with the current password, then stores the master key under the new one.
+
+- The new password comes from `--new-password-file`, then `ARK_NEW_PASSWORD`, then a prompt that
+  asks twice.
+- `--new-insecure-no-password` removes the password.
+- The master key stays the same. Whoever could read it before still can.
 
 ## profile
 
-`ark profile list` prints name, repository and backup path, or `volume NAME`, of every profile in
-the profile directory; `--json` gives `path` or `volume`. `ark profile show NAME` (or
-`ark profile show -f FILE`) prints every value a command would use with the profile and where it
-comes from. `ark profile backup NAME` (or `-f FILE`) backs up what the profile names with the
-profile's values alone: a `backup.path` as `ark backup -P NAME` does, a `backup.volume` as
-`ark docker backup -P NAME` does. It takes no backup flags. See [Profiles](profiles.md).
+```
+ark profile list
+ark profile show NAME | -f FILE
+ark profile backup NAME | -f FILE
+```
+
+| Command | Does |
+|---|---|
+| `list` | prints the name, repository, and backup path or `volume NAME` of every profile in the profile directory; `--json` gives `path` or `volume` |
+| `show` | prints every value a command would use with the profile, and where each comes from |
+| `backup` | backs up what the profile names, with the profile's values alone; takes no backup flags |
+
+`ark profile backup` runs a `backup.path` as `ark backup -P NAME` does, and a `backup.volume` as
+`ark docker backup -P NAME` does. See [Profiles](profiles.md).

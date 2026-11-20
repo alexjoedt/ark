@@ -19,7 +19,6 @@ var docFlagToken = regexp.MustCompile(`(?:^|[^\w-])(--|[–—])([A-Za-z](?:[\w-
 // documented as absent. An entry covers only the lines of its file that contain
 // its line text, and every entry must still match a line.
 var docFlagAllowed = []struct{ file, flag, line, reason string }{
-	{"docs/getting-started.md", "password", "There is no `--password` flag", "documented as absent"},
 	{"docs/cli/index.md", "password", "There is no `--password` flag", "documented as absent"},
 	{"docs/releasing.md", "push", "a real run needs `--push`", "flag of scripts/release.sh"},
 	{"docs/releasing.md", "push", "scripts/release.sh --push", "flag of scripts/release.sh"},

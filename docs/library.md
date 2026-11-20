@@ -1,23 +1,38 @@
 # Library
 
-ark is a Go library first; the `ark` CLI is one program built on it. This page walks through the packages and the calls an embedder needs. The full API is on [pkg.go.dev](https://pkg.go.dev/github.com/alexjoedt/ark), and the [examples directory](https://github.com/alexjoedt/ark/tree/main/examples) has runnable programs for each part.
+ark is a Go library first. The `ark` command is one program built on it, and your program can use
+the same packages: open a repository, back up a directory, a Docker volume, or a stream, restore
+it, and apply a retention policy.
 
-## Modules
+This page gets you to a first backup and gives you the map. The pages after it go into one topic
+each:
 
-| Module | Holds |
-|---|---|
-| `github.com/alexjoedt/ark` | the core package `ark`, the backends, `arkfs`, `arkprofile`, `arkfind`, `arkglob`, `arktest` and `chunker` |
-| `github.com/alexjoedt/ark/arkdocker` | Docker volumes, in its own module so the Docker SDK stays out of the core |
-| `github.com/alexjoedt/ark/cmd/ark` | the `ark` binary, see [CLI](cli/index.md) |
+- [Backends](library/backends.md): where a repository lives, and how to write your own backend.
+- [Sources and sinks](library/sources-and-sinks.md): what a backup reads and a restore writes, and
+  how to write your own.
+- [Forget policies](library/forget.md): retention from Go.
+- [Profiles](library/profiles.md): the CLI's profile format as a package.
+- [Progress and logging](library/observing.md): progress events, lock events, logs, and backend
+  statistics.
+
+The full API is on [pkg.go.dev](https://pkg.go.dev/github.com/alexjoedt/ark).
+
+## Install
 
 ```bash
 go get github.com/alexjoedt/ark
 go get github.com/alexjoedt/ark/arkdocker   # only for Docker volumes
 ```
 
-## Back up and restore a directory
+ark ships as three modules, so the Docker SDK stays out of programs that don't need it:
 
-A repository is created once with `ark.Init` and opened with `ark.Open`. `Init` on an existing repository fails with `ark.ErrAlreadyInitialized`, and `Open` never creates one, so a mistyped path fails with `ark.ErrNotInitialized` instead of starting a second repository. A program that runs every day can call `Init` each time and let the first run create the repository:
+| Module | Holds |
+|---|---|
+| `github.com/alexjoedt/ark` | the core package `ark`, the backends, `arkfs`, `arkprofile`, `arkfind`, `arkglob`, `arktest`, and `chunker` |
+| `github.com/alexjoedt/ark/arkdocker` | Docker volumes |
+| `github.com/alexjoedt/ark/cmd/ark` | the `ark` binary, see [CLI](cli/index.md) |
+
+## Back up and restore a directory
 
 ```go
 b, err := arklocal.New("/srv/ark")
@@ -41,121 +56,98 @@ if err != nil {
 _, err = arkfs.Restore(ctx, repo, snap.ID, "/tmp/docs")
 ```
 
-`arkfs.Backup` and `arkfs.Restore` are `repo.Backup(ctx, source)` and `repo.Restore(ctx, snapshotID, sink)` with a directory as source and sink. A snapshot ID has its own type, `ark.SnapshotID`; `Snapshot.ID` is one, and `Restore`, `Snapshot`, `Verify`, `Walk`, `Export`, `Reader.FS`, `WithParent`, and `SnapshotFilter.IDs` passed to `Snapshots` or `Forget`, take a full ID or a unique prefix of one, in upper or lower case. A prefix that matches no snapshot wraps `ark.ErrNotFound`, one that matches several wraps `ark.ErrAmbiguousID`. `SnapshotFilter.Match` resolves nothing: called on its own, it compares `IDs` with the full, lower-case `Snapshot.ID` exactly. A literal converts as it is, `ark.SnapshotID("3f9a")`. Restore and export stream the snapshot: memory stays at the chunk cache plus one chunk per worker, no matter how large the snapshot is. The cache is 256 MiB; `ark.WithRestoreCache` changes it for a restore, export always uses the default. Verify reads pack by pack instead and holds about 150 bytes per distinct chunk of the snapshot plus one pack range of up to about 20 MiB, so its memory grows with the snapshot.
+Three steps:
 
-Besides backup and restore, a `*ark.Repository` lists snapshots (`Snapshots`, `Walk`), reports its size (`Info`), forgets and prunes (`Forget`, `Prune`), checks (`Verify`, `Check`), reads snapshots as file systems (`OpenReader`), rebuilds the index (`RebuildIndex`), exports and imports, changes the password, and lists and removes locks (`Locks`, `Unlock`).
+1. **Pick a backend.** A backend is where the repository lives. `arklocal` is a local directory.
+2. **Create and open the repository.** `ark.Init` creates it once, `ark.Open` opens it.
+3. **Back up and restore.** `arkfs.Backup` reads a directory, `arkfs.Restore` writes one.
 
-## Repository size
+`Init` and `Open` are separate on purpose:
 
-`repo.Info` counts the snapshots, sums their `Stats.TotalSize` and adds up the object sizes the backend lists per namespace in `Stored` (data packs, tree packs, indexes, snapshots, keys, other); `Stored.Total()` is the size of the repository. The summed total size is not deduplicated: a file in ten snapshots counts ten times. `Info` reads the snapshot manifests and no pack or index, and takes no lock. A manifest deleted while it runs is left out. With `ark.WithInfoExact()` it runs a prune dry run and fills `BytesFreed`, the bytes no snapshot uses that a prune deletes, and `BytesUnused`, those it leaves in place; together they are all the unused space. That reads every tree and index, holds the exclusive lock like `Prune` and reports progress as a prune.
+- `Init` on an existing repository fails with `ark.ErrAlreadyInitialized`. A program that runs
+  every day can call `Init` each time, as above, and let the first run create the repository.
+- `Open` never creates a repository. A mistyped path fails with `ark.ErrNotInitialized` instead of
+  quietly starting a second repository.
 
-```go
-info, err := repo.Info(ctx, ark.WithInfoExact())
-if err != nil {
-	return err
-}
-fmt.Printf("%d snapshots, %d of %d bytes unused\n", info.Snapshots, info.BytesFreed+info.BytesUnused, info.Stored.Total())
-```
+`arkfs.Backup` and `arkfs.Restore` are shortcuts. Underneath, a backup is
+`repo.Backup(ctx, source)` and a restore is `repo.Restore(ctx, snapshotID, sink)`, with a
+directory as the source and the sink. See [Sources and sinks](library/sources-and-sinks.md).
 
-## Packages
+## What a repository does
 
-| Package | What it is |
+Everything else is a method on `*ark.Repository`:
+
+| Task | Methods |
 |---|---|
-| **Core** | |
-| [`ark`](https://pkg.go.dev/github.com/alexjoedt/ark) | Repositories, snapshots, backup, restore, forget, prune, verify, check, export, import, locks |
-| [`chunker`](https://pkg.go.dev/github.com/alexjoedt/ark/chunker) | FastCDC content-defined chunking |
-| **Backends**, where the repository lives | |
-| [`arklocal`](https://pkg.go.dev/github.com/alexjoedt/ark/arklocal) | A local directory, atomic writes through temp file and rename |
-| [`arksftp`](https://pkg.go.dev/github.com/alexjoedt/ark/arksftp) | A directory over SFTP, host key checked against known_hosts by default |
-| [`arkmem`](https://pkg.go.dev/github.com/alexjoedt/ark/arkmem) | In memory, for tests |
-| [`arkuri`](https://pkg.go.dev/github.com/alexjoedt/ark/arkuri) | Opens one of the above from a string |
-| **Sources and sinks**, what gets backed up and restored | |
-| [`arkfs`](https://pkg.go.dev/github.com/alexjoedt/ark/arkfs) | A local directory, with hardlinks, xattrs and excludes |
-| [`arkdocker`](https://pkg.go.dev/github.com/alexjoedt/ark/arkdocker) | A Docker volume, and an `Engine` that stops and restarts the containers using it |
-| **Tools on top** | |
-| [`arkprofile`](https://pkg.go.dev/github.com/alexjoedt/ark/arkprofile) | Profiles: a stored repository, directory or Docker volume and forget policy, in code or YAML |
-| [`arkfind`](https://pkg.go.dev/github.com/alexjoedt/ark/arkfind) | Searches snapshots for paths that match a pattern |
-| [`arkglob`](https://pkg.go.dev/github.com/alexjoedt/ark/arkglob) | Matches snapshot paths against exclude patterns with restic's rules |
-| **Testing** | |
-| [`arktest`](https://pkg.go.dev/github.com/alexjoedt/ark/arktest) | Conformance suites for your own backends, sources and sinks |
+| back up and restore | `Backup`, `Restore` |
+| list snapshots and their files | `Snapshots`, `Snapshot`, `Walk` |
+| read a snapshot as a file system | `OpenReader`, then `Reader.FS` |
+| remove snapshots and free space | `Forget`, `Prune` |
+| check for damage | `Verify`, `Check` |
+| rebuild the index | `RebuildIndex` |
+| move snapshots between repositories | `Export`, `Import` |
+| report the size | `Info` |
+| change the password | `ChangePassword` |
+| list and remove locks | `Locks`, `Unlock` |
 
-## Backends
+## Snapshot IDs
 
-A backend stores opaque, encrypted objects. Pick one and hand it to `ark.Init` and `ark.Open`:
+A snapshot ID has its own type, `ark.SnapshotID`. `Snapshot.ID` is one. A string converts as it
+is: `ark.SnapshotID("3f9a")`.
 
-```go
-b, err := arklocal.New("/srv/ark")
+Wherever a method takes an ID, a unique prefix works too, in upper or lower case. That covers
+`Restore`, `Snapshot`, `Verify`, `Walk`, `Export`, `Reader.FS`, `WithParent`, and the
+`SnapshotFilter.IDs` passed to `Snapshots` or `Forget`.
 
-b, err := arksftp.New(arksftp.Config{Host: "nas", User: "backup", Path: "/srv/ark"})
+| Prefix matches | Error wraps |
+|---|---|
+| no snapshot | `ark.ErrNotFound` |
+| several snapshots | `ark.ErrAmbiguousID` |
 
-b, err := arkuri.Open(ctx, "sftp://backup@nas/srv/ark") // or "/srv/ark", "local:///srv/ark"
+`SnapshotFilter.Match` is the exception. It resolves nothing: called on its own, it compares `IDs`
+with the full, lowercase `Snapshot.ID` exactly.
 
-b := arkmem.New() // its objects are gone on Close
-```
+## Passwords and encryption
 
-`arksftp` reads `~/.ssh/config`, so a `Host` alias works. It authenticates with ssh-agent, then `IdentityFile` or the default keys in `~/.ssh`, then the password in `ARK_SFTP_PASSWORD`. An encrypted key file is unlocked with `ARK_SFTP_KEY_PASSPHRASE`. Secrets never go into `Config` or a URI. `arkuri` takes the non-secret options as query parameters: `known_hosts`, `identity` and `insecure`. User and port are optional in an `sftp://` URI, and the path after the host is absolute on the server. [`arkuri.Open`](https://pkg.go.dev/github.com/alexjoedt/ark/arkuri#Open) rejects the scp form `sftp:host:/path`.
-
-Anything else, such as S3 or a NAS API, is an `ark.Backend`: nine methods (`Put`, `Get`, `GetRange`, `Exists`, `Delete`, `Sync`, `List`, `Stat`, `Close`). The suite in `arktest` checks the same contract the built-in backends pass:
+Every repository is encrypted and authenticated. The password unlocks a random master key that is
+stored in the repository, and that key seals everything else. The backend sees neither file
+contents nor file names.
 
 ```go
-func TestConformance(t *testing.T) {
-	arktest.RunBackendTests(t, func(t *testing.T) ark.Backend {
-		return mybackend.New()
-	})
-}
+pw := ark.NewPassword("correct horse battery staple")
 ```
 
-## Sources and sinks
+What to know when you handle passwords:
 
-A backup reads an `ark.Source` and a restore writes into an `ark.Sink`. Three come with ark.
+- **A lost password is lost data.** There is no recovery and no backdoor.
+- **A wrong password** fails with `ark.ErrWrongPassword` before any data is read.
+- **`repo.ChangePassword`** seals the same master key under a new password. It doesn't revoke a
+  key that already leaked.
+- **Key derivation needs memory.** `Init`, `Open`, and `ChangePassword` derive the key with
+  argon2id and need 64 MiB for it. Size containers accordingly.
 
-**A directory.** `arkfs.NewSource` takes options that `arkfs.Backup` leaves at their defaults: a source name other than the path, excludes with restic's rules, and skipping files that exist only in the cloud.
+`ark.NoPassword()` creates or opens a repository without a password. The format is the same, but
+the master key is stored unprotected, so anyone with access to the backend can read the
+repository. `Init` records the choice, and `Open` holds you to it:
 
-```go
-src, err := arkfs.NewSource("/home/me",
-	arkfs.WithName("home"),
-	arkfs.WithExclude("*.tmp", ".cache"),
-)
-if err != nil {
-	return err
-}
-snap, err := repo.Backup(ctx, src)
-```
+| Repository | Opened with | Error |
+|---|---|---|
+| protected | `ark.NoPassword()` | `ark.ErrPasswordRequired` |
+| unprotected | a password | `ark.ErrNotPasswordProtected` |
 
-**A Docker volume.** `arkdocker` stops the containers using the volume, copies it and starts them again. The daemon comes from `DOCKER_HOST`, or `arkdocker.WithDockerHost`.
+[Security](SECURITY.md) has the threat model, the accepted risks, and how to report a
+vulnerability.
 
-```go
-eng, err := arkdocker.New(repo)
-if err != nil {
-	return err
-}
-defer eng.Close()
-snap, err := eng.BackupVolume(ctx, "postgres_data", ark.WithHost("db1"))
-if err != nil {
-	return err
-}
-_, err = eng.RestoreVolume(ctx, snap.ID, "postgres_copy")
-```
+## Host, series, and labels
 
-`RestoreVolume` creates a missing volume. An existing one has its contents replaced, and the running containers that use it are stopped for the restore and started again after, so restore into a new volume name unless replacing the data is the point.
+Source type, source name, and host make up a snapshot's [series](series.md). A backup takes the
+newest snapshot of its series as the parent, and `Forget` applies a policy once per series.
 
-**A byte stream.** A database dump or any other single stream needs no file on disk: `ark.NewStreamSource(name, r)` backs up one reader as one file and `ark.NewStreamSink(w)` restores it to a writer.
+The core library records no host unless you pass `ark.WithHost`. If several machines share one
+repository, set a host. Without one, their snapshots of the same source fall into one series.
 
-```go
-snap, err := repo.Backup(ctx, ark.NewStreamSource("dump", stdout))
-if err != nil {
-	return err
-}
-_, err = repo.Restore(ctx, snap.ID, ark.NewStreamSink(os.Stdout))
-```
-
-**Your own.** An `ark.Source` has two methods: `Meta` names the snapshot, `Walk` yields entries. A matching `ark.Sink` (`Open`, `Receive`, `Close`) brings them back. The rules the core relies on, such as when an open func may run and the order a sink sees entries in, are in [Writing a Source or Sink](https://pkg.go.dev/github.com/alexjoedt/ark#hdr-Writing_a_Source_or_Sink). A backup reads a plain `Source` one file at a time, inside the walk callback. A source whose open funcs may run later and on other goroutines, such as one reading over the network, implements `ark.ConcurrentSource` and is read in parallel. `ark.RewalkSource` adds a cheap second walk that `ark.WithBackupScan` uses to count totals before the backup. `arktest.RunSourceSinkTests` checks that what the sink receives, the source yields again; `arktest.RunStreamTests` does the same for one-file streams.
-
-## Host, series and labels
-
-The core library records no host unless you pass `ark.WithHost`; it reads the machine's hostname only for locks, to stamp the ones it writes and to clear at once a lock of this hostname whose process is gone; any other lock is cleared once it is 30 minutes old. The `ark` CLI always records one, and so does `arkprofile`: without `backup.host`, a profile's `BackupOptions` and `Filter` use the machine's hostname. In a container whose hostname changes on every deploy, set `backup.host`, or each deploy starts a new series and `Forget` no longer sees the older snapshots. Source type, source name and host make up a snapshot's series: a backup takes the newest snapshot of its series as its parent, and `Forget` applies a keep policy once per series. Embedders that share one repository between machines should set a host. [Series](series.md) has the details.
-
-Labels are key-value pairs stored with a snapshot, set at backup with `ark.WithLabels` and matched with `SnapshotFilter.Labels`. Keys that start with `ark/` belong to ark's own sources, and a backup that sets one fails with `ark.ErrInvalidLabel`. [Labels](labels.md) has the key rules and the reserved keys.
+Labels are key-value pairs stored with a snapshot. Set them with `ark.WithLabels` and match them
+with `SnapshotFilter.Labels`:
 
 ```go
 snap, err := arkfs.Backup(ctx, repo, "/home/me/docs",
@@ -171,115 +163,24 @@ snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{
 })
 ```
 
-## Encryption
+Keys that start with `ark/` belong to ark's own sources. A backup that sets one fails with
+`ark.ErrInvalidLabel`. [Labels](labels.md) has the key rules and the reserved keys.
 
-Every repository is encrypted and authenticated. The password unlocks a random master key stored in `keys/`; chunks, trees, indexes, snapshot manifests, locks and the lost-pack marker are sealed with XChaCha20-Poly1305, and no object is named after a file or its plain contents, so the backend sees neither contents nor file names. Lock names and 26 character base32 snapshot IDs do show a creation time. A changed object fails to open instead of restoring garbage.
+### Hostnames and locks
 
-- A lost password is lost data. There is no recovery and no backdoor.
-- `ark.NoPassword()` creates or opens a repository without one. The format is the same, but the master key is stored unprotected: anyone with access to the backend can read it. `Init` records the choice, and `Open` holds to it: `NoPassword` on a protected repository fails with `ark.ErrPasswordRequired`, a password on an unprotected one with `ark.ErrNotPasswordProtected`.
-- A wrong password fails with `ark.ErrWrongPassword` before any data is read.
-- `repo.ChangePassword` seals the same master key under a new password. It does not revoke a key that already leaked.
-- `Init`, `Open` and `ChangePassword` derive the key with argon2id and need 64 MiB of memory for it. Size containers accordingly.
+The library does read the machine's hostname for one thing: locks. It stamps the locks it writes
+with the hostname, and it clears a lock of the same hostname at once when that lock's process is
+gone. Any other lock is cleared once it is 30 minutes old.
 
-The threat model, the accepted risks and how to report a vulnerability: [Security](SECURITY.md).
+`arkprofile` and the CLI differ from the core here. Both always record a host. Without
+`backup.host`, a profile's `BackupOptions` and `Filter` use the machine's hostname. In a container
+whose hostname changes on every deploy, set `backup.host`. Otherwise each deploy starts a new
+series, and `Forget` no longer sees the older snapshots.
 
-## Watching operations
+## Find files
 
-An embedder that shows progress, waits on locks or measures the backend hooks in at `ark.Open`:
-
-| Hook | Reports |
-|---|---|
-| `ark.WithProgress(fn)` | an `ark.ProgressEvent` per step of every operation: operation, phase, current path, files, bytes and chunks done. `ark.WithBackupProgress` and `ark.WithRestoreProgress` override it per call, `ark.WithBackupScan` adds totals to a backup |
-| `ark.WithLockEvent(fn)` | an `ark.LockEvent` when a lock is acquired, rejected (with the conflicting holders), released or left over |
-| `ark.WithLogger(l)` | the library's own log lines through a `*slog.Logger` |
-| `ark.Instrument(b)` | wraps a backend and counts calls, errors, durations and bytes per method, read with `Stats()` |
-
-```go
-backend := ark.Instrument(local)
-repo, err := ark.Open(ctx, backend, ark.NoPassword(),
-	ark.WithLogger(logger),
-	ark.WithProgress(func(e ark.ProgressEvent) {
-		logger.Debug("progress", "op", e.Operation, "phase", e.Phase, "files", e.FilesDone, "bytes", e.BytesDone)
-	}),
-	ark.WithLockEvent(func(e ark.LockEvent) {
-		logger.Info("lock", "kind", e.Kind, "exclusive", e.Exclusive, "holders", len(e.Holders))
-	}),
-)
-if err != nil {
-	return err
-}
-defer repo.Close()
-// ... operations ...
-logger.Info("backend", "puts", backend.Stats().Put.Calls)
-```
-
-Concurrent operations call the progress function concurrently, so it must not block. A lock event runs on the operation's goroutine and holds up the operation while it runs. [`examples/observe`](https://github.com/alexjoedt/ark/tree/main/examples/observe) logs every operation this way.
-
-## Profiles
-
-`arkprofile` is the profile format of the CLI as a package: one repository, one directory or Docker volume to back up and one forget policy, built in code or decoded from YAML. The keys are the CLI's flag names, listed in [Profiles](cli/profiles.md).
-
-```go
-p := &arkprofile.Profile{
-	Name:        "docs",
-	Repo:        "sftp://backup@nas/srv/ark",
-	PasswordEnv: "ARK_PASSWORD",
-	Backup:      arkprofile.Backup{Path: "/home/me/docs", Tags: []string{"daily"}},
-	Forget:      arkprofile.Forget{KeepLast: 3},
-}
-if err := p.Validate(); err != nil {
-	return err
-}
-pw, err := p.Password()
-if err != nil {
-	return err
-}
-repo, err := p.Open(ctx, pw)
-if err != nil {
-	return err
-}
-defer repo.Close()
-
-src, err := p.Source()
-if err != nil {
-	return err
-}
-if _, err := repo.Backup(ctx, src, p.BackupOptions()...); err != nil {
-	return err
-}
-filter, err := p.Filter()
-if err != nil {
-	return err
-}
-if _, err := repo.Forget(ctx, p.ForgetPolicy(), filter); err != nil {
-	return err
-}
-if p.Forget.Prune {
-	_, err = repo.Prune(ctx)
-}
-```
-
-`Source` names the snapshots `Backup.Source`, else the absolute `Backup.Path`, the name `arkfs.NewSource` gives that path, and `Filter` selects the same source; `Name` names no snapshots. A volume profile has no `Source`: the call fails, and the program backs up `Backup.Volume` with an `arkdocker.Engine` opened with `arkdocker.WithDockerHost(p.DockerHost)` and `BackupVolume` called with `BackupOptions`. Without that option the engine uses `DOCKER_HOST` or the local daemon and backs up another machine's volume under the profile's host. The snapshot is named after the volume, which `Filter` then selects.
-
-The counted rules of an `ark.ForgetPolicy`, `KeepLast` to `KeepYearly`, are of type `ark.KeepCount`: a number, or `ark.Unlimited` to keep every snapshot (`KeepLast`) or the newest of every period. `Forget` refuses any other negative count with `ark.ErrInvalidPolicy`. `ark.ParseKeepCount` reads the text form a profile and the CLI use, a whole number or `unlimited`. In JSON a count is a number and `ark.Unlimited` the string `"unlimited"`.
-
-`KeepWithin` is an `ark.Within`, a window of calendar `Years`, `Months` and `Days` plus `Hours`: `ark.Within{Days: 30}` keeps every snapshot of a series less than 30 days older than its newest one that is not dated in the future. Years, months and days are stepped back on the calendar of the forget zone, hours are elapsed time. `ark.ParseWithin` reads the text form a profile and the CLI use, `30d`, `72h` or `1y6m`, where `m` counts months. `Forget` refuses a negative number, more than 11 months (18 months are `ark.Within{Years: 1, Months: 6}`) and a number above a million with `ark.ErrInvalidPolicy`, the bounds of the text form. In JSON a window is that text, `"30d"`.
-
-`KeepWithinHourly`, `KeepWithinDaily`, `KeepWithinWeekly`, `KeepWithinMonthly` and `KeepWithinYearly` are windows too, each for a period rule without a count: `KeepWithinDaily: ark.Within{Days: 14}` keeps the newest snapshot of every day inside the window, which is measured as the one of `KeepWithin`. The oldest snapshot of a series is kept in addition when it lies inside the window. The reasons in `ForgetResult.KeepReasons` read `daily within 14d` and `oldest daily within 14d`.
-
-`KeepTags` keeps by tag: it holds lists of tags, and a snapshot that carries all tags of one of the lists is kept; the empty tag stands for no tag, so `[][]string{{""}}` keeps the untagged snapshots. `ark.ParseTagList` reads the text form of one list, `db,prod`. Blanks around a tag do not count. A list with the empty tag next to others, as a stray comma leaves one, matches no snapshot, and `Forget` refuses it with `ark.ErrInvalidPolicy`. The rule has no count and can match nothing: when a policy keeps no snapshot of one of the series, `Forget` removes nothing at all and returns `ark.ErrNoSnapshotKept`. With this field a `ForgetPolicy` holds a slice, so two policies compare with `reflect.DeepEqual`, not with `==`; `policy.Empty()` tells whether a policy has a rule that keeps a snapshot.
-
-A snapshot dated after the time of the run, as a machine with a wrong clock leaves it, is kept whatever the policy says, and a snapshot dated exactly at that time is not one of these. No rule sees it: it uses no count, takes no period, moves no window and is not matched by `KeepTags`, so the other snapshots are decided as if it was not there. Its one reason in `ForgetResult.KeepReasons` is `in the future`, and it does not count as the snapshot that keeps its series, so a policy that keeps nothing else of the series still returns `ark.ErrNoSnapshotKept`. `ForgetResult.Future` lists these snapshots, newest first, each of them also in `Keep`, so a program can warn about them as `ark forget` does. `Future` is nil when there is none and when `Forget` removes named IDs without a policy, which removes such a snapshot like any other.
-
-`Forget` counts the hours, days, weeks, months and years of a policy in `time.Local`; `ark.WithForgetLocation` names another zone. The result depends on the zone of the machine, so a program that has to keep the same snapshots wherever it runs passes a fixed zone, for example `ark.WithForgetLocation(time.UTC)`.
-
-These calls apply neither the profile's hooks nor `forget.prune` on their own. Read `p.Forget.Prune` as above, and run each step inside `p.Backup.Hooks.Run` or `p.Forget.Hooks.Run` with an `arkprofile.HookEnv`, as the CLI does; a profile with `run-before` or `run-after` hooks otherwise behaves differently in your program than under `ark`.
-
-`arkprofile.Load` reads a profile file. A program with a configuration of its own, such as a scheduler, embeds `arkprofile.Profile` inline in its struct and decodes the whole file with `arkprofile.Decode`, which expands `$VAR` and `~` and resolves relative paths against the directory it is given, as `Load` does with the file's directory. [`examples/profile`](https://github.com/alexjoedt/ark/tree/main/examples/profile) does both.
-
-## Finding files
-
-`arkfind.Find` searches the snapshots a filter selects, newest first, for entries whose path matches a pattern. Patterns follow the exclude rules: without a `/` a pattern matches a base name anywhere, a leading `/` anchors it at the snapshot root, and a matched directory yields everything below it.
+`arkfind.Find` searches the snapshots that a filter selects, newest first, for entries whose path
+matches a pattern:
 
 ```go
 err := arkfind.Find(ctx, repo, ark.SnapshotFilter{Host: "laptop"}, []string{"*.pdf"},
@@ -289,17 +190,92 @@ err := arkfind.Find(ctx, repo, ark.SnapshotFilter{Host: "laptop"}, []string{"*.p
 	})
 ```
 
-No file content is read. The callback runs while the repository's shared lock is held, so it must not call `Prune`, `RebuildIndex`, `ChangePassword` or another operation that takes the exclusive lock.
+- Patterns follow the exclude rules. Without a `/`, a pattern matches a base name at any depth. A
+  leading `/` anchors it at the snapshot root. A matched directory yields everything below it.
+- No file content is read.
+- The callback runs while the repository's shared lock is held. It must not call `Prune`,
+  `RebuildIndex`, `ChangePassword`, or any other operation that takes the exclusive lock.
+
+## Repository size
+
+`repo.Info` reports how many snapshots a repository holds and how large it is:
+
+```go
+info, err := repo.Info(ctx, ark.WithInfoExact())
+if err != nil {
+	return err
+}
+fmt.Printf("%d snapshots, %d of %d bytes unused\n",
+	info.Snapshots, info.BytesFreed+info.BytesUnused, info.Stored.Total())
+```
+
+Without options, `Info` is cheap:
+
+- It counts the snapshots and sums their `Stats.TotalSize`. That sum isn't deduplicated: a file in
+  ten snapshots counts ten times.
+- It adds up the object sizes that the backend lists, per kind, in `Stored`: data packs, tree
+  packs, indexes, snapshots, keys, and other. `Stored.Total()` is the size of the repository.
+- It reads the snapshot manifests but no pack and no index, and it takes no lock. A manifest that
+  is deleted while it runs is left out.
+
+`ark.WithInfoExact()` adds the unused space. It runs a prune dry run, so it reads every tree and
+index, holds the exclusive lock like `Prune`, and reports progress as a prune does.
+
+| Field | Meaning |
+|---|---|
+| `BytesFreed` | unused bytes that a prune deletes |
+| `BytesUnused` | unused bytes that a prune leaves in place |
+
+Together they are all the unused space.
+
+## Memory use
+
+Restore and export stream the snapshot. Memory stays at the chunk cache plus one chunk per worker,
+no matter how large the snapshot is.
+
+| Operation | Memory |
+|---|---|
+| `Restore` | the chunk cache, 256 MiB by default; `ark.WithRestoreCache` changes it |
+| `Export` | the chunk cache at its default size |
+| `Verify` | about 150 bytes per distinct chunk of the snapshot, plus one pack range of up to about 20 MiB |
+
+`Verify` reads pack by pack instead of file by file, so its memory grows with the snapshot.
+
+## Packages
+
+| Package | What it is |
+|---|---|
+| **Core** | |
+| [`ark`](https://pkg.go.dev/github.com/alexjoedt/ark) | repositories, snapshots, backup, restore, forget, prune, verify, check, export, import, locks |
+| [`chunker`](https://pkg.go.dev/github.com/alexjoedt/ark/chunker) | FastCDC content-defined chunking |
+| **Backends** | |
+| [`arklocal`](https://pkg.go.dev/github.com/alexjoedt/ark/arklocal) | a local directory |
+| [`arksftp`](https://pkg.go.dev/github.com/alexjoedt/ark/arksftp) | a directory over SFTP |
+| [`arkmem`](https://pkg.go.dev/github.com/alexjoedt/ark/arkmem) | memory, for tests |
+| [`arkuri`](https://pkg.go.dev/github.com/alexjoedt/ark/arkuri) | opens one of the above from a string |
+| **Sources and sinks** | |
+| [`arkfs`](https://pkg.go.dev/github.com/alexjoedt/ark/arkfs) | a local directory, with hardlinks, xattrs, and excludes |
+| [`arkdocker`](https://pkg.go.dev/github.com/alexjoedt/ark/arkdocker) | a Docker volume, and an `Engine` that stops and restarts the containers that use it |
+| **Tools on top** | |
+| [`arkprofile`](https://pkg.go.dev/github.com/alexjoedt/ark/arkprofile) | profiles: a stored repository, source, and forget policy, in code or YAML |
+| [`arkfind`](https://pkg.go.dev/github.com/alexjoedt/ark/arkfind) | searches snapshots for paths that match a pattern |
+| [`arkglob`](https://pkg.go.dev/github.com/alexjoedt/ark/arkglob) | matches snapshot paths against exclude patterns with restic's rules |
+| **Testing** | |
+| [`arktest`](https://pkg.go.dev/github.com/alexjoedt/ark/arktest) | conformance suites for your own backends, sources, and sinks |
 
 ## Examples
 
-Each example is a `main` package in the [examples directory](https://github.com/alexjoedt/ark/tree/main/examples), run with `go run ./<name>` from there.
+Each example is a `main` package in the
+[examples directory](https://github.com/alexjoedt/ark/tree/main/examples). Run one with
+`go run ./<name>` from there.
 
 | Example | Shows |
 |---|---|
 | [`filebackup`](https://github.com/alexjoedt/ark/tree/main/examples/filebackup) | a directory into a local repository and back |
 | [`dockervolume`](https://github.com/alexjoedt/ark/tree/main/examples/dockervolume) | a Docker volume into a snapshot and into a second volume |
+| [`streambackup`](https://github.com/alexjoedt/ark/tree/main/examples/streambackup) | a command's stdout into a snapshot and back to stdout |
 | [`customsource`](https://github.com/alexjoedt/ark/tree/main/examples/customsource) | an `ark.Source` over in-memory files |
-| [`streambackup`](https://github.com/alexjoedt/ark/tree/main/examples/streambackup) | a command's stdout through `ark.NewStreamSource` into a snapshot and back to stdout via `ark.NewStreamSink` |
-| [`observe`](https://github.com/alexjoedt/ark/tree/main/examples/observe) | every operation with `ark.WithProgress`, `ark.WithLockEvent` and `ark.Instrument` logged through slog |
+| [`customsink`](https://github.com/alexjoedt/ark/tree/main/examples/customsink) | an `ark.Sink` that restores a snapshot into a zip archive |
+| [`custombackend`](https://github.com/alexjoedt/ark/tree/main/examples/custombackend) | an `ark.Backend` over a key-value store, with its conformance test |
+| [`observe`](https://github.com/alexjoedt/ark/tree/main/examples/observe) | progress, lock events, and backend statistics logged through slog |
 | [`profile`](https://github.com/alexjoedt/ark/tree/main/examples/profile) | a backup and a forget from a profile built in code, and a scheduler's configuration that embeds a profile |

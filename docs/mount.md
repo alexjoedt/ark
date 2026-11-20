@@ -1,21 +1,47 @@
 # Mount
 
-`ark mount DIR` serves every snapshot of the repository read-only through FUSE until Ctrl-C. The
-snapshot list is the one at mount start; remount to see newer snapshots.
+`ark mount` shows every snapshot of a repository as a read-only directory tree. You can browse
+old versions with `ls`, compare them with `diff`, and copy single files back with `cp`, without
+restoring a whole snapshot.
 
-## Layout
+## Mount a repository
+
+Mounting needs FUSE on your machine, see [Platforms](#platforms). Then:
+
+```bash
+mkdir -p /mnt/ark
+ark mount /mnt/ark
+```
+
+The command keeps running and serves the mount until you press Ctrl-C. Work in a second shell:
+
+```bash
+ls /mnt/ark/sources/files/laptop/home/alex/latest/
+cp /mnt/ark/sources/files/laptop/home/alex/latest/notes.txt ~/notes.txt
+```
+
+The mount shows the snapshots that existed when it started. To see newer ones, unmount and mount
+again.
+
+## Find a snapshot
+
+The mount offers three ways to reach a snapshot:
 
 ```
-DIR/
+/mnt/ark/
   ids/<id>/                                  one directory per snapshot
-  tags/<tag>/<time>/                         snapshots with that tag
-  sources/<type>/<host>/<source path>/
+  tags/<tag>/<time>/                         the snapshots with that tag
+  sources/<type>/<host>/<source>/
       <time>/                                one directory per snapshot of the series
       latest -> <newest time>
 ```
 
-For a repository with a directory backup of `/home/alex` from host `laptop`, one of `/srv/app`, a
-Docker volume `postgres_data` and a stream `dump` from a host that recorded none:
+`sources/` is usually the one you want. It follows the [series](series.md): pick the type, the
+host, and the source, and you get that series' snapshots by time, with `latest` pointing at the
+newest.
+
+Take a repository with two directory backups from the host `laptop`, a Docker volume, and a stream
+from a program that recorded no host:
 
 ```
 sources/
@@ -34,28 +60,50 @@ sources/
     _/dump/...
 ```
 
-- `<type>` is the source type plus `s`: `files`, `docker-volumes`, `streams`.
-- `<source path>` nests: `/home/alex` is `home/alex/`, so `/home` and `/home/alex` share `home/`.
-  The sources of one [series](series.md) are one directory, so `latest` is per series.
-- An empty host is `_`.
-- A `/` in a host becomes `_`. A host or path element that is empty, `latest`, shaped like a time
-  or starts with `.` or `_` gets a `_` in front.
-- A name that escaping changed, or a relative source name that an absolute one also uses, gets a
-  `-1`, `-2` suffix when another directory already holds it. Only such names depend on the other
-  snapshots: relative `home` is `home/` until a snapshot of `/home` exists, then `home-1/`; host
-  `a/b` is `a_b/` until a host named `a_b` exists, then `a_b-1/`.
-- A second snapshot in the same second gets a `-1`, `-2` suffix.
-- `ids/` uses the short id, the full id when two snapshots share the prefix.
+- `<type>` is the source type in the plural: `files`, `docker-volumes`, `streams`.
+- A source path nests. `/home/alex` becomes `home/alex/`, so `/home` and `/home/alex` share `home/`.
+- An empty host shows as `_`.
 
-## Behaviour
+## Unmount
 
-- The mount holds a shared lock for as long as it runs, so `ark prune` and `ark forget --prune`
-  exit 3 (after `--lock-wait`, if set) until it is unmounted.
-- Ctrl-C unmounts. While a process still uses the mount it keeps serving and retries every second;
-  a second Ctrl-C or SIGTERM quits anyway, with exit 1, and leaves the mountpoint to unmount by hand.
+Press Ctrl-C in the shell that runs `ark mount`.
+
+If a process still uses the mount, for example a shell whose working directory is inside it, ark
+keeps serving and tries again every second. Leave the directory, and the unmount goes through. A
+second Ctrl-C, or SIGTERM, quits at once with exit code 1 and leaves the mount point for you to
+unmount by hand.
+
+## Mount and prune
+
+A mount holds a shared [lock](concepts.md#locks) for as long as it runs. Backups and restores work
+as usual, but `ark prune` and `ark forget --prune` exit 3 until you unmount. With `--lock-wait`,
+they wait that long first.
 
 ## Platforms
 
-Linux needs FUSE 3: `/dev/fuse` and `fusermount3` (package `fuse3`). macOS needs
-[macFUSE](https://macfuse.github.io/) and is best effort. Windows and 32-bit Linux are not
-supported.
+| Platform | Requirement |
+|---|---|
+| Linux | FUSE 3: `/dev/fuse` and `fusermount3`, in the package `fuse3` |
+| macOS | [macFUSE](https://macfuse.github.io/); best effort |
+| Windows, 32-bit Linux | not supported |
+
+## Details: directory names
+
+Hosts and source names are free text, and not every one of them works as a directory name. ark
+adjusts the names that don't:
+
+- A `/` in a host becomes `_`.
+- A host or path element gets a `_` in front when it's empty, is named `latest`, looks like a
+  time, or starts with `.` or `_`.
+- Two snapshots in the same second in one directory, a series or a tag: the second one gets the
+  suffix `-1`, the next one `-2`.
+- `ids/` uses the short ID. When two snapshots share that prefix, it uses the full ID.
+
+Two names can end up the same after these changes, or a relative source name can collide with an
+absolute one. The later one then gets a `-1` or `-2` suffix. Only such names depend on which other
+snapshots exist:
+
+| Name | Directory | Becomes, once the other exists |
+|---|---|---|
+| relative source `home` | `home/` | `home-1/`, when a snapshot of `/home` exists |
+| host `a/b` | `a_b/` | `a_b-1/`, when a host named `a_b` exists |

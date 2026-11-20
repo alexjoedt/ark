@@ -22,18 +22,21 @@ landing:
       details: Blobs are gathered into packs named by their SHA-256, in a local directory or over SFTP.
 
 features:
+  - title: Getting started
+    details: From an empty directory to a first backup, a restore, and a retention policy.
+    link: /getting-started
+  - title: How ark works
+    details: Snapshots, deduplication, series, and what forget and prune do.
+    link: /concepts
   - title: CLI
-    details: Every command, the global flags, profiles and exit codes.
+    details: Every command, the global flags, profiles, and exit codes.
     link: /cli/
   - title: Library
-    details: Backends, sources and sinks, encryption, progress hooks, profiles and search for Go programs.
+    details: Backends, sources and sinks, forget policies, profiles, and progress hooks for Go programs.
     link: /library
-  - title: Series and labels
-    details: How snapshots group into series, and how labels tell jobs of one source apart.
-    link: /series
-  - title: Mount
-    details: Browse every snapshot read-only through FUSE.
-    link: /mount
+  - title: Docker volumes
+    details: Back up and restore volumes on a local or remote daemon.
+    link: /docker
   - title: Format and security
     details: The byte layout of a repository and the threat model it is built against.
     link: /format
@@ -42,11 +45,14 @@ features:
 ark keeps deduplicated, compressed and encrypted backups of directories and Docker volumes in a local or SFTP repository, as a Go library with a CLI on top. A Go program can plug in its own Source or Sink.
 
 - [Getting started](getting-started.md): install ark and make a first backup.
-- [CLI](cli/index.md): every command, the global flags, profiles and exit codes.
-- [Library](library.md): ark from Go: backends, sources and sinks, hooks, profiles and search.
-- [Series](series.md): how snapshots group into series.
-- [Labels](labels.md): how labels tell jobs of one source apart.
+- [How ark works](concepts.md): snapshots, deduplication, forget and prune.
+- [Series](series.md) and [Labels](labels.md): how snapshots group, and how to tell jobs apart.
+- [Retention policies](retention.md): what each forget rule keeps, on timelines.
+- [Docker volumes](docker.md): back up and restore volumes.
 - [Mount](mount.md): browse every snapshot read-only through FUSE.
+- [Troubleshooting](troubleshooting.md): common errors and what to do.
+- [CLI](cli/index.md): every command, the global flags, profiles, and exit codes.
+- [Library](library.md): ark from Go, with your own backends, sources, and sinks.
 - [Repository format](format.md): the byte layout of a repository.
 - [Security](SECURITY.md): the threat model.
-- [Releasing](releasing.md): versioning and how releases are cut.
+- [Versioning](versioning.md): what may change between releases.

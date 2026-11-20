@@ -81,13 +81,14 @@ _, err = arkfs.Restore(ctx, repo, snap.ID, "/tmp/docs")
 ## Documentation
 
 - [Getting started](https://alexjoedt.github.io/ark/getting-started): repository, password, first backup, restore, retention
+- [How ark works](https://alexjoedt.github.io/ark/concepts): snapshots, deduplication, forget and prune
 - [CLI](https://alexjoedt.github.io/ark/cli/): every command and flag, [profiles](https://alexjoedt.github.io/ark/cli/profiles), exit codes
-- [Library](https://alexjoedt.github.io/ark/library): packages, backends, sources and sinks, encryption, examples
-- [Mount](https://alexjoedt.github.io/ark/mount), [Series](https://alexjoedt.github.io/ark/series), [Labels](https://alexjoedt.github.io/ark/labels)
-- [Repository format](https://alexjoedt.github.io/ark/format) and [Security](https://alexjoedt.github.io/ark/SECURITY)
-- [Releasing](https://alexjoedt.github.io/ark/releasing)
+- [Library](https://alexjoedt.github.io/ark/library): packages, [backends](https://alexjoedt.github.io/ark/library/backends), [sources and sinks](https://alexjoedt.github.io/ark/library/sources-and-sinks), examples
+- [Series](https://alexjoedt.github.io/ark/series), [Labels](https://alexjoedt.github.io/ark/labels), [Retention policies](https://alexjoedt.github.io/ark/retention)
+- [Docker volumes](https://alexjoedt.github.io/ark/docker), [Mount](https://alexjoedt.github.io/ark/mount), [Troubleshooting](https://alexjoedt.github.io/ark/troubleshooting)
+- [Repository format](https://alexjoedt.github.io/ark/format), [Security](https://alexjoedt.github.io/ark/SECURITY), [Versioning](https://alexjoedt.github.io/ark/versioning)
 
-The same pages are in [docs/](docs/).
+The same pages are in [docs/](docs/), along with [how a release is cut](docs/releasing.md).
 
 ## Development
 

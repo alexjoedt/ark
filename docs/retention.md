@@ -2,23 +2,45 @@
 
 # Retention policies
 
-`ark forget` keeps the snapshots a policy selects and removes the rest. The examples on this page are computed by ark itself: each shows a history of snapshots, what one rule keeps of it and the reasons `ark forget --json` gives.
+A retention policy tells `ark forget` which snapshots to keep. It removes the rest. This page shows every rule on a timeline, so you can see what a policy does before you run it.
 
-The examples count hours, days, weeks, months and years in UTC; ark counts them in the local time zone of the machine that runs forget. A policy applies to each series on its own. Time zones, summer time, ISO weeks and series are covered in the [forget reference](cli/commands.md#forget).
+The examples are computed by ark itself. Each one takes a history of snapshots, applies a policy, and shows what stays, with the reasons that `ark forget --json` gives.
 
-In short:
+## The rules in brief
 
-- A counted rule such as `--keep-daily N` counts periods, not snapshots: it keeps the newest snapshot of each of the N most recent days that have one. A day without a snapshot uses no count, and of a day with several only the newest counts.
-- When a counted rule reaches the oldest snapshot of the history with count left, it keeps that snapshot too, and so does a rule such as `--keep-within-daily 30d` whose window holds it.
-- A within rule such as `--keep-within 7d` measures its window back from the newest snapshot, not from the time forget runs.
-- A snapshot that any rule keeps stays.
-- A snapshot dated in the future is kept and used by no rule, see the [forget reference](cli/commands.md#forget).
+| Rule | Keeps |
+|---|---|
+| `--keep-last N` | the N newest snapshots |
+| `--keep-hourly N`, `--keep-daily N`, `--keep-weekly N`, `--keep-monthly N`, `--keep-yearly N` | the newest snapshot of each of the N most recent hours, days, weeks, months, or years that have one |
+| `--keep-within DURATION` | every snapshot younger than DURATION |
+| `--keep-within-hourly DURATION` to `--keep-within-yearly DURATION` | the newest snapshot of every hour, day, week, month, or year younger than DURATION |
+| `--keep-tag TAG` | every snapshot that carries the tag |
 
-Most examples share one history of three weeks, with days without a backup and days with several. Hourly, monthly and yearly rules, `--keep-tag`, the long-horizon recipe and the comparison of daily with hourly get histories of their own.
+Five things are true for every policy:
+
+- **Rules add up.** A snapshot that any rule keeps stays.
+- **Each series is on its own.** A policy applies to every [series](series.md) separately.
+- **Counted rules count periods, not snapshots.** `--keep-daily 7` keeps the newest snapshot of each of the 7 most recent days that have one. A day without a snapshot uses no count, and of a day with several, only the newest counts.
+- **The oldest snapshot can stay too.** When a counted rule reaches the oldest snapshot with count left, it keeps that snapshot as well.
+- **Windows are measured back from the newest snapshot.** `--keep-within 7d` covers the 7 days before the newest snapshot, not the 7 days before `ark forget` runs.
+
+Before you run a policy for real, try it:
+
+```bash
+ark forget --keep-daily 7 --keep-weekly 4 --dry-run
+```
+
+The [command reference](cli/commands.md#forget) lists the flags and how the command behaves.
+
+## How to read the examples
+
+- Most examples share one history of three weeks, with days without a backup and days with several. Hourly, monthly, and yearly rules, `--keep-tag`, the long-horizon recipe, and the comparison of daily with hourly get histories of their own.
+- The examples count hours, days, weeks, months, and years in UTC. ark counts them in the local time zone of the machine that runs `ark forget`, see [Time zones](#time-zones).
+- Each example shows one series.
 
 ## Keep last
 
-`--keep-last N` keeps the N newest snapshots, counted one by one: several snapshots of one day each use a count.
+`--keep-last N` keeps the N newest snapshots. It counts snapshots one by one, so several snapshots of one day each use a count.
 
 ![Timeline of --keep-last 5](retention/keep-last.svg)
 
@@ -51,11 +73,11 @@ Most examples share one history of three weeks, with days without a backup and d
 
 ## Keep hourly, daily, weekly, monthly, yearly
 
-These rules count periods. Each keeps the newest snapshot of a period, newest period first, until its count is used up. A week is an ISO week and starts on Monday.
+These rules count periods. Each one keeps the newest snapshot of a period, newest period first, until its count is used up. A week is an ISO week and starts on Monday.
 
 ### Keep daily
 
-`--keep-daily N` keeps the newest snapshot of each of the N most recent days that have a snapshot. It is not one snapshot a day for N days: days without a backup are skipped, so the rule reaches back as far as it takes to find N days.
+`--keep-daily N` keeps the newest snapshot of each of the N most recent days that have a snapshot. That isn't the same as one snapshot a day for N days. Days without a backup are skipped, so the rule reaches back as far as it takes to find N days.
 
 ![Timeline of --keep-daily 5](retention/keep-daily.svg)
 
@@ -189,7 +211,7 @@ These rules count periods. Each keeps the newest snapshot of a period, newest pe
 
 ### Unlimited
 
-Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keeps the newest snapshot of every day that has one, and the oldest snapshot of the history always stays.
+Every counted rule takes `unlimited` as its count. `--keep-daily unlimited` keeps the newest snapshot of every day that has one. The oldest snapshot of the history always stays.
 
 ![Timeline of --keep-daily unlimited](retention/keep-unlimited.svg)
 
@@ -220,11 +242,45 @@ Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keep
 
 `--keep-daily unlimited` keeps Sun 22 Mar 18:00, Fri 20 Mar 18:00, Thu 19 Mar 18:00, Wed 18 Mar 18:00, Mon 16 Mar 18:00, Fri 13 Mar 18:00, Thu 12 Mar 18:00, Tue 10 Mar 18:00, Mon 09 Mar 18:00, Sat 07 Mar 18:00, Fri 06 Mar 23:00, Wed 04 Mar 18:00, Tue 03 Mar 18:00, Mon 02 Mar 18:00 and Mon 02 Mar 09:00 and removes 7 other snapshots. The oldest snapshot, Mon 02 Mar 09:00, stays although its day is taken.
 
+### The oldest snapshot
+
+A period rule works through the periods, newest first. When it reaches the oldest snapshot of a series and still has count left, it keeps that snapshot too, although its period is already taken.
+
+For example, `--keep-daily 7` on a series that spans two days keeps the newest snapshot of each day, and the oldest snapshot. `--json` gives that one the reason `oldest daily snapshot`. The [weekly example](#keep-weekly) shows the rule at work.
+
+The effect is that a series shorter than its policy keeps its first snapshot until the policy is filled. With `unlimited`, the oldest snapshot always stays.
+
+`--keep-last` and `--keep-within` have no such rule. restic selects the same way.
+
 ## Keep within
+
+The rules in this section take a duration instead of a count.
+
+### Durations
+
+A duration is written as whole numbers, each followed by a unit. Every unit appears at most once, in this order:
+
+| Unit | Meaning |
+|---|---|
+| `y` | years |
+| `m` | months, at most 11 |
+| `d` | days |
+| `h` | hours |
+
+`30d`, `72h`, `1y6m`, and `1y2m3d4h` are durations.
+
+- There are no minutes, seconds, or weeks, and no fractions.
+- A number can be at most a million, and a duration of zero is refused.
+- `m` always means months. `90m` is neither 90 minutes nor seven and a half years: it's a usage error. Write 18 months as `1y6m`.
+- Years, months, and days are steps on the calendar. Hours are elapsed time. [Calendar steps](#details-calendar-steps) has the cases where that matters.
+
+These are restic's units.
 
 ### Keep within a duration
 
-`--keep-within DURATION` keeps every snapshot younger than the duration, however many there are. The window ends at the newest snapshot, so a history that stopped receiving backups keeps its last ones. A snapshot exactly the duration old is outside.
+`--keep-within DURATION` keeps every snapshot younger than the duration, however many there are.
+
+The window is measured back from the newest snapshot of the series, not from the time of the run. A series that stopped receiving backups therefore keeps its last snapshots. A snapshot that is exactly the duration old is outside the window.
 
 ![Timeline of --keep-within 5d](retention/keep-within.svg)
 
@@ -257,7 +313,14 @@ Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keep
 
 ### Keep the newest of every period within a duration
 
-`--keep-within-hourly`, `--keep-within-daily`, `--keep-within-weekly`, `--keep-within-monthly` and `--keep-within-yearly` take a duration in place of a count: they keep the newest snapshot of every period that has one inside the window, however many periods that is. When the oldest snapshot of the history lies inside the window and shares its period with a newer one, they keep it too, for an `oldest` reason such as `oldest daily within 30d`.
+`--keep-within-hourly`, `--keep-within-daily`, `--keep-within-weekly`, `--keep-within-monthly`, and `--keep-within-yearly` are the period rules with a duration in place of a count. `--keep-within-daily 14d` keeps the newest snapshot of every day of the last 14 days, however many of those days have one.
+
+- The window is measured like the one of `--keep-within`.
+- The periods are those of the counted rules.
+- Each rule has its own duration and decides by itself.
+- When the oldest snapshot of the history lies inside the window and shares its period with a newer one, the rule keeps it too. Its reason then starts with `oldest`, as in `oldest daily within 30d`.
+
+restic selects the same way.
 
 ![Timeline of --keep-within-hourly 3h](retention/keep-within-hourly.svg)
 
@@ -375,7 +438,23 @@ Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keep
 
 ## Keep tag
 
-`--keep-tag TAG` keeps every snapshot that carries the tag, whatever its age. It has no count and no period, and on its own it keeps nothing else, not even the newest snapshot. When that would leave a series with no snapshot, forget removes nothing at all and exits 1, naming the series; `--dry-run` fails the same way and prints no list. A snapshot kept only for being dated in the future does not count as kept. The history is a week of daily backups, some of them tagged `release`.
+`--keep-tag TAG` keeps every snapshot that carries the tag, whatever its age.
+
+- One value can list several tags, separated by commas. A snapshot has to carry all of them: `--keep-tag db,prod`.
+- You can give the flag several times. A snapshot that matches any of the lists stays.
+- `--keep-tag ''` keeps the snapshots without a tag.
+- Blanks around a tag are dropped.
+- The reason in `--json` reads `has tags [db, prod]`.
+
+The rule has no count and no period. On its own, it keeps nothing else, not even the newest snapshot. That makes it the one rule that can leave a series without any snapshot, and ark refuses to do that. `ark forget` then removes nothing, of no series, and exits 1 naming the series. `--dry-run` fails the same way and prints no list. restic refuses the same way.
+
+If you get that error, do one of these:
+
+- Narrow the filters to the series that carry the tag.
+- Add a rule that always keeps something, such as `--keep-last 1`.
+- Remove a series on purpose with a filter and `--all`.
+
+The history below is a week of daily backups, some of them tagged `release`.
 
 ![Timeline of --keep-tag release](retention/keep-tag.svg)
 
@@ -393,7 +472,9 @@ Every counted rule takes `unlimited` as its count: `--keep-daily unlimited` keep
 
 ## Combining rules
 
-A policy of several rules keeps a snapshot when any of its rules keeps it and removes only what none of them keeps. Each rule counts on its own over the whole history: a snapshot two rules keep uses a count of each, and `--json` gives a reason for each. In a timeline of several rules each rule has a lane, and the bottom lane shows what the policy keeps.
+A policy of several rules keeps a snapshot when any of its rules keeps it, and removes only what none of them keeps. Each rule counts on its own over the whole history. A snapshot that two rules keep uses a count of each, and `--json` gives a reason for each.
+
+In a timeline of several rules, each rule has a lane. The bottom lane shows what the policy keeps.
 
 ![Timeline of --keep-daily 3 --keep-weekly 3](retention/union.svg)
 
@@ -426,7 +507,7 @@ A policy of several rules keeps a snapshot when any of its rules keeps it and re
 
 ### Keep tag with a counted rule
 
-`--keep-tag` adds the snapshots it keeps to what the other rules keep and takes nothing out of their counts. A tagged snapshot that a counted rule reaches still uses a count of it, so a tagged snapshot among the newest leaves `--keep-last` a slot fewer for the others.
+`--keep-tag` adds the snapshots it keeps to what the other rules keep. It takes nothing out of their counts. A tagged snapshot that a counted rule reaches still uses a count of that rule, so a tagged snapshot among the newest leaves `--keep-last` one slot fewer for the others.
 
 ![Timeline of --keep-tag release --keep-last 3](retention/keep-tag-and-last.svg)
 
@@ -495,11 +576,11 @@ A policy of several rules keeps a snapshot when any of its rules keeps it and re
 
 ## Comparisons
 
-Rules that sound alike can keep different snapshots. Each timeline below runs two policies on the same history, one lane each; the table shows what each keeps.
+Rules that sound alike can keep different snapshots. Each timeline below runs two policies on the same history, one lane each. The table shows what each keeps.
 
 ### Keep daily or keep within daily
 
-`--keep-daily 7` and `--keep-within-daily 7d` both keep one snapshot a day. `--keep-daily 7` counts days that have a snapshot, so it reaches back past days without one until it has found 7; `--keep-within-daily 7d` looks only at the 7 days before the newest snapshot, whatever they hold.
+`--keep-daily 7` and `--keep-within-daily 7d` both keep one snapshot a day. `--keep-daily 7` counts days that have a snapshot, so it reaches back past days without one until it has found 7. `--keep-within-daily 7d` looks only at the 7 days before the newest snapshot, whatever they hold.
 
 ![Timeline of --keep-daily 7 and --keep-within-daily 7d](retention/daily-vs-within-daily.svg)
 
@@ -585,3 +666,48 @@ With several backups a day, `--keep-hourly 4` keeps the newest snapshot of each 
 | Mon 02 Mar 08:00 | removed | removed |
 
 `--keep-daily 4` keeps 4 snapshots, among them Tue 03 Mar 18:00 and Mon 02 Mar 18:00, which `--keep-hourly 4` does not keep. `--keep-hourly 4` keeps 4 snapshots, among them Thu 05 Mar 12:00 and Thu 05 Mar 08:00, which `--keep-daily 4` does not keep.
+## Time zones
+
+ark counts hours, days, weeks, months, and years in the local time zone of the machine that runs `ark forget`. The machine that made the backup doesn't matter.
+
+- A backup at 00:30 local time belongs to the new day.
+- A week is an ISO week and starts on Monday.
+- `--keep-last` doesn't depend on the zone. Of a `--keep-within` duration, only the hours don't.
+
+Set `TZ` to count in another zone:
+
+```bash
+TZ=UTC ark forget --keep-daily 7
+```
+
+## Snapshots dated in the future
+
+A snapshot can carry a date that is later than the time `ark forget` runs. A machine with a wrong clock produces one, and so can an imported archive.
+
+ark keeps such a snapshot, whatever the policy says, and leaves it out of every rule:
+
+- No rule counts it, no period takes it, and no window starts at it. The other snapshots are decided as if it weren't there.
+- Its reason in `--json` is `in the future`, also when its tags match a `--keep-tag` list.
+- It doesn't count as a kept snapshot of its series. A policy that keeps nothing else of the series is still refused.
+- A policy run warns about each one on stderr, with `--dry-run` too. When the run is refused, the error names the snapshots instead.
+
+The snapshot stays until its date has passed. From then on, the rules see it like any other. To remove it earlier, name its ID: `ark forget <id>`.
+
+The time of the run is taken from the repository's clock, the one its locks use, and read once per run.
+
+restic handles this differently. It counts such a snapshot in its rules, so the two tools keep different snapshots of a series that holds one.
+
+## Details: calendar steps
+
+The years, months, and days of a duration are stepped back on the calendar of the local time zone. Hours are elapsed time. Most of the time you won't notice the difference. These are the cases where you do:
+
+| Case | Result |
+|---|---|
+| `1m` back from 15 March | 15 February |
+| `1m` back from 31 March | 3 March, or 2 March in a leap year: February has no 31st, so the step runs over into the next month |
+| `1d` back across the start of daylight saving time | 23 hours, where `24h` is always 24 |
+| a step onto a time that the clocks skip when daylight saving time starts | an hour before or after that time |
+
+`--json` writes a `within` reason unit by unit, as the duration was given: `within 72h`, not `within 3d`. Numbers are written plainly, so `030d` reads `within 30d`.
+
+restic counts and writes durations the same way.
