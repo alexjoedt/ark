@@ -1,28 +1,32 @@
 # One-time setup: Settings > Pages > Source must be "GitHub Actions" before
-# the first deploy on main, or deploy-pages fails with "Not Found".
+# the first deploy, or deploy-pages fails with "Not Found".
 name: Docs
 
+# Deploys after a successful release run. release.yml fires on v* tags and
+# scripts/release.sh rejects anything but X.Y.Z or X.Y.Z-rc.N, so success means
+# a semver tag. workflow_run runs in the context of main, which the
+# github-pages environment allows; a tag-triggered deploy would be rejected.
+# Pull requests touching the docs only build them.
 on:
-  push:
-    branches: [ "main" ]
-    paths:
-      - 'docs/**'
-      - '.github/workflows/docs.yml'
+  workflow_run:
+    workflows: [ "release" ]
+    types: [ completed ]
   pull_request:
     paths:
       - 'docs/**'
       - '.github/workflows/docs.yml'
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   build:
+    if: github.event_name == 'pull_request' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           # lastUpdated reads git history; a shallow clone stamps every page
           # with the deploy commit.
           fetch-depth: 0
@@ -42,12 +46,12 @@ jobs:
         run: npm run docs:build
 
       - uses: actions/upload-pages-artifact@v3
-        if: github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_run'
         with:
           path: docs/.vitepress/dist
 
   deploy:
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_run'
     needs: build
     runs-on: ubuntu-latest
     permissions:
