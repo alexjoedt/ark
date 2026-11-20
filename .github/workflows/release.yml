@@ -46,7 +46,7 @@ jobs:
       - name: Check out the cmd/ark tag
         run: git checkout "cmd/ark/$GITHUB_REF_NAME"
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: "~> v2"
