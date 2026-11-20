@@ -41,7 +41,8 @@
 //
 // A volume profile backs up a docker volume instead of a directory. It takes
 // the backup keys above but path, exclude, exclude-file, exclude-cloud-files
-// and source; the volume names the snapshots:
+// and source, plus no-stop and stop-timeout, which a path or source refuses;
+// the volume names the snapshots:
 //
 //	repo: /srv/ark
 //	docker-host: ssh://admin@db1     # the daemon, default: DOCKER_HOST, else the local one
@@ -49,6 +50,7 @@
 //	  volume: pgdata                 # the docker volume to back up
 //	  host: db1                      # needed with a remote docker-host
 //	  tag: [db]
+//	  stop-timeout: 1m               # or no-stop: true, the containers keep running
 //
 // $VAR and ${VAR} expand in every value but the hooks. In repo (unless it is a
 // URI), password-file, backup.path and backup.exclude-file, ~ is the home
@@ -128,6 +130,10 @@ type Backup struct {
 	Source string `yaml:"source"`
 	// Labels are recorded in the snapshot; their keys follow [ark.ValidateLabels].
 	Labels map[string]string `yaml:"label"`
+	// NoStop and StopTimeout are for a volume: the containers that use it keep
+	// running, or get StopTimeout to stop, 0 meaning the default of the caller.
+	NoStop      bool          `yaml:"no-stop"      conflicts:"path source"`
+	StopTimeout time.Duration `yaml:"stop-timeout" conflicts:"path source"`
 
 	Hooks `yaml:",inline"`
 }
@@ -190,6 +196,9 @@ func (p *Profile) Validate() error {
 	}
 	if p.LockWait < 0 {
 		return invalidf("lock-wait %s: want 0 or more", p.LockWait)
+	}
+	if p.Backup.StopTimeout < 0 {
+		return invalidf("backup.stop-timeout %s: want 0 or more", p.Backup.StopTimeout)
 	}
 	if err := p.checkVolume(); err != nil {
 		return err

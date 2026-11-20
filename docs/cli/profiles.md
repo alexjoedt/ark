@@ -22,16 +22,17 @@ forget:
 ```
 
 ```bash
-ark backup -P docs              # source ~/Documents as an absolute path, the profile's tags and excludes
+ark profile backup docs         # back up what the profile names, with its values alone
+ark backup -P docs              # the same through ark backup: source ~/Documents as an absolute path
 ark forget -P docs --yes        # the policy on this host's ~/Documents snapshots, then prune
 ark snapshots -P docs           # only the ~/Documents snapshots
 ark backup -P docs -t manual    # a flag beats the profile, a list flag replaces its list
-ark profile list                # every profile with its repo and backup path
+ark profile list                # every profile with its repo and backup path or volume
 ark profile show docs           # each effective value and its source: cli, profile, env or default
 ```
 
-A profile can name a Docker volume instead of a directory. `ark docker backup -P db` backs it up
-on the profile's `docker-host`, and `forget`, `snapshots` and `find` select that volume's series:
+A profile can name a Docker volume instead of a directory. `ark profile backup db` and
+`ark docker backup -P db` back it up on the profile's `docker-host`, and `forget`, `snapshots` and `find` select that volume's series:
 
 ```yaml
 # ~/.config/ark/profiles/db.yaml
@@ -41,12 +42,14 @@ docker-host: tcp://db1:2375
 backup:
   volume: pgdata
   host: db1
+  stop-timeout: 2m              # or no-stop: true, the containers keep running
 forget:
   keep-daily: 7
 ```
 
 ```bash
-ark docker backup -P db         # backup.volume on db1's daemon, filed under the host db1
+ark profile backup db           # backup.volume on db1's daemon, filed under the host db1
+ark docker backup -P db --no-stop  # the same, a flag over the profile
 ark snapshots -P db             # the docker-volume snapshots of pgdata, from every host
 ark forget -P db --yes          # the policy on the pgdata series of host db1
 ```
@@ -56,12 +59,15 @@ ark forget -P db --yes          # the policy on the pgdata series of host db1
 | Section | Keys |
 |---|---|
 | top level | `repo`, `password-file`, `password-env`, `insecure-no-password`, `lock-wait`, `concurrency`, `docker-host` |
-| `backup` | `path`, `source`, `volume`, `host`, `tag`, `comment`, `label`, `exclude`, `exclude-file`, `exclude-cloud-files`, hooks |
+| `backup` | `path`, `source`, `volume`, `host`, `tag`, `comment`, `label`, `exclude`, `exclude-file`, `exclude-cloud-files`, `no-stop`, `stop-timeout`, hooks |
 | `forget` | `keep-last`, `keep-hourly`, `keep-daily`, `keep-weekly`, `keep-monthly`, `keep-yearly`, `keep-within`, `keep-within-hourly`, `keep-within-daily`, `keep-within-weekly`, `keep-within-monthly`, `keep-within-yearly`, `keep-tag`, `prune`, hooks |
 
 Each key means what the flag of the same name means, see [CLI](index.md#global-flags) and
 [Commands](commands.md). `password-env` names the environment variable that holds the password.
 `backup.path` is the directory `ark backup -P` backs up when no path is given.
+`backup.no-stop` and `backup.stop-timeout` are the flags of `ark docker backup`: the containers that
+use the volume keep running, or get that long to stop (default 30s). `ark docker restore -P` does not
+read them, a restore stops the containers unless `--no-stop` is given.
 A keep count is a whole number or `unlimited`, as on the command line: `keep-yearly: unlimited`
 keeps the newest snapshot of every year. A negative count fails the load.
 `keep-within` is a duration as `--keep-within` takes it, `30d`, `72h` or `1y6m`, where `m` counts
@@ -96,8 +102,13 @@ the load.
   `backup.host`, else this machine's hostname, and for a remote daemon in `$DOCKER_HOST` the
   daemon's own name, which `forget` asks the daemon for unless `--host` names it. The load fails
   for `backup.volume` next to `backup.path`, `backup.source`, `backup.exclude`,
-  `backup.exclude-file` or `backup.exclude-cloud-files`, and for a remote `docker-host` without
-  `backup.host`.
+  `backup.exclude-file` or `backup.exclude-cloud-files`, for `backup.no-stop` or
+  `backup.stop-timeout` next to `backup.path` or `backup.source`, and for a remote `docker-host`
+  without `backup.host`.
+- `ark profile backup NAME` (or `-f FILE`) takes no backup flags: every value comes from the
+  profile, the environment or the default. A profile with `backup.path` runs `ark backup -P NAME`,
+  one with `backup.volume` `ark docker backup -P NAME`; one with neither exits 2. `ark backup -P` on
+  a volume profile and `ark docker backup -P` on a path profile exit 2 and name the command to run.
 - `backup.label` sets labels as a map, `label: {app: docs}`; a `--label` flag adds to them and wins
   for a key in both. See [Labels](../labels.md).
 - `$VAR` and `${VAR}` expand in every value but the hooks; an unset variable exits 2. `~` and
@@ -107,8 +118,8 @@ the load.
 - An unknown key or section, a bad name (`[a-z0-9][a-z0-9._-]*`), a file writable by group or
   others or a file owned by someone other than you or root exits 2 naming the file and the problem.
 
-`ark profile list` prints name, repository and backup path of every profile in the profile
-directory; a file that does not load is listed with its error, and the command fails only when no
+`ark profile list` prints name, repository and backup path, or `volume NAME`, of every profile in
+the profile directory (`--json`: `path` or `volume`); a file that does not load is listed with its error, and the command fails only when no
 profile loads. `ark profile show NAME` (or `-f FILE`) prints every value a command would use and
 where it comes from: cli, profile, env or default. The password is never printed, only its source.
 
@@ -128,7 +139,7 @@ where it comes from: cli, profile, env or default. The password is never printed
 Schedule a profile with cron (use the path `go install` or the release archive put ark at):
 
 ```text
-30 2 * * * /usr/local/bin/ark backup -P docs && /usr/local/bin/ark forget -P docs --yes
+30 2 * * * /usr/local/bin/ark profile backup docs && /usr/local/bin/ark forget -P docs --yes
 ```
 
 or a systemd user timer:
@@ -137,7 +148,7 @@ or a systemd user timer:
 # ~/.config/systemd/user/ark-docs.service
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/ark backup -P docs
+ExecStart=/usr/local/bin/ark profile backup docs
 ExecStart=/usr/local/bin/ark forget -P docs --yes
 
 # ~/.config/systemd/user/ark-docs.timer
@@ -149,6 +160,15 @@ Persistent=true
 WantedBy=timers.target
 ```
 
-`systemctl --user enable --now ark-docs.timer` starts it. Neither cron nor a timer has a terminal,
+`systemctl --user enable --now ark-docs.timer` starts it. `ark profile backup` backs up directory and
+volume profiles alike, so one loop covers every profile:
+
+```bash
+for p in $(ark profile list --json | jq -r '.[] | select(.error == null) | .name'); do
+  ark profile backup "$p" && ark forget -P "$p" --yes
+done
+```
+
+ Neither cron nor a timer has a terminal,
 so the password must come from a file, a command or the environment, and `forget` and `prune` need
 `--yes`.

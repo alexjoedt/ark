@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	ark "github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkprofile"
@@ -21,15 +22,15 @@ import (
 func profileCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "profile",
-		Usage: "inspect profiles",
+		Usage: "inspect profiles and run their backup",
 		Commands: []*cli.Command{
 			{
 				Name:  "list",
 				Usage: "list the profiles in the profile directory",
 				UsageText: `ark profile list
 
-   Prints name, repository and backup path of every profile in
-   $XDG_CONFIG_HOME/ark/profiles. A file that does not load is listed with its
+   Prints name, repository and backup path, or volume NAME, of every profile
+   in $XDG_CONFIG_HOME/ark/profiles. A file that does not load is listed with its
    error, a file not named NAME.yaml as ignored; the command fails only when
    no profile loads.`,
 				Action: profileList,
@@ -46,15 +47,30 @@ func profileCommand() *cli.Command {
    password is never printed, only where it comes from.`,
 				Action: profileShow,
 			},
+			{
+				Name:      "backup",
+				Usage:     "run the backup a profile describes, of its directory or its docker volume",
+				ArgsUsage: "[NAME]",
+				UsageText: `ark profile backup NAME
+   ark profile backup -f FILE
+
+   Backs up what the profile names, with every value from the profile:
+   backup.path as ark backup -P NAME does, backup.volume as ark docker
+   backup -P NAME does, stopping the containers that use it unless
+   backup.no-stop is set. Takes no backup flags; to override a value give it
+   to ark backup -P or ark docker backup -P.`,
+				Action: profileBackupAction,
+			},
 		},
 	}
 }
 
 type profileEntry struct {
-	Name  string `json:"name"`
-	Repo  string `json:"repo"`
-	Path  string `json:"path"`
-	Error string `json:"error,omitempty"`
+	Name   string `json:"name"`
+	Repo   string `json:"repo"`
+	Path   string `json:"path,omitempty"`
+	Volume string `json:"volume,omitempty"`
+	Error  string `json:"error,omitempty"`
 }
 
 func profileList(_ context.Context, cmd *cli.Command) error {
@@ -88,7 +104,9 @@ func profileList(_ context.Context, cmd *cli.Command) error {
 			continue
 		}
 		loaded++
-		entries = append(entries, profileEntry{Name: p.Name, Repo: p.Repo, Path: p.Backup.Path})
+		entries = append(entries, profileEntry{
+			Name: p.Name, Repo: p.Repo, Path: p.Backup.Path, Volume: p.Backup.Volume,
+		})
 	}
 
 	p := printer(cmd)
@@ -99,9 +117,13 @@ func profileList(_ context.Context, cmd *cli.Command) error {
 	} else if len(entries) > 0 {
 		rows := make([][]string, len(entries))
 		for i, e := range entries {
-			rows[i] = []string{e.Name, e.Repo, e.Path, e.Error}
+			backup := e.Path
+			if e.Volume != "" {
+				backup = "volume " + e.Volume
+			}
+			rows[i] = []string{e.Name, e.Repo, backup, e.Error}
 		}
-		p.Table([]string{"NAME", "REPO", "BACKUP PATH", "ERROR"}, rows)
+		p.Table([]string{"NAME", "REPO", "BACKUP", "ERROR"}, rows)
 	} else {
 		p.Infof("no profiles in %s", dir)
 	}
@@ -121,23 +143,48 @@ type profileValue struct {
 	Source string `json:"source"`
 }
 
-func profileShow(ctx context.Context, cmd *cli.Command) error {
+// profileOperand is the profile a profile subcommand names, as NAME or with
+// -P or -f.
+func profileOperand(ctx context.Context, cmd *cli.Command) (*loadedProfile, error) {
 	lp := profileFrom(ctx)
+	usage := "usage: ark profile " + cmd.Name + " NAME, or -f FILE"
 	switch {
 	case cmd.NArg() > 1:
-		return exitcode.Usagef("usage: ark profile show NAME, or -f FILE")
+		return nil, exitcode.Usagef("%s", usage)
 	case cmd.NArg() == 1 && lp != nil:
-		return exitcode.Usagef("give the profile as NAME or with -P or -f, not both")
+		return nil, exitcode.Usagef("give the profile as NAME or with -P or -f, not both")
 	case cmd.NArg() == 1:
 		file, err := profilePath(cmd.Args().First())
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if lp, err = loadProfileFile(file); err != nil {
-			return err
-		}
+		return loadProfileFile(file)
 	case lp == nil:
-		return exitcode.Usagef("usage: ark profile show NAME, or -f FILE")
+		return nil, exitcode.Usagef("%s", usage)
+	}
+	return lp, nil
+}
+
+// profileBackupAction backs up the profile's backup.path or backup.volume.
+func profileBackupAction(ctx context.Context, cmd *cli.Command) error {
+	lp, err := profileOperand(ctx, cmd)
+	if err != nil {
+		return err
+	}
+	ctx = context.WithValue(ctx, profileKey{}, lp)
+	switch {
+	case lp.Backup.Volume != "":
+		return runVolumeBackup(ctx, cmd, lp, lp.Backup.Volume, lp.Backup)
+	case lp.Backup.Path != "":
+		return runFileBackup(ctx, cmd, lp, *lp.Profile, nil, nil)
+	}
+	return exitcode.Usagef("profile %s names no backup.path or backup.volume to back up", lp.Name)
+}
+
+func profileShow(ctx context.Context, cmd *cli.Command) error {
+	lp, err := profileOperand(ctx, cmd)
+	if err != nil {
+		return err
 	}
 
 	values := effectiveValues(cmd.Root(), lp)
@@ -214,6 +261,8 @@ func effectiveValues(root *cli.Command, lp *loadedProfile) []profileValue {
 		profileOnly("backup.comment", b.Comment, ""),
 		profileOnly("backup.source", b.Source, source),
 		profileOnly("backup.label", labelList(b.Labels), ""),
+		profileBool("backup.no-stop", b.NoStop),
+		stopTimeoutValue(b.StopTimeout),
 	}
 	values = append(values, hookValues("backup", b.Hooks)...)
 	values = append(values,
@@ -233,6 +282,14 @@ func effectiveValues(root *cli.Command, lp *loadedProfile) []profileValue {
 		profileBool("forget.prune", f.Prune),
 	)
 	return append(values, hookValues("forget", f.Hooks)...)
+}
+
+// stopTimeoutValue is backup.stop-timeout, 0 showing the default.
+func stopTimeoutValue(d time.Duration) profileValue {
+	if d == 0 {
+		return profileValue{"backup.stop-timeout", defaultStopTimeout.String(), "default"}
+	}
+	return profileValue{"backup.stop-timeout", d.String(), "profile"}
 }
 
 // labelList shows labels as KEY="VALUE" pairs sorted by key; the value is

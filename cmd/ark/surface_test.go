@@ -78,6 +78,7 @@ func TestCommandSurface(t *testing.T) {
 		"profile":        {},
 		"profile list":   {},
 		"profile show":   {},
+		"profile backup": {},
 		"version":        {},
 	}
 

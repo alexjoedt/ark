@@ -10,6 +10,7 @@ import (
 
 	ark "github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkdocker"
+	"github.com/alexjoedt/ark/arkprofile"
 	"github.com/alexjoedt/ark/cmd/ark/internal/exitcode"
 	"github.com/alexjoedt/ark/cmd/ark/internal/out"
 	"github.com/urfave/cli/v3"
@@ -33,12 +34,39 @@ func dockerCommand() *cli.Command {
 	}
 }
 
+// defaultStopTimeout is arkdocker's own default, shown by --help and ark
+// profile show.
+const defaultStopTimeout = 30 * time.Second
+
+// stopOptions are --no-stop and --stop-timeout, each over b's no-stop and
+// stop-timeout when not given: the backup section of a profile, or none for a
+// restore. A timeout of 0 is arkdocker's default.
+func stopOptions(cmd *cli.Command, b arkprofile.Backup) []arkdocker.Option {
+	timeout, noStop := stopSettings(cmd, b)
+	opts := []arkdocker.Option{arkdocker.WithStopTimeout(timeout)}
+	if noStop {
+		opts = append(opts, arkdocker.WithoutStop())
+	}
+	return opts
+}
+
+func stopSettings(cmd *cli.Command, b arkprofile.Backup) (time.Duration, bool) {
+	timeout, noStop := b.StopTimeout, b.NoStop
+	if cmd.IsSet("stop-timeout") {
+		timeout = cmd.Duration("stop-timeout")
+	}
+	if cmd.IsSet("no-stop") {
+		noStop = cmd.Bool("no-stop")
+	}
+	return timeout, noStop
+}
+
 // stopFlags are shared by backup and restore: both stop the containers that
 // use the volume unless told otherwise.
 func stopFlags() []cli.Flag {
 	return []cli.Flag{
 		&cli.BoolFlag{Name: "no-stop", Usage: "do not stop containers"},
-		&cli.DurationFlag{Name: "stop-timeout", Usage: "graceful stop `DURATION`", Value: 30 * time.Second},
+		&cli.DurationFlag{Name: "stop-timeout", Usage: "graceful stop `DURATION`", Value: defaultStopTimeout},
 	}
 }
 
@@ -55,21 +83,21 @@ func dockerHost(ctx context.Context, cmd *cli.Command) string {
 }
 
 // openDocker opens the repository and an Engine on the daemon dockerHost
-// names. The daemon is not contacted until the first call. The caller
-// closes both.
-func openDocker(ctx context.Context, cmd *cli.Command) (*arkdocker.Engine, *ark.Repository, error) {
+// names, stopping containers as stop says. The daemon is not contacted until
+// the first call. The caller closes both.
+func openDocker(
+	ctx context.Context,
+	cmd *cli.Command,
+	stop []arkdocker.Option,
+) (*arkdocker.Engine, *ark.Repository, error) {
 	repo, err := openRepo(ctx, cmd)
 	if err != nil {
 		return nil, nil, err
 	}
-	opts := []arkdocker.Option{
+	opts := append([]arkdocker.Option{
 		arkdocker.WithLogger(slog.Default()),
 		arkdocker.WithDockerHost(dockerHost(ctx, cmd)),
-		arkdocker.WithStopTimeout(cmd.Duration("stop-timeout")),
-	}
-	if cmd.Bool("no-stop") {
-		opts = append(opts, arkdocker.WithoutStop())
-	}
+	}, stop...)
 	e, err := arkdocker.New(repo, opts...)
 	if err != nil {
 		_ = repo.Close()
@@ -301,57 +329,69 @@ func dockerBackupCommand() *cli.Command {
 			if err != nil {
 				return err
 			}
-			labels, err := labelValue(cmd, false)
-			if err != nil {
-				return err
-			}
-			at, err := timeOption(cmd)
-			if err != nil {
-				return err
-			}
-			// before the hooks: a usage error must not follow their side effects
-			if err := checkHostFlag(cmd); err != nil {
-				return err
-			}
-			b := backupProfile(cmd, lp).Backup
-
-			return withHooks(ctx, lp, "backup", func(ctx context.Context) error {
-				e, repo, err := openDocker(ctx, cmd)
-				if err != nil {
-					return err
-				}
-				defer repo.Close()
-				defer e.Close()
-
-				host, err := dockerSeriesHost(ctx, cmd, e.Client().DaemonName)
-				if err != nil {
-					return fmt.Errorf("docker backup %s: %w", volume, err)
-				}
-				p := printer(cmd)
-				pr := startProgress(p, "backup volume "+volume)
-				// --label adds to the profile's labels, a key in both takes the flag's value
-				snap, err := e.BackupVolume(ctx, volume, append(at,
-					ark.WithTags(b.Tags...),
-					ark.WithComment(b.Comment),
-					ark.WithHost(host),
-					ark.WithParent(ark.SnapshotID(cmd.String("parent"))),
-					ark.WithLabels(b.Labels),
-					ark.WithLabels(labels),
-				)...)
-				if err != nil {
-					pr.Fail()
-					return fmt.Errorf("docker backup %s: %w", volume, err)
-				}
-				pr.Done(out.BackupRows(snap)...)
-
-				if p.Mode().JSON {
-					return p.JSON(out.NewSnapshot(snap))
-				}
-				p.Result("snapshot", string(snap.ID))
-				return nil
-			})
+			return runVolumeBackup(ctx, cmd, lp, volume, backupProfile(cmd, lp).Backup)
 		},
 	}
+}
+
+// runVolumeBackup backs up volume with the tags, comment, labels and stop
+// settings of b and the remaining flags of cmd; a cmd without them, ark
+// profile backup, takes b alone. The backup hooks of lp run around it.
+func runVolumeBackup(
+	ctx context.Context,
+	cmd *cli.Command,
+	lp *loadedProfile,
+	volume string,
+	b arkprofile.Backup,
+) error {
+	labels, err := labelValue(cmd, false)
+	if err != nil {
+		return err
+	}
+	at, err := timeOption(cmd)
+	if err != nil {
+		return err
+	}
+	// before the hooks: a usage error must not follow their side effects
+	if err := checkHostFlag(cmd); err != nil {
+		return err
+	}
+
+	return withHooks(ctx, lp, "backup", func(ctx context.Context) error {
+		e, repo, err := openDocker(ctx, cmd, stopOptions(cmd, b))
+		if err != nil {
+			return err
+		}
+		defer repo.Close()
+		defer e.Close()
+
+		host, err := dockerSeriesHost(ctx, cmd, e.Client().DaemonName)
+		if err != nil {
+			return fmt.Errorf("docker backup %s: %w", volume, err)
+		}
+		p := printer(cmd)
+		pr := startProgress(p, "backup volume "+volume)
+		// --label adds to the profile's labels, a key in both takes the flag's value
+		snap, err := e.BackupVolume(ctx, volume, append(at,
+			ark.WithTags(b.Tags...),
+			ark.WithComment(b.Comment),
+			ark.WithHost(host),
+			ark.WithParent(ark.SnapshotID(cmd.String("parent"))),
+			ark.WithLabels(b.Labels),
+			ark.WithLabels(labels),
+		)...)
+		if err != nil {
+			pr.Fail()
+			return fmt.Errorf("docker backup %s: %w", volume, err)
+		}
+		pr.Done(out.BackupRows(snap)...)
+
+		if p.Mode().JSON {
+			return p.JSON(out.NewSnapshot(snap))
+		}
+		p.Result("snapshot", string(snap.ID))
+		return nil
+	})
 }
 
 func dockerRestoreCommand() *cli.Command {
@@ -385,7 +425,7 @@ func dockerRestoreCommand() *cli.Command {
 			id, volume := ark.SnapshotID(cmd.Args().Get(0)), cmd.Args().Get(1)
 			paths := restorePaths(cmd.StringSlice("path"))
 
-			e, repo, err := openDocker(ctx, cmd)
+			e, repo, err := openDocker(ctx, cmd, stopOptions(cmd, arkprofile.Backup{}))
 			if err != nil {
 				return err
 			}
@@ -484,8 +524,8 @@ func backupVolume(cmd *cli.Command, lp *loadedProfile) (string, error) {
 		return arg, nil
 	}
 	if pathProfile(lp) {
-		return "", exitcode.Usagef("profile %s backs up a path, not a docker volume, use ark backup %s",
-			lp.Name, profileArg(cmd))
+		return "", exitcode.Usagef("profile %s backs up a path, not a docker volume, use %s or ark backup %s",
+			lp.Name, profileBackupCommand(cmd), profileArg(cmd))
 	}
 	switch {
 	case lp.Backup.Volume == "" && arg == "":

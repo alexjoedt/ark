@@ -132,6 +132,15 @@ func profileArg(cmd *cli.Command) string {
 	return "-f " + cmd.Root().String("profile-file")
 }
 
+// profileBackupCommand is the ark profile backup run of the profile -P or -f
+// named, for a message that names the command to run instead.
+func profileBackupCommand(cmd *cli.Command) string {
+	if name := cmd.Root().String("profile"); name != "" {
+		return "ark profile backup " + name
+	}
+	return "ark profile backup -f " + cmd.Root().String("profile-file")
+}
+
 // profileDir is $XDG_CONFIG_HOME/ark/profiles, else ~/.config/ark/profiles,
 // on every OS.
 func profileDir() (string, error) {

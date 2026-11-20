@@ -1,6 +1,6 @@
 # 0018: Profile files and the arkprofile package
 
-Status: accepted
+Status: partly superseded by 0030
 Date: 2026-11-15
 
 ## Context

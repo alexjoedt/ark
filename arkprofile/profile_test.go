@@ -221,6 +221,16 @@ func TestDecodeRejects(t *testing.T) {
 			"backup:\n  volume: v\n  <<: {exclude-file: [x]}\n",
 			"line 2: backup.volume: excludes backup.exclude-file at line 3",
 		},
+		{
+			"no-stop beside a path",
+			"backup:\n  path: /p\n  no-stop: true\n",
+			"line 3: backup.no-stop: excludes backup.path at line 2",
+		},
+		{
+			"stop-timeout beside a source",
+			"backup:\n  source: s\n  stop-timeout: 1m\n",
+			"line 3: backup.stop-timeout: excludes backup.source at line 2",
+		},
 		{"wrong kind", "concurrency: three\n", "line 1: concurrency: want a whole number"},
 		{
 			"keep count not a number",
@@ -323,6 +333,8 @@ func TestValidate(t *testing.T) {
 		{"slash", func(p *arkprofile.Profile) { p.Name = "a/b" }},
 		{"negative concurrency", func(p *arkprofile.Profile) { p.Concurrency = -4 }},
 		{"negative lock-wait", func(p *arkprofile.Profile) { p.LockWait = -time.Second }},
+		{"negative stop-timeout", func(p *arkprofile.Profile) { p.Backup.StopTimeout = -time.Second }},
+		{"no-stop beside a path", func(p *arkprofile.Profile) { p.Backup.NoStop = true }},
 		{"negative keep-daily", func(p *arkprofile.Profile) { p.Forget.KeepDaily = -2 }},
 		{"negative keep-yearly", func(p *arkprofile.Profile) { p.Forget.KeepYearly = -7 }},
 		{"negative keep-within", func(p *arkprofile.Profile) { p.Forget.KeepWithin = ark.Within{Days: -1} }},
@@ -389,6 +401,9 @@ func TestValidateAcceptsVolumeProfiles(t *testing.T) {
 		{Name: "db", DockerHost: "unix:///run/docker.sock", Backup: arkprofile.Backup{Volume: "pgdata"}},
 		{Name: "db", DockerHost: "npipe:////./pipe/docker_engine", Backup: arkprofile.Backup{Volume: "pgdata"}},
 		{Name: "db", DockerHost: "ssh://admin@db1", Backup: arkprofile.Backup{Volume: "pgdata", Host: "db1"}},
+		{Name: "db", Backup: arkprofile.Backup{Volume: "pgdata", NoStop: true, StopTimeout: time.Minute}},
+		// a profile naming neither may still set how a volume argument stops
+		{Name: "db", Backup: arkprofile.Backup{StopTimeout: time.Minute}},
 		// docker-host only names the host of a volume backup
 		{Name: "db", DockerHost: "tcp://db1:2375", Backup: arkprofile.Backup{Path: "/data"}},
 	} {

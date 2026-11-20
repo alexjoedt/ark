@@ -1,7 +1,7 @@
 # Commands
 
-Every command takes the [global flags](index.md#global-flags). All but `ark profile` and
-`ark version` need a repository and a password as described in [CLI](index.md);
+Every command takes the [global flags](index.md#global-flags). All but `ark profile list`,
+`ark profile show` and `ark version` need a repository and a password as described in [CLI](index.md);
 `ark docker volumes` needs them only when a repository is configured. A snapshot `<id>` is the full
 id or a unique prefix of it.
 `ark <command> --help` lists every flag.
@@ -42,7 +42,7 @@ ark repair index            # after check or prune report a lost or damaged inde
 | [`unlock`](#unlock) | remove stale repository locks |
 | [`docker`](#docker) | list, back up and restore Docker volumes |
 | [`key passwd`](#key-passwd) | change the repository password |
-| [`profile`](#profile) | list profiles and show their effective values |
+| [`profile`](#profile) | list profiles, show their effective values and run their backup |
 | `version` | print version information |
 
 ## init
@@ -402,10 +402,11 @@ ark docker restore <id> postgres_copy  # or into another one, created if missing
 
 With `-P NAME` (or `-f FILE`) of a profile with `backup.volume`, `ark docker backup` takes no volume
 argument: it backs up `backup.volume` on the profile's `docker-host`, with the profile's tags, labels,
-comment and `backup.host`, flags winning as for `ark backup`, and runs the profile's backup hooks
-around it. A volume argument other than `backup.volume` is a usage error, and so are
-`ark docker backup -P` on a profile with `backup.path` or `backup.source` and `ark backup -P` on a
-volume profile, which points to `ark docker backup -P`. `ark docker restore -P NAME <id>` restores
+comment, `backup.host`, `backup.no-stop` and `backup.stop-timeout`, flags winning as for
+`ark backup`, and runs the profile's backup hooks around it. A volume argument other than
+`backup.volume` is a usage error, and so are `ark docker backup -P` on a profile with `backup.path` or
+`backup.source`, which points to `ark profile backup`, and `ark backup -P` on a volume profile, which
+points to `ark profile backup` and `ark docker backup -P`. `ark docker restore -P NAME <id>` restores
 into `backup.volume` unless a volume is given, and refuses a snapshot of another volume without one;
 `<id>` stays required.
 
@@ -433,6 +434,9 @@ it before still can.
 
 ## profile
 
-`ark profile list` prints name, repository and backup path of every profile in the profile
-directory. `ark profile show NAME` (or `ark profile show -f FILE`) prints every value a command would
-use with the profile and where it comes from. See [Profiles](profiles.md).
+`ark profile list` prints name, repository and backup path, or `volume NAME`, of every profile in
+the profile directory; `--json` gives `path` or `volume`. `ark profile show NAME` (or
+`ark profile show -f FILE`) prints every value a command would use with the profile and where it
+comes from. `ark profile backup NAME` (or `-f FILE`) backs up what the profile names with the
+profile's values alone: a `backup.path` as `ark backup -P NAME` does, a `backup.volume` as
+`ark docker backup -P NAME` does. It takes no backup flags. See [Profiles](profiles.md).

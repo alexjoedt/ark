@@ -56,68 +56,83 @@ func backupCommand() *cli.Command {
 			}
 			lp := profileFrom(ctx)
 			if lp != nil && lp.Backup.Volume != "" {
-				return exitcode.Usagef("profile %s backs up docker volume %s, use ark docker backup %s",
-					lp.Name, lp.Backup.Volume, profileArg(cmd))
+				return exitcode.Usagef("profile %s backs up docker volume %s, use %s or ark docker backup %s",
+					lp.Name, lp.Backup.Volume, profileBackupCommand(cmd), profileArg(cmd))
 			}
 			eff := backupProfile(cmd, lp)
 			if cmd.NArg() > 1 || eff.Backup.Path == "" {
 				return exitcode.Usagef("usage: ark backup [options] <path>, or -P NAME with a backup.path")
 			}
-			dir := eff.Backup.Path
 			if err := checkOtherPath(cmd, lp); err != nil {
 				return err
 			}
-			return withHooks(ctx, lp, "backup", func(ctx context.Context) error {
-				src, err := eff.Source()
-				if errors.Is(err, path.ErrBadPattern) {
-					return exitcode.Usagef("backup: %w", err)
-				}
-				if err != nil {
-					return fmt.Errorf("backup %s: %w", dir, err)
-				}
-
-				repo, err := openRepo(ctx, cmd)
-				if err != nil {
-					return err
-				}
-				defer repo.Close()
-
-				p := printer(cmd)
-				// --label adds to the profile's labels, a key in both takes the flag's value
-				bopts := append(
-					eff.BackupOptions(),
-					ark.WithParent(ark.SnapshotID(cmd.String("parent"))),
-					ark.WithLabels(labels),
-				)
-				bopts = append(bopts, at...)
-				// an empty --host or --comment clears the profile's value,
-				// which BackupOptions would leave out or default
-				if cmd.IsSet("host") {
-					bopts = append(bopts, ark.WithHost(cmd.String("host")))
-				}
-				if cmd.IsSet("comment") {
-					bopts = append(bopts, ark.WithComment(cmd.String("comment")))
-				}
-				// The counting scan only feeds the live display's totals and ETA.
-				if p.Live() {
-					bopts = append(bopts, ark.WithBackupScan())
-				}
-				pr := startProgress(p, "backup "+src.Meta().Name)
-				snap, err := repo.Backup(ctx, src, bopts...)
-				if err != nil {
-					pr.Fail()
-					return fmt.Errorf("backup %s: %w", dir, err)
-				}
-				pr.Done(out.BackupRows(snap)...)
-
-				if p.Mode().JSON {
-					return p.JSON(out.NewSnapshot(snap))
-				}
-				p.Result("snapshot", string(snap.ID))
-				return nil
-			})
+			return runFileBackup(ctx, cmd, lp, eff, labels, at)
 		},
 	}
+}
+
+// runFileBackup backs up eff.Backup.Path with labels and at added by the
+// caller and the remaining flags of cmd over the profile; a cmd without them,
+// ark profile backup, takes the profile alone. The backup hooks of lp run
+// around it.
+func runFileBackup(
+	ctx context.Context,
+	cmd *cli.Command,
+	lp *loadedProfile,
+	eff arkprofile.Profile,
+	labels map[string]string,
+	at []ark.BackupOption,
+) error {
+	dir := eff.Backup.Path
+	return withHooks(ctx, lp, "backup", func(ctx context.Context) error {
+		src, err := eff.Source()
+		if errors.Is(err, path.ErrBadPattern) {
+			return exitcode.Usagef("backup: %w", err)
+		}
+		if err != nil {
+			return fmt.Errorf("backup %s: %w", dir, err)
+		}
+
+		repo, err := openRepo(ctx, cmd)
+		if err != nil {
+			return err
+		}
+		defer repo.Close()
+
+		p := printer(cmd)
+		// --label adds to the profile's labels, a key in both takes the flag's value
+		bopts := append(
+			eff.BackupOptions(),
+			ark.WithParent(ark.SnapshotID(cmd.String("parent"))),
+			ark.WithLabels(labels),
+		)
+		bopts = append(bopts, at...)
+		// an empty --host or --comment clears the profile's value,
+		// which BackupOptions would leave out or default
+		if cmd.IsSet("host") {
+			bopts = append(bopts, ark.WithHost(cmd.String("host")))
+		}
+		if cmd.IsSet("comment") {
+			bopts = append(bopts, ark.WithComment(cmd.String("comment")))
+		}
+		// The counting scan only feeds the live display's totals and ETA.
+		if p.Live() {
+			bopts = append(bopts, ark.WithBackupScan())
+		}
+		pr := startProgress(p, "backup "+src.Meta().Name)
+		snap, err := repo.Backup(ctx, src, bopts...)
+		if err != nil {
+			pr.Fail()
+			return fmt.Errorf("backup %s: %w", dir, err)
+		}
+		pr.Done(out.BackupRows(snap)...)
+
+		if p.Mode().JSON {
+			return p.JSON(out.NewSnapshot(snap))
+		}
+		p.Result("snapshot", string(snap.ID))
+		return nil
+	})
 }
 
 // backupProfile is the profile's backup section with every flag given on the

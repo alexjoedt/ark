@@ -1,10 +1,15 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/alexjoedt/ark/arkprofile"
+	"github.com/urfave/cli/v3"
 )
 
 // TestDockerProfileWithoutDaemon covers what -P resolves before the daemon
@@ -37,14 +42,26 @@ backup:
 		code int
 		want string
 	}{
-		{"backup of a volume profile", []string{"backup", "-P", "db"}, 2, "use ark docker backup -P db"},
+		{
+			"backup of a volume profile",
+			[]string{"backup", "-P", "db"},
+			2,
+			"use ark profile backup db or ark docker backup -P db",
+		},
+		{"profile backup of a volume profile", []string{"profile", "backup", "db"}, 1, "docker backup pgdata"},
+		{"profile backup on the profile's daemon", []string{"profile", "backup", "db"}, 1, "127.0.0.1:3"},
 		{
 			"backup of a volume profile with a path",
 			[]string{"backup", "-P", "db", t.TempDir()},
 			2,
 			"ark docker backup -P db",
 		},
-		{"docker backup of a path profile", []string{"docker", "backup", "-P", "files"}, 2, "use ark backup -P files"},
+		{
+			"docker backup of a path profile",
+			[]string{"docker", "backup", "-P", "files"},
+			2,
+			"use ark profile backup files or ark backup -P files",
+		},
 		{
 			"docker backup of a source profile",
 			[]string{"docker", "backup", "-P", "named", "vol"},
@@ -98,12 +115,50 @@ backup:
 		})
 	}
 
-	// only the three db runs that got past resolution ran the hooks
+	// only the five db runs that got past resolution ran the hooks
 	b, err := os.ReadFile(marker)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(b), strings.Repeat("before\nfailed\n", 3); got != want {
+	if got, want := string(b), strings.Repeat("before\nfailed\n", 5); got != want {
 		t.Fatalf("hook output %q, want %q", got, want)
+	}
+}
+
+func TestStopSettings(t *testing.T) {
+	profile := arkprofile.Backup{NoStop: true, StopTimeout: time.Minute}
+	tests := []struct {
+		name    string
+		args    []string
+		b       arkprofile.Backup
+		timeout time.Duration
+		noStop  bool
+	}{
+		{"defaults", nil, arkprofile.Backup{}, 0, false},
+		{"profile", nil, profile, time.Minute, true},
+		{
+			"flags over the profile",
+			[]string{"--no-stop=false", "--stop-timeout", "5s"},
+			profile,
+			5 * time.Second,
+			false,
+		},
+		{"flags alone", []string{"--no-stop"}, arkprofile.Backup{}, 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var timeout time.Duration
+			var noStop bool
+			cmd := &cli.Command{Name: "x", Flags: stopFlags(), Action: func(_ context.Context, c *cli.Command) error {
+				timeout, noStop = stopSettings(c, tt.b)
+				return nil
+			}}
+			if err := cmd.Run(t.Context(), append([]string{"x"}, tt.args...)); err != nil {
+				t.Fatal(err)
+			}
+			if timeout != tt.timeout || noStop != tt.noStop {
+				t.Fatalf("stopSettings = %v, %v, want %v, %v", timeout, noStop, tt.timeout, tt.noStop)
+			}
+		})
 	}
 }

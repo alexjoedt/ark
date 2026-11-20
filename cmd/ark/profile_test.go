@@ -468,12 +468,14 @@ func TestProfileShowSources(t *testing.T) {
 			}
 		}
 	}
-	writeProfile(t, dir, "db", "docker-host: unix:///run/docker.sock\nbackup:\n  volume: pgdata\n")
+	writeProfile(t, dir, "db", "docker-host: unix:///run/docker.sock\nbackup:\n  volume: pgdata\n  stop-timeout: 1m\n")
 	vol := show("profile", "show", "db")
 	for k, w := range map[string][2]string{
-		"docker-host":   {"unix:///run/docker.sock", "profile"},
-		"backup.volume": {"pgdata", "profile"},
-		"backup.source": {"", "default"},
+		"docker-host":         {"unix:///run/docker.sock", "profile"},
+		"backup.volume":       {"pgdata", "profile"},
+		"backup.source":       {"", "default"},
+		"backup.no-stop":      {"false", "default"},
+		"backup.stop-timeout": {"1m0s", "profile"},
 	} {
 		if vol[k] != w {
 			t.Errorf("volume profile: %s = %v, want %v", k, vol[k], w)
@@ -504,7 +506,7 @@ func TestProfileShowSources(t *testing.T) {
 
 func TestProfileList(t *testing.T) {
 	dir := profileDirFor(t)
-	type entry struct{ Name, Repo, Path, Error string }
+	type entry struct{ Name, Repo, Path, Volume, Error string }
 	list := func(wantCode int) []entry {
 		t.Helper()
 		code, out := runCapture(t, "--json", "profile", "list")
@@ -533,13 +535,80 @@ func TestProfileList(t *testing.T) {
 	if code, out := runCapture(t, "profile", "list"); code != 0 || !strings.Contains(out, "/srv/ark") {
 		t.Fatalf("table output: exit %d %q", code, out)
 	}
+	writeProfile(t, dir, "db", "repo: /srv/ark\nbackup:\n  volume: pgdata\n")
+	if es := list(0); len(es) != 3 || es[1] != (entry{Name: "db", Repo: "/srv/ark", Volume: "pgdata"}) {
+		t.Fatalf("list %+v, want db with its volume and no path", es)
+	}
+	_, out := runCapture(t, "--json", "profile", "list")
+	var raw []map[string]any
+	if err := json.Unmarshal([]byte(out), &raw); err != nil || len(raw) != 3 {
+		t.Fatalf("json list %q: %v", out, err)
+	}
+	if _, ok := raw[1]["path"]; ok {
+		t.Errorf("volume profile lists a path: %v", raw[1])
+	}
+	if _, ok := raw[2]["volume"]; ok {
+		t.Errorf("path profile lists a volume: %v", raw[2])
+	}
+	if code, out := runCapture(t, "profile", "list"); code != 0 || !strings.Contains(out, "volume pgdata") {
+		t.Fatalf("table output of a volume profile: exit %d %q", code, out)
+	}
 	if code, out := runCapture(t, "-P", "bad", "profile", "list"); code != 0 || !strings.Contains(out, "/srv/ark") {
 		t.Fatalf("list with a broken -P: exit %d %q, want the list", code, out)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "old.yml"), []byte("repo: /x\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if es := list(0); len(es) != 3 || es[2].Name != "old.yml" || es[2].Error == "" {
+	if es := list(0); len(es) != 4 || es[3].Name != "old.yml" || es[3].Error == "" {
 		t.Fatalf("list %+v, want old.yml reported as ignored", es)
+	}
+}
+
+func TestProfileBackupCommand(t *testing.T) {
+	dir := profileDirFor(t)
+	repo, docs := initRepo(t), t.TempDir()
+	t.Setenv("ARK_REPOSITORY", "")
+	if err := os.WriteFile(filepath.Join(docs, "a.txt"), []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "hooks")
+	writeProfile(t, dir, "docs", "repo: "+repo+"\nbackup:\n  path: "+docs+
+		"\n  tag: [docs]\n  run-before: echo before >> "+marker+"\n")
+	writeProfile(t, dir, "plain", "repo: "+repo+"\n")
+	backup := func(args ...string) profileSnapshot {
+		t.Helper()
+		code, out := runCapture(t, append([]string{"--json"}, args...)...)
+		var s profileSnapshot
+		if code != 0 || json.Unmarshal([]byte(out), &s) != nil {
+			t.Fatalf("%v: exit %d %q", args, code, out)
+		}
+		return s
+	}
+	for _, args := range [][]string{
+		{"profile", "backup", "docs"},
+		{"-P", "docs", "profile", "backup"},
+		{"-f", filepath.Join(dir, "docs.yaml"), "profile", "backup"},
+	} {
+		if s := backup(args...); s.Name != docs || !slices.Equal(s.Tags, []string{"docs"}) {
+			t.Fatalf("%v: snapshot %+v, want name %s and tag docs", args, s, docs)
+		}
+	}
+	if b, err := os.ReadFile(marker); err != nil || string(b) != strings.Repeat("before\n", 3) {
+		t.Fatalf("hook output %q, %v, want three runs", b, err)
+	}
+
+	for _, tt := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"profile", "backup"}, "usage: ark profile backup NAME"},
+		{[]string{"profile", "backup", "docs", "plain"}, "usage: ark profile backup NAME"},
+		{[]string{"-P", "docs", "profile", "backup", "docs"}, "not both"},
+		{[]string{"profile", "backup", "plain"}, "names no backup.path or backup.volume"},
+		{[]string{"profile", "backup", "docs", "--tag", "x"}, "tag"},
+	} {
+		if code, _, stderr := runCaptureAll(t, tt.args...); code != 2 || !strings.Contains(stderr, tt.want) {
+			t.Errorf("%v: exit %d %q, want 2 and %q", tt.args, code, stderr, tt.want)
+		}
 	}
 }

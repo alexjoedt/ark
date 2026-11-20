@@ -14,8 +14,8 @@ A release archive holds the same binary. `ark version` (or `ark --version`) prin
 ## Repository
 
 Every command that opens a repository takes it from `--repo`, a profile's `repo` or
-`ARK_REPOSITORY`, in this order. There is no default path. `ark profile` and `ark version` need
-neither a repository nor a password; `ark docker volumes` opens one only when it is configured, to
+`ARK_REPOSITORY`, in this order. There is no default path. `ark profile list`, `ark profile show`
+and `ark version` need neither a repository nor a password; `ark docker volumes` opens one only when it is configured, to
 show the last snapshot of each volume.
 
 | Form | Backend |

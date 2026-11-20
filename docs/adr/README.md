@@ -32,7 +32,7 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0015 | [A marker makes unchanged backups see a lost data pack](0015-lost-pack-marker-for-unchanged-backups.md) | accepted | 2026-11-13 |
 | 0016 | [Drop the web UI](0016-drop-the-web-ui.md) | accepted | 2026-11-14 |
 | 0017 | [A counting scan beside the store](0017-counting-scan-beside-the-store.md) | accepted | 2026-11-14 |
-| 0018 | [Profile files and the arkprofile package](0018-profile-files-and-the-arkprofile-package.md) | accepted | 2026-11-15 |
+| 0018 | [Profile files and the arkprofile package](0018-profile-files-and-the-arkprofile-package.md) | partly superseded by 0030 | 2026-11-15 |
 | 0019 | [Find and the arkfind package](0019-find-and-the-arkfind-package.md) | accepted | 2026-11-15 |
 | 0020 | [Read session with an io/fs view per snapshot](0020-read-session-with-an-io-fs-view.md) | accepted | 2026-11-15 |
 | 0021 | [One series key: source type, source name and host](0021-one-series-key-type-source-host.md) | accepted | 2026-11-16 |
@@ -44,3 +44,4 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0027 | [Keep-within takes restic's calendar durations](0027-keep-within-takes-calendar-durations.md) | partly superseded by 0028 | 2026-11-17 |
 | 0028 | [Forget keeps future-dated snapshots out of its rules](0028-forget-keeps-future-snapshots-out-of-its-rules.md) | accepted | 2026-11-18 |
 | 0029 | [Volume profiles without the Docker SDK](0029-volume-profiles-without-the-docker-sdk.md) | accepted | 2026-11-19 |
+| 0030 | [ark profile backup runs the backup a profile names](0030-profile-backup-runs-the-backup-a-profile-names.md) | accepted | 2026-11-20 |
