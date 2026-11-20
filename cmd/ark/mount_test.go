@@ -439,13 +439,13 @@ func TestMountAttributes(t *testing.T) {
 		}
 	}
 	for _, dir := range []string{mnt, filepath.Join(mnt, "ids"), snapDir} {
-		var s syscall.Stat_t
-		if err := syscall.Stat(dir, &s); err != nil {
+		fi, err := os.Stat(dir)
+		if err != nil {
 			t.Fatal(err)
 		}
-		mtime := time.Unix(s.Mtim.Unix())
-		if d := mtime.Sub(snap.CreatedAt); d < -time.Second || d > time.Second || s.Nlink != 1 {
-			t.Errorf("%s: mtime %v nlink %d, want the snapshot time %v and 1", dir, mtime, s.Nlink, snap.CreatedAt)
+		nlink := fi.Sys().(*syscall.Stat_t).Nlink
+		if d := fi.ModTime().Sub(snap.CreatedAt); d < -time.Second || d > time.Second || nlink != 1 {
+			t.Errorf("%s: mtime %v nlink %d, want the snapshot time %v and 1", dir, fi.ModTime(), nlink, snap.CreatedAt)
 		}
 	}
 }
