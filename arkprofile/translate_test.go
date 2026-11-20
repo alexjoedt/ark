@@ -250,6 +250,9 @@ func TestFilterReportsAnUnresolvablePath(t *testing.T) {
 	if err := os.Remove(gone); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Getwd(); err == nil {
+		t.Skip("the OS still resolves a removed working directory")
+	}
 	p := &arkprofile.Profile{Backup: arkprofile.Backup{Path: "docs"}}
 	if f, err := p.Filter(); err == nil {
 		t.Fatalf("filter = %+v, want an error", f)
