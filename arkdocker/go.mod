@@ -3,7 +3,7 @@ module github.com/alexjoedt/ark/arkdocker
 go 1.27.4
 
 require (
-	github.com/alexjoedt/ark v1.0.0
+	github.com/alexjoedt/ark v0.4.1
 	github.com/containerd/errdefs v1.0.0
 	github.com/distribution/reference v0.6.0
 	github.com/moby/moby/api v1.57.0
@@ -19,7 +19,7 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/klauspost/compress v1.20.4 // indirect
+	github.com/klauspost/compress v1.20.5 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
