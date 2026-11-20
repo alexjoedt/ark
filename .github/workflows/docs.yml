@@ -45,7 +45,7 @@ jobs:
         working-directory: docs
         run: npm run docs:build
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         if: github.event_name == 'workflow_run'
         with:
           path: docs/.vitepress/dist
