@@ -3,6 +3,7 @@ package ark_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -33,7 +34,11 @@ func rawTree(t *testing.T) (string, bool) {
 	root := t.TempDir()
 	write := func(name, body string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
+		err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644)
+		if errors.Is(err, unix.EILSEQ) || errors.Is(err, unix.EINVAL) {
+			t.Skipf("filesystem refuses names that are not valid UTF-8: %v", err)
+		}
+		if err != nil {
 			t.Fatalf("write %q: %v", name, err)
 		}
 	}
@@ -48,6 +53,9 @@ func rawTree(t *testing.T) (string, bool) {
 	}
 	xattrOK := unix.Setxattr(filepath.Join(root, rawE9), rawXattr, []byte("v"), 0) == nil
 	if !xattrOK {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("user xattrs unsupported in CI, the xattr name would go unchecked")
+		}
 		t.Log("user xattrs unsupported here, the xattr name goes unchecked")
 	}
 	return root, xattrOK
@@ -56,8 +64,8 @@ func rawTree(t *testing.T) (string, bool) {
 func checkRawTree(t *testing.T, dst string, xattrOK bool) {
 	t.Helper()
 	for name, want := range map[string]string{
-		rawE9:                       "e9",
-		rawE8:                       "e8",
+		rawE9:                        "e9",
+		rawE8:                        "e8",
 		filepath.Join(rawDir, rawE9): "inner",
 	} {
 		got, err := os.ReadFile(filepath.Join(dst, name))
@@ -75,8 +83,10 @@ func checkRawTree(t *testing.T, dst string, xattrOK bool) {
 	if xattrOK {
 		var buf [8]byte
 		n, err := unix.Getxattr(filepath.Join(dst, rawE9), rawXattr, buf[:])
-		if err != nil || string(buf[:n]) != "v" {
-			t.Errorf("restored xattr %q = %q (%v), want %q", rawXattr, buf[:n], err, "v")
+		if err != nil {
+			t.Errorf("restored xattr %q: %v", rawXattr, err)
+		} else if string(buf[:n]) != "v" {
+			t.Errorf("restored xattr %q = %q, want %q", rawXattr, buf[:n], "v")
 		}
 	}
 }

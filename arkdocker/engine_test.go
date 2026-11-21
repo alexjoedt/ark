@@ -88,9 +88,10 @@ func volumeListing(t *testing.T, c *Client, volume string) string {
 // container logs replace such bytes, so the listing travels as hex.
 func rawVolumeListing(t *testing.T, c *Client, volume string) string {
 	t.Helper()
-	out, err := hex.DecodeString(runListing(t, c, volume, "{ "+listing+"; } | od -An -tx1 -v | tr -d ' \\n'"))
+	raw := runListing(t, c, volume, "{ "+listing+"; } | od -An -tx1 -v | tr -d ' \\n'")
+	out, err := hex.DecodeString(raw)
 	if err != nil {
-		t.Fatalf("decode listing: %v", err)
+		t.Fatalf("decode listing: %v, output %q", err, raw)
 	}
 	return string(out)
 }
