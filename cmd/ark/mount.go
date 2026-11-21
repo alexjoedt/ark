@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"maps"
+	"math"
 	"os"
 	"os/signal"
 	"path"
@@ -696,7 +697,7 @@ func fillAttr(a *fuse.Attr, info fs.FileInfo, ino uint64) {
 		a.Uid = uint32(max(fi.UID, 0))
 		a.Gid = uint32(max(fi.GID, 0))
 		if info.Mode()&fs.ModeDevice != 0 {
-			a.Rdev = uint32(unix.Mkdev(fi.DevMajor, fi.DevMinor))
+			a.Rdev = rdev(fi.DevMajor, fi.DevMinor)
 		}
 		if !fi.ChangeTime.IsZero() {
 			a.SetTimes(nil, nil, &fi.ChangeTime)
@@ -705,6 +706,17 @@ func fillAttr(a *fuse.Attr, info fs.FileInfo, ino uint64) {
 }
 
 // fileMode converts an io/fs mode to the stat mode FUSE expects.
+// rdev is the 32-bit device number FUSE carries, 0 for numbers it cannot
+// hold (on Linux a major above 4095 or a minor above 20 bits) rather than
+// another device's.
+func rdev(major, minor uint32) uint32 {
+	dev := unix.Mkdev(major, minor)
+	if dev > math.MaxUint32 || unix.Major(dev) != major || unix.Minor(dev) != minor {
+		return 0
+	}
+	return uint32(dev)
+}
+
 func fileMode(m fs.FileMode) uint32 {
 	mode := ark.UnixMode(m)
 	switch {

@@ -90,8 +90,11 @@ they wait that long first.
 ## Details: special files
 
 A fifo or a device node of a snapshot shows up with its type and, for a device, its major and
-minor number. It has no content: a read fails. ark mounts with `nodev` on Linux, so a device node
-never opens the device of your machine.
+minor number. A device number the kernel can't hold (on Linux a major above 4095 or a minor above
+20 bits) shows as 0, 0. ark mounts with `nodev` on Linux, so opening a device node fails and never
+reaches the device of your machine. Opening a fifo blocks: the kernel opens it as a pipe that
+nothing writes to. A tool that reads every file, such as `diff -r` or `sha256sum`, hangs on one;
+leave fifos out, for example with `find -type f`.
 
 ## Details: directory names
 

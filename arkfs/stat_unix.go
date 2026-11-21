@@ -5,6 +5,7 @@ package arkfs
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"syscall"
 	"time"
@@ -79,7 +80,13 @@ func makeNode(path string, entry ark.FileInfo) error {
 		if entry.Type == ark.FileTypeCharDevice {
 			kind = unix.S_IFCHR
 		}
-		err = unix.Mknod(path, kind|perm, int(unix.Mkdev(entry.DevMajor, entry.DevMinor)))
+		dev := unix.Mkdev(entry.DevMajor, entry.DevMinor)
+		// mknod takes a 32-bit number: a larger one would make another device.
+		if dev > math.MaxUint32 || unix.Major(dev) != entry.DevMajor || unix.Minor(dev) != entry.DevMinor {
+			return fmt.Errorf("arkfs: create the %s %s: device number %d, %d does not fit this system (%w)",
+				entry.Type, path, entry.DevMajor, entry.DevMinor, ark.ErrEntrySkipped)
+		}
+		err = unix.Mknod(path, kind|perm, int(dev))
 	}
 	switch {
 	case err == nil:

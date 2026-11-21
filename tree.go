@@ -137,25 +137,41 @@ func marshalTreeNode(dir string, children []fileEntry, hashes map[string]string)
 }
 
 // sourcePaths holds the path of every entry a backup or an import took from
-// its source. add refuses, before any data of the entry is read and stored,
-// what the tree could not hold at the end: a path a second time and a link
-// without a target. An entry no node gets, the root and a type that is
-// skipped, is not looked at.
-type sourcePaths map[string]struct{}
+// its source, and the entry itself for a symlink, a fifo or a device node. add refuses,
+// before any data of the entry is read and stored, what the tree could not
+// hold at the end: a path a second time and a link without a target. An entry
+// no node gets, the root and a type that is skipped, is not looked at.
+type sourcePaths map[string]*FileInfo
 
-func (s sourcePaths) add(fi FileInfo) error {
+// add records fi and returns the entry to store for it. A hardlink to a
+// symlink, a fifo or a device node comes back as a copy of that entry under
+// its own path: a hardlink in the tree names a regular file.
+func (s sourcePaths) add(fi FileInfo) (FileInfo, error) {
 	norm := normEntryPath(fi.Path)
 	if norm == "" || !storedType(fi.Type) {
-		return nil
+		return fi, nil
 	}
 	if _, ok := s[norm]; ok {
-		return fmt.Errorf("the source yielded %q more than once", norm)
+		return fi, fmt.Errorf("the source yielded %q more than once", norm)
 	}
-	s[norm] = struct{}{}
 	if (fi.Type == FileTypeSymlink || fi.Type == FileTypeHardlink) && fi.LinkDest == "" {
-		return fmt.Errorf("the source yielded the link %q without a target", norm)
+		return fi, fmt.Errorf("the source yielded the link %q without a target", norm)
 	}
-	return nil
+	if fi.Type == FileTypeHardlink {
+		if target := s[normEntryPath(fi.LinkDest)]; target != nil {
+			path := fi.Path
+			fi = *target
+			fi.Path = path
+		}
+	}
+	var special *FileInfo
+	switch fi.Type {
+	case FileTypeSymlink, FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice:
+		special = &fi
+	case FileTypeRegular, FileTypeDirectory, FileTypeHardlink, FileTypeUnsupported:
+	}
+	s[norm] = special
+	return fi, nil
 }
 
 // storedType reports whether a tree stores an entry of type t; a backup drops

@@ -441,3 +441,80 @@ func TestReaderFSListsSpecialFiles(t *testing.T) {
 		t.Errorf("not listed: %v", want)
 	}
 }
+
+// linkedSpecialSource yields a device node, a fifo and a symlink, each with a
+// hardlink to it, as a docker volume tar can.
+type linkedSpecialSource struct{}
+
+func (linkedSpecialSource) Meta() ark.SourceMeta {
+	return ark.SourceMeta{Name: "linked", Type: ark.SourceTypeFile}
+}
+
+func (linkedSpecialSource) Walk(_ context.Context, fn ark.WalkFunc) error {
+	for _, fi := range []ark.FileInfo{
+		{Path: "null", Mode: 0o666, Type: ark.FileTypeCharDevice, DevMajor: 1, DevMinor: 3},
+		{Path: "pipe", Mode: 0o640, Type: ark.FileTypeFifo},
+		{Path: "null2", Type: ark.FileTypeHardlink, LinkDest: "null"},
+		{Path: "pipe2", Type: ark.FileTypeHardlink, LinkDest: "./pipe"},
+		{Path: "sym", Mode: 0o777, Type: ark.FileTypeSymlink, LinkDest: "null"},
+		{Path: "sym2", Type: ark.FileTypeHardlink, LinkDest: "sym"},
+	} {
+		if err := fn(fi, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TestHardlinkToASpecialFileIsStoredAsACopy: a hardlink names a regular file
+// in the tree, so a link to a device node, a fifo or a symlink is stored as a
+// copy of it.
+func TestHardlinkToASpecialFileIsStoredAsACopy(t *testing.T) {
+	repo := chunkyRepo(t, arkmem.New())
+	snap, err := repo.Backup(context.Background(), linkedSpecialSource{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rd, err := repo.OpenReader(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rd.Close() })
+	fsys, err := rd.FS(snap.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := fsys.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	types := map[string]fs.FileMode{}
+	for _, e := range entries {
+		types[e.Name()] = e.Type()
+	}
+	for name, want := range map[string]fs.FileMode{
+		"null2": fs.ModeDevice | fs.ModeCharDevice,
+		"pipe2": fs.ModeNamedPipe,
+	} {
+		if types[name] != want {
+			t.Errorf("ReadDir %s: type %v, want %v", name, types[name], want)
+		}
+		info, err := fsys.Stat(name)
+		if err != nil {
+			t.Fatalf("Stat %s: %v", name, err)
+		}
+		if fi, _ := info.Sys().(ark.FileInfo); info.Mode().Type() != want || fi.Path != name || fi.LinkDest != "" {
+			t.Errorf("Stat %s: %v, %+v", name, info.Mode(), fi)
+		}
+		if _, err := fsys.Open(name); !errors.Is(err, fs.ErrInvalid) {
+			t.Errorf("Open(%s) = %v, want fs.ErrInvalid", name, err)
+		}
+	}
+	fi, _ := mustStat(t, fsys, "null2").Sys().(ark.FileInfo)
+	if fi.DevMajor != 1 || fi.DevMinor != 3 || fi.Mode != 0o666 {
+		t.Errorf("null2: %+v", fi)
+	}
+	if dest, err := fsys.ReadLink("sym2"); err != nil || dest != "null" {
+		t.Errorf("ReadLink(sym2) = %q, %v", dest, err)
+	}
+}

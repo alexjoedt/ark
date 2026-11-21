@@ -294,7 +294,7 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader, session *p
 				stats.Skipped++
 				continue
 			}
-			if err := taken.add(fe.FileInfo); err != nil {
+			if fe.FileInfo, err = taken.add(fe.FileInfo); err != nil {
 				return nil, fmt.Errorf("import: %w", err)
 			}
 			switch fe.Type {

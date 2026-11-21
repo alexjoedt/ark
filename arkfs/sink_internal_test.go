@@ -2,6 +2,7 @@ package arkfs
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -90,5 +91,18 @@ func TestRefusedNode(t *testing.T) {
 		if got := refusedNode(tc.err); got != tc.want {
 			t.Errorf("refusedNode(%v) = %v, want %v", tc.err, got, tc.want)
 		}
+	}
+}
+
+// TestMakeNodeRefusesADeviceNumberMknodCannotTake: mknod would cut the
+// number to 32 bits and make another device.
+func TestMakeNodeRefusesADeviceNumberMknodCannotTake(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dev")
+	err := makeNode(path, ark.FileInfo{Type: ark.FileTypeCharDevice, Mode: 0o600, DevMajor: 5000, DevMinor: 1})
+	if !errors.Is(err, ark.ErrEntrySkipped) {
+		t.Fatalf("makeNode = %v, want ErrEntrySkipped", err)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Errorf("a node is on disk: %v", err)
 	}
 }

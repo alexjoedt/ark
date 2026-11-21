@@ -528,3 +528,12 @@ func TestMountListsSpecialFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestRdevRefusesANumberFUSECannotCarry(t *testing.T) {
+	if got, want := rdev(1, 3), uint32(unix.Mkdev(1, 3)); got != want || got == 0 {
+		t.Errorf("rdev(1, 3) = %#x, want %#x", got, want)
+	}
+	if got := rdev(5000, 1); got != 0 {
+		t.Errorf("rdev(5000, 1) = %#x, want 0", got)
+	}
+}

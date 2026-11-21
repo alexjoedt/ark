@@ -107,7 +107,8 @@ func (r *Repository) runBackup(
 
 	taken := sourcePaths{}
 	err = src.Walk(ctx, func(entry FileInfo, open func() (io.ReadCloser, error)) error {
-		if err := taken.add(entry); err != nil {
+		entry, err := taken.add(entry)
+		if err != nil {
 			return err
 		}
 		fe := fileEntry{FileInfo: entry}

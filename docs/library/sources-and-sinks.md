@@ -144,7 +144,8 @@ The complete program is
 ### Rules for a source
 
 - **Order.** Entries may come in any order. The one rule: a hardlink target comes before the
-  `ark.FileTypeHardlink` entries that name it.
+  `ark.FileTypeHardlink` entries that name it. A hardlink to a symlink, a fifo or a device node
+  is stored as a copy of that entry, since a hardlink in the tree names a regular file.
 - **The open function.** Pass `nil` for everything but a regular file. For a regular file, the
   function yields at most `Size` bytes and does no work until it's called.
 - **How often open is called.** At most once, and never when the parent snapshot already holds the
