@@ -3,9 +3,11 @@ package ark_test
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -18,8 +20,14 @@ import (
 	"github.com/alexjoedt/ark/arkmem"
 )
 
-// formatSealed is the format byte of a sealed object.
-const formatSealed = 0x02
+// The format bytes of a sealed object: a zstd frame, or the content as it is.
+const (
+	formatZstd = 0x02
+	formatRaw  = 0x03
+)
+
+// sealedFormat reports whether b is a format byte of a sealed object.
+func sealedFormat(b byte) bool { return b == formatZstd || b == formatRaw }
 
 // backupFixture initialises a repository in b and backs up a small tree of two
 // directories, three files and a symlink into it. It returns the open
@@ -177,8 +185,8 @@ func TestChunksAndTreesAreSealedUnderKeyedNames(t *testing.T) {
 		}
 		for _, name := range names {
 			obj := readBlob(t, b, repo, typ, name)
-			if obj[0] != formatSealed {
-				t.Errorf("%s/%s starts with 0x%02x, want 0x%02x", typ, name, obj[0], formatSealed)
+			if !sealedFormat(obj[0]) {
+				t.Errorf("%s/%s starts with 0x%02x, want a sealed format byte", typ, name, obj[0])
 			}
 			// The name is the keyed hash of the raw content, never its sha256.
 			data := openObject(t, repo, typ, name)
@@ -236,8 +244,8 @@ func TestTreeNodesLiveInTheTreesNamespace(t *testing.T) {
 	b := arkmem.New()
 	repo, id := backupFixture(t, b)
 
-	if stored := readObject(t, b, ark.SnapshotFile, string(id)); stored[0] != formatSealed {
-		t.Errorf("manifest starts with 0x%02x, want 0x%02x", stored[0], formatSealed)
+	if stored := readObject(t, b, ark.SnapshotFile, string(id)); !sealedFormat(stored[0]) {
+		t.Errorf("manifest starts with 0x%02x, want a sealed format byte", stored[0])
 	}
 	manifest := openObject(t, repo, ark.SnapshotFile, string(id))
 	var m struct {
@@ -307,6 +315,68 @@ func TestUnknownFormatByteIsRejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "0x01") {
 		t.Errorf("error does not name the format byte: %v", err)
+	}
+}
+
+// TestWriterStoresABlobRawWhenZstdIsNotSmaller backs up random and
+// compressible files. Every chunk of the random ones is stored raw, its
+// content plus the seal overhead, and none of the compressible ones is. A
+// format byte changed to the other codec's does not open either way: the
+// byte is part of what the tag covers, or a zstd frame relabelled raw would
+// come back as the content.
+func TestWriterStoresABlobRawWhenZstdIsNotSmaller(t *testing.T) {
+	ctx := context.Background()
+	random := make([]byte, 300<<10)
+	_, _ = rand.Read(random)
+	for name, tc := range map[string]struct {
+		content []byte
+		format  byte
+	}{
+		"random":       {random, formatRaw},
+		"compressible": {bytes.Repeat([]byte("the quick brown fox "), 15<<10), formatZstd},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "file"), tc.content, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			b := arkmem.New()
+			repo := openRepo(t, b)
+			snap := backupDir(t, repo, root)
+
+			chunks := blobNames(t, repo, ark.BlobFile)
+			if len(chunks) == 0 {
+				t.Fatal("the backup stored no chunk")
+			}
+			for _, chunk := range chunks {
+				obj := readBlob(t, b, repo, ark.BlobFile, chunk)
+				plain := len(openObject(t, repo, ark.BlobFile, chunk))
+				if obj[0] != tc.format {
+					t.Fatalf("chunk %s starts with 0x%02x, want 0x%02x", chunk, obj[0], tc.format)
+				}
+				if raw := plain + ark.SealOverhead; (len(obj) == raw) != (tc.format == formatRaw) || len(obj) > raw {
+					t.Errorf("chunk of %d bytes sealed at %d under 0x%02x, raw is %d", plain, len(obj), obj[0], raw)
+				}
+
+				h := ark.Handle{Type: ark.BlobFile, Name: chunk}
+				if _, err := ark.UnsealObject(repo, h, obj); err != nil {
+					t.Fatalf("chunk %s as stored: %v", chunk, err)
+				}
+				obj[0] ^= formatZstd ^ formatRaw
+				if data, err := ark.UnsealObject(repo, h, obj); err == nil {
+					t.Errorf("chunk %s opened to %d bytes under the other format byte 0x%02x", chunk, len(data), obj[0])
+				}
+			}
+
+			writeBlob(t, b, repo, ark.BlobFile, chunks[0], func() []byte {
+				obj := readBlob(t, b, repo, ark.BlobFile, chunks[0])
+				obj[0] ^= formatZstd ^ formatRaw
+				return obj
+			}())
+			if _, err := repo.Restore(ctx, snap.ID, discardSink{}); !errors.Is(err, ark.ErrCorruptChunk) {
+				t.Errorf("Restore with a changed format byte = %v, want ErrCorruptChunk", err)
+			}
+		})
 	}
 }
 

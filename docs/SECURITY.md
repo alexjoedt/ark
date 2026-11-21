@@ -49,10 +49,12 @@ writer, every accepted risk included.
 ## Format
 
 - Chunks, trees, index objects, manifests, locks and the lost-pack marker are sealed under the
-  data key as `0x02 | 24-byte nonce | XChaCha20-Poly1305(zstd frame)` with the associated data
-  `<namespace>/<name>`; data is compressed with zstd before it is sealed, and an object with any
-  other format byte is rejected: `TestUnknownFormatByteIsRejected`. A key file's `key` field is
-  sealed the same way.
+  data key as `format byte | 24-byte nonce | XChaCha20-Poly1305(payload)` with the associated data
+  `format byte | <namespace>/<name>`. Under format byte `0x02` the payload is the zstd frame of
+  the content. Under `0x03` it is the content as it is, which the writer picks when the zstd frame
+  would not be smaller. An object with any other format byte is rejected, and one whose format
+  byte was changed to the other does not open: `TestUnknownFormatByteIsRejected`,
+  `TestWriterStoresABlobRawWhenZstdIsNotSmaller`. A key file's `key` field is sealed the same way.
 - Chunks and trees are stored inside pack objects: each one sealed on its own as above, followed
   by a sealed table of their names and lengths that is bound to the SHA-256 of the bytes before
   it. A pack is named by the SHA-256 of its bytes, which are ciphertext throughout. The layout
@@ -164,11 +166,15 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
   listed, until a prune or a rebuild of the index drops the entries:
   `TestReplayedIndexObjectIsPassedOver`.
 - Object sizes and counts per namespace show: the size of every pack and index object, and with the
-  index sizes the number of chunks and trees. A sealed chunk is its zstd frame plus 41 bytes and a
-  pack is its sealed chunks plus a sealed table, so the stored bytes show, while the boundaries
-  between the blobs of a pack do not, they sit in the sealed table. A stored lost-pack marker shows
-  that an index load found a data pack missing or a data index object that does not open:
-  `TestListingRevealsCountsAndSizes`.
+  index sizes the number of chunks and trees. A sealed chunk is 41 bytes plus its zstd frame under
+  format byte `0x02`, or plus its plain length under `0x03`, and a pack is its sealed chunks plus a
+  sealed table, so the stored bytes show, while the boundaries between the blobs of a pack do not,
+  they sit in the sealed table. A stored lost-pack marker shows that an index load found a data
+  pack missing or a data index object that does not open: `TestListingRevealsCountsAndSizes`.
+- The format byte is plaintext. For a single object, a key file's `key` field, and the first blob
+  and the table of a pack it shows whether the content compressed, and an object stored raw is its
+  exact plain length plus 41 bytes. The format bytes of the other blobs of a pack sit at offsets
+  only the sealed table gives: `TestWriterStoresABlobRawWhenZstdIsNotSmaller`.
 - The number of packs shows the size of what a backup added: a pack closes once its blobs reach
   16 MiB, so the number of full packs and the size of the run's last, short one give it:
   `TestPackWriterClosesPacksAtTheTargetSize`.

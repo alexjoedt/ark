@@ -19,12 +19,19 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
-// formatSealed is the format byte of every data object: a nonce and an
-// XChaCha20-Poly1305 sealed zstd frame follow it. The first byte names the
-// codec of everything after it, so a later codec gets a new byte.
-const formatSealed byte = 0x02
+// The first byte of a sealed object names the codec of what follows it: a
+// nonce, then the XChaCha20-Poly1305 sealed payload. Every build reads both
+// codecs. The byte is part of the associated data, so a changed one does not
+// open: without that a zstd frame relabelled raw would come back as content.
+const (
+	// formatZstd: the payload is the zstd frame of the content.
+	formatZstd byte = 0x02
+	// formatRaw: the payload is the content. seal picks it when the zstd
+	// frame would not be smaller.
+	formatRaw byte = 0x03
+)
 
-// sealOverhead is what seal adds to the zstd frame: format byte, nonce, tag.
+// sealOverhead is what seal adds to the payload: format byte, nonce, tag.
 const sealOverhead = 1 + chacha20poly1305.NonceSizeX + chacha20poly1305.Overhead
 
 var (
@@ -63,36 +70,46 @@ func (c *objectCodec) Close() {
 	c.dec.Close()
 }
 
-// seal returns the sealed form of data: formatSealed, a random nonce, then
-// XChaCha20-Poly1305 over the zstd frame of data with aad bound to the tag.
+// seal returns the sealed form of data: the format byte, a random nonce, then
+// XChaCha20-Poly1305 over the payload with the format byte and aad bound to
+// the tag. The payload is the zstd frame of data, or data itself when the
+// frame is not smaller.
 func (c *objectCodec) seal(key *[32]byte, aad string, data []byte) []byte {
 	aead, _ := chacha20poly1305.NewX(key[:]) // fails only on a wrong key size
 	const hdr = 1 + chacha20poly1305.NonceSizeX
 	out := make([]byte, hdr, sealOverhead+len(data)/2)
-	out[0] = formatSealed
+	out[0] = formatZstd
 	rand.Read(out[1:hdr])
 	// Compress behind the header and seal in place, one buffer for both.
-	out = slices.Grow(c.enc.EncodeAll(data, out), chacha20poly1305.Overhead)
-	return aead.Seal(out[:hdr], out[1:hdr], out[hdr:], []byte(aad))
+	out = c.enc.EncodeAll(data, out)
+	if len(out)-hdr >= len(data) {
+		out[0] = formatRaw
+		out = append(out[:hdr], data...)
+	}
+	out = slices.Grow(out, chacha20poly1305.Overhead)
+	return aead.Seal(out[:hdr], out[1:hdr], out[hdr:], sealAAD(out[0], aad))
 }
 
 // open reverses seal. A changed byte, an unknown format byte, a different key
 // or a different aad all return errSealBroken.
 func (c *objectCodec) open(key *[32]byte, aad string, obj []byte) ([]byte, error) {
-	frame, err := unseal(key, aad, obj)
+	payload, err := unseal(key, aad, obj)
 	if err != nil {
 		return nil, err
 	}
-	return c.dec.DecodeAll(frame, nil)
+	if obj[0] == formatRaw {
+		return payload, nil
+	}
+	return c.dec.DecodeAll(payload, nil)
 }
 
-// unseal authenticates obj and returns the zstd frame it seals: all of open
-// but the decompression.
+// unseal authenticates obj and returns the payload it seals, a zstd frame or
+// the content by the format byte: all of open but the decompression.
 func unseal(key *[32]byte, aad string, obj []byte) ([]byte, error) {
 	if len(obj) == 0 {
 		return nil, fmt.Errorf("%w: object is empty", errSealBroken)
 	}
-	if obj[0] != formatSealed {
+	if obj[0] != formatZstd && obj[0] != formatRaw {
 		return nil, fmt.Errorf("%w: unknown object format byte 0x%02x", errSealBroken, obj[0])
 	}
 	if len(obj) < sealOverhead {
@@ -100,11 +117,17 @@ func unseal(key *[32]byte, aad string, obj []byte) ([]byte, error) {
 	}
 	aead, _ := chacha20poly1305.NewX(key[:])
 	nonce := obj[1 : 1+chacha20poly1305.NonceSizeX]
-	frame, err := aead.Open(nil, nonce, obj[1+chacha20poly1305.NonceSizeX:], []byte(aad))
+	payload, err := aead.Open(nil, nonce, obj[1+chacha20poly1305.NonceSizeX:], sealAAD(obj[0], aad))
 	if err != nil {
 		return nil, errSealBroken
 	}
-	return frame, nil
+	return payload, nil
+}
+
+// sealAAD is what the tag of a sealed object covers besides the payload: the
+// format byte, then aad.
+func sealAAD(format byte, aad string) []byte {
+	return append([]byte{format}, aad...)
 }
 
 // objectAAD is the associated data an object is sealed with, so an object

@@ -18,13 +18,13 @@
     "total_dirs": 1,
     "skipped": 0,
     "total_size": 10,
-    "stored_size": 118,
+    "stored_size": 92,
     "new_chunks_raw_size": 10,
     "chunks_total": 2,
     "chunks_new": 2,
     "chunks_reused": 0,
     "deduplication_ratio": 0,
-    "compression_ratio": -10.8,
+    "compression_ratio": -8.2,
     "duration": "<duration>"
   }
 }
@@ -160,13 +160,13 @@ no matches
         "total_dirs": 1,
         "skipped": 0,
         "total_size": 10,
-        "stored_size": 118,
+        "stored_size": 92,
         "new_chunks_raw_size": 10,
         "chunks_total": 2,
         "chunks_new": 2,
         "chunks_reused": 0,
         "deduplication_ratio": 0,
-        "compression_ratio": -10.8,
+        "compression_ratio": -8.2,
         "duration": "<duration>"
       }
     }

@@ -338,7 +338,8 @@ func flipAt(name string, off func(n int) int) tamperMutation {
 }
 
 // Offsets of a sealed object: format byte, 24-byte nonce, ciphertext of the
-// zstd frame, 16-byte tag (objectstore.go seal).
+// payload, 16-byte tag (objectstore.go seal). A flipped format byte is the
+// other codec's, 0x02 for 0x03 and back, so that cell fails on the tag alone.
 const (
 	nonceStart = 1
 	frameStart = nonceStart + 24

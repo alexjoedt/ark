@@ -46,3 +46,4 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0029 | [Volume profiles without the Docker SDK](0029-volume-profiles-without-the-docker-sdk.md) | accepted | 2026-11-19 |
 | 0030 | [ark profile backup runs the backup a profile names](0030-profile-backup-runs-the-backup-a-profile-names.md) | accepted | 2026-11-20 |
 | 0031 | [No pool for chunk buffers](0031-no-pool-for-chunk-buffers.md) | accepted | 2026-11-21 |
+| 0032 | [A raw codec and an authenticated format byte](0032-raw-codec-and-authenticated-format-byte.md) | accepted | 2026-11-21 |

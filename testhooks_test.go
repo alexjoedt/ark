@@ -42,7 +42,7 @@ func UnsealObject(r *Repository, h Handle, obj []byte) ([]byte, error) {
 // LostPackMarker returns the handle of the lost-pack marker of r.
 func LostPackMarker(r *Repository) Handle { return r.lostPacksMarker() }
 
-// SealOverhead is what sealing adds to the zstd frame of an object.
+// SealOverhead is what sealing adds to the payload of an object.
 const SealOverhead = sealOverhead
 
 // ObjectName returns the name r stores a chunk or tree of this content under.

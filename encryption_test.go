@@ -21,7 +21,8 @@ package ark_test
 //
 //	pack and index counts and sizes           TestListingRevealsCountsAndSizes
 //	pack size = sealed chunks + sealed table  TestListingRevealsCountsAndSizes
-//	sealed chunk size = zstd frame + overhead TestListingRevealsCountsAndSizes
+//	sealed chunk size = payload + overhead    TestListingRevealsCountsAndSizes,
+//	                                          TestWriterStoresABlobRawWhenZstdIsNotSmaller (format_test.go)
 //	KDF parameters and config in plaintext    TestInitWritesOneKeyFile, TestConfigHoldsOnlyItsPlaintextFields
 //	ms timestamp in lock names                TestLockNamesCarryTheirTime
 
@@ -485,10 +486,10 @@ func TestLockNamesCarryTheirTime(t *testing.T) {
 // TestListingRevealsCountsAndSizes pins the accepted leaks of a listing: one
 // data pack, one tree pack and one index object each for a small backup, one
 // object per snapshot and key file, every size as stored. No chunk and no
-// tree node is listed: a pack is its sealed chunks, each only a fixed
-// overhead plus its zstd frame larger than its content, and a sealed table
-// of one entry per chunk, so its size shows the bytes it holds and not where
-// one chunk ends. Padding would narrow this; anything that widens it fails.
+// tree node is listed: a pack is its sealed chunks, each of these random ones
+// stored raw at its content plus a fixed overhead, and a sealed table of one
+// entry per chunk, so its size shows the bytes it holds and not where one
+// chunk ends. Padding would narrow this; anything that widens it fails.
 func TestListingRevealsCountsAndSizes(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -546,9 +547,6 @@ func TestListingRevealsCountsAndSizes(t *testing.T) {
 		}
 	}
 
-	// zstd stores random data in raw blocks behind a frame header and
-	// checksum, a few bytes per chunk.
-	const zstdFrameSlack = 24
 	chunks := blobNames(t, repo, ark.BlobFile)
 	if len(chunks) != snap.Stats.ChunksNew {
 		t.Errorf("the data index lists %d chunks, the backup stored %d", len(chunks), snap.Stats.ChunksNew)
@@ -562,9 +560,8 @@ func TestListingRevealsCountsAndSizes(t *testing.T) {
 		p := int64(len(openObject(t, repo, ark.BlobFile, name)))
 		plain += p
 		sealed += size
-		if extra := size - ark.SealOverhead - p; extra < 0 || extra > zstdFrameSlack {
-			t.Errorf("chunk of %d bytes sealed at %d, want %d plus at most %d",
-				p, size, p+ark.SealOverhead, zstdFrameSlack)
+		if size != p+ark.SealOverhead {
+			t.Errorf("random chunk of %d bytes sealed at %d, want %d", p, size, p+ark.SealOverhead)
 		}
 	}
 	if plain != snap.Stats.TotalSize {
@@ -573,11 +570,11 @@ func TestListingRevealsCountsAndSizes(t *testing.T) {
 	if sealed != snap.Stats.StoredSize {
 		t.Errorf("chunks are sealed to %d bytes, the snapshot counts %d stored", sealed, snap.Stats.StoredSize)
 	}
-	// The rest of the pack is the sealed table, 36 bytes per chunk before
-	// compression, and its 4 byte length.
+	// The rest of the pack is the sealed table, at most 36 bytes per chunk,
+	// and its 4 byte length.
 	const tableEntry = 36
 	table := sizes[ark.DataPackFile] - sealed
-	if limit := int64(len(chunks)*tableEntry + ark.SealOverhead + zstdFrameSlack + 4); table <= 4 || table > limit {
+	if limit := int64(len(chunks)*tableEntry + ark.SealOverhead + 4); table <= 4 || table > limit {
 		t.Errorf("the data pack holds %d bytes besides its chunks, want a table of at most %d", table, limit)
 	}
 }

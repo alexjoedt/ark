@@ -1,6 +1,7 @@
 package ark_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -713,6 +714,53 @@ func incompressible(seed byte, n int) []string {
 		out[i] = string(buf)
 	}
 	return out
+}
+
+// TestPruneCopiesRawAndZstdBlobsAsStored repacks a pack that holds blobs of
+// both codecs: each live one arrives in the new pack byte for byte as it was
+// sealed, format byte, nonce and tag included.
+func TestPruneCopiesRawAndZstdBlobsAsStored(t *testing.T) {
+	b := arkmem.New()
+	repo := openRepo(t, b)
+	live := append(incompressible(1, 3), strings.Repeat("text that compresses ", 4<<10))
+	keep := treeOf("keep", dirOf{"b", live})
+	gone := mustBackup(t, repo, treeOf("one", dirOf{"a", incompressible(2, 3)}, dirOf{"b", live}))
+	kept := mustBackup(t, repo, keep)
+	mustForget(t, repo, gone)
+
+	type stored struct {
+		pack   string
+		sealed []byte
+	}
+	before := map[string]stored{}
+	formats := map[byte]int{}
+	for _, content := range live {
+		name := ark.ObjectName(repo, []byte(content))
+		pack, _, _ := place(t, repo, content)
+		before[name] = stored{pack, readBlob(t, b, repo, ark.BlobFile, name)}
+		formats[before[name].sealed[0]]++
+	}
+	if formats[formatRaw] != 3 || formats[formatZstd] != 1 {
+		t.Fatalf("fixture: live chunks by format byte %v, want 3 raw and 1 zstd", formats)
+	}
+
+	if _, err := repo.Prune(context.Background()); err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	for _, content := range live {
+		name := ark.ObjectName(repo, []byte(content))
+		was := before[name]
+		if pack, _, _ := place(t, repo, content); pack == was.pack {
+			t.Fatalf("chunk %s is still in pack %s, want it repacked", name, pack)
+		}
+		if got := readBlob(t, b, repo, ark.BlobFile, name); !bytes.Equal(got, was.sealed) {
+			t.Errorf("chunk %s (0x%02x) was not copied as stored", name, was.sealed[0])
+		}
+	}
+	assertRestores(t, repo, kept, keep)
+	if check := mustCheck(t, repo); len(check.Errors) != 0 || len(check.Warnings) != 0 {
+		t.Errorf("Check = %+v, want no findings", check)
+	}
 }
 
 // TestPruneAbortedRepackIsNotCopiedAgain damages a live chunk that a repack

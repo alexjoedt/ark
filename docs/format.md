@@ -56,15 +56,16 @@ A pack has three parts, in this order:
 3. the length of the sealed table, 4 bytes little endian
 
 **Blobs.** A blob is one chunk or one directory node, sealed on its own like a single object. Its
-associated data is `chunks/<name>` for a chunk and `trees/<name>` for a directory node, where
-`<name>` is the blob's hex name. No object is stored under `chunks` or `trees`. The associated data
-only binds a blob to its type and name, so the bytes of one blob, read where the index lists
-another, don't open.
+first byte is the format byte: `0x02` when the sealed payload is the zstd frame of the content,
+`0x03` when it is the content as it is. Its associated data is that format byte followed by
+`chunks/<name>` for a chunk and `trees/<name>` for a directory node, where `<name>` is the blob's
+hex name. No object is stored under `chunks` or `trees`. The associated data only binds a blob to
+its codec, type and name, so the bytes of one blob, read where the index lists another, don't open.
 
 **Table.** The table has one entry per blob: its 32-byte name and its sealed length as 4 bytes
-little endian. Offsets follow from the order. The table is sealed with the data key and the
-associated data `datapacks/<hex SHA-256 of the blob section>`, or `treepacks/<...>`, by the pack's
-namespace. It therefore opens only behind the blobs it describes.
+little endian. Offsets follow from the order. The table is sealed with the data key and, behind
+its format byte, the associated data `datapacks/<hex SHA-256 of the blob section>`, or
+`treepacks/<...>`, by the pack's namespace. It therefore opens only behind the blobs it describes.
 
 **Names.** A pack is named by the hex SHA-256 of all its bytes. Chunk and node names are the hex
 HMAC-SHA256 of their plaintext under the repository's ID key. The name of a pack isn't keyed.

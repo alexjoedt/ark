@@ -137,8 +137,8 @@ func TestInitWritesOneKeyFile(t *testing.T) {
 				t.Errorf("salt %q, want 16 bytes in hex", kf.Salt)
 			}
 			sealed, err := hex.DecodeString(kf.Key)
-			if err != nil || len(sealed) < 41 || sealed[0] != 0x02 {
-				t.Errorf("key %q, want a sealed object in hex starting with format byte 0x02", kf.Key)
+			if err != nil || len(sealed) < 41 || !sealedFormat(sealed[0]) {
+				t.Errorf("key %q, want a sealed object in hex starting with a sealed format byte", kf.Key)
 			}
 			for _, leak := range []string{"data_key", "id_key", "chunker_seed", "repository_id", "secret"} {
 				if strings.Contains(string(body), leak) {
