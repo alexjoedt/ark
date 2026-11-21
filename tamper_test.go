@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -55,12 +56,15 @@ import (
 // The blob table is the one sealed object inside a pack that no read through
 // the index opens: only RebuildIndex does. Its cells change the table and
 // store the pack under the name its bytes then hash to, so nothing but the
-// table's tag rejects it, and they delete the index before the rebuild.
+// table itself rejects it, and they delete the index before the rebuild.
 //
 // The tag binds key, namespace and name (objectAAD), so it alone rejects
-// every cell: Restore reads through a non-verifying store and still fails on
-// a moved or swapped chunk or tree. No cell restores other bytes than the
-// backup held.
+// every cell but two: Restore reads through a non-verifying store and still
+// fails on a moved or swapped chunk or tree. Every blob table of a namespace
+// is sealed under one name, so the table of another pack authenticates in
+// the swapped and moved cells; RebuildIndex has the whole pack and rejects
+// it by the hash of the blob section the table carries. No cell restores
+// other bytes than the backup held.
 func TestTamperedObjectsAreRejected(t *testing.T) {
 	for _, ns := range tamperNamespaces {
 		for _, mut := range tamperMutations {
@@ -110,6 +114,11 @@ func TestTamperedConfigIsRejected(t *testing.T) {
 			cfg[bytes.Index(cfg, []byte(`"version":`))+len(`"version":`)] ^= 0x01
 			return cfg
 		}, ark.ErrCorruptConfig},
+		// The binding is checked before the config is parsed, so a key added
+		// without the master key is a changed config, not a later format.
+		{"added key", func(_ *testing.T, cfg []byte) []byte {
+			return bytes.Replace(cfg, []byte(`{`), []byte(`{"later":true,`), 1)
+		}, ark.ErrCorruptConfig},
 	}
 	for _, c := range cells {
 		t.Run(c.name, func(t *testing.T) {
@@ -138,7 +147,7 @@ func TestTamperedConfigIsRejected(t *testing.T) {
 
 const (
 	victimContent = "the victim's contents"
-	otherContent  = "some other contents"
+	otherContent  = "some other's contents"
 )
 
 type tamperFixture struct {
@@ -147,9 +156,12 @@ type tamperFixture struct {
 	victim, other *ark.Snapshot
 	// index names the index object each backup wrote, the victim's first.
 	index map[ark.HandleType][2]string
-	// tables maps the name a blob table is sealed under, the hex SHA-256 of
-	// its pack's blob section, to the pack. Only the pack table rows fill it.
+	// tables maps the name a blob table goes by in the cells, the hex SHA-256
+	// of its pack's blob section, to the pack. Only the pack table rows fill
+	// it. Every table is sealed under ark.PackTableName.
 	tables map[string]ark.Handle
+	// packs is tables as setup left it, so a cell's rewrites show.
+	packs map[string]ark.Handle
 }
 
 func newTamperFixture(t *testing.T) *tamperFixture {
@@ -195,7 +207,7 @@ func (f *tamperFixture) stored(t *testing.T, typ ark.HandleType, name string) (a
 }
 
 // whole returns the stored object of name and its handle. A blob table is
-// its own object here, under the name it is sealed with.
+// its own object here, under the name the cells know it by.
 func (f *tamperFixture) whole(t *testing.T, typ ark.HandleType, name string) (ark.Handle, []byte) {
 	t.Helper()
 	if _, ok := f.tables[name]; ok {
@@ -206,8 +218,8 @@ func (f *tamperFixture) whole(t *testing.T, typ ark.HandleType, name string) (ar
 	return h, readObject(t, f.b, h.Type, h.Name)
 }
 
-// table returns the blob section of the pack whose table is sealed under
-// name, and that sealed table.
+// table returns the blob section of the pack whose table goes by name, and
+// that sealed table.
 func (f *tamperFixture) table(t *testing.T, name string) (section, table []byte) {
 	t.Helper()
 	h := f.tables[name]
@@ -261,8 +273,8 @@ func (f *tamperFixture) plaintext(t *testing.T, typ ark.HandleType, name string)
 		return readObject(t, f.b, typ, name)
 	}
 	if _, ok := f.tables[name]; ok {
-		h, table := f.whole(t, typ, name)
-		data, err := ark.UnsealObject(f.repo, h, table)
+		_, table := f.whole(t, typ, name)
+		data, err := ark.UnsealObject(f.repo, f.sealedUnder(typ, name), table)
 		if err != nil {
 			t.Fatalf("open the blob table %s/%s: %v", typ, name, err)
 		}
@@ -273,6 +285,16 @@ func (f *tamperFixture) plaintext(t *testing.T, typ ark.HandleType, name string)
 		t.Fatalf("open %s/%s: %v", typ, name, err)
 	}
 	return data
+}
+
+// sealedUnder returns the handle whose namespace and name the object that
+// goes by name is sealed with: its own, for a blob table the one name all
+// tables of the namespace share.
+func (f *tamperFixture) sealedUnder(typ ark.HandleType, name string) ark.Handle {
+	if _, ok := f.tables[name]; ok {
+		name = ark.PackTableName
+	}
+	return ark.Handle{Type: typ, Name: name}
 }
 
 // sealedAs returns data sealed by repo the way it would store it under h.
@@ -338,7 +360,8 @@ func flipAt(name string, off func(n int) int) tamperMutation {
 }
 
 // Offsets of a sealed object: format byte, 24-byte nonce, ciphertext of the
-// zstd frame, 16-byte tag (objectstore.go seal).
+// payload, 16-byte tag (objectstore.go seal). A flipped format byte is the
+// other codec's, 0x02 for 0x03 and back, so that cell fails on the tag alone.
 const (
 	nonceStart = 1
 	frameStart = nonceStart + 24
@@ -390,7 +413,8 @@ var tamperMutations = []tamperMutation{
 		f.del(t, ho.Type, ho.Name)
 	}},
 	{"other namespace", func(t *testing.T, f *tamperFixture, typ ark.HandleType, victim, _ string) {
-		h := ark.Handle{Type: foreignNamespace[typ], Name: victim}
+		h := f.sealedUnder(typ, victim)
+		h.Type = foreignNamespace[typ]
 		obj := sealedAs(t, f.repo, f.b, h, f.plaintext(t, typ, victim))
 		f.editSealed(t, typ, victim, func([]byte) []byte { return obj })
 	}},
@@ -402,8 +426,7 @@ var tamperMutations = []tamperMutation{
 			f.put(t, typ, victim, body)
 			return
 		}
-		h := ark.Handle{Type: typ, Name: victim}
-		obj := sealedAs(t, repo2, b2, h, f.plaintext(t, typ, victim))
+		obj := sealedAs(t, repo2, b2, f.sealedUnder(typ, victim), f.plaintext(t, typ, victim))
 		f.editSealed(t, typ, victim, func([]byte) []byte { return obj })
 	}},
 }
@@ -600,6 +623,7 @@ func packTableRow(
 		setup: func(t *testing.T, f *tamperFixture) (string, string) {
 			f.tables = make(map[string]ark.Handle)
 			var names [2]string
+			var sizes [2]int
 			victim, other := blobsOf(t, f)
 			for i, blob := range []string{victim, other} {
 				pack, _, _ := f.stored(t, blobs, blob)
@@ -607,7 +631,17 @@ func packTableRow(
 				sum := sha256.Sum256(section)
 				names[i] = hex.EncodeToString(sum[:])
 				f.tables[names[i]] = pack
+				sizes[i] = len(section)
 			}
+			// Equal blob sections leave a table behind the other pack's
+			// blobs nothing but its sum to be refused by. Chunks of equal
+			// length give them; a compressed tree node varies by a byte
+			// with the chunk names it lists, so the tree row may also be
+			// refused by the length.
+			if blobs == ark.BlobFile && sizes[0] != sizes[1] {
+				t.Fatalf("blob sections of %d and %d bytes, want packs of one shape", sizes[0], sizes[1])
+			}
+			f.packs = maps.Clone(f.tables)
 			return names[0], names[1]
 		},
 		accepted: func(t *testing.T, f *tamperFixture, victim string) {
@@ -616,10 +650,19 @@ func packTableRow(
 			}
 			acceptedSnapshot(t, f, victim)
 		},
+		// rejected wants exactly the packs a cell rewrote unreadable: the
+		// victim's, and in the swapped cell the other's, which carries the
+		// victim's table.
 		rejected: func(t *testing.T, f *tamperFixture, victim string) {
-			if res := rebuild(t, f); !slices.Contains(res.UnreadablePacks, f.tables[victim].Name) {
-				t.Errorf("RebuildIndex names %v unreadable, want the pack %s with the mutated table",
-					res.UnreadablePacks, f.tables[victim].Name)
+			res := rebuild(t, f)
+			for name, h := range f.tables {
+				if rewritten := h != f.packs[name]; rewritten != slices.Contains(res.UnreadablePacks, h.Name) {
+					t.Errorf("RebuildIndex names %v unreadable, pack %s rewritten %v",
+						res.UnreadablePacks, h.Name, rewritten)
+				}
+			}
+			if f.tables[victim] == f.packs[victim] {
+				t.Errorf("the cell left the pack %s of the victim's table as it was", f.tables[victim].Name)
 			}
 			missing(t, f, victim)
 		},

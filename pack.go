@@ -19,10 +19,12 @@ import (
 //
 // Each blob is sealed on its own with the name it would have as a single
 // object, so one moved inside a pack or into another does not open. The table
-// has one entry per blob, the 32-byte name and the sealed length; offsets
-// follow from the order. It is sealed with the SHA-256 of the blob section in
-// its associated data, so a table put behind other blobs does not open. The
-// pack is named by the hex SHA-256 of all its bytes.
+// starts with the SHA-256 of the blob section and has one entry per blob, the
+// 32-byte name and the sealed length; offsets follow from the order. It is
+// sealed under one name per pack namespace, so the tail of a pack is enough to
+// open it. A reader that holds the whole pack compares the sum and refuses a
+// table put behind other blobs. The pack is named by the hex SHA-256 of all
+// its bytes.
 const (
 	// packTargetSize closes a pack: one that holds at least this many blob
 	// bytes after an append is uploaded, so it overshoots by one blob at most.
@@ -91,9 +93,14 @@ func parseName(name string) (b [sha256.Size]byte, ok bool) {
 	return b, err == nil && hex.EncodeToString(b[:]) == name
 }
 
-// tableAAD binds a blob table to the blob section with the hash sum.
-func (s *packSpace) tableAAD(sum []byte) string {
-	return objectAAD(Handle{Type: s.packs, Name: hex.EncodeToString(sum)})
+// packTableName is the name every blob table of a pack namespace is sealed
+// under. Nothing else is sealed under a pack namespace: putSealed refuses one.
+const packTableName = "table"
+
+// tableAAD binds a blob table to its pack namespace. What binds it to its
+// blobs is the sum it carries.
+func (s *packSpace) tableAAD() string {
+	return objectAAD(Handle{Type: s.packs, Name: packTableName})
 }
 
 // place sets the offset of every entry from the lengths before it and returns
@@ -111,19 +118,19 @@ func place(entries []packEntry) uint64 {
 // finish places entries and returns what ends the pack whose blob section is
 // the parts of section in order, the sealed table and the trailer, with the
 // pack's name. The section is hashed once: the sum so far goes into the
-// table's associated data, the final sum is the name.
+// table, the final sum is the name.
 func (s *packSpace) finish(entries []packEntry, section ...[]byte) ([]byte, string) {
 	place(entries)
-	table := make([]byte, 0, len(entries)*packEntrySize)
-	for _, e := range entries {
-		table = append(table, e.name[:]...)
-		table = binary.LittleEndian.AppendUint32(table, e.length)
-	}
 	h := sha256.New()
 	for _, part := range section {
 		h.Write(part)
 	}
-	tail := s.codec.seal(s.dataKey, s.tableAAD(h.Sum(nil)), table)
+	table := h.Sum(make([]byte, 0, sha256.Size+len(entries)*packEntrySize))
+	for _, e := range entries {
+		table = append(table, e.name[:]...)
+		table = binary.LittleEndian.AppendUint32(table, e.length)
+	}
+	tail := s.codec.seal(s.dataKey, s.tableAAD(), table)
 	tail = binary.LittleEndian.AppendUint32(tail, uint32(len(tail)))
 	h.Write(tail)
 	return tail, hex.EncodeToString(h.Sum(nil))
@@ -143,26 +150,51 @@ func (s *packSpace) parse(pack []byte) ([]packEntry, error) {
 	}
 	blobs, sealed := body[:len(body)-int(n)], body[len(body)-int(n):]
 
-	sum := sha256.Sum256(blobs)
-	table, err := s.codec.open(s.dataKey, s.tableAAD(sum[:]), sealed)
+	entries, sum, err := s.openTable(sealed)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to open the table of a %s object: %w", s.corruptErr, s.packs, err)
+		return nil, err
 	}
-	if len(table)%packEntrySize != 0 {
-		return nil, fmt.Errorf("%w: table of a %s object has %d bytes", s.corruptErr, s.packs, len(table))
+	if sha256.Sum256(blobs) != sum {
+		return nil, fmt.Errorf("%w: table of a %s object is not the table of its blobs", s.corruptErr, s.packs)
 	}
-	entries := make([]packEntry, len(table)/packEntrySize)
+	if listed := place(entries); listed != uint64(len(blobs)) {
+		return nil, fmt.Errorf("%w: table of a %s object lists %d bytes, the pack holds %d",
+			s.corruptErr, s.packs, listed, len(blobs))
+	}
+	return entries, nil
+}
+
+// openTable opens a sealed blob table without its pack. It returns the placed
+// entries and the SHA-256 of the blob section they describe. A reader of the
+// pack's tail does the range reads: the last packTrailerSize bytes give the
+// table's length n, which it checks against size-packTrailerSize before it
+// reads the n bytes before them.
+//
+// The seal says that a holder of the key wrote the table, not that it is the
+// table of the pack it was read from. parse compares the sum. A reader
+// without the blob section cannot. It learns of another pack's table when a
+// blob it lists does not open under its name, which every blob does that
+// this pack does not also hold at the same place.
+func (s *packSpace) openTable(sealed []byte) (entries []packEntry, sum [sha256.Size]byte, err error) {
+	table, err := s.codec.open(s.dataKey, s.tableAAD(), sealed)
+	if err != nil {
+		return nil, sum, s.sealErr(err, "failed to open the table of a %s object", s.packs)
+	}
+	if len(table) < len(sum) || (len(table)-len(sum))%packEntrySize != 0 {
+		return nil, sum, fmt.Errorf("%w: table of a %s object has %d bytes", s.corruptErr, s.packs, len(table))
+	}
+	table = table[copy(sum[:], table):]
+	entries = make([]packEntry, len(table)/packEntrySize)
 	for i := range entries {
 		rec := table[i*packEntrySize:]
 		e := &entries[i]
 		copy(e.name[:], rec)
 		e.length = binary.LittleEndian.Uint32(rec[len(e.name):])
 	}
-	if listed := place(entries); listed != uint64(len(blobs)) || listed > math.MaxUint32 {
-		return nil, fmt.Errorf("%w: table of a %s object lists %d bytes, the pack holds %d",
-			s.corruptErr, s.packs, listed, len(blobs))
+	if listed := place(entries); listed > math.MaxUint32 {
+		return nil, sum, fmt.Errorf("%w: table of a %s object lists %d bytes", s.corruptErr, s.packs, listed)
 	}
-	return entries, nil
+	return entries, sum, nil
 }
 
 // readBlob returns the content of the blob at e in the pack named pack, with
@@ -190,7 +222,7 @@ func (s *packSpace) openBlob(pack string, e packEntry, obj []byte) ([]byte, erro
 	name := hex.EncodeToString(e.name[:])
 	data, err := s.codec.open(s.dataKey, objectAAD(Handle{Type: s.blobs, Name: name}), obj)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to open %s in %s object %s: %w", s.corruptErr, name, s.packs, pack, err)
+		return nil, s.sealErr(err, "failed to open %s in %s object %s", name, s.packs, pack)
 	}
 	return data, nil
 }
@@ -200,9 +232,21 @@ func (s *packSpace) openBlob(pack string, e packEntry, obj []byte) ([]byte, erro
 func (s *packSpace) checkSeal(pack string, e packEntry, obj []byte) error {
 	name := hex.EncodeToString(e.name[:])
 	if _, err := unseal(s.dataKey, objectAAD(Handle{Type: s.blobs, Name: name}), obj); err != nil {
-		return fmt.Errorf("%w: failed to open %s in %s object %s: %w", s.corruptErr, name, s.packs, pack, err)
+		return s.sealErr(err, "failed to open %s in %s object %s", name, s.packs, pack)
 	}
 	return nil
+}
+
+// sealErr is the error of a table or blob that did not open with err: the
+// corrupt error of the namespace, unless the build does not read the object.
+// That one stays ErrUnsupportedFormat alone, so nothing that handles
+// corruption skips, retries or repairs what a later build may have written.
+func (s *packSpace) sealErr(err error, format string, args ...any) error {
+	what := fmt.Sprintf(format, args...)
+	if errors.Is(err, ErrUnsupportedFormat) {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	return fmt.Errorf("%w: %s: %w", s.corruptErr, what, err)
 }
 
 // packWriter collects sealed blobs of one type into pack objects. It is safe

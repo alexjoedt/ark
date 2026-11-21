@@ -192,6 +192,22 @@ func TestOpenRejectsTheFormatBeforePacks(t *testing.T) {
 // written them.
 func rebindConfig(t *testing.T, b Backend, change func(*repositoryConfig)) {
 	t.Helper()
+	rebindConfigBytes(t, b, func(data []byte) []byte {
+		cfg, err := parseRepositoryConfig(data)
+		if err != nil {
+			t.Fatalf("parseRepositoryConfig: %v", err)
+		}
+		change(&cfg)
+		if data, err = json.Marshal(cfg); err != nil {
+			t.Fatalf("marshal config: %v", err)
+		}
+		return data
+	})
+}
+
+// rebindConfigBytes is rebindConfig for a change to the stored bytes.
+func rebindConfigBytes(t *testing.T, b Backend, change func([]byte) []byte) {
+	t.Helper()
 	ctx := context.Background()
 	repo, err := Open(ctx, b, NoPassword())
 	if err != nil {
@@ -203,14 +219,7 @@ func rebindConfig(t *testing.T, b Backend, change func(*repositoryConfig)) {
 	if err != nil {
 		t.Fatalf("readRepositoryConfig: %v", err)
 	}
-	cfg, err := parseRepositoryConfig(data)
-	if err != nil {
-		t.Fatalf("parseRepositoryConfig: %v", err)
-	}
-	change(&cfg)
-	if data, err = json.Marshal(cfg); err != nil {
-		t.Fatalf("marshal config: %v", err)
-	}
+	data = change(data)
 	if err := b.Put(ctx, Handle{Type: ConfigFile, Name: configName}, bytes.NewReader(data)); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -223,9 +232,9 @@ func rebindConfig(t *testing.T, b Backend, change func(*repositoryConfig)) {
 	}
 }
 
-// TestOpenRejectsAMasterKeyWithoutConfigHash pins that there is no legacy
-// path: a master key that carries no config_hash, as an older format wrote
-// it, does not open the repository and reports the older format.
+// TestOpenRejectsAMasterKeyWithoutConfigHash pins that there is no path
+// around the config binding: a master key that carries no config_hash does
+// not match the config, like one that carries another hash.
 func TestOpenRejectsAMasterKeyWithoutConfigHash(t *testing.T) {
 	ctx := context.Background()
 	b := newStubBackend()
@@ -253,6 +262,17 @@ func TestOpenRejectsAMasterKeyWithoutConfigHash(t *testing.T) {
 	if blob, err = json.Marshal(fields); err != nil {
 		t.Fatalf("marshal master key: %v", err)
 	}
+	resealMasterKey(t, b, repo, blob)
+
+	_, err = Open(ctx, b, NoPassword())
+	if !errors.Is(err, ErrCorruptConfig) || !strings.Contains(err.Error(), "no config binding") {
+		t.Errorf("Open = %v, want ErrCorruptConfig naming the missing binding", err)
+	}
+}
+
+// resealMasterKey replaces the key file of repo by one that seals blob.
+func resealMasterKey(t *testing.T, b Backend, repo *Repository, blob []byte) {
+	t.Helper()
 	var wrap [32]byte
 	h := Handle{Type: KeyFile, Name: repo.keyName}
 	kf, err := json.Marshal(keyFile{
@@ -263,11 +283,280 @@ func TestOpenRejectsAMasterKeyWithoutConfigHash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal key file: %v", err)
 	}
-	if err := b.Put(ctx, h, bytes.NewReader(kf)); err != nil {
+	if err := b.Put(context.Background(), h, bytes.NewReader(kf)); err != nil {
 		t.Fatalf("put key file: %v", err)
 	}
+}
 
-	if _, err := Open(ctx, b, NoPassword()); !errors.Is(err, ErrUnsupportedFormat) {
-		t.Errorf("Open = %v, want ErrUnsupportedFormat", err)
+// TestOpenRefusesUnknownKeys: the config and the master key are decoded
+// strictly. A key this build does not know, in the object or in a nested one,
+// is something a later build wrote for a reader to act on, so Open refuses
+// the repository and names the key instead of dropping it. The key file
+// header is a row of TestOpenRejectsUnknownKeyFiles. A master key sealed
+// under a format byte this build does not know, or with a value of another
+// type, is refused the same way, not taken for a wrong password.
+func TestOpenRefusesUnknownKeys(t *testing.T) {
+	ctx := context.Background()
+	later := func(data []byte, before string) []byte {
+		return bytes.Replace(data, []byte(before), []byte(`"later":true,`+before), 1)
+	}
+	const laterKey = `key "later"`
+	for name, tc := range map[string]struct {
+		change func(t *testing.T, b Backend)
+		names  string
+	}{
+		"config": {func(t *testing.T, b Backend) {
+			rebindConfigBytes(t, b, func(data []byte) []byte { return later(data, `"version"`) })
+		}, laterKey},
+		"config chunker": {func(t *testing.T, b Backend) {
+			rebindConfigBytes(t, b, func(data []byte) []byte { return later(data, `"min"`) })
+		}, laterKey},
+		"master key format byte": {func(t *testing.T, b Backend) {
+			repo, err := Open(ctx, b, NoPassword())
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer repo.Close()
+			kf, err := readKeyFile(ctx, b, repo.keyName)
+			if err != nil {
+				t.Fatalf("readKeyFile: %v", err)
+			}
+			sealed, _ := hex.DecodeString(kf.Key)
+			var wrap [32]byte
+			h := Handle{Type: KeyFile, Name: repo.keyName}
+			if sealed, err = retag(&wrap, objectAAD(h), sealed, 0x04); err != nil {
+				t.Fatalf("retag: %v", err)
+			}
+			kf.Key = hex.EncodeToString(sealed)
+			data, _ := json.Marshal(kf)
+			if err := b.Put(ctx, h, bytes.NewReader(data)); err != nil {
+				t.Fatalf("put key file: %v", err)
+			}
+		}, "0x04"},
+		"master key": {func(t *testing.T, b Backend) {
+			repo, err := Open(ctx, b, NoPassword())
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer repo.Close()
+			blob, err := json.Marshal(repo.key)
+			if err != nil {
+				t.Fatalf("marshal master key: %v", err)
+			}
+			resealMasterKey(t, b, repo, later(blob, `"data_key"`))
+		}, laterKey},
+		"master key value of another type": {func(t *testing.T, b Backend) {
+			repo, err := Open(ctx, b, NoPassword())
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer repo.Close()
+			blob, err := json.Marshal(repo.key)
+			if err != nil {
+				t.Fatalf("marshal master key: %v", err)
+			}
+			resealMasterKey(t, b, repo, bytes.Replace(blob, []byte(`"created":"`), []byte(`"created":1,"label":"`), 1))
+		}, "master key"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newStubBackend()
+			if err := Init(ctx, b, NoPassword()); err != nil {
+				t.Fatalf("Init: %v", err)
+			}
+			tc.change(t, b)
+
+			_, err := Open(ctx, b, NoPassword())
+			if !errors.Is(err, ErrUnsupportedFormat) || errors.Is(err, ErrCorruptConfig) {
+				t.Fatalf("Open = %v, want ErrUnsupportedFormat alone", err)
+			}
+			if !strings.Contains(err.Error(), tc.names) {
+				t.Errorf("Open = %q, want it to name %s", err, tc.names)
+			}
+		})
+	}
+}
+
+// TestDecodeStrict pins what the readers of config, key file, manifest and
+// lock rely on: an unknown key is ErrUnsupportedFormat and named, at any
+// depth, and input [json.Unmarshal] refuses stays refused, as a plain error.
+// Only the name of the key is taken from the text of encoding/json's error,
+// so this test is what notices a Go release that words it differently.
+func TestDecodeStrict(t *testing.T) {
+	for in, unsupported := range map[string]bool{
+		`{"version":1,"chunker":{"min":1}}`:           false,
+		`{"version":1,"later":0}`:                     true,
+		`{"version":1,"chunker":{"min":1,"later":0}}`: true,
+	} {
+		var cfg repositoryConfig
+		err := decodeStrict("config", []byte(in), &cfg)
+		if unsupported != errors.Is(err, ErrUnsupportedFormat) || (!unsupported && err != nil) {
+			t.Errorf("%s: decodeStrict = %v, want ErrUnsupportedFormat: %v", in, err, unsupported)
+		}
+		if unsupported && !strings.Contains(err.Error(), `config has the key "later"`) {
+			t.Errorf("%s: decodeStrict = %q, want it to name the object and the key", in, err)
+		}
+	}
+	for _, in := range []string{
+		`{"version":1}{}`, `{"version":1}}`, `{"version":"1"}`, `{"version":1`, ``,
+		`{"later":0,"version":"1"}`, `{"later":0,"version":1}{}`,
+	} {
+		var cfg repositoryConfig
+		if err := decodeStrict("config", []byte(in), &cfg); err == nil || errors.Is(err, ErrUnsupportedFormat) {
+			t.Errorf("%q: decodeStrict = %v, want an error that is not ErrUnsupportedFormat", in, err)
+		}
+	}
+}
+
+// TestArchiveMetadataIsDecodedStrictly: an import stores the manifest of its
+// archive, so a key it dropped there would be lost to every later reader. The
+// metadata is refused like a stored manifest a later build wrote.
+func TestArchiveMetadataIsDecodedStrictly(t *testing.T) {
+	for in, names := range map[string]string{
+		`{"version":1,"source_name":"app"}`:             "",
+		`{"id":"01ab","source":{"volume":"pgdata"}}`:    `the archive metadata has the key "source"`,
+		`{"version":1,"later":true}`:                    `the archive metadata has the key "later"`,
+		`{"version":1,"stats":{"later":1}}`:             `the archive metadata has the key "later"`,
+		`{"version":1,"stats":{"compression_ratio":0}}`: `the archive metadata has the key "compression_ratio"`,
+		`{"source_name":"app"}`:                         "manifest version 0",
+		`{"version":2}`:                                 "manifest version 2",
+	} {
+		_, err := parseArchiveMetadata([]byte(in))
+		switch {
+		case names == "" && err != nil:
+			t.Errorf("%s: parseArchiveMetadata = %v, want it read", in, err)
+		case names != "" && (!errors.Is(err, ErrUnsupportedFormat) || !strings.Contains(err.Error(), names)):
+			t.Errorf("%s: parseArchiveMetadata = %v, want ErrUnsupportedFormat naming %s", in, err, names)
+		}
+	}
+}
+
+func putFeatures(t *testing.T, b Backend, body string) {
+	t.Helper()
+	ctx := context.Background()
+	repo, err := Open(ctx, b, NoPassword())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer repo.Close()
+	h := Handle{Type: ConfigFile, Name: featuresName}
+	if err := repo.putSealed(ctx, h, []byte(body)); err != nil {
+		t.Fatalf("write features: %v", err)
+	}
+}
+
+func TestOpenReadsTheFeaturesObject(t *testing.T) {
+	ctx := context.Background()
+	open := func(t *testing.T, b Backend) error {
+		t.Helper()
+		repo, err := Open(ctx, b, NoPassword())
+		if err == nil {
+			repo.Close()
+		}
+		return err
+	}
+	newRepo := func(t *testing.T) Backend {
+		t.Helper()
+		b := newStubBackend()
+		if err := Init(ctx, b, NoPassword()); err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+
+	t.Run("none", func(t *testing.T) {
+		b := newRepo(t)
+		if ok, _ := b.Exists(ctx, Handle{Type: ConfigFile, Name: featuresName}); ok {
+			t.Fatal("Init wrote a features object")
+		}
+		if err := open(t, b); err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+	})
+	t.Run("empty", func(t *testing.T) {
+		b := newRepo(t)
+		putFeatures(t, b, `{"required":[]}`)
+		if err := open(t, b); err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+	})
+	t.Run("unknown feature", func(t *testing.T) {
+		b := newRepo(t)
+		putFeatures(t, b, `{"required":["packv2"]}`)
+		err := open(t, b)
+		if !errors.Is(err, ErrUnsupportedFormat) || !strings.Contains(err.Error(), "packv2") ||
+			!strings.Contains(err.Error(), "newer ark") {
+			t.Fatalf("Open = %v, want ErrUnsupportedFormat naming the feature", err)
+		}
+	})
+	t.Run("unknown key", func(t *testing.T) {
+		b := newRepo(t)
+		putFeatures(t, b, `{"required":[],"optional":[]}`)
+		if err := open(t, b); !errors.Is(err, ErrUnsupportedFormat) {
+			t.Fatalf("Open = %v, want ErrUnsupportedFormat", err)
+		}
+	})
+	for _, body := range []string{`{"required":"packv2"}`, `{"required":{"packv2":1}}`, `[]`, `{"required":[]} {}`} {
+		t.Run("undecodable "+body, func(t *testing.T) {
+			b := newRepo(t)
+			putFeatures(t, b, body)
+			if err := open(t, b); !errors.Is(err, ErrUnsupportedFormat) || errors.Is(err, ErrCorruptConfig) {
+				t.Fatalf("Open = %v, want ErrUnsupportedFormat", err)
+			}
+		})
+	}
+	t.Run("init over a features object", func(t *testing.T) {
+		b := newRepo(t)
+		putFeatures(t, b, `{"required":[]}`)
+		if err := b.Delete(ctx, Handle{Type: ConfigFile, Name: configName}); err != nil {
+			t.Fatal(err)
+		}
+		if err := Init(ctx, b, NoPassword()); !errors.Is(err, ErrAlreadyInitialized) {
+			t.Fatalf("Init = %v, want ErrAlreadyInitialized", err)
+		}
+	})
+	t.Run("damaged", func(t *testing.T) {
+		b := newRepo(t)
+		putFeatures(t, b, `{"required":[]}`)
+		h := Handle{Type: ConfigFile, Name: featuresName}
+		obj, err := readWhole(ctx, b, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		obj[len(obj)-1] ^= 1
+		if err := b.Put(ctx, h, bytes.NewReader(obj)); err != nil {
+			t.Fatal(err)
+		}
+		if err := open(t, b); !errors.Is(err, ErrCorruptConfig) {
+			t.Fatalf("Open = %v, want ErrCorruptConfig", err)
+		}
+	})
+}
+
+func TestOpenCostsOneGetForTheFeatures(t *testing.T) {
+	ctx := context.Background()
+	count := func(t *testing.T, b *InstrumentedBackend) (gets, lists int64) {
+		t.Helper()
+		before := b.Stats()
+		repo, err := Open(ctx, b, NoPassword())
+		if err != nil {
+			t.Fatal(err)
+		}
+		repo.Close()
+		after := b.Stats()
+		return after.Get.Calls - before.Get.Calls, after.List.Calls - before.List.Calls
+	}
+	b := Instrument(newStubBackend())
+	if err := Init(ctx, b, NoPassword()); err != nil {
+		t.Fatal(err)
+	}
+	// config, key file and features: the features Get is issued whether or
+	// not the object exists. The one List is the key file listing.
+	for _, with := range []bool{false, true} {
+		if with {
+			putFeatures(t, b, `{"required":[]}`)
+		}
+		if gets, lists := count(t, b); gets != 3 || lists != 1 {
+			t.Errorf("features object %v: Open issued %d Gets and %d Lists, want 3 and 1", with, gets, lists)
+		}
 	}
 }

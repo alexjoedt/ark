@@ -21,7 +21,8 @@ package ark_test
 //
 //	pack and index counts and sizes           TestListingRevealsCountsAndSizes
 //	pack size = sealed chunks + sealed table  TestListingRevealsCountsAndSizes
-//	sealed chunk size = zstd frame + overhead TestListingRevealsCountsAndSizes
+//	sealed chunk size = payload + overhead    TestListingRevealsCountsAndSizes,
+//	                                          TestWriterStoresABlobRawWhenZstdIsNotSmaller (format_test.go)
 //	KDF parameters and config in plaintext    TestInitWritesOneKeyFile, TestConfigHoldsOnlyItsPlaintextFields
 //	ms timestamp in lock names                TestLockNamesCarryTheirTime
 
@@ -322,7 +323,7 @@ func TestConfigHoldsOnlyItsPlaintextFields(t *testing.T) {
 		fields map[string]json.RawMessage
 		want   []string
 	}{
-		{cfg, []string{"chunker", "compression", "created_at", "id", "version"}},
+		{cfg, []string{"chunker", "created_at", "id", "version"}},
 		{chunkerFields, []string{"avg", "max", "min"}},
 	} {
 		if got := slices.Sorted(maps.Keys(tc.fields)); !slices.Equal(got, tc.want) {
@@ -396,63 +397,36 @@ func TestSnapshotIDsCarryNoTimestamp(t *testing.T) {
 	}
 }
 
-// TestBase32SnapshotIDsStillWork: a repository written before hex IDs keeps
-// its 26 character names; they list, resolve by full ID and by prefix next to
-// hex ones, and an export imports as a copy under a hex ID.
-func TestBase32SnapshotIDsStillWork(t *testing.T) {
+// TestSnapshotUnderAnotherNameIsRefused: a repository holds snapshots under
+// 32 lowercase hex characters only. A manifest that opens under any other
+// name, such as the dated 26 character names of early builds, is one this
+// format does not have, and the listing fails instead of showing it.
+func TestSnapshotUnderAnotherNameIsRefused(t *testing.T) {
 	ctx := context.Background()
 	repo := openRepo(t, arkmem.New())
-	hexSnap, err := repo.Backup(ctx, stubSource{name: "app", content: "payload"})
+	snap, err := repo.Backup(ctx, stubSource{name: "app", content: "payload"})
 	if err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
-	oldID, err := ark.WriteBase32Snapshot(ctx, repo, hexSnap.ID)
-	if err != nil || len(oldID) != 26 {
-		t.Fatalf("WriteBase32Snapshot = %q, %v", oldID, err)
+	if all, err := repo.Snapshots(ctx, ark.SnapshotFilter{}); err != nil || len(all) != 1 {
+		t.Fatalf("Snapshots = %d, %v, want 1", len(all), err)
 	}
-
-	all, err := repo.Snapshots(ctx, ark.SnapshotFilter{})
-	if err != nil || len(all) != 2 {
-		t.Fatalf("Snapshots = %d, %v, want 2", len(all), err)
+	const dated = "01jd3k9s5w0000000000000000"
+	if err := ark.WriteSnapshotCopy(ctx, repo, snap.ID, dated); err != nil {
+		t.Fatalf("WriteSnapshotCopy: %v", err)
 	}
-	upper := ark.SnapshotID(strings.ToUpper(string(hexSnap.ID)))
-	for _, ref := range []ark.SnapshotID{oldID, oldID[:8], hexSnap.ID, hexSnap.ID[:8], upper, upper[:8]} {
-		got, err := repo.Snapshot(ctx, ref)
-		if err != nil || (got.ID != oldID && got.ID != hexSnap.ID) ||
-			!strings.HasPrefix(string(got.ID), strings.ToLower(string(ref))) {
-			t.Errorf("Snapshot(%q) = %v, %v", ref, got, err)
-		}
+	if _, err := repo.Snapshots(ctx, ark.SnapshotFilter{}); !errors.Is(err, ark.ErrUnsupportedFormat) {
+		t.Errorf("Snapshots = %v, want ErrUnsupportedFormat", err)
 	}
-	sink := &recordingSink{}
-	if _, err := repo.Restore(ctx, oldID[:8], sink); err != nil || sink.written["data.txt"] != "payload" {
-		t.Errorf("Restore by base32 prefix: %v, %q", err, sink.written["data.txt"])
+	if _, err := repo.Snapshot(ctx, dated); !errors.Is(err, ark.ErrUnsupportedFormat) {
+		t.Errorf("Snapshot(%s) = %v, want ErrUnsupportedFormat", dated, err)
 	}
-
-	var archive bytes.Buffer
-	if err := repo.Export(ctx, oldID, &archive); err != nil {
-		t.Fatalf("Export: %v", err)
+	res, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{dated}})
+	if err != nil || len(res.Remove) != 1 || res.Remove[0].ID != dated {
+		t.Fatalf("Forget(%s) = %+v, %v, want it removed", dated, res, err)
 	}
-	target := openRepo(t, arkmem.New())
-	imported, err := target.Import(ctx, bytes.NewReader(archive.Bytes()))
-	if err != nil {
-		t.Fatalf("Import: %v", err)
-	}
-	if len(imported.ID) != 32 || strings.ToLower(string(imported.ID)) != string(imported.ID) {
-		t.Errorf("imported ID %q is not 32 lowercase hex characters", imported.ID)
-	}
-	if _, err := target.Import(ctx, bytes.NewReader(archive.Bytes())); err == nil {
-		t.Error("a second import of the same base32 archive succeeded")
-	}
-	if all, err := target.Snapshots(ctx, ark.SnapshotFilter{}); err != nil || len(all) != 1 {
-		t.Errorf("after two imports Snapshots = %d, %v, want 1", len(all), err)
-	}
-
-	archive.Reset()
-	if err := repo.Export(ctx, hexSnap.ID, &archive); err != nil {
-		t.Fatalf("Export: %v", err)
-	}
-	if _, err := repo.Import(ctx, &archive); err == nil {
-		t.Error("importing a hex snapshot into the repository that holds it replaced it")
+	if all, err := repo.Snapshots(ctx, ark.SnapshotFilter{}); err != nil || len(all) != 1 {
+		t.Errorf("Snapshots after Forget = %d, %v, want 1", len(all), err)
 	}
 }
 
@@ -485,10 +459,10 @@ func TestLockNamesCarryTheirTime(t *testing.T) {
 // TestListingRevealsCountsAndSizes pins the accepted leaks of a listing: one
 // data pack, one tree pack and one index object each for a small backup, one
 // object per snapshot and key file, every size as stored. No chunk and no
-// tree node is listed: a pack is its sealed chunks, each only a fixed
-// overhead plus its zstd frame larger than its content, and a sealed table
-// of one entry per chunk, so its size shows the bytes it holds and not where
-// one chunk ends. Padding would narrow this; anything that widens it fails.
+// tree node is listed: a pack is its sealed chunks, each of these random ones
+// stored raw at its content plus a fixed overhead, and a sealed table of one
+// entry per chunk, so its size shows the bytes it holds and not where one
+// chunk ends. Padding would narrow this; anything that widens it fails.
 func TestListingRevealsCountsAndSizes(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -546,9 +520,6 @@ func TestListingRevealsCountsAndSizes(t *testing.T) {
 		}
 	}
 
-	// zstd stores random data in raw blocks behind a frame header and
-	// checksum, a few bytes per chunk.
-	const zstdFrameSlack = 24
 	chunks := blobNames(t, repo, ark.BlobFile)
 	if len(chunks) != snap.Stats.ChunksNew {
 		t.Errorf("the data index lists %d chunks, the backup stored %d", len(chunks), snap.Stats.ChunksNew)
@@ -562,9 +533,8 @@ func TestListingRevealsCountsAndSizes(t *testing.T) {
 		p := int64(len(openObject(t, repo, ark.BlobFile, name)))
 		plain += p
 		sealed += size
-		if extra := size - ark.SealOverhead - p; extra < 0 || extra > zstdFrameSlack {
-			t.Errorf("chunk of %d bytes sealed at %d, want %d plus at most %d",
-				p, size, p+ark.SealOverhead, zstdFrameSlack)
+		if size != p+ark.SealOverhead {
+			t.Errorf("random chunk of %d bytes sealed at %d, want %d", p, size, p+ark.SealOverhead)
 		}
 	}
 	if plain != snap.Stats.TotalSize {
@@ -573,11 +543,11 @@ func TestListingRevealsCountsAndSizes(t *testing.T) {
 	if sealed != snap.Stats.StoredSize {
 		t.Errorf("chunks are sealed to %d bytes, the snapshot counts %d stored", sealed, snap.Stats.StoredSize)
 	}
-	// The rest of the pack is the sealed table, 36 bytes per chunk before
-	// compression, and its 4 byte length.
-	const tableEntry = 36
+	// The rest of the pack is the sealed table, the 32-byte hash of the
+	// chunks and at most 36 bytes per chunk, and its 4 byte length.
+	const tableSum, tableEntry = 32, 36
 	table := sizes[ark.DataPackFile] - sealed
-	if limit := int64(len(chunks)*tableEntry + ark.SealOverhead + zstdFrameSlack + 4); table <= 4 || table > limit {
+	if limit := int64(tableSum + len(chunks)*tableEntry + ark.SealOverhead + 4); table <= 4 || table > limit {
 		t.Errorf("the data pack holds %d bytes besides its chunks, want a table of at most %d", table, limit)
 	}
 }

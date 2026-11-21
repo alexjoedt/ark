@@ -385,26 +385,154 @@ func TestPackTamperedBytesAreRejected(t *testing.T) {
 	}
 }
 
-func TestPackTableDoesNotOpenBehindOtherBlobs(t *testing.T) {
+// splicedPack returns the blobs of one pack followed by the table of another
+// of the same shape, so only the binding tells them apart, with the entries
+// of that table.
+func splicedPack(t *testing.T, s *packSpace) ([]byte, []packEntry) {
+	t.Helper()
+	_, one, oneEntries := writeOnePack(t, s, newStubBackend(), testBlobs(s, 5, 64, 200, 7))
+	_, two, twoEntries := writeOnePack(t, s, newStubBackend(), testBlobs(s, 6, 64, 200, 7))
+	section := blobSection(oneEntries)
+	if len(one) != len(two) || section != blobSection(twoEntries) {
+		t.Fatalf("fixture packs differ in shape: %d and %d bytes", len(one), len(two))
+	}
+	for i := range oneEntries {
+		if oneEntries[i].length != twoEntries[i].length {
+			t.Fatalf("fixture blob %d differs in sealed length", i)
+		}
+	}
+	return append(bytes.Clone(two[:section]), one[section:]...), oneEntries
+}
+
+// A reader that holds the whole pack compares the sum the table carries with
+// its blobs. The seal of the table is intact: only the sum refuses it.
+func TestPackTableBehindOtherBlobsIsRefusedByItsSum(t *testing.T) {
 	for _, s := range testPackSpaces(t) {
 		t.Run(s.packs.String(), func(t *testing.T) {
-			// Two packs of the same shape, so only the binding tells them apart.
-			_, one, oneEntries := writeOnePack(t, s, newStubBackend(), testBlobs(s, 5, 64, 200, 7))
-			_, two, twoEntries := writeOnePack(t, s, newStubBackend(), testBlobs(s, 6, 64, 200, 7))
-			section := blobSection(oneEntries)
-			if len(one) != len(two) || section != blobSection(twoEntries) {
-				t.Fatalf("fixture packs differ in shape: %d and %d bytes", len(one), len(two))
+			spliced, _ := splicedPack(t, s)
+			_, err := s.parse(spliced)
+			if !errors.Is(err, s.corruptErr) || errors.Is(err, errSealBroken) {
+				t.Errorf("a table behind other blobs: got %v, want %v by its sum", err, s.corruptErr)
 			}
-			for i := range oneEntries {
-				if oneEntries[i].length != twoEntries[i].length {
-					t.Fatalf("fixture blob %d differs in sealed length", i)
+		})
+	}
+}
+
+// What a reader of the tail gives up: without the blob section it cannot
+// compare the sum, so the table of another pack opens. The fixture packs hold
+// no blob in common, so every blob it then reads is one the table does not
+// name, and none opens.
+func TestPackTableOfAnotherPackOpensFromATailReadAndNoOtherBlobDoes(t *testing.T) {
+	ctx := context.Background()
+	for _, s := range testPackSpaces(t) {
+		t.Run(s.packs.String(), func(t *testing.T) {
+			spliced, want := splicedPack(t, s)
+			b := newStubBackend()
+			h := Handle{Type: s.packs, Name: "spliced"}
+			if err := b.Put(ctx, h, bytes.NewReader(spliced)); err != nil {
+				t.Fatal(err)
+			}
+			entries := tailTable(t, s, b, h, int64(len(spliced)))
+			if !slices.Equal(entries, want) {
+				t.Fatalf("the swapped table lists %v, want the entries of its own pack %v", entries, want)
+			}
+			for _, e := range entries {
+				if _, err := s.readBlob(ctx, b, h.Name, e); !errors.Is(err, s.corruptErr) {
+					t.Errorf("blob %x read through a swapped table: got %v, want %v", e.name, err, s.corruptErr)
+				}
+			}
+		})
+	}
+}
+
+// tailTable opens the blob table of the pack of size bytes stored under h the
+// way a reader does that never fetches the blobs: one range read of the
+// trailer, one of the sealed table.
+func tailTable(t *testing.T, s *packSpace, b Backend, h Handle, size int64) []packEntry {
+	t.Helper()
+	ctx := context.Background()
+	trailer, err := b.GetRange(ctx, h, size-packTrailerSize, packTrailerSize)
+	if err != nil {
+		t.Fatalf("read the trailer of %s: %v", h.Name, err)
+	}
+	n := int64(binary.LittleEndian.Uint32(trailer))
+	if n > size-packTrailerSize {
+		t.Fatalf("the trailer of %s gives a table of %d bytes, the pack has %d", h.Name, n, size)
+	}
+	sealed, err := b.GetRange(ctx, h, size-packTrailerSize-n, n)
+	if err != nil {
+		t.Fatalf("read the table of %s: %v", h.Name, err)
+	}
+	entries, _, err := s.openTable(sealed)
+	if err != nil {
+		t.Fatalf("open the table of %s from its tail: %v", h.Name, err)
+	}
+	return entries
+}
+
+// rangeLog records the range reads that reach a backend.
+type rangeLog struct {
+	Backend
+	ranges [][2]int64
+}
+
+func (l *rangeLog) GetRange(ctx context.Context, h Handle, offset, length int64) ([]byte, error) {
+	l.ranges = append(l.ranges, [2]int64{offset, length})
+	return l.Backend.GetRange(ctx, h, offset, length)
+}
+
+func (l *rangeLog) Get(context.Context, Handle) (io.ReadCloser, error) {
+	return nil, errors.New("a tail read fetched the whole pack")
+}
+
+// The table opens from the tail of its pack: the size from a listing, the
+// last four bytes, then the table. No byte of the blob section is read.
+func TestPackTableOpensFromATailRead(t *testing.T) {
+	ctx := context.Background()
+	for _, s := range testPackSpaces(t) {
+		t.Run(s.packs.String(), func(t *testing.T) {
+			b := newStubBackend()
+			blobs := testBlobs(s, 12, 3000, 1, 64, 500, 9000)
+			name, pack, want := writeOnePack(t, s, b, blobs)
+
+			size := int64(-1)
+			err := b.List(ctx, s.packs, func(info BlobInfo) error {
+				if info.Name == name {
+					size = info.Size
+				}
+				return nil
+			})
+			if err != nil || size != int64(len(pack)) {
+				t.Fatalf("List gives %d bytes for the pack of %d: %v", size, len(pack), err)
+			}
+
+			log := &rangeLog{Backend: b}
+			got := tailTable(t, s, log, Handle{Type: s.packs, Name: name}, size)
+			if !slices.Equal(got, want) {
+				t.Errorf("a tail read lists %v, the writer reported %v", got, want)
+			}
+			for i, blob := range blobs {
+				if hex.EncodeToString(got[i].name[:]) != blob.name || int(got[i].length) != len(blob.sealed) {
+					t.Errorf("entry %d is %x with %d bytes, want %s with %d",
+						i, got[i].name, got[i].length, blob.name, len(blob.sealed))
+				}
+			}
+			section := int64(blobSection(want))
+			if len(log.ranges) != 2 {
+				t.Fatalf("a tail read took %d range reads, want 2", len(log.ranges))
+			}
+			for _, r := range log.ranges {
+				if r[0] < section {
+					t.Errorf("a tail read started at %d, inside the %d bytes of blobs", r[0], section)
 				}
 			}
 
-			spliced := append(bytes.Clone(two[:section]), one[section:]...)
-			_, err := s.parse(spliced)
-			if !errors.Is(err, s.corruptErr) || !errors.Is(err, errSealBroken) {
-				t.Errorf("a table behind another pack's blobs: got %v, want %v from a broken seal", err, s.corruptErr)
+			// The blobs then open by range, each under its own name.
+			for i, e := range got {
+				data, err := s.readBlob(ctx, b, name, e)
+				if err != nil || !bytes.Equal(data, blobs[i].data) {
+					t.Errorf("blob %d read through the tail's table: %v", i, err)
+				}
 			}
 		})
 	}
@@ -720,7 +848,7 @@ func TestPackTableThatDisagreesWithItsBlobsIsRejected(t *testing.T) {
 			// One entry covering the whole section, then a stray byte.
 			table := binary.LittleEndian.AppendUint32(make([]byte, sha256.Size), uint32(len(section)))
 			sum := sha256.Sum256(section)
-			tail = s.codec.seal(s.dataKey, s.tableAAD(sum[:]), append(table, 0))
+			tail = s.codec.seal(s.dataKey, s.tableAAD(), append(slices.Concat(sum[:], table), 0))
 			tail = append(tail, byte(len(tail)), 0, 0, 0)
 			if _, err := s.parse(slices.Concat(section, tail)); !errors.Is(err, s.corruptErr) {
 				t.Errorf("a table with a cut entry: got %v, want %v", err, s.corruptErr)

@@ -41,8 +41,17 @@ there, you don't need to initialize it again.
 
 ### `unsupported repository format`
 
-The repository was written by a build with another format version. ark doesn't migrate
-repositories. Read it with the build that wrote it, or create a new repository and back up again.
+The repository was written by a build with another format version, or it holds something a later
+release stored that this release doesn't know. The message names what it is: a format version, an
+object format byte, a file type, or a JSON key.
+
+- For another format version, read the repository with the build that wrote it, or create a new
+  repository and back up again. ark doesn't migrate repositories.
+- For anything else, use the newer release. An older release refuses what it doesn't know
+  instead of skipping it.
+- If the message names a lock, a newer release holds it or left it behind. `ark unlock --force`
+  removes it together with every other lock. Run it only when no ark command of any release is
+  using the repository.
 
 ## Passwords
 

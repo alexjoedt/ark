@@ -44,7 +44,7 @@ func TestInitWritesTheConfigSchema(t *testing.T) {
 	}
 
 	// Field order is part of the format promise.
-	wantOrder := []string{`"version"`, `"id"`, `"created_at"`, `"chunker"`, `"compression"`}
+	wantOrder := []string{`"version"`, `"id"`, `"created_at"`, `"chunker"`}
 	pos := -1
 	for _, field := range wantOrder {
 		at := strings.Index(string(data), field)
@@ -58,11 +58,10 @@ func TestInitWritesTheConfigSchema(t *testing.T) {
 	}
 
 	var cfg struct {
-		Version     int            `json:"version"`
-		ID          string         `json:"id"`
-		CreatedAt   time.Time      `json:"created_at"`
-		Chunker     map[string]int `json:"chunker"`
-		Compression string         `json:"compression"`
+		Version   int            `json:"version"`
+		ID        string         `json:"id"`
+		CreatedAt time.Time      `json:"created_at"`
+		Chunker   map[string]int `json:"chunker"`
 	}
 	if strings.Contains(string(data), `"encryption"`) {
 		t.Errorf("config has an encryption field, the object format byte names the codec: %s", data)
@@ -83,9 +82,6 @@ func TestInitWritesTheConfigSchema(t *testing.T) {
 	want := chunker.DefaultConfig()
 	if cfg.Chunker["min"] != want.MinSize || cfg.Chunker["avg"] != want.AvgSize || cfg.Chunker["max"] != want.MaxSize {
 		t.Errorf("chunker = %v, want the chunker defaults %+v", cfg.Chunker, want)
-	}
-	if cfg.Compression != "zstd" {
-		t.Errorf("compression = %q, want %q", cfg.Compression, "zstd")
 	}
 }
 
@@ -217,10 +213,10 @@ func TestOpenRequiresAConfig(t *testing.T) {
 func TestOpenRejectsUnknownFormats(t *testing.T) {
 	ctx := context.Background()
 	cases := map[string]string{
-		"future version":     `{"version":4,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3},"compression":"zstd"}`,
-		"missing version":    `{"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3},"compression":"zstd"}`,
-		"unknown codec":      `{"version":1,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3},"compression":"lz4"}`,
-		"impossible chunker": `{"version":1,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":9,"avg":2,"max":3},"compression":"zstd"}`,
+		"future version":     `{"version":4,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3}}`,
+		"missing version":    `{"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3}}`,
+		"compression field":  `{"version":1,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3},"compression":"zstd"}`,
+		"impossible chunker": `{"version":1,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":9,"avg":2,"max":3}}`,
 		"not json":           `this is not a repository`,
 	}
 	for name, body := range cases {

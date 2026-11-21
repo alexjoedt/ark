@@ -109,5 +109,5 @@ The value of `ark/docker-host` depends on who talks to the daemon:
 
 ### Stored form
 
-The snapshot manifest keeps the labels under the key `source_meta`. See
+The snapshot manifest keeps the labels under the key `labels`. See
 [Repository format](format.md).

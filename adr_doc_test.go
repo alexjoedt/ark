@@ -11,9 +11,10 @@ import (
 )
 
 var (
-	adrFile    = regexp.MustCompile(`^(\d{4})-[a-z0-9-]+\.md$`)
-	adrTitle   = regexp.MustCompile(`(?m)\A# (\d{4}): (.+)$`)
-	adrStatus  = regexp.MustCompile(`(?m)^Status: (proposed|accepted|deprecated|(?:partly )?superseded by (\d{4}))$`)
+	adrFile   = regexp.MustCompile(`^(\d{4})-[a-z0-9-]+\.md$`)
+	adrTitle  = regexp.MustCompile(`(?m)\A# (\d{4}): (.+)$`)
+	adrStatus = regexp.MustCompile(
+		`(?m)^Status: (proposed|accepted|deprecated|(?:partly )?superseded by (\d{4}(?:, \d{4})*))$`)
 	adrFileRef = regexp.MustCompile("`([A-Za-z0-9_./-]+\\.(?:go|sh|md|yml|yaml|mod))`")
 	adrDate    = regexp.MustCompile(`(?m)^Date: (\d{4}-\d{2}-\d{2})$`)
 	adrRow     = regexp.MustCompile(`(?m)^\| (\d{4}) \| \[(.+)\]\(([^)]+)\) \| (.+) \| (\d{4}-\d{2}-\d{2}) \|$`)
@@ -140,9 +141,11 @@ func TestADRIndexMatchesFiles(t *testing.T) {
 			t.Errorf("%s: index date %q, file date %q", name, r.date, date[1])
 		}
 	}
-	for name, n := range superseders {
-		if _, ok := numbers[n]; !ok {
-			t.Errorf("%s: superseded by %s, which does not exist", name, n)
+	for name, list := range superseders {
+		for _, n := range strings.Split(list, ", ") {
+			if _, ok := numbers[n]; !ok {
+				t.Errorf("%s: superseded by %s, which does not exist", name, n)
+			}
 		}
 	}
 	for name := range rows {

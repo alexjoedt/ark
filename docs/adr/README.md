@@ -20,11 +20,11 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0003 | [Unchanged-file detection](0003-unchanged-file-detection.md) | accepted | 2026-11-07 |
 | 0004 | [v0 line and release tagging](0004-v0-line-and-release-tagging.md) | accepted | 2026-11-07 |
 | 0005 | [Sync barrier instead of per-object fsync](0005-sync-barrier-instead-of-per-object-fsync.md) | partly superseded by 0012 | 2026-11-08 |
-| 0006 | [Threat model boundaries](0006-threat-model-boundaries.md) | partly superseded by 0016 | 2026-11-08 |
+| 0006 | [Threat model boundaries](0006-threat-model-boundaries.md) | partly superseded by 0016, 0035 | 2026-11-08 |
 | 0007 | [Embedding hooks on Open](0007-embedding-hooks-on-open.md) | accepted | 2026-11-08 |
 | 0008 | [Path matcher package](0008-path-matcher-package.md) | accepted | 2026-11-11 |
 | 0009 | [Exclude patterns on the snapshot](0009-exclude-patterns-on-the-snapshot.md) | accepted | 2026-11-11 |
-| 0010 | [Pack object layout and blob binding](0010-pack-object-layout-and-blob-binding.md) | accepted | 2026-11-11 |
+| 0010 | [Pack object layout and blob binding](0010-pack-object-layout-and-blob-binding.md) | partly superseded by 0033 | 2026-11-11 |
 | 0011 | [Pack index format and loading](0011-pack-index-format-and-loading.md) | partly superseded by 0014 | 2026-11-11 |
 | 0012 | [Crash and concurrent-writer model for packs](0012-crash-and-writer-model-for-packs.md) | partly superseded by 0014 | 2026-11-11 |
 | 0013 | [Prune repacks by a repository-wide unused budget](0013-prune-repacks-by-an-unused-budget.md) | accepted | 2026-11-11 |
@@ -36,7 +36,7 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0019 | [Find and the arkfind package](0019-find-and-the-arkfind-package.md) | accepted | 2026-11-15 |
 | 0020 | [Read session with an io/fs view per snapshot](0020-read-session-with-an-io-fs-view.md) | accepted | 2026-11-15 |
 | 0021 | [One series key: source type, source name and host](0021-one-series-key-type-source-host.md) | accepted | 2026-11-16 |
-| 0022 | [Snapshot labels](0022-snapshot-labels.md) | accepted | 2026-11-16 |
+| 0022 | [Snapshot labels](0022-snapshot-labels.md) | partly superseded by 0035 | 2026-11-16 |
 | 0023 | [A VitePress docs site with Node only in docs/](0023-vitepress-docs-site.md) | accepted | 2026-11-16 |
 | 0024 | [Forget periods count in the local time of the forget run](0024-forget-periods-in-the-local-time-of-the-forget-run.md) | partly superseded by 0027 | 2026-11-17 |
 | 0025 | [A typed keep count with a named unlimited value](0025-typed-keep-count-with-unlimited.md) | accepted | 2026-11-17 |
@@ -46,3 +46,8 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0029 | [Volume profiles without the Docker SDK](0029-volume-profiles-without-the-docker-sdk.md) | accepted | 2026-11-19 |
 | 0030 | [ark profile backup runs the backup a profile names](0030-profile-backup-runs-the-backup-a-profile-names.md) | accepted | 2026-11-20 |
 | 0031 | [No pool for chunk buffers](0031-no-pool-for-chunk-buffers.md) | accepted | 2026-11-21 |
+| 0032 | [A raw codec and an authenticated format byte](0032-raw-codec-and-authenticated-format-byte.md) | accepted | 2026-11-21 |
+| 0033 | [A pack table that opens from the tail of its pack](0033-pack-table-opens-from-a-tail-read.md) | accepted | 2026-11-21 |
+| 0034 | [What a build does not know it refuses, per object](0034-unknown-input-is-refused-not-skipped.md) | accepted | 2026-11-21 |
+| 0035 | [Version 1 drops the legacy of earlier builds](0035-version-1-drops-the-legacy-of-earlier-builds.md) | accepted | 2026-11-21 |
+| 0036 | [Manifest names stay random](0036-manifest-names-stay-random.md) | accepted | 2026-11-21 |

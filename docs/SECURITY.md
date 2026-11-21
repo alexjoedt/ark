@@ -49,22 +49,25 @@ writer, every accepted risk included.
 ## Format
 
 - Chunks, trees, index objects, manifests, locks and the lost-pack marker are sealed under the
-  data key as `0x02 | 24-byte nonce | XChaCha20-Poly1305(zstd frame)` with the associated data
-  `<namespace>/<name>`; data is compressed with zstd before it is sealed, and an object with any
-  other format byte is rejected: `TestUnknownFormatByteIsRejected`. A key file's `key` field is
-  sealed the same way.
+  data key as `format byte | 24-byte nonce | XChaCha20-Poly1305(payload)` with the associated data
+  `format byte | <namespace>/<name>`. Under format byte `0x02` the payload is the zstd frame of
+  the content. Under `0x03` it is the content as it is, which the writer picks when the zstd frame
+  would not be smaller. An object that authenticates under any other format byte is refused with
+  `ErrUnsupportedFormat`, and one whose format byte was changed, to the other or to any byte,
+  does not open: `TestUnknownFormatByteIsRejected`,
+  `TestWriterStoresABlobRawWhenZstdIsNotSmaller`. A key file's `key` field is sealed the same way.
 - Chunks and trees are stored inside pack objects: each one sealed on its own as above, followed
-  by a sealed table of their names and lengths that is bound to the SHA-256 of the bytes before
+  by a sealed table of their names and lengths that carries the SHA-256 of the bytes before
   it. A pack is named by the SHA-256 of its bytes, which are ciphertext throughout. The layout
   of packs and index objects is in [Repository format](format.md).
 - Chunk, tree and index names are the hex HMAC-SHA256 of their plaintext under the repository's ID
   key, the lost-pack marker's that of its namespace name, manifests and locks are sealed under
   chosen names: snapshot IDs are 128 random bits in 32 lowercase hex characters, lock names a
-  millisecond timestamp plus 80 random bits. A repository may also hold snapshots under 26
-  character Crockford base32 IDs, which ark resolves but does not write; an import of an archive
-  whose ID has another form names the copy by the first 128 bits of the SHA-256 of that ID:
+  millisecond timestamp plus 80 random bits. A manifest that opens under a name of any other form
+  is refused with `ErrUnsupportedFormat`, and an import of an archive whose ID has another form
+  names the copy by the first 128 bits of the SHA-256 of that ID:
   `TestChunksAndTreesAreSealedUnderKeyedNames`, `TestSnapshotIDsCarryNoTimestamp`,
-  `TestBase32SnapshotIDsStillWork`.
+  `TestSnapshotUnderAnotherNameIsRefused`, `TestImportNamesAForeignIDByItsHash`.
 - The master key holds the data key, the ID key, the chunker seed (which keys the chunk boundaries),
   the repository ID and `config_hash`, the SHA-256 of the config bytes Init stored.
 - A key file seals the master key under a wrap key derived with argon2id from the password and a
@@ -74,7 +77,7 @@ writer, every accepted risk included.
 - Open refuses a key file asking for more than time 16 or 1 GiB of memory and tries at most 20 key
   files, so a forged key file cannot make it allocate or spin without bound:
   `TestOpenRejectsUnknownKeyFiles`, `TestOpenTriesAtMostTwentyKeyFiles`.
-- The config is plain JSON (version, id, created_at, chunker, compression), authenticated through
+- The config is plain JSON (version, id, created_at, chunker), authenticated through
   `config_hash`: `TestConfigHoldsOnlyItsPlaintextFields`, `TestTamperedConfigIsRejected`.
 
 ## Guarantees at rest
@@ -98,10 +101,16 @@ writer, every accepted risk included.
   missing: Restore and Verify fail with `ErrNotFound` or report the chunk missing, Check lists it
   under errors, and prune deletes nothing while a snapshot references a blob no index lists:
   `TestTamperedObjectsAreRejected`, `TestPruneAbortsWhenTheIndexHidesALiveBlob`.
-- The blob table of a pack under the same mutations does not open, also when the pack is stored
+- The blob table of a pack under the same mutations is refused, also when the pack is stored
   under the name its changed bytes hash to: RebuildIndex names the pack unreadable and takes no
-  entry from it, so a rebuilt index never points a name at other bytes:
-  `TestTamperedObjectsAreRejected`.
+  entry from it, so a rebuilt index never points a name at other bytes. A changed table does not
+  open. The table of another pack of the repository opens, since all tables of a namespace are
+  sealed under one name, and is refused by the hash of the blobs it carries, which RebuildIndex
+  compares with the pack it read: `TestTamperedObjectsAreRejected`,
+  `TestPackTableBehindOtherBlobsIsRefusedByItsSum`. A table read from the tail of a pack alone
+  lacks that comparison. It leads to no content other than the blob a name stands for: each blob
+  it lists that the pack does not also hold at that place fails to open under its name:
+  `TestPackTableOfAnotherPackOpensFromATailReadAndNoOtherBlobDoes`.
 - A pack that is gone while the index lists it is an error of Check whether or not a snapshot
   references it, as is a pack whose own table disagrees with the index. A backup passes over what
   the index lists in a pack that is gone and stores again what it reads. Once an index load has
@@ -121,11 +130,20 @@ writer, every accepted risk included.
 - A lock under the same mutations is treated as absent, Check lists it under warnings, and only a
   forced unlock deletes it: `TestTamperedObjectsAreRejected`,
   `TestTamperedLockIsIgnoredUntilForced`.
+- What a build does not know is refused with `ErrUnsupportedFormat`, never skipped and never
+  reported as corrupt: a sealed object under an unknown format byte, a tree entry of an unknown
+  file type, and a config, key file, manifest or lock with a JSON key the build does not know.
+  Restore, Verify, Check, Export, a Reader and prune stop at such a chunk, tree entry or
+  manifest, and no operation starts while such a lock is stored. Only a holder of the key can
+  store one of these, the key file header aside, which is plaintext:
+  `TestUnknownFormatByteIsRejected`, `TestUnknownFileTypeFailsEveryReader`,
+  `TestManifestIsDecodedStrictly`, `TestLockWithAnUnknownKeyStopsTheOperation`,
+  `TestOpenRefusesUnknownKeys`.
 - A key file with any byte changed, or one from another repository, does not open:
   `TestEveryFlippedKeyFileByteFailsOpen`, `TestKeyFileDoesNotOpenElsewhere`.
 - A config that is flipped, truncated, reformatted or replaced by another repository's fails Open
-  with `ErrCorruptConfig`, also after ChangePassword, and a master key without `config_hash` is
-  refused: `TestTamperedConfigIsRejected`, `TestOpenRejectsAMasterKeyWithoutConfigHash`.
+  with `ErrCorruptConfig`, also after ChangePassword, and so does a master key without
+  `config_hash`: `TestTamperedConfigIsRejected`, `TestOpenRejectsAMasterKeyWithoutConfigHash`.
 - A replayed snapshot manifest restores exactly the bytes its snapshot held, never newer ones;
   after a prune it fails with `ErrNotFound` on its root tree: `TestReplayedManifestRestoresOnlyItsOwnBytes`.
 - An old config put back beside the current key files fails Open with `ErrCorruptConfig`:
@@ -164,20 +182,21 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
   listed, until a prune or a rebuild of the index drops the entries:
   `TestReplayedIndexObjectIsPassedOver`.
 - Object sizes and counts per namespace show: the size of every pack and index object, and with the
-  index sizes the number of chunks and trees. A sealed chunk is its zstd frame plus 41 bytes and a
-  pack is its sealed chunks plus a sealed table, so the stored bytes show, while the boundaries
-  between the blobs of a pack do not, they sit in the sealed table. A stored lost-pack marker shows
-  that an index load found a data pack missing or a data index object that does not open:
-  `TestListingRevealsCountsAndSizes`.
+  index sizes the number of chunks and trees. A sealed chunk is 41 bytes plus its zstd frame under
+  format byte `0x02`, or plus its plain length under `0x03`, and a pack is its sealed chunks plus a
+  sealed table, so the stored bytes show, while the boundaries between the blobs of a pack do not,
+  they sit in the sealed table. A stored lost-pack marker shows that an index load found a data
+  pack missing or a data index object that does not open: `TestListingRevealsCountsAndSizes`.
+- The format byte is plaintext. For a single object, a key file's `key` field, and the first blob
+  and the table of a pack it shows whether the content compressed, and an object stored raw is its
+  exact plain length plus 41 bytes. The format bytes of the other blobs of a pack sit at offsets
+  only the sealed table gives: `TestWriterStoresABlobRawWhenZstdIsNotSmaller`.
 - The number of packs shows the size of what a backup added: a pack closes once its blobs reach
   16 MiB, so the number of full packs and the size of the run's last, short one give it:
   `TestPackWriterClosesPacksAtTheTargetSize`.
 - The argon2id parameters and the config are plaintext: `TestInitWritesOneKeyFile`,
   `TestConfigHoldsOnlyItsPlaintextFields`.
 - Lock names carry the millisecond they were created: `TestLockNamesCarryTheirTime`.
-- A 26 character base32 snapshot ID begins with the millisecond its snapshot was created in its
-  first 10 characters, so whoever can list `snapshots/` dates those snapshots:
-  `TestBase32SnapshotIDsStillWork`.
 - `ARK_PASSWORD` and `ARK_NEW_PASSWORD` are visible to every process of the same user;
   `--password-file` and `--new-password-file` are the safer inputs: `TestNoPasswordFlag`.
 

@@ -1474,3 +1474,49 @@ func TestBackupTimeInAClockChange(t *testing.T) {
 		}
 	}
 }
+
+// ls --json reports mode_t & 07777, as the snapshot stores it: setuid,
+// setgid and sticky included.
+func TestLsJSONKeepsSpecialBits(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no setuid on windows")
+	}
+	repo := initRepo(t)
+	t.Setenv("ARK_REPOSITORY", "")
+	src := t.TempDir()
+	bin := filepath.Join(src, "passwd")
+	if err := os.WriteFile(bin, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bin, 0o755|os.ModeSetuid); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := runCapture(t, "-r", repo, "backup", "--source", "s", src); code != 0 {
+		t.Fatalf("backup exit %d: %s", code, out)
+	}
+	code, out := runCapture(t, "--json", "-r", repo, "snapshots")
+	var list []struct{ ID string }
+	if err := json.Unmarshal([]byte(out), &list); err != nil || code != 0 || len(list) != 1 {
+		t.Fatalf("snapshots: exit %d, %q", code, out)
+	}
+	code, out = runCapture(t, "--json", "-r", repo, "ls", list[0].ID)
+	if code != 0 {
+		t.Fatalf("ls exit %d: %s", code, out)
+	}
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		var e struct {
+			Path string `json:"path"`
+			Mode int    `json:"mode"`
+		}
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatalf("not one object per line: %q", line)
+		}
+		if e.Path == "passwd" {
+			if e.Mode != 0o4755 {
+				t.Fatalf("mode %o, want 4755", e.Mode)
+			}
+			return
+		}
+	}
+	t.Fatalf("passwd not listed: %q", out)
+}

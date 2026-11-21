@@ -110,7 +110,7 @@ func TestLockObjectIsSealedInTheLocksNamespace(t *testing.T) {
 	}
 
 	h := Handle{Type: LockFile, Name: names[0]}
-	if stored := readObject(t, b, h); stored[0] != formatSealed {
+	if stored := readObject(t, b, h); !knownFormat(stored[0]) {
 		t.Fatalf("lock starts with 0x%02x, want the sealed format byte", stored[0])
 	}
 	raw, err := repo.getSealed(ctx, h)

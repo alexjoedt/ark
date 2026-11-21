@@ -44,7 +44,7 @@ func (r *Repository) runBackup(
 		Version:    manifestVersion,
 		ID:         newSnapshotID(),
 		ParentID:   parentID,
-		CreatedAt:  createdAt.UTC(),
+		CreatedAt:  createdAt,
 		SourceName: meta.Name,
 		SourceType: meta.Type,
 		Labels:     mergeLabels(meta.Labels, opts.labels),
@@ -236,7 +236,7 @@ func (r *Repository) runBackup(
 
 	stats.computeRatios()
 
-	m.Stats = stats
+	m.Stats = storedStats(stats)
 
 	if err := r.saveManifest(ctx, m); err != nil {
 		return nil, err

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -75,6 +76,7 @@ func RunSourceSinkTests(
 	t.Run("EmptyFileAndDirectory", func(t *testing.T) { testEmptyEntries(t, newSource, write) })
 	t.Run("Hardlink", func(t *testing.T) { testHardlink(t, newSource, write) })
 	t.Run("Symlink", func(t *testing.T) { testSymlink(t, newSource, write) })
+	t.Run("SpecialModes", func(t *testing.T) { testSpecialModes(t, newSource, write) })
 	t.Run("Xattrs", func(t *testing.T) { testXattrs(t, newSource, write) })
 	t.Run("WalkWithoutOpen", func(t *testing.T) { testWalkWithoutOpen(t, newSource, write) })
 	t.Run("ConcurrentOpen", func(t *testing.T) { testConcurrentOpen(t, newSource, write) })
@@ -87,7 +89,8 @@ type writeFunc func(t *testing.T, entries []Entry) string
 
 // write feeds entries into a fresh sink and returns the location to read back.
 // Entries arrive in the order given, which is the order the core uses: parents
-// before children, a hardlink after the entry it points at.
+// before children, a hardlink after the entry it points at. Every entry is
+// owned by the user running the suite, so a sink needs no privilege to set it.
 func write(t *testing.T, newSink func(t *testing.T) (ark.Sink, string), meta ark.SourceMeta, entries []Entry) string {
 	t.Helper()
 	ctx := context.Background()
@@ -106,6 +109,8 @@ func write(t *testing.T, newSink func(t *testing.T) (ark.Sink, string), meta ark
 			Type:     e.Type,
 			LinkDest: e.LinkDest,
 			Xattrs:   e.Xattrs,
+			UID:      max(os.Getuid(), 0),
+			GID:      max(os.Getgid(), 0),
 		}
 		var r io.Reader
 		if e.Type == ark.FileTypeRegular {
@@ -132,7 +137,7 @@ func read(t *testing.T, newSource func(t *testing.T, location string) ark.Source
 		e := Entry{
 			Path:     info.Path,
 			Type:     info.Type,
-			Mode:     info.Mode.Perm(),
+			Mode:     info.Mode & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky),
 			LinkDest: info.LinkDest,
 			Xattrs:   info.Xattrs,
 		}
@@ -315,6 +320,36 @@ func testSymlink(
 	}
 	if link.LinkDest != "target.txt" {
 		t.Errorf("link points at %q, want target.txt", link.LinkDest)
+	}
+}
+
+// testSpecialModes checks that setuid, setgid and sticky survive, as the
+// [ark.FileInfo] Mode contract asks.
+func testSpecialModes(
+	t *testing.T,
+	newSource func(t *testing.T, location string) ark.Source,
+	write writeFunc,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows holds no setuid, setgid or sticky bit")
+	}
+	entries := []Entry{
+		{Path: "shared", Type: ark.FileTypeDirectory, Mode: os.ModeSetgid | os.ModeSticky | 0o775},
+		{Path: "suid", Type: ark.FileTypeRegular, Mode: os.ModeSetuid | 0o755, Content: "runs as its owner"},
+		{Path: "sgid", Type: ark.FileTypeRegular, Mode: os.ModeSetgid | 0o755, Content: "runs as its group"},
+	}
+
+	got := roundTrip(t, newSource, write, entries)
+
+	for _, want := range entries {
+		e, ok := got[want.Path]
+		if !ok {
+			t.Errorf("%s did not come back, got %v", want.Path, paths(got))
+			continue
+		}
+		if e.Mode != want.Mode {
+			t.Errorf("%s came back with mode %v, want %v", want.Path, e.Mode, want.Mode)
+		}
 	}
 }
 

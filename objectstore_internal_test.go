@@ -82,6 +82,44 @@ func TestVerifyingStoreRecomputesTheName(t *testing.T) {
 	}
 }
 
+// TestCodecOpensBothFormatBytes seals content that compresses, content that
+// does not and none at all: seal picks the smaller payload, open returns the
+// content under either byte, and an object relabelled with the other byte
+// fails on its tag.
+func TestCodecOpensBothFormatBytes(t *testing.T) {
+	codec := newObjectCodec()
+	defer codec.Close()
+	key := (*[32]byte)(&newMasterKey("repo").DataKey)
+	random := make([]byte, 4<<10)
+	rand.Read(random)
+
+	for name, tc := range map[string]struct {
+		data   []byte
+		format byte
+	}{
+		"text":   {bytes.Repeat([]byte("text "), 1<<10), formatZstd},
+		"random": {random, formatRaw},
+		"short":  {[]byte("x"), formatRaw},
+		"empty":  {nil, formatRaw},
+	} {
+		obj := codec.seal(key, "data/x", tc.data)
+		if obj[0] != tc.format {
+			t.Errorf("%s: sealed under 0x%02x, want 0x%02x", name, obj[0], tc.format)
+		}
+		if raw := sealOverhead + len(tc.data); len(obj) > raw || (obj[0] == formatRaw) != (len(obj) == raw) {
+			t.Errorf("%s: %d bytes sealed to %d under 0x%02x, raw is %d", name, len(tc.data), len(obj), obj[0], raw)
+		}
+		if got, err := codec.open(key, "data/x", obj); err != nil || !bytes.Equal(got, tc.data) {
+			t.Errorf("%s: open returned %d bytes, want %d: %v", name, len(got), len(tc.data), err)
+		}
+		obj[0] ^= formatZstd ^ formatRaw
+		if got, err := codec.open(key, "data/x", obj); !errors.Is(err, errSealBroken) {
+			t.Errorf("%s: open under the other format byte returned %d bytes and %v, want errSealBroken",
+				name, len(got), err)
+		}
+	}
+}
+
 // BenchmarkObjectCodec measures seal and open of a 1 MiB chunk, zstd
 // included, for random and for compressible content.
 func BenchmarkObjectCodec(b *testing.B) {
@@ -364,5 +402,23 @@ func TestCheckComparesASuspectPackWithTheIndex(t *testing.T) {
 		!strings.Contains(result.Errors[0], "an index rebuild restores the index from the packs") {
 		t.Errorf("findings %+v, want one error saying that pack %s disagrees with the index about %s "+
 			"and that an index rebuild repairs it", result, packs[0].name, names[0])
+	}
+}
+
+// Every blob table of a pack namespace is sealed under the one name
+// packTableName, so an object sealed whole there would authenticate as one.
+func TestPutSealedRefusesAPackNamespace(t *testing.T) {
+	codec := newObjectCodec()
+	defer codec.Close()
+	b := newStubBackend()
+	r := &Repository{backend: b, codec: codec, key: newMasterKey("repo"), logger: quietLogger}
+	for _, typ := range []HandleType{DataPackFile, TreePackFile} {
+		h := Handle{Type: typ, Name: packTableName}
+		if err := r.putSealed(context.Background(), h, []byte("marker")); err == nil {
+			t.Errorf("putSealed stored a sealed object under %s/%s", typ, packTableName)
+		}
+		if ok, _ := b.Exists(context.Background(), h); ok {
+			t.Errorf("putSealed left an object under %s/%s", typ, packTableName)
+		}
 	}
 }

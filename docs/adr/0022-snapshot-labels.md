@@ -1,6 +1,6 @@
 # 0022: Snapshot labels
 
-Status: accepted
+Status: partly superseded by 0035
 Date: 2026-11-16
 
 ## Context
@@ -43,8 +43,8 @@ repository opens, and `Backup` runs the same check before it writes anything; bo
 ## Consequences
 
 Validation is tested key by key (`TestBackupRejectsInvalidLabels`), as is the exact AND filter
-(`TestSnapshotFilterMatchesLabels`, `TestBackupLabelsAreStoredAndFiltered`) and the unchanged
-manifest key (`TestManifestLabelsKeepTheSourceMetaKey`). A Sink sees the merged labels in
+(`TestSnapshotFilterMatchesLabels`, `TestBackupLabelsAreStoredAndFiltered`) and the manifest key
+(`TestManifestKeepsLabelsUnderLabels`, since 0035 renamed the key to `labels`). A Sink sees the merged labels in
 `SourceMeta.Labels` on restore. Labels are set at backup only; changing them later needs a manifest
 rewrite of its own. The filter knows equality only; selector operators such as `!=` or `in` can be
 added beside it. Code that read `Snapshot.SourceMeta` now reads `Snapshot.Labels`, an API break on

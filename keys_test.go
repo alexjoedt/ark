@@ -137,8 +137,8 @@ func TestInitWritesOneKeyFile(t *testing.T) {
 				t.Errorf("salt %q, want 16 bytes in hex", kf.Salt)
 			}
 			sealed, err := hex.DecodeString(kf.Key)
-			if err != nil || len(sealed) < 41 || sealed[0] != 0x02 {
-				t.Errorf("key %q, want a sealed object in hex starting with format byte 0x02", kf.Key)
+			if err != nil || len(sealed) < 41 || !sealedFormat(sealed[0]) {
+				t.Errorf("key %q, want a sealed object in hex starting with a sealed format byte", kf.Key)
 			}
 			for _, leak := range []string{"data_key", "id_key", "chunker_seed", "repository_id", "secret"} {
 				if strings.Contains(string(body), leak) {
@@ -281,6 +281,7 @@ func TestOpenRejectsUnknownKeyFiles(t *testing.T) {
 		"too much time":   `{"version":1,"kdf":"argon2id","time":17,"memory":64,"threads":1,"salt":"00","key":"00"}`,
 		"too much memory": `{"version":1,"kdf":"argon2id","time":1,"memory":1048577,"threads":1,"salt":"00","key":"00"}`,
 		"not json":        `not a key file`,
+		"unknown key":     `{"version":1,"kdf":"none","key":"00","later":true}`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

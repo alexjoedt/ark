@@ -300,7 +300,7 @@ func (s *fileSource) walk(ctx context.Context, fn func(path string, fi os.FileIn
 			Path:    rel,
 			Type:    ark.FileTypeRegular,
 			Size:    fi.Size(),
-			Mode:    fi.Mode().Perm(),
+			Mode:    fi.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky),
 			ModTime: fi.ModTime(),
 			UID:     uid,
 			GID:     gid,

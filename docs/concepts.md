@@ -49,8 +49,8 @@ file ──► chunks ──► compress ──► encrypt ──► packs ─�
 - **Index.** The index records which pack holds which chunk. If it's ever lost,
   `ark repair index` rebuilds it from the packs.
 
-Chunks are compressed with zstd and then encrypted. [Repository format](format.md) has the byte
-layout.
+Chunks are compressed with zstd and then encrypted. A chunk that zstd doesn't make smaller is
+encrypted as it is. [Repository format](format.md) has the byte layout.
 
 ## Parents and unchanged files
 

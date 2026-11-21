@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/alexjoedt/ark/chunker"
@@ -20,14 +21,55 @@ import (
 // The format is frozen with v1.1.0; later changes are additive or bump it.
 const repoFormatVersion = 1
 
-// configName is the name of the single object in the config namespace.
+// configName is the name of the repository config object in the config
+// namespace. The namespace holds one other object, the optional features.
 const configName = "config"
+
+// featuresName is the optional sealed object in the config namespace that
+// names the features a repository requires. No build of version 1 writes it.
+const featuresName = "features"
+
+// knownFeatures are the feature names this build supports. Version 1 has none.
+var knownFeatures = map[string]struct{}{}
+
+type repositoryFeatures struct {
+	Required []string `json:"required"`
+}
+
+// checkFeatures reads the features object, when there is one, and refuses a
+// repository that requires a feature this build does not know. A tag that
+// does not verify is ErrCorruptConfig. An object that authenticates but does
+// not decode was written by a holder of the data key, so a later build, and
+// is ErrUnsupportedFormat like the config.
+func checkFeatures(ctx context.Context, b Backend, codec *objectCodec, key *masterKey) error {
+	data, err := readSealed(ctx, b, codec, (*[32]byte)(&key.DataKey), Handle{Type: ConfigFile, Name: featuresName})
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if errors.Is(err, errSealBroken) {
+		return fmt.Errorf("%w: features: %w", ErrCorruptConfig, err)
+	}
+	if err != nil {
+		return err
+	}
+	var f repositoryFeatures
+	if err := decodeStrict("features", data, &f); err != nil {
+		if errors.Is(err, ErrUnsupportedFormat) {
+			return err
+		}
+		return fmt.Errorf("%w: features: %w", ErrUnsupportedFormat, err)
+	}
+	for _, name := range f.Required {
+		if _, ok := knownFeatures[name]; !ok {
+			return fmt.Errorf("%w: the repository requires the feature %q, a newer ark is needed",
+				ErrUnsupportedFormat, name)
+		}
+	}
+	return nil
+}
 
 // repoIDBytes is the length of the random repository id before hex encoding.
 const repoIDBytes = 32
-
-// compressionZstd is the only compression codec the format defines.
-const compressionZstd = "zstd"
 
 // repositoryConfig is the JSON object Init writes into the config namespace.
 // It is plain JSON with no header byte, so it always starts with '{'. The
@@ -37,11 +79,10 @@ const compressionZstd = "zstd"
 // Field order is part of the format: the JSON is marshalled with Go's
 // encoding/json in the order declared here.
 type repositoryConfig struct {
-	Version     int           `json:"version"`
-	ID          string        `json:"id"`
-	CreatedAt   time.Time     `json:"created_at"`
-	Chunker     chunkerParams `json:"chunker"`
-	Compression string        `json:"compression"`
+	Version   int           `json:"version"`
+	ID        string        `json:"id"`
+	CreatedAt time.Time     `json:"created_at"`
+	Chunker   chunkerParams `json:"chunker"`
 }
 
 // chunkerParams are the FastCDC boundaries a repository was created with.
@@ -93,8 +134,10 @@ func WithChunkerConfig(c chunker.Config) InitOption {
 // NoPassword. The password only unlocks the master key; without it the
 // repository cannot be read, and nothing recovers it.
 //
-// It returns ErrAlreadyInitialized if b already holds a config, so a typo in a
-// repository path cannot silently create a second repository next to the first.
+// It returns ErrAlreadyInitialized if b already holds a config or a features
+// object, so a typo in a repository path cannot silently create a second
+// repository next to the first, and a features object an earlier repository
+// left behind cannot make the new one fail every Open.
 // The config is written last, so a failed Init leaves no repository behind.
 func Init(ctx context.Context, b Backend, pw Password, opts ...InitOption) error {
 	if err := pw.validate(); err != nil {
@@ -123,14 +166,21 @@ func Init(ctx context.Context, b Backend, pw Password, opts ...InitOption) error
 	if exists {
 		return ErrAlreadyInitialized
 	}
+	exists, err = b.Exists(ctx, Handle{Type: ConfigFile, Name: featuresName})
+	if err != nil {
+		return fmt.Errorf("ark: failed to check for an existing repository: %w", err)
+	}
+	if exists {
+		return fmt.Errorf("%w: the config namespace holds a features object of an earlier repository",
+			ErrAlreadyInitialized)
+	}
 
 	id := randomHex(repoIDBytes)
 	data, err := json.Marshal(repositoryConfig{
-		Version:     repoFormatVersion,
-		ID:          id,
-		CreatedAt:   time.Now().UTC(),
-		Chunker:     params,
-		Compression: compressionZstd,
+		Version:   repoFormatVersion,
+		ID:        id,
+		CreatedAt: time.Now().UTC(),
+		Chunker:   params,
 	})
 	if err != nil {
 		return fmt.Errorf("ark: failed to encode the repository config: %w", err)
@@ -193,7 +243,10 @@ func errFormatVersion(v int) error {
 // build cannot use is ErrUnsupportedFormat.
 func parseRepositoryConfig(data []byte) (repositoryConfig, error) {
 	var cfg repositoryConfig
-	if jsonErr := json.Unmarshal(data, &cfg); jsonErr != nil {
+	if jsonErr := decodeStrict("config", data, &cfg); jsonErr != nil {
+		if errors.Is(jsonErr, ErrUnsupportedFormat) {
+			return repositoryConfig{}, jsonErr
+		}
 		return repositoryConfig{}, fmt.Errorf("%w: config is not valid JSON: %w", ErrUnsupportedFormat, jsonErr)
 	}
 	if cfg.Version != repoFormatVersion {
@@ -202,8 +255,33 @@ func parseRepositoryConfig(data []byte) (repositoryConfig, error) {
 	if invalid := cfg.Chunker.validate(); invalid != nil {
 		return repositoryConfig{}, fmt.Errorf("%w: %w", ErrUnsupportedFormat, invalid)
 	}
-	if cfg.Compression != compressionZstd {
-		return repositoryConfig{}, fmt.Errorf("%w: unknown compression %q", ErrUnsupportedFormat, cfg.Compression)
-	}
+	cfg.CreatedAt = cfg.CreatedAt.UTC()
 	return cfg, nil
+}
+
+// decodeStrict decodes the JSON object data, which the message calls what,
+// into v. A key v has no field for is ErrUnsupportedFormat and named in the
+// message: a later build wrote it, and this one cannot know what the key
+// asks of a reader. Config, key file, manifest and lock are read with it.
+// After an error v holds nothing to use.
+func decodeStrict(what string, data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	err := dec.Decode(v)
+	if err == nil {
+		if _, more := dec.Token(); !errors.Is(more, io.EOF) {
+			return fmt.Errorf("%s has data after its JSON value", what)
+		}
+		return nil
+	}
+	// encoding/json has no type for an unknown key, only a text that may
+	// change. So the text decides nothing: what this decode refuses and one
+	// without the option accepts has such a key.
+	if json.Unmarshal(data, v) != nil {
+		return err //nolint:wrapcheck // the caller names the object
+	}
+	if key, ok := strings.CutPrefix(err.Error(), "json: unknown field "); ok {
+		return fmt.Errorf("%w: %s has the key %s, which this build does not know", ErrUnsupportedFormat, what, key)
+	}
+	return fmt.Errorf("%w: %s has a key this build does not know: %w", ErrUnsupportedFormat, what, err)
 }

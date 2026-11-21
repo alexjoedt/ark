@@ -3,13 +3,15 @@ package ark
 import (
 	"bytes"
 	"context"
-	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"slices"
 	"time"
+
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 // OpenObject returns the raw content of an object of r for the tests in
@@ -29,9 +31,10 @@ func OpenObject(ctx context.Context, r *Repository, typ HandleType, name string)
 }
 
 // PutObject seals data and stores it under h, the way r writes manifests and
-// locks.
+// locks. It also seals under a pack namespace, which putSealed refuses.
 func PutObject(ctx context.Context, r *Repository, h Handle, data []byte) error {
-	return r.putSealed(ctx, h, data)
+	obj := r.codec.seal((*[32]byte)(&r.key.DataKey), objectAAD(h), data)
+	return r.backend.Put(ctx, h, bytes.NewReader(obj))
 }
 
 // UnsealObject opens obj as r would read it back from h.
@@ -39,10 +42,13 @@ func UnsealObject(r *Repository, h Handle, obj []byte) ([]byte, error) {
 	return r.codec.open((*[32]byte)(&r.key.DataKey), objectAAD(h), obj)
 }
 
+// PackTableName is the name the blob table of every pack is sealed under.
+const PackTableName = packTableName
+
 // LostPackMarker returns the handle of the lost-pack marker of r.
 func LostPackMarker(r *Repository) Handle { return r.lostPacksMarker() }
 
-// SealOverhead is what sealing adds to the zstd frame of an object.
+// SealOverhead is what sealing adds to the payload of an object.
 const SealOverhead = sealOverhead
 
 // ObjectName returns the name r stores a chunk or tree of this content under.
@@ -155,18 +161,15 @@ func SetPackLimits(r *Repository, packBytes, checkpointBlobs int) {
 	r.packTarget, r.checkpointBlobs = packBytes, checkpointBlobs
 }
 
-// WriteBase32Snapshot stores a copy of snapshot id under a 26 character
-// Crockford base32 name, the form snapshots had before hex IDs, and returns
-// that name.
-func WriteBase32Snapshot(ctx context.Context, r *Repository, id SnapshotID) (SnapshotID, error) {
+// WriteSnapshotCopy stores a copy of snapshot id under name, sealed for that
+// name as a build that names snapshots otherwise would store it.
+func WriteSnapshotCopy(ctx context.Context, r *Repository, id, name SnapshotID) error {
 	m, err := r.loadManifest(ctx, id)
 	if err != nil {
-		return "", err
+		return err
 	}
-	b := make([]byte, 16)
-	_, _ = cryptorand.Read(b)
-	m.ID = SnapshotID(encodeBase32(b))
-	return m.ID, r.saveManifest(ctx, m)
+	m.ID = name
+	return r.saveManifest(ctx, m)
 }
 
 // ChunkOffsets returns where each chunk of the regular file name of s starts,
@@ -185,4 +188,55 @@ func ChunkOffsets(s *SnapshotFS, name string) ([]int64, error) {
 		offsets[i] = c.Offset
 	}
 	return offsets, nil
+}
+
+// RetypeEntry stores the root tree node of snapshot id again with the type of
+// its entry name set to typ and points the manifest at it: the snapshot a
+// build that knows typ would have written.
+func RetypeEntry(ctx context.Context, r *Repository, id SnapshotID, name string, typ FileType) error {
+	m, err := r.loadManifest(ctx, id)
+	if err != nil {
+		return err
+	}
+	session := r.writeSession()
+	node, err := loadTreeNode(ctx, session.trees, m.RootTree)
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(node.Entries, func(e treeEntry) bool { return e.Name == name })
+	if i < 0 {
+		return fmt.Errorf("%w: root entry %s", ErrNotFound, name)
+	}
+	node.Entries[i].Type = typ
+	data, err := json.Marshal(node)
+	if err != nil {
+		return err
+	}
+	m.RootTree = session.trees.name(data)
+	if _, err := session.trees.putNamed(ctx, m.RootTree, data); err != nil {
+		return err
+	}
+	if err := session.finish(ctx); err != nil {
+		return err
+	}
+	return r.saveManifest(ctx, m)
+}
+
+// Retag returns obj, an object of r sealed under h, sealed again under the
+// format byte format with the same nonce and payload: what a later build
+// with a codec of that byte stores. A blob table is sealed under
+// PackTableName in its pack namespace.
+func Retag(r *Repository, h Handle, obj []byte, format byte) ([]byte, error) {
+	return retag((*[32]byte)(&r.key.DataKey), objectAAD(h), obj, format)
+}
+
+func retag(key *[32]byte, aad string, obj []byte, format byte) ([]byte, error) {
+	payload, err := unseal(key, aad, obj)
+	if err != nil {
+		return nil, err
+	}
+	aead, _ := chacha20poly1305.NewX(key[:])
+	const hdr = 1 + chacha20poly1305.NonceSizeX
+	out := append([]byte{format}, obj[1:hdr]...)
+	return aead.Seal(out, obj[1:hdr], payload, sealAAD(format, aad)), nil
 }

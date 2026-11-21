@@ -92,7 +92,7 @@ func (s *dockerVolumeSink) Close() error {
 func fileInfoToTarHeader(fi ark.FileInfo) *tar.Header {
 	hdr := &tar.Header{
 		Name:    fi.Path,
-		Mode:    int64(fi.Mode.Perm()),
+		Mode:    int64(ark.UnixMode(fi.Mode)),
 		Uid:     fi.UID,
 		Gid:     fi.GID,
 		ModTime: fi.ModTime,

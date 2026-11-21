@@ -29,6 +29,9 @@ type dirMeta struct {
 
 // NewSink creates an ark.Sink that writes restored entries under root.
 // The directory is created (along with parents) when Open is called.
+//
+// Owners are restored best effort, which takes root. An entry whose owner
+// could not be set is restored without its setuid and setgid bits.
 func NewSink(root string) (ark.Sink, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
@@ -69,14 +72,14 @@ func (s *fileSink) Receive(_ context.Context, entry ark.FileInfo, r io.Reader) e
 
 	switch entry.Type {
 	case ark.FileTypeDirectory:
-		if err := os.MkdirAll(target, entry.Mode|0o700); err != nil {
+		if err := os.MkdirAll(target, entry.Mode.Perm()|0o700); err != nil {
 			return fmt.Errorf("arkfs: mkdir %s: %w", target, err)
 		}
-		setOwner(target, entry.UID, entry.GID)
+		mode := setOwner(target, entry.UID, entry.GID, entry.Mode)
 		writeXattrs(target, entry.Xattrs)
 		// Defer mode and mtime: the dir must stay writable for its children,
 		// and creating them updates its mtime.
-		s.dirs = append(s.dirs, dirMeta{path: target, mode: entry.Mode, modTime: entry.ModTime})
+		s.dirs = append(s.dirs, dirMeta{path: target, mode: mode, modTime: entry.ModTime})
 
 	case ark.FileTypeSymlink:
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -90,13 +93,13 @@ func (s *fileSink) Receive(_ context.Context, entry ark.FileInfo, r io.Reader) e
 			s.links = make(map[string]struct{})
 		}
 		s.links[path.Clean(entry.Path)] = struct{}{}
-		setOwner(target, entry.UID, entry.GID)
+		setOwner(target, entry.UID, entry.GID, entry.Mode)
 
 	case ark.FileTypeRegular:
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return fmt.Errorf("arkfs: mkdir parent of %s: %w", target, err)
 		}
-		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, entry.Mode|0o600)
+		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, entry.Mode.Perm()|0o600)
 		if err != nil {
 			return fmt.Errorf("arkfs: create %s: %w", target, err)
 		}
@@ -109,9 +112,9 @@ func (s *fileSink) Receive(_ context.Context, entry ark.FileInfo, r io.Reader) e
 		if err := f.Close(); err != nil {
 			return fmt.Errorf("arkfs: close %s: %w", target, err)
 		}
-		// Chmod after close so umask doesn't interfere.
-		_ = os.Chmod(target, entry.Mode)
-		setOwner(target, entry.UID, entry.GID)
+		// Chmod after close so umask doesn't interfere, and after the owner:
+		// chown clears setuid and setgid.
+		_ = os.Chmod(target, setOwner(target, entry.UID, entry.GID, entry.Mode))
 		writeXattrs(target, entry.Xattrs)
 		_ = os.Chtimes(target, entry.ModTime, entry.ModTime)
 
@@ -150,7 +153,7 @@ func copyFile(src, dst string, entry ark.FileInfo) error {
 	}
 	defer in.Close()
 
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, entry.Mode|0o600)
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, entry.Mode.Perm()|0o600)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", dst, err)
 	}
@@ -161,8 +164,7 @@ func copyFile(src, dst string, entry ark.FileInfo) error {
 	if err := out.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", dst, err)
 	}
-	_ = os.Chmod(dst, entry.Mode)
-	setOwner(dst, entry.UID, entry.GID)
+	_ = os.Chmod(dst, setOwner(dst, entry.UID, entry.GID, entry.Mode))
 	writeXattrs(dst, entry.Xattrs)
 	_ = os.Chtimes(dst, entry.ModTime, entry.ModTime)
 	return nil

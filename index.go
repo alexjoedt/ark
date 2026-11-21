@@ -617,8 +617,8 @@ func (x *packIndex) scanPack(ctx context.Context, name string) ([]packEntry, err
 	if err != nil {
 		return nil, err
 	}
-	// The table of a pack stored under another name still opens: it is bound
-	// to the blobs, not to the name.
+	// The table of a pack stored under another name still parses: it carries
+	// the hash of the blobs, not the name.
 	if sha256.Sum256(pack) != sum {
 		return nil, fmt.Errorf("%w: %s object %s is not named by its hash", x.space.corruptErr, h.Type, name)
 	}

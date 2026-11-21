@@ -696,7 +696,7 @@ func fillAttr(a *fuse.Attr, info fs.FileInfo, ino uint64) {
 
 // fileMode converts an io/fs mode to the stat mode FUSE expects.
 func fileMode(m fs.FileMode) uint32 {
-	mode := uint32(m.Perm())
+	mode := ark.UnixMode(m)
 	switch {
 	case m.IsDir():
 		mode |= syscall.S_IFDIR
@@ -704,15 +704,6 @@ func fileMode(m fs.FileMode) uint32 {
 		mode |= syscall.S_IFLNK
 	default:
 		mode |= syscall.S_IFREG
-	}
-	if m&fs.ModeSetuid != 0 {
-		mode |= syscall.S_ISUID
-	}
-	if m&fs.ModeSetgid != 0 {
-		mode |= syscall.S_ISGID
-	}
-	if m&fs.ModeSticky != 0 {
-		mode |= syscall.S_ISVTX
 	}
 	return mode
 }

@@ -19,7 +19,8 @@ The `config` object carries `version`.
 ## Layout
 
 ```
-config       plaintext JSON, authenticated through a hash sealed in the master key
+config/      config: plaintext JSON, authenticated through a hash sealed in the master key
+             features: optional sealed JSON, the features the repository requires
 keys/        key files: the master key sealed under the password
 datapacks/   packs of file content chunks
 treepacks/   packs of directory nodes
@@ -30,13 +31,11 @@ locks/       sealed shared and exclusive locks
 lostpacks/   at most one sealed marker, see below
 ```
 
-- `config`, the key files, the manifests, the locks, and the marker are single objects, one per
-  file.
+- `config`, `features`, the key files, the manifests, the locks, and the marker are single
+  objects, one per file.
 - Chunks and directory nodes are never stored alone. They live in packs, and the index finds them.
-- A manifest holds the source type, source name, host, tags, comment, statistics, and the labels
-  under the key `source_meta`. See [Labels](labels.md) and [Series](series.md).
-- A lock is stale once its recorded time is 30 minutes old, or at once when it's from this host
-  and its process is gone.
+- A snapshot ID is 128 random bits as 32 lowercase hex characters. It says nothing about the
+  snapshot's series or time.
 
 ### Sharding
 
@@ -47,6 +46,203 @@ namespace, created when first needed. All other namespaces are flat.
 Sharding is a property of those backends, not of the format. The memory backend and any other
 implementation of `ark.Backend` store the same names.
 
+## Sealed objects
+
+A sealed object is these bytes, in this order:
+
+| Bytes | Content |
+|---|---|
+| 1 | the format byte |
+| 24 | the nonce, random for every object |
+| rest | the XChaCha20-Poly1305 ciphertext of the payload, its 16-byte tag at the end |
+
+- Under format byte `0x02`, the payload is one zstd frame of the content.
+- Under format byte `0x03`, the payload is the content as it is. The writer picks it when the
+  zstd frame wouldn't be smaller.
+- The byte `0x01` is retired. No object of version 1 carries it, and no later codec is ever
+  assigned to it.
+- The associated data is the format byte followed by `<namespace>/<name>` in ASCII, for example
+  `snapshots/<id>` for a manifest. An object moved to another name or relabelled with the other
+  codec fails on its tag.
+- A reader opens both format bytes, for every object. It checks the tag first and judges the byte
+  after it.
+
+Index objects, manifests, locks, the lost-pack marker, and `features` are sealed with the data key
+under their own name. The `key` field of a key file is sealed under the wrap key, with the
+associated data `keys/<name>`. The config isn't sealed. Blobs and pack tables have their own
+associated data, see [Packs](#packs).
+
+## JSON objects
+
+`config`, `features`, key files, the master key, manifests, and locks are JSON objects. The
+tables below name every key a version 1 build writes or reads. A key marked optional is left out
+when it's empty or zero.
+
+### Times
+
+- A writer stores every time in these objects as an RFC 3339 string in UTC, with up to nine
+  fractional digits, for example `2026-11-21T18:35:07.123456789Z`.
+- A reader accepts any offset and takes the instant. It keeps no zone.
+
+### What a reader refuses
+
+A reader refuses what a later build may have written with `ErrUnsupportedFormat`. It never skips
+such an object and never reports it as damaged.
+
+| Input | Where |
+|---|---|
+| a format byte other than `0x02` or `0x03`, on an object whose tag verifies | every sealed object |
+| a key the reader has no field for | every JSON object on this page |
+| a `version` other than 1 | config, key file, manifest |
+| a `kdf` other than `argon2id` or `none` | key file |
+| with `argon2id`, a `time`, `memory`, or `threads` outside the range its row gives, or a `salt` that is empty or isn't hex | key file |
+| a `chunker` size below 1, a `min` above `avg`, or an `avg` above `max` | config |
+| a name in `required` | features |
+| a name that isn't 32 lowercase hex characters | manifest, once its tag verifies |
+
+- Keys match without regard to case, as Go's `encoding/json` does. A later version never adds a
+  key that differs from an existing one only in case.
+- An object can also fail to decode: it isn't valid JSON, a value has another type, or data
+  follows its JSON value. A config, key file, master key, or features object like that is
+  `ErrUnsupportedFormat` too, the sealed ones once their tag verifies. Such a manifest is
+  `ErrCorruptManifest`. Such a lock is passed over, like one whose tag doesn't verify.
+- An object whose tag doesn't verify is damaged, not unsupported. It gets the error of its
+  namespace, for example `ErrCorruptManifest`.
+- A lock that a reader refuses stops every operation that would take a lock. A lock whose tag
+  doesn't verify is passed over.
+
+### Config
+
+`config/config` is plain JSON, not sealed, with no byte before it. Its bytes are written once, by
+`Init`, with the keys in this order and no whitespace. The SHA-256 of these bytes is the master
+key's `config_hash`, so a changed byte fails `Open` with `ErrCorruptConfig`.
+
+| Key | Type | Optional | Content |
+|---|---|---|---|
+| `version` | number | no | the format version, 1 |
+| `id` | string, 64 lowercase hex | no | the repository ID, 32 random bytes |
+| `created_at` | string, time | no | when `Init` ran |
+| `chunker` | object | no | the chunk boundaries, see [Chunker](#chunker) |
+
+### Chunker
+
+The `chunker` object of the config. Every backup into the repository cuts chunks with these sizes,
+in bytes.
+
+| Key | Type | Optional | Content |
+|---|---|---|---|
+| `min` | number | no | the smallest chunk, except at the end of a file |
+| `avg` | number | no | the target size |
+| `max` | number | no | the largest chunk |
+
+### Key file
+
+A key file is plain JSON, named by 16 random bytes as 32 lowercase hex characters. `Open` tries at
+most 20 of them.
+
+| Key | Type | Optional | Content |
+|---|---|---|---|
+| `version` | number | no | 1 |
+| `kdf` | string | no | `argon2id`, or `none` for a repository without a password |
+| `time` | number | yes, absent with `none` | argon2id passes, 1 to 16 |
+| `memory` | number | yes, absent with `none` | argon2id memory in KiB, at least 8 per thread, at most 1 GiB |
+| `threads` | number | yes, absent with `none` | argon2id lanes, at least 1 |
+| `salt` | string, lowercase hex | yes, absent with `none` | 16 random bytes |
+| `key` | string, lowercase hex | no | the sealed [master key](#master-key) |
+
+The wrap key is the 32-byte argon2id key of the password and the salt. With `none` it's 32 zero
+bytes.
+
+### Master key
+
+The JSON inside a key file's `key`. Every key file of a repository seals the same master key.
+
+| Key | Type | Optional | Content |
+|---|---|---|---|
+| `data_key` | string, 64 lowercase hex | no | the key every other sealed object is sealed with |
+| `id_key` | string, 64 lowercase hex | no | the HMAC key of chunk, node, index, and marker names |
+| `chunker_seed` | string, 64 lowercase hex | no | the key of the chunk boundaries |
+| `repository_id` | string, 64 lowercase hex | no | the config's `id` |
+| `config_hash` | string, 64 lowercase hex | no | the SHA-256 of the config bytes |
+| `created` | string, time | no | when the master key was made |
+| `label` | string | yes | free text; no build of version 1 writes it |
+
+A master key whose tag doesn't verify is `ErrWrongPassword`. One that opens with a `config_hash`
+that is empty or isn't the hash of the config bytes fails `Open` with `ErrCorruptConfig`.
+
+### Manifest
+
+`snapshots/<id>` is a sealed JSON object. `<id>` is the snapshot ID.
+
+| Key | Type | Optional | Content |
+|---|---|---|---|
+| `version` | number | no | 1 |
+| `id` | string, 32 lowercase hex | no | the snapshot ID, the object's name |
+| `parent_id` | string, 32 lowercase hex | yes | the snapshot the backup compared its files against |
+| `created_at` | string, time | no | the snapshot time |
+| `source_name` | string | no | the source name, see [Series](series.md) |
+| `source_type` | string | no | the source type: `file`, `stream`, `docker-volume`, or the name a custom source gives |
+| `labels` | object of strings | yes | the labels, see [Labels](labels.md) |
+| `excludes` | array of strings | yes | the exclude patterns of the source |
+| `tags` | array of strings | yes | the tags |
+| `host` | string | no | the host name |
+| `comment` | string | yes | the comment |
+| `root_tree` | string, 64 lowercase hex | yes | the name of the root directory node; every build writes it, and a snapshot without it has no entries |
+| `stats` | object | no | the counters, see [Statistics](#statistics) |
+
+### Statistics
+
+The `stats` object of a manifest. Sizes are in bytes. The deduplication and compression ratios
+follow from the counters and aren't stored.
+
+| Key | Type | Optional | Content |
+|---|---|---|---|
+| `total_files` | number | no | regular files in the snapshot |
+| `total_dirs` | number | no | directories in the snapshot |
+| `skipped` | number | no | entries the source offered and the snapshot leaves out |
+| `files_unchanged` | number | yes | files taken from the parent without being read |
+| `total_size` | number | no | the content size of the regular files |
+| `stored_size` | number | no | the sealed size of the chunks this snapshot stored first |
+| `new_chunks_raw_size` | number | no | the content size of those chunks |
+| `chunks_total` | number | no | chunk references of all files |
+| `chunks_new` | number | no | distinct chunks this snapshot stored first |
+| `chunks_reused` | number | no | `chunks_total` minus `chunks_new` |
+| `duration` | string | no | the run time in Go's duration syntax, for example `1m2.5s` |
+
+### Lock
+
+`locks/<name>` is a sealed JSON object. `<name>` is 26 characters: a millisecond timestamp and 80
+random bits, both in lowercase Crockford base32.
+
+| Key | Type | Optional | Content |
+|---|---|---|---|
+| `time` | string, time | no | when the lock was taken or last refreshed |
+| `exclusive` | boolean | no | true for an exclusive lock, false for a shared one |
+| `hostname` | string | no | the host of the holder |
+| `username` | string | no | the user of the holder, empty when unknown |
+| `pid` | number | no | the process ID of the holder |
+| `uid` | number | no | the user ID of the holder |
+| `gid` | number | no | the group ID of the holder |
+
+A lock is stale once its `time` is 30 minutes old, or at once when its `hostname` is this host and
+its process is gone.
+
+### Features
+
+`config/features` is a sealed JSON object. It's optional, and a repository without it requires
+nothing. No build of version 1 writes it. A later release writes it when it changes what a whole
+repository means, so every earlier build refuses that repository.
+
+| Key | Type | Optional | Content |
+|---|---|---|---|
+| `required` | array of strings | no | the features a reader must know to open the repository |
+
+- `Open` reads it with one `Get` after the master key is unsealed.
+- A name the build doesn't know refuses the repository with `ErrUnsupportedFormat`. Version 1
+  knows no name, so any name refuses.
+- A tag that doesn't verify is `ErrCorruptConfig`.
+- `Init` refuses a backend that holds a `features` object with `ErrAlreadyInitialized`.
+
 ## Packs
 
 A pack has three parts, in this order:
@@ -55,16 +251,24 @@ A pack has three parts, in this order:
 2. the sealed blob table
 3. the length of the sealed table, 4 bytes little endian
 
-**Blobs.** A blob is one chunk or one directory node, sealed on its own like a single object. Its
-associated data is `chunks/<name>` for a chunk and `trees/<name>` for a directory node, where
-`<name>` is the blob's hex name. No object is stored under `chunks` or `trees`. The associated data
-only binds a blob to its type and name, so the bytes of one blob, read where the index lists
-another, don't open.
+**Blobs.** A blob is one chunk or one directory node, sealed on its own like a single object (see
+[Sealed objects](#sealed-objects)). Its associated data is the format byte followed by
+`chunks/<name>` for a chunk and `trees/<name>` for a directory node, where `<name>` is the blob's
+hex name. No object is stored under `chunks` or `trees`. The associated data only binds a blob to
+its codec, type and name, so the bytes of one blob, read where the index lists another, don't open.
 
-**Table.** The table has one entry per blob: its 32-byte name and its sealed length as 4 bytes
-little endian. Offsets follow from the order. The table is sealed with the data key and the
-associated data `datapacks/<hex SHA-256 of the blob section>`, or `treepacks/<...>`, by the pack's
-namespace. It therefore opens only behind the blobs it describes.
+**Table.** The table starts with the SHA-256 of the blob section, 32 bytes. One entry per blob
+follows: its 32-byte name and its sealed length as 4 bytes little endian. Offsets follow from the
+order. The table is sealed with the data key and, behind its format byte, the associated data
+`datapacks/table` or `treepacks/table`, by the pack's namespace. That is the same for every pack
+of a namespace, so the table opens from the tail of a pack alone: the last 4 bytes give its
+length, the bytes before them are the table.
+
+A reader that holds the whole pack hashes the blob section and refuses a table that carries
+another hash. A reader that holds only the tail can't make that comparison. For such a reader, a
+table moved in from another pack of the repository opens. It can't lead the reader to content
+other than the blob a name stands for: a blob is bound to its own name and not to the table, so
+each blob it lists that this pack doesn't also hold at that place fails to open.
 
 **Names.** A pack is named by the hex SHA-256 of all its bytes. Chunk and node names are the hex
 HMAC-SHA256 of their plaintext under the repository's ID key. The name of a pack isn't keyed.
@@ -279,13 +483,9 @@ runs it:
 3. It writes a new index from the tables.
 4. It deletes the old index objects.
 
-A pack whose table doesn't open, or whose name isn't the hash of its bytes, is named in the result
-and contributes nothing. For that pack, the new index keeps what the old one listed, except for
-blobs that a pack which opens holds as well.
+A pack whose table doesn't open or carries the hash of other blobs, or whose name isn't the hash
+of its bytes, is named in the result and contributes nothing. For that pack, the new index keeps
+what the old one listed, except for blobs that a pack which opens holds as well.
 
-A rebuild needs the repository to itself, like prune, and it downloads every pack.
-
-## Everything else
-
-The master key, the key files, the config, the manifests, the locks, and the sealing of every
-object are described in [Security](SECURITY.md#format).
+A rebuild needs the repository to itself, like prune, and it downloads every pack. The format
+doesn't require that: a table opens from the tail of its pack (see [Packs](#packs)).

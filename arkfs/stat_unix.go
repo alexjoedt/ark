@@ -15,10 +15,21 @@ func fileOwner(fi os.FileInfo) (uid, gid int) {
 	return 0, 0
 }
 
-func setOwner(path string, uid, gid int) {
+// setOwner sets the owner of path, best effort: changing it requires root.
+// It returns mode as the entry may carry it afterwards. Setuid and setgid
+// name the owner and the group, so they are dropped when those could not be
+// set, as cp does: a restored file must not hand the restoring user's
+// identity to whoever runs it. A directory keeps them: setgid there only
+// passes the directory's group to new children, and nothing runs as it.
+func setOwner(path string, uid, gid int, mode os.FileMode) os.FileMode {
 	// Lchown works on symlinks without following them.
-	// Requires root; best effort — ignore errors.
-	_ = os.Lchown(path, uid, gid)
+	if err := os.Lchown(path, uid, gid); err != nil {
+		if fi, err := os.Lstat(path); err == nil && fi.IsDir() {
+			return mode
+		}
+		return mode &^ (os.ModeSetuid | os.ModeSetgid)
+	}
+	return mode
 }
 
 // inodeKey identifies the inode behind a path. Two paths with the same key are

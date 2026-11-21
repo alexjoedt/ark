@@ -186,8 +186,7 @@ var errStopList = errors.New("stop listing")
 // was changed, or the key file belongs to another repository. The config's
 // unauthenticated id only tells the two apart, so a foreign key yields to a
 // key file that failed to open (ErrWrongPassword), a changed config does not.
-// A key that opens without a binding predates format version 2 and is
-// ErrUnsupportedFormat.
+// A key that opens without a binding is ErrCorruptConfig too.
 func loadMasterKey(
 	ctx context.Context,
 	b Backend,
@@ -215,11 +214,12 @@ func loadMasterKey(
 	_ = json.Unmarshal(data, &stored) // a zero value only means no id matches
 
 	// Precedence when nothing opens bound: a changed config, a key without a
-	// binding, a file that was tried with a matching kind of passphrase, a
+	// binding, a key this build does not read, a file that was tried with a
+	// matching kind of passphrase, a
 	// foreign key, then a password or no-password mismatch, then an
 	// unreadable header.
 	var failed bool
-	var changed, legacy, foreign, mismatch, unsupported error
+	var changed, unbound, unknown, foreign, mismatch, unsupported error
 	for _, name := range names {
 		kf, err := readKeyFile(ctx, b, name)
 		if errors.Is(err, ErrNotFound) {
@@ -240,14 +240,16 @@ func loadMasterKey(
 			mismatch = ErrPasswordRequired
 			continue
 		}
-		mk := kf.open(codec, name, pw)
+		mk, err := kf.open(codec, name, pw)
 		switch {
-		case mk == nil:
+		case errors.Is(err, ErrUnsupportedFormat):
+			unknown = err
+		case err != nil:
 			failed = true
 		case mk.ConfigHash == hash:
 			return mk, name, nil
 		case mk.ConfigHash == "":
-			legacy = fmt.Errorf("%w: key file %s has no config binding, an older repository format wrote it", ErrUnsupportedFormat, name)
+			unbound = fmt.Errorf("%w: key file %s has no config binding", ErrCorruptConfig, name)
 		case mk.RepositoryID == stored.ID:
 			changed = fmt.Errorf("%w: the config was changed after Init", ErrCorruptConfig)
 		default:
@@ -259,8 +261,10 @@ func loadMasterKey(
 	switch {
 	case changed != nil:
 		return nil, "", changed
-	case legacy != nil:
-		return nil, "", legacy
+	case unbound != nil:
+		return nil, "", unbound
+	case unknown != nil:
+		return nil, "", unknown
 	case failed:
 		return nil, "", ErrWrongPassword
 	case foreign != nil:
@@ -288,7 +292,10 @@ func readKeyFile(ctx context.Context, b Backend, name string) (*keyFile, error) 
 	}
 
 	var kf keyFile
-	if err := json.Unmarshal(data, &kf); err != nil {
+	if err := decodeStrict("key file "+name, data, &kf); err != nil {
+		if errors.Is(err, ErrUnsupportedFormat) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("%w: key file %s is not valid JSON: %w", ErrUnsupportedFormat, name, err)
 	}
 	if kf.Version != keyFileVersion {
@@ -312,13 +319,16 @@ func readKeyFile(ctx context.Context, b Backend, name string) (*keyFile, error) 
 	return &kf, nil
 }
 
-// open unseals the master key of kf, the key file name, under pw. It returns
-// nil when the key does not open; a wrong password and a tampered key are
-// indistinguishable by design.
-func (kf *keyFile) open(codec *objectCodec, name string, pw Password) *masterKey {
+// open unseals the master key of kf, the key file name, under pw. A key that
+// does not open is an error the caller reports as a wrong password: that and
+// a tampered key are indistinguishable by design. A key that opens under a
+// format byte this build does not know, or does not decode into the master
+// key of this build, is ErrUnsupportedFormat: only a holder of the wrap key
+// can have sealed it.
+func (kf *keyFile) open(codec *objectCodec, name string, pw Password) (*masterKey, error) {
 	sealed, err := hex.DecodeString(kf.Key)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("key file %s: %w", name, err)
 	}
 	var wrap [32]byte
 	if kf.KDF == kdfArgon2id {
@@ -328,11 +338,15 @@ func (kf *keyFile) open(codec *objectCodec, name string, pw Password) *masterKey
 	}
 	blob, err := codec.open(&wrap, objectAAD(Handle{Type: KeyFile, Name: name}), sealed)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("key file %s: %w", name, err)
 	}
 	var mk masterKey
-	if err := json.Unmarshal(blob, &mk); err != nil {
-		return nil
+	if err := decodeStrict("the master key of key file "+name, blob, &mk); err != nil {
+		if errors.Is(err, ErrUnsupportedFormat) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: the master key of key file %s does not decode: %w", ErrUnsupportedFormat, name, err)
 	}
-	return &mk
+	mk.Created = mk.Created.UTC()
+	return &mk, nil
 }

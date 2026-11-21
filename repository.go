@@ -1,6 +1,7 @@
 package ark
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -124,8 +125,11 @@ func (r *Repository) now() time.Time {
 // returns ErrWrongPassword when no key file opens, ErrPasswordRequired for
 // NoPassword on a protected repository and ErrNotPasswordProtected for a
 // password on a repository created with NoPassword, and ErrCorruptConfig
-// when a key opens but the config is not the one it was sealed with. Unsealing
-// a password protected key file runs argon2id with 64 MiB of memory.
+// when a key opens but the config is not the one it was sealed with. An
+// optional features object that requires a feature this build does not know,
+// or that authenticates but does not decode, returns ErrUnsupportedFormat; one
+// whose tag does not verify returns ErrCorruptConfig. Unsealing a password
+// protected key file runs argon2id with 64 MiB of memory.
 func Open(ctx context.Context, b Backend, pw Password, opts ...Option) (*Repository, error) {
 	if err := pw.validate(); err != nil {
 		return nil, err
@@ -151,6 +155,10 @@ func Open(ctx context.Context, b Backend, pw Password, opts ...Option) (*Reposit
 	}
 	rc, err := parseRepositoryConfig(data)
 	if err != nil {
+		codec.Close()
+		return nil, err
+	}
+	if err := checkFeatures(ctx, b, codec, key); err != nil {
 		codec.Close()
 		return nil, err
 	}
@@ -409,7 +417,8 @@ func (r *Repository) deleteSnapshot(ctx context.Context, id SnapshotID) error {
 //
 // Removing named ids without a policy reads only those manifests, and one
 // that fails with ErrCorruptManifest is still removed, reported with its ID
-// alone. This is how a corrupt manifest leaves the repository.
+// alone. So is one stored under a name that is not a snapshot ID of this
+// format. This is how such a manifest leaves the repository.
 func (r *Repository) Forget(
 	ctx context.Context,
 	policy ForgetPolicy,
@@ -495,6 +504,10 @@ func (r *Repository) forgetNamed(ctx context.Context, filter SnapshotFilter) (*F
 			continue
 		}
 		seen[full] = true
+		if !isHexSnapshotID(string(full)) {
+			result.Remove = append(result.Remove, &Snapshot{ID: full})
+			continue
+		}
 		m, err := r.loadManifest(ctx, full)
 		if errors.Is(err, ErrCorruptManifest) {
 			result.Remove = append(result.Remove, &Snapshot{ID: full})
@@ -660,8 +673,8 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 	slices.Sort(ids)
 	slices.Reverse(ids)
 
-	_, unreadable, err := r.loadLocks(ctx)
-	if err != nil {
+	_, unreadable, refused, err := r.loadLocks(ctx)
+	if err = cmp.Or(err, refused); err != nil {
 		return nil, err
 	}
 	result := &CheckResult{SnapshotsChecked: len(ids)}
@@ -693,6 +706,11 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 			return nil, ctx.Err() //nolint:wrapcheck // the caller's own cancellation
 		}
 		progress(ProgressEvent{Phase: PhaseFetch, CurrentPath: string(id), FilesDone: i + 1, FilesTotal: len(ids)})
+		if errors.Is(err, ErrUnsupportedFormat) {
+			// Not a finding: a build that does not read what is stored
+			// cannot say whether it is sound.
+			return nil, fmt.Errorf("check: snapshot %s: %w", id, err)
+		}
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("snapshot %s: %v", id, err))
 			continue

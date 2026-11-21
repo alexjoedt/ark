@@ -6,11 +6,10 @@ import (
 	"time"
 )
 
-// SnapshotID names a snapshot. A full ID is 32 lowercase hex characters;
-// snapshots written before that keep 26 character base32 IDs. A method or
-// option that takes one also accepts a unique prefix of it, in upper or lower
-// case, and fails with ErrNotFound or ErrAmbiguousID when it names no
-// snapshot or more than one. Chunk names and lock names are plain strings.
+// SnapshotID names a snapshot. A full ID is 32 lowercase hex characters. A
+// method or option that takes one also accepts a unique prefix of it, in
+// upper or lower case, and fails with ErrNotFound or ErrAmbiguousID when it
+// names no snapshot or more than one. Chunk names and lock names are plain strings.
 type SnapshotID string
 
 // Snapshot describes a completed backup, as returned by the public API.

@@ -23,16 +23,18 @@ type treeNode struct {
 
 // treeEntry is one child inside a treeNode.
 type treeEntry struct {
-	Name     string      `json:"name"`
-	Type     FileType    `json:"type"`
-	Mode     os.FileMode `json:"mode"`
-	UID      int         `json:"uid"`
-	GID      int         `json:"gid"`
-	ModTime  time.Time   `json:"mtime"`
-	Size     int64       `json:"size,omitempty"`
-	LinkDest string      `json:"link_dest,omitempty"`
-	TreeHash string      `json:"tree_hash,omitempty"`
-	Chunks   []chunkRef  `json:"chunks,omitempty"`
+	Name string   `json:"name"`
+	Type FileType `json:"type"`
+	// Mode is mode_t & 07777: the permission bits with setuid 04000, setgid
+	// 02000 and sticky 01000. The file type is in Type, never here.
+	Mode     uint32     `json:"mode"`
+	UID      int        `json:"uid"`
+	GID      int        `json:"gid"`
+	ModTime  time.Time  `json:"mtime"`
+	Size     int64      `json:"size,omitempty"`
+	LinkDest string     `json:"link_dest,omitempty"`
+	TreeHash string     `json:"tree_hash,omitempty"`
+	Chunks   []chunkRef `json:"chunks,omitempty"`
 
 	// Xattrs maps an extended attribute name to its value. encoding/json
 	// writes the values base64 encoded, which is the v1 wire format.
@@ -44,12 +46,48 @@ type treeEntry struct {
 	Inode      uint64    `json:"inode,omitempty"`
 }
 
+// storedModeMask is every bit a stored mode may carry.
+const storedModeMask = 0o7777
+
+// UnixMode returns m as mode_t & 07777, the form a snapshot stores and a tar
+// header holds: the permission bits plus setuid, setgid and sticky. Type bits
+// and every other bit of m are dropped.
+func UnixMode(m os.FileMode) uint32 {
+	mode := uint32(m.Perm())
+	if m&os.ModeSetuid != 0 {
+		mode |= 0o4000
+	}
+	if m&os.ModeSetgid != 0 {
+		mode |= 0o2000
+	}
+	if m&os.ModeSticky != 0 {
+		mode |= 0o1000
+	}
+	return mode
+}
+
+// goMode is the inverse of UnixMode: the permission bits plus ModeSetuid,
+// ModeSetgid and ModeSticky, and no type bit.
+func goMode(mode uint32) os.FileMode {
+	m := os.FileMode(mode).Perm()
+	if mode&0o4000 != 0 {
+		m |= os.ModeSetuid
+	}
+	if mode&0o2000 != 0 {
+		m |= os.ModeSetgid
+	}
+	if mode&0o1000 != 0 {
+		m |= os.ModeSticky
+	}
+	return m
+}
+
 // fileInfo is the entry as a FileInfo under path.
 func (e treeEntry) fileInfo(path string) FileInfo {
 	return FileInfo{
 		Path:     path,
 		Type:     e.Type,
-		Mode:     e.Mode,
+		Mode:     goMode(e.Mode),
 		UID:      e.UID,
 		GID:      e.GID,
 		ModTime:  e.ModTime,
@@ -83,6 +121,12 @@ func marshalTreeNode(children []fileEntry, hashes map[string]string) ([]byte, er
 	return data, nil
 }
 
+// storedType reports whether t is a file type a tree node of this format
+// holds.
+func storedType(t FileType) bool {
+	return t == FileTypeRegular || t == FileTypeDirectory || t == FileTypeSymlink || t == FileTypeHardlink
+}
+
 func loadTreeNode(ctx context.Context, trees *objectStore, hash string) (*treeNode, error) {
 	data, err := trees.Get(ctx, hash)
 	if err != nil {
@@ -91,6 +135,19 @@ func loadTreeNode(ctx context.Context, trees *objectStore, hash string) (*treeNo
 	var node treeNode
 	if err := json.Unmarshal(data, &node); err != nil {
 		return nil, fmt.Errorf("tree: failed to unmarshal node %s: %w", hash, err)
+	}
+	for _, e := range node.Entries {
+		if e.Mode&^storedModeMask != 0 {
+			return nil, fmt.Errorf("%w: node %s: mode %#o of %q has a bit outside 07777",
+				ErrCorruptTree, hash, e.Mode, e.Name)
+		}
+		// Every reader of a tree loads its nodes here, so none of them meets
+		// a type it would have to skip: a restore that leaves the entry out
+		// and a prune that counts it as holding nothing are both wrong.
+		if !storedType(e.Type) {
+			return nil, fmt.Errorf("%w: node %s: %q has the file type %q, which this build does not know",
+				ErrUnsupportedFormat, hash, e.Name, e.Type)
+		}
 	}
 	return &node, nil
 }
@@ -217,7 +274,7 @@ func newTreeEntry(child fileEntry, hashes map[string]string) (treeEntry, error) 
 	te := treeEntry{
 		Name:     filepath.Base(norm),
 		Type:     child.Type,
-		Mode:     child.Mode,
+		Mode:     UnixMode(child.Mode),
 		UID:      child.UID,
 		GID:      child.GID,
 		ModTime:  child.ModTime,
@@ -356,7 +413,7 @@ func visitTreeEntry(
 		return fn(fileEntry{FileInfo: info, Chunks: e.Chunks})
 
 	case FileTypeUnsupported:
-		// Never written: the backup drops these before the tree is built.
+		// Never stored, and loadTreeNode refuses a node that holds one.
 	}
 	return nil
 }

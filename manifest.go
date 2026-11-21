@@ -24,13 +24,13 @@ type manifest struct {
 	CreatedAt  time.Time         `json:"created_at"`
 	SourceName string            `json:"source_name"`
 	SourceType SourceType        `json:"source_type"`
-	Labels     map[string]string `json:"source_meta,omitempty"`
+	Labels     map[string]string `json:"labels,omitempty"`
 	Excludes   []string          `json:"excludes,omitempty"`
 	Tags       []string          `json:"tags,omitempty"`
 	Host       string            `json:"host"`
 	Comment    string            `json:"comment,omitempty"`
 	RootTree   string            `json:"root_tree,omitempty"`
-	Stats      SnapshotStats     `json:"stats"`
+	Stats      manifestStats     `json:"stats"`
 }
 
 // fileEntry is the internal representation of a file inside a snapshot.
@@ -42,9 +42,67 @@ type fileEntry struct {
 	Chunks []chunkRef `json:"chunks,omitempty"`
 }
 
-// statsJSON is the manifest representation of SnapshotStats. The v1 format froze
-// the field order and the duration as a string, so the wire format lives here
-// rather than in struct tags on the public type.
+// manifestStats is what a manifest stores of SnapshotStats: the counters and
+// the duration. The two ratios follow from the counters, so they are not
+// stored and are computed on load.
+type manifestStats struct {
+	FileCount        int    `json:"total_files"`
+	DirCount         int    `json:"total_dirs"`
+	Skipped          int    `json:"skipped"`
+	FilesUnchanged   int    `json:"files_unchanged,omitempty"`
+	TotalSize        int64  `json:"total_size"`
+	StoredSize       int64  `json:"stored_size"`
+	NewChunksRawSize int64  `json:"new_chunks_raw_size"`
+	ChunksTotal      int    `json:"chunks_total"`
+	ChunksNew        int    `json:"chunks_new"`
+	ChunksReused     int    `json:"chunks_reused"`
+	Duration         string `json:"duration"`
+}
+
+// storedStats returns s as a manifest stores it.
+func storedStats(s SnapshotStats) manifestStats {
+	return manifestStats{
+		FileCount:        s.FileCount,
+		DirCount:         s.DirCount,
+		Skipped:          s.Skipped,
+		FilesUnchanged:   s.FilesUnchanged,
+		TotalSize:        s.TotalSize,
+		StoredSize:       s.StoredSize,
+		NewChunksRawSize: s.NewChunksRawSize,
+		ChunksTotal:      s.ChunksTotal,
+		ChunksNew:        s.ChunksNew,
+		ChunksReused:     s.ChunksReused,
+		Duration:         s.Duration.String(),
+	}
+}
+
+// snapshotStats returns the public form of s with the ratios computed. An
+// unparsable duration leaves the field zero rather than failing the manifest.
+func (s manifestStats) snapshotStats() SnapshotStats {
+	d, err := time.ParseDuration(s.Duration)
+	if err != nil {
+		d = 0
+	}
+	stats := SnapshotStats{
+		FileCount:        s.FileCount,
+		DirCount:         s.DirCount,
+		Skipped:          s.Skipped,
+		FilesUnchanged:   s.FilesUnchanged,
+		TotalSize:        s.TotalSize,
+		StoredSize:       s.StoredSize,
+		NewChunksRawSize: s.NewChunksRawSize,
+		ChunksTotal:      s.ChunksTotal,
+		ChunksNew:        s.ChunksNew,
+		ChunksReused:     s.ChunksReused,
+		Duration:         d,
+	}
+	stats.computeRatios()
+	return stats
+}
+
+// statsJSON is the JSON shape of the public SnapshotStats: the field order is
+// fixed and the duration is a string, so the shape lives here rather than in
+// struct tags on the public type. A manifest stores manifestStats instead.
 type statsJSON struct {
 	FileCount          int     `json:"total_files"`
 	DirCount           int     `json:"total_dirs"`
@@ -61,8 +119,8 @@ type statsJSON struct {
 	Duration           string  `json:"duration"`
 }
 
-// MarshalJSON writes the manifest shape: Duration becomes the string field
-// "duration".
+// MarshalJSON writes the counters, the two ratios and Duration as the string
+// field "duration".
 func (s SnapshotStats) MarshalJSON() ([]byte, error) {
 	data, err := json.Marshal(statsJSON{
 		FileCount:          s.FileCount,
@@ -80,17 +138,20 @@ func (s SnapshotStats) MarshalJSON() ([]byte, error) {
 		Duration:           s.Duration.String(),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("manifest: failed to marshal stats: %w", err)
+		return nil, fmt.Errorf("ark: failed to marshal stats: %w", err)
 	}
 	return data, nil
 }
 
-// UnmarshalJSON reads the manifest shape. An unparsable duration leaves the
-// field zero rather than failing the whole manifest.
+// UnmarshalJSON reads what MarshalJSON writes. An unparsable duration leaves
+// the field zero. A key the shape does not have is ErrUnsupportedFormat.
 func (s *SnapshotStats) UnmarshalJSON(data []byte) error {
 	var raw statsJSON
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return fmt.Errorf("manifest: failed to parse stats: %w", err)
+	if err := decodeStrict("stats", data, &raw); err != nil {
+		if errors.Is(err, ErrUnsupportedFormat) {
+			return err
+		}
+		return fmt.Errorf("ark: failed to parse stats: %w", err)
 	}
 	d, err := time.ParseDuration(raw.Duration)
 	if err != nil {
@@ -126,6 +187,7 @@ type chunkRef struct {
 // references durable before anything can point at them, the second makes the
 // manifest itself durable before the caller reports the snapshot.
 func (r *Repository) saveManifest(ctx context.Context, m *manifest) error {
+	m.CreatedAt = m.CreatedAt.UTC()
 	data, err := json.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("manifest: failed to marshal: %w", err)
@@ -143,7 +205,10 @@ func (r *Repository) saveManifest(ctx context.Context, m *manifest) error {
 }
 
 // loadManifest reads and opens a manifest. One that was changed or moved
-// from another snapshot id fails with ErrCorruptManifest.
+// from another snapshot id fails with ErrCorruptManifest, one with a format
+// byte, a JSON key or a version this build does not know with
+// ErrUnsupportedFormat. So does one that opens under a name that is not a
+// snapshot ID of this format: no build of it wrote that object.
 func (r *Repository) loadManifest(ctx context.Context, id SnapshotID) (*manifest, error) {
 	data, err := r.getSealed(ctx, Handle{Type: SnapshotFile, Name: string(id)})
 	if errors.Is(err, errSealBroken) {
@@ -152,13 +217,23 @@ func (r *Repository) loadManifest(ctx context.Context, id SnapshotID) (*manifest
 	if err != nil {
 		return nil, err // wraps ErrNotFound as appropriate
 	}
+	// Judged after the tag, like an unknown format byte: only a holder of the
+	// key can have stored it there.
+	if !isHexSnapshotID(string(id)) {
+		return nil, fmt.Errorf("snapshot %s: %w: the name is not 32 lowercase hex characters", id, ErrUnsupportedFormat)
+	}
 	var m manifest
-	if err := json.Unmarshal(data, &m); err != nil {
+	if err := decodeStrict("manifest", data, &m); err != nil {
+		if errors.Is(err, ErrUnsupportedFormat) {
+			return nil, fmt.Errorf("snapshot %s: %w", id, err)
+		}
 		return nil, fmt.Errorf("%w: snapshot %s: %w", ErrCorruptManifest, id, err)
 	}
 	if m.Version != manifestVersion {
-		return nil, fmt.Errorf("manifest: unsupported version %d (only v1 is supported)", m.Version)
+		return nil, fmt.Errorf("snapshot %s: %w: manifest has version %d, this build reads version %d",
+			id, ErrUnsupportedFormat, m.Version, manifestVersion)
 	}
+	m.CreatedAt = m.CreatedAt.UTC()
 	return &m, nil
 }
 
@@ -174,7 +249,7 @@ func (r *Repository) readManifests(ctx context.Context) ([]*manifest, error) {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("snapshot %s: %w", info.Name, err)
+			return err // names the snapshot
 		}
 		manifests = append(manifests, m)
 		return nil
@@ -202,7 +277,7 @@ func manifestToSnapshot(m *manifest) *Snapshot {
 		Comment:    m.Comment,
 		CreatedAt:  m.CreatedAt,
 		ParentID:   m.ParentID,
-		Stats:      m.Stats,
+		Stats:      m.Stats.snapshotStats(),
 	}
 }
 
