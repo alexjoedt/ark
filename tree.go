@@ -3,8 +3,10 @@ package ark
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -27,11 +29,13 @@ type treeEntry struct {
 	Type FileType `json:"type"`
 	// Mode is mode_t & 07777: the permission bits with setuid 04000, setgid
 	// 02000 and sticky 01000. The file type is in Type, never here.
-	Mode     uint32     `json:"mode"`
-	UID      int        `json:"uid"`
-	GID      int        `json:"gid"`
-	ModTime  time.Time  `json:"mtime"`
-	Size     int64      `json:"size,omitempty"`
+	Mode    uint32    `json:"mode"`
+	UID     int       `json:"uid"`
+	GID     int       `json:"gid"`
+	ModTime time.Time `json:"mtime"`
+	// Size is the sum of the chunk lengths, set by loadTreeNode and never
+	// stored; a hardlink's is its target's, which Walk and Restore fill in.
+	Size     int64      `json:"-"`
 	LinkDest string     `json:"link_dest,omitempty"`
 	TreeHash string     `json:"tree_hash,omitempty"`
 	Chunks   []chunkRef `json:"chunks,omitempty"`
@@ -141,7 +145,11 @@ func loadTreeNode(ctx context.Context, trees *objectStore, hash string) (*treeNo
 	if err := json.Unmarshal(data, &node); err != nil {
 		return nil, fmt.Errorf("tree: failed to unmarshal node %s: %w", hash, err)
 	}
-	for _, e := range node.Entries {
+	for i := range node.Entries {
+		e := &node.Entries[i]
+		if err := fillChunkOffsets(e); err != nil {
+			return nil, fmt.Errorf("%w: node %s: %q: %w", ErrCorruptTree, hash, e.Name, err)
+		}
 		if e.Mode&^storedModeMask != 0 {
 			return nil, fmt.Errorf("%w: node %s: mode %#o of %q has a bit outside 07777",
 				ErrCorruptTree, hash, e.Mode, e.Name)
@@ -155,6 +163,32 @@ func loadTreeNode(ctx context.Context, trees *objectStore, hash string) (*treeNo
 		}
 	}
 	return &node, nil
+}
+
+// fillChunkOffsets derives what a node does not store: every chunk's offset is
+// the sum of the lengths before it, and the entry's size is the sum of all.
+func fillChunkOffsets(e *treeEntry) error {
+	var off int64
+	for i := range e.Chunks {
+		c := &e.Chunks[i]
+		if c.Length < 0 || c.Length > math.MaxInt64-off {
+			return fmt.Errorf("chunk length %d is out of range", c.Length)
+		}
+		c.Offset = off
+		off += c.Length
+	}
+	e.Size = off
+	return nil
+}
+
+// linkSize is the size of the file a hardlink at link names, 0 when the tree
+// holds no entry there; restore reports that as the sink's error.
+func linkSize(load func(hash string) (*treeNode, error), root, link string) (int64, error) {
+	target, err := lookupTreeEntry(load, root, link)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	return target.Size, err
 }
 
 // buildTree organises the flat fileEntry list into a Merkle directory tree,

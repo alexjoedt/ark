@@ -756,7 +756,19 @@ func (r *Repository) Walk(ctx context.Context, snapshotID SnapshotID, fn func(Fi
 		return nil
 	}
 	_, trees := r.stores()
-	return walkTree(ctx, trees, m.RootTree, func(e fileEntry) error { return fn(e.FileInfo) })
+	cache := newNodeCache(treeNodeCacheEntries)
+	load := func(hash string) (*treeNode, error) {
+		return cache.load(hash, func() (*treeNode, error) { return loadTreeNode(ctx, trees, hash) })
+	}
+	return walkTree(ctx, trees, m.RootTree, func(e fileEntry) error {
+		if e.Type == FileTypeHardlink {
+			var err error
+			if e.Size, err = linkSize(load, m.RootTree, e.LinkDest); err != nil {
+				return fmt.Errorf("walk: hardlink %s: %w", e.Path, err)
+			}
+		}
+		return fn(e.FileInfo)
+	})
 }
 
 // Close releases any resources held by the repository (and the backend).

@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -211,31 +212,48 @@ func TestBuildTreeStopsOnFirstError(t *testing.T) {
 	})
 }
 
-// TestTreeNodeChunkRefsCarryNoStoredSize pins the node format: a chunk
-// reference is id, length and offset, so a node of unchanged files is
-// byte-identical to the one the parent snapshot stored.
-func TestTreeNodeChunkRefsCarryNoStoredSize(t *testing.T) {
+// TestTreeNodeStoresNoSizeAndNoOffset pins the node format: an entry holds no
+// size and a chunk reference is id and length, and a loaded node derives
+// both from the lengths.
+func TestTreeNodeStoresNoSizeAndNoOffset(t *testing.T) {
 	entries := []fileEntry{{
-		FileInfo: FileInfo{Path: "f", Type: FileTypeRegular, Size: 3},
-		Chunks:   []chunkRef{{ID: "c", Length: 3, Offset: 0}},
+		FileInfo: FileInfo{Path: "f", Type: FileTypeRegular, Size: 7},
+		Chunks:   []chunkRef{{ID: "c", Length: 3}, {ID: "d", Length: 4, Offset: 3}},
 	}}
 	data, err := marshalTreeNode(entries, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var raw struct {
-		Entries []struct {
-			Chunks []map[string]any `json:"chunks"`
-		} `json:"entries"`
+		Entries []map[string]any `json:"entries"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatal(err)
 	}
-	got := slices.Sorted(maps.Keys(raw.Entries[0].Chunks[0]))
-	if want := []string{"id", "length", "offset"}; !slices.Equal(got, want) {
-		t.Errorf("chunk ref keys %v, want %v", got, want)
+	if _, ok := raw.Entries[0]["size"]; ok {
+		t.Errorf("a stored entry has a size: %s", data)
+	}
+	for _, c := range raw.Entries[0]["chunks"].([]any) {
+		if got := slices.Sorted(maps.Keys(c.(map[string]any))); !slices.Equal(got, []string{"id", "length"}) {
+			t.Errorf("chunk ref keys %v, want [id length]", got)
+		}
 	}
 
+	var node treeNode
+	if err := json.Unmarshal(data, &node); err != nil {
+		t.Fatal(err)
+	}
+	e := &node.Entries[0]
+	if err := fillChunkOffsets(e); err != nil {
+		t.Fatal(err)
+	}
+	if e.Size != 7 || e.Chunks[0].Offset != 0 || e.Chunks[1].Offset != 3 {
+		t.Errorf("size %d, offsets %d and %d, want 7, 0 and 3", e.Size, e.Chunks[0].Offset, e.Chunks[1].Offset)
+	}
+	bad := treeEntry{Chunks: []chunkRef{{ID: "c", Length: math.MaxInt64}, {ID: "d", Length: 1}}}
+	if err := fillChunkOffsets(&bad); err == nil {
+		t.Error("lengths past int64 were accepted")
+	}
 }
 
 // TestTreeNodeModeIsModeTAnd07777 pins the meaning of mode in a node: the

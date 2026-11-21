@@ -105,6 +105,14 @@ func TestHardlinkIsStoredOnceAndRestoredAsALink(t *testing.T) {
 	if link.LinkDest != "a.txt" {
 		t.Errorf("z-link.txt points at %q, want %q", link.LinkDest, "a.txt")
 	}
+	if link.Size != int64(len(content)) || entries["a.txt"].Size != link.Size {
+		t.Errorf(
+			"sizes are %d for the link and %d for the file, want %d",
+			link.Size,
+			entries["a.txt"].Size,
+			len(content),
+		)
+	}
 	if entries["a.txt"].Type != ark.FileTypeRegular {
 		t.Errorf("a.txt has type %q, want %q", entries["a.txt"].Type, ark.FileTypeRegular)
 	}
