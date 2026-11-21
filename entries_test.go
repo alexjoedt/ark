@@ -4,11 +4,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -158,31 +158,12 @@ func TestXattrsSurviveTheRoundTrip(t *testing.T) {
 		t.Errorf("snapshot entry carries user.ark = %q, want %q", got, "value")
 	}
 
-	// The tree entry, not FileInfo, owns the wire format: base64 values.
-	var found bool
-	for _, name := range blobNames(t, repo, ark.TreeFile) {
-		var node struct {
-			Entries []struct {
-				Name   string            `json:"name"`
-				Xattrs map[string]string `json:"xattrs"`
-			} `json:"entries"`
-		}
-		if err := json.Unmarshal(openObject(t, repo, ark.TreeFile, name), &node); err != nil {
-			t.Fatalf("parse tree %s: %v", name, err)
-		}
-		for _, e := range node.Entries {
-			if e.Name == "file.txt" {
-				found = true
-				// base64 of "value".
-				if e.Xattrs["user.ark"] != "dmFsdWU=" {
-					t.Errorf("tree entry stores user.ark as %q, want base64 %q",
-						e.Xattrs["user.ark"], "dmFsdWU=")
-				}
-			}
-		}
-	}
-	if !found {
-		t.Fatal("no tree entry for file.txt")
+	// The node holds name and value as they are, each behind its length.
+	stored := []byte("\x08user.ark\x05value")
+	if !slices.ContainsFunc(blobNames(t, repo, ark.TreeFile), func(name string) bool {
+		return bytes.Contains(openObject(t, repo, ark.TreeFile, name), stored)
+	}) {
+		t.Errorf("no tree node holds %q", stored)
 	}
 
 	var buf [64]byte

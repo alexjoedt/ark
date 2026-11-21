@@ -3,13 +3,10 @@ package ark
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
-	"maps"
-	"math"
 	"os"
 	"slices"
 	"strings"
@@ -28,7 +25,7 @@ func treeFixture() []fileEntry {
 		e := fileEntry{FileInfo: FileInfo{Path: path, Type: typ, Mode: 0o644, ModTime: mtime}}
 		if typ == FileTypeRegular {
 			e.Size = int64(len(path))
-			e.Chunks = []chunkRef{{ID: "chunk-" + path, Length: int64(len(path))}}
+			e.Chunks = []chunkRef{{ID: keyedName([]byte("fixture"), []byte(path)), Length: int64(len(path))}}
 		}
 		return e
 	}
@@ -74,7 +71,7 @@ func buildTreeSequential(ctx context.Context, trees *objectStore, entries []file
 				hashes[norm] = hash
 			}
 		}
-		data, err := marshalTreeNode(dirChildren[dir], hashes)
+		data, err := marshalTreeNode(dir, dirChildren[dir], hashes)
 		if err != nil {
 			return "", err
 		}
@@ -213,47 +210,52 @@ func TestBuildTreeStopsOnFirstError(t *testing.T) {
 	})
 }
 
-// TestTreeNodeStoresNoSizeAndNoOffset pins the node format: an entry holds no
-// size and a chunk reference is id and length, and a loaded node derives
-// both from the lengths.
-func TestTreeNodeStoresNoSizeAndNoOffset(t *testing.T) {
-	entries := []fileEntry{{
-		FileInfo: FileInfo{Path: "f", Type: FileTypeRegular, Size: 7},
-		Chunks:   []chunkRef{{ID: "c", Length: 3}, {ID: "d", Length: 4, Offset: 3}},
-	}}
-	data, err := marshalTreeNode(entries, nil)
+// TestMarshalTreeNodeStoresTheBinaryNode: what the write path stores decodes
+// with the node codec, sorted by name, and a regular file's size is that of
+// its chunks whatever the source reported.
+func TestMarshalTreeNodeStoresTheBinaryNode(t *testing.T) {
+	entries := []fileEntry{
+		{Path: "d/z", Type: FileTypeSymlink, LinkDest: "f"},
+		{
+			Path: "d/f", Type: FileTypeRegular, Size: 99, LinkDest: "stray",
+			Chunks: []chunkRef{{ID: nodeID(1), Length: 3}, {ID: nodeID(2), Length: 4}},
+		},
+	}
+	data, err := marshalTreeNode("d", entries, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var raw struct {
-		Entries []map[string]any `json:"entries"`
+	node, err := decodeTreeNode(data)
+	if err != nil {
+		t.Fatalf("decodeTreeNode: %v", err)
 	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatal(err)
+	if len(node.Entries) != 2 || node.Entries[0].Name != "f" || node.Entries[1].Name != "z" {
+		t.Fatalf("entries %+v, want f before z", node.Entries)
 	}
-	if _, ok := raw.Entries[0]["size"]; ok {
-		t.Errorf("a stored entry has a size: %s", data)
+	f := node.Entries[0]
+	if f.Size != 7 || f.Chunks[1].Offset != 3 || f.LinkDest != "" {
+		t.Errorf("file reads back as %+v, want size 7, second offset 3, no link target", f)
 	}
-	for _, c := range raw.Entries[0]["chunks"].([]any) {
-		if got := slices.Sorted(maps.Keys(c.(map[string]any))); !slices.Equal(got, []string{"id", "length"}) {
-			t.Errorf("chunk ref keys %v, want [id length]", got)
-		}
-	}
+}
 
-	var node treeNode
-	if err := json.Unmarshal(data, &node); err != nil {
-		t.Fatal(err)
-	}
-	e := &node.Entries[0]
-	if err := fillChunkOffsets(e); err != nil {
-		t.Fatal(err)
-	}
-	if e.Size != 7 || e.Chunks[0].Offset != 0 || e.Chunks[1].Offset != 3 {
-		t.Errorf("size %d, offsets %d and %d, want 7, 0 and 3", e.Size, e.Chunks[0].Offset, e.Chunks[1].Offset)
-	}
-	bad := treeEntry{Chunks: []chunkRef{{ID: "c", Length: math.MaxInt64}, {ID: "d", Length: 1}}}
-	if err := fillChunkOffsets(&bad); err == nil {
-		t.Error("lengths past int64 were accepted")
+// TestMarshalTreeNodeRefusesANameTwice: a node holds a name once, whatever
+// the two entries are, and the error names the path.
+func TestMarshalTreeNodeRefusesANameTwice(t *testing.T) {
+	for name, twice := range map[string][]fileEntry{
+		"two files": {
+			{Path: "d/a", Type: FileTypeRegular},
+			{Path: "d/b", Type: FileTypeRegular},
+			{Path: "./d/a", Type: FileTypeRegular},
+		},
+		"file and directory": {
+			{Path: "d/a", Type: FileTypeRegular},
+			{Path: "d/a/", Type: FileTypeDirectory},
+		},
+	} {
+		_, err := marshalTreeNode("d", twice, map[string]string{"d/a": nodeID(1)})
+		if err == nil || !strings.Contains(err.Error(), `"d/a" more than once`) {
+			t.Errorf("%s: marshalTreeNode returned %v, want an error naming d/a", name, err)
+		}
 	}
 }
 
@@ -289,37 +291,6 @@ func TestTreeNodeModeIsModeTAnd07777(t *testing.T) {
 		}
 		if got := te.fileInfo("e").Mode; got != tc.back {
 			t.Errorf("stored mode %#o reads as %v, want %v", te.Mode, got, tc.back)
-		}
-	}
-}
-
-// TestLoadTreeNodeRefusesAModeOutside07777: a type bit or any other bit above
-// 07777 in a stored mode is not something this format writes.
-func TestLoadTreeNodeRefusesAModeOutside07777(t *testing.T) {
-	ctx := context.Background()
-	codec := newObjectCodec()
-	defer codec.Close()
-	session := testSession(newStubBackend(), codec, newMasterKey("repo"))
-
-	wantErr := map[uint32]bool{0o7777: false, 0o10000: true, uint32(fs.ModeDir) | 0o755: true}
-	hashes := make(map[uint32]string)
-	for mode := range wantErr {
-		data, err := json.Marshal(treeNode{Entries: []treeEntry{{Name: "e", Type: FileTypeRegular, Mode: mode}}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		hashes[mode] = session.trees.name(data)
-		if _, err := session.trees.putNamed(ctx, hashes[mode], data); err != nil {
-			t.Fatalf("putNamed: %v", err)
-		}
-	}
-	if err := session.finish(ctx); err != nil {
-		t.Fatalf("finish: %v", err)
-	}
-	for mode, want := range wantErr {
-		_, err := loadTreeNode(ctx, session.trees, hashes[mode])
-		if want != errors.Is(err, ErrCorruptTree) || (!want && err != nil) {
-			t.Errorf("mode %#o: loadTreeNode returned %v, want ErrCorruptTree: %v", mode, err, want)
 		}
 	}
 }

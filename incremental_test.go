@@ -371,6 +371,52 @@ func (b *putCountingBackend) take() map[ark.HandleType]int {
 	return puts
 }
 
+// TestBackupInAnotherTimeZoneStoresNoTreeNode: a node holds its times as
+// nanoseconds without a zone. The zone a source reports them in is therefore
+// no part of a node's name, and the parent's files still match.
+func TestBackupInAnotherTimeZoneStoresNoTreeNode(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t, arkmem.New())
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mtime := time.Date(2026, 1, 2, 3, 4, 5, 123_456_789, time.UTC)
+	ctime := time.Date(2026, 1, 2, 23, 59, 59, 987_654_321, time.UTC)
+	in := func(loc *time.Location) *statSource {
+		return newStatSource("app", map[string]statFile{
+			"a.txt":     {content: "alpha", mtime: mtime.In(loc), ctime: ctime.In(loc), inode: 1},
+			"dir/b.txt": {content: "bravo", mtime: mtime.In(loc), ctime: ctime.In(loc), inode: 2},
+		})
+	}
+	if _, err := repo.Backup(ctx, in(time.UTC)); err != nil {
+		t.Fatalf("backup in UTC: %v", err)
+	}
+	trees := blobNames(t, repo, ark.TreeFile)
+
+	src := in(tokyo)
+	snap, err := repo.Backup(ctx, src)
+	if err != nil {
+		t.Fatalf("backup in Asia/Tokyo: %v", err)
+	}
+	if got := blobNames(t, repo, ark.TreeFile); !slices.Equal(got, trees) {
+		t.Errorf("the backup in another zone left the tree nodes %v, want the %v of the first", got, trees)
+	}
+	if snap.Stats.FilesUnchanged != 2 || len(src.opened()) != 0 {
+		t.Errorf("%d files unchanged, opened %v; want 2 and none", snap.Stats.FilesUnchanged, src.opened())
+	}
+	for path, e := range entriesOf(t, repo, snap.ID) {
+		if e.Type != ark.FileTypeRegular {
+			continue
+		}
+		if !e.ModTime.Equal(mtime) || !e.ChangeTime.Equal(ctime) {
+			t.Errorf("%s reads back mtime %s and ctime %s, want %s and %s",
+				path, e.ModTime.Format(time.RFC3339Nano), e.ChangeTime.Format(time.RFC3339Nano),
+				mtime.Format(time.RFC3339Nano), ctime.Format(time.RFC3339Nano))
+		}
+	}
+}
+
 func TestBackupStoresOnlyChangedTreeNodes(t *testing.T) {
 	ctx := context.Background()
 	b := &putCountingBackend{Backend: arkmem.New(), puts: map[ark.HandleType]int{}}

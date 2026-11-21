@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"slices"
@@ -190,28 +189,20 @@ func ChunkOffsets(s *SnapshotFS, name string) ([]int64, error) {
 	return offsets, nil
 }
 
-// RetypeEntry stores the root tree node of snapshot id again with the type of
-// its entry name set to typ and points the manifest at it: the snapshot a
-// build that knows typ would have written.
-func RetypeEntry(ctx context.Context, r *Repository, id SnapshotID, name string, typ FileType) error {
+// DecodeTreeNode reports whether data is a tree node as this build stores it.
+func DecodeTreeNode(data []byte) error {
+	_, err := decodeTreeNode(data)
+	return err
+}
+
+// ReplaceRootTree stores data as a tree node and points the manifest of
+// snapshot id at it.
+func ReplaceRootTree(ctx context.Context, r *Repository, id SnapshotID, data []byte) error {
 	m, err := r.loadManifest(ctx, id)
 	if err != nil {
 		return err
 	}
 	session := r.writeSession()
-	node, err := loadTreeNode(ctx, session.trees, m.RootTree)
-	if err != nil {
-		return err
-	}
-	i := slices.IndexFunc(node.Entries, func(e treeEntry) bool { return e.Name == name })
-	if i < 0 {
-		return fmt.Errorf("%w: root entry %s", ErrNotFound, name)
-	}
-	node.Entries[i].Type = typ
-	data, err := json.Marshal(node)
-	if err != nil {
-		return err
-	}
 	m.RootTree = session.trees.name(data)
 	if _, err := session.trees.putNamed(ctx, m.RootTree, data); err != nil {
 		return err
@@ -220,6 +211,40 @@ func RetypeEntry(ctx context.Context, r *Repository, id SnapshotID, name string,
 		return err
 	}
 	return r.saveManifest(ctx, m)
+}
+
+// RetypeEntry stores the root tree node of snapshot id again with its entry
+// name turned into one without content under the type byte typ, and points
+// the manifest at it: the snapshot a build that knows typ would have written.
+func RetypeEntry(ctx context.Context, r *Repository, id SnapshotID, name string, typ byte) error {
+	m, err := r.loadManifest(ctx, id)
+	if err != nil {
+		return err
+	}
+	_, trees := r.stores()
+	node, err := loadTreeNode(ctx, trees, m.RootTree)
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(node.Entries, func(e treeEntry) bool { return e.Name == name })
+	if i < 0 {
+		return fmt.Errorf("%w: root entry %s", ErrNotFound, name)
+	}
+	// A fifo holds nothing behind its head, so its type byte is the only one
+	// to change.
+	const fifo = 5
+	node.Entries[i] = treeEntry{Name: name, Type: fileTypeFifo}
+	data, err := encodeTreeNode(node)
+	if err != nil {
+		return err
+	}
+	head := append(appendNodeBytes(nil, name), fifo)
+	at := bytes.Index(data, head)
+	if at < 0 {
+		return fmt.Errorf("entry %s not found in its node", name)
+	}
+	data[at+len(head)-1] = typ
+	return ReplaceRootTree(ctx, r, id, data)
 }
 
 // Retag returns obj, an object of r sealed under h, sealed again under the

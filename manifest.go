@@ -177,9 +177,9 @@ func (s *SnapshotStats) UnmarshalJSON(data []byte) error {
 
 // chunkRef references a content-addressable chunk in the CAS.
 type chunkRef struct {
-	ID     string `json:"id"`
-	Length int64  `json:"length"`
-	Offset int64  `json:"-"` // derived at load, never stored
+	ID     string
+	Length int64
+	Offset int64 // derived at load, never stored
 }
 
 // saveManifest seals m and writes it under SnapshotFile between two

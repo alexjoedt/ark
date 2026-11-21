@@ -2,12 +2,11 @@ package ark
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
-	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -17,42 +16,41 @@ import (
 )
 
 // treeNode is a directory node in the snapshot Merkle tree. It lives in the
-// trees namespace, named by the HMAC of its canonical JSON: entries sorted
-// by name, marshalled without indentation.
+// trees namespace, named by the HMAC of its stored bytes, which treenode.go
+// defines.
 type treeNode struct {
-	Entries []treeEntry `json:"entries"`
+	Entries []treeEntry
 }
 
 // treeEntry is one child inside a treeNode.
 type treeEntry struct {
-	Name string   `json:"name"`
-	Type FileType `json:"type"`
+	Name string
+	Type FileType
 	// Mode is mode_t & 07777: the permission bits with setuid 04000, setgid
 	// 02000 and sticky 01000. The file type is in Type, never here.
-	Mode    uint32    `json:"mode"`
-	UID     int       `json:"uid"`
-	GID     int       `json:"gid"`
-	ModTime time.Time `json:"mtime"`
-	// Size is the sum of the chunk lengths, set by loadTreeNode and never
-	// stored; a hardlink's is its target's, which Walk and Restore fill in.
-	Size     int64      `json:"-"`
-	LinkDest string     `json:"link_dest,omitempty"`
-	TreeHash string     `json:"tree_hash,omitempty"`
-	Chunks   []chunkRef `json:"chunks,omitempty"`
+	Mode    uint32
+	UID     int
+	GID     int
+	ModTime time.Time
+	// Size is the sum of the chunk lengths and is not stored; a hardlink's is
+	// its target's, which Walk and Restore fill in.
+	Size     int64
+	LinkDest string
+	TreeHash string
+	Chunks   []chunkRef
 
-	// Xattrs maps an extended attribute name to its value. encoding/json
-	// writes the values base64 encoded, which is the v1 wire format.
-	Xattrs map[string][]byte `json:"xattrs,omitempty"`
+	// Xattrs maps an extended attribute name to its value.
+	Xattrs map[string][]byte
 
 	// ChangeTime and Inode are what a later backup compares to skip the
-	// file; snapshots from older builds and tar sources carry neither.
-	ChangeTime time.Time `json:"ctime,omitzero"`
-	Inode      uint64    `json:"inode,omitempty"`
+	// file; tar sources carry neither.
+	ChangeTime time.Time
+	Inode      uint64
 
 	// DevMajor and DevMinor are the device numbers of a character or block
-	// device. Only the binary node holds them.
-	DevMajor uint32 `json:"-"`
-	DevMinor uint32 `json:"-"`
+	// device.
+	DevMajor uint32
+	DevMinor uint32
 }
 
 // storedModeMask is every bit a stored mode may carry.
@@ -109,11 +107,12 @@ func (e treeEntry) fileInfo(path string) FileInfo {
 	}
 }
 
-// marshalTreeNode is the canonical JSON of the node holding children, the
+// marshalTreeNode is the stored form of the node of dir holding children, the
 // bytes buildTree stores and the input of the node's name. Sorting here rather
 // than at every call site keeps the canonical form an invariant of the write
-// path.
-func marshalTreeNode(children []fileEntry, hashes map[string]string) ([]byte, error) {
+// path. Two children of one name are an error: a node holds a name once, and
+// leaving one of them out would drop an entry the source yielded.
+func marshalTreeNode(dir string, children []fileEntry, hashes map[string]string) ([]byte, error) {
 	node := treeNode{Entries: make([]treeEntry, 0, len(children))}
 	for _, child := range children {
 		te, err := newTreeEntry(child, hashes)
@@ -123,15 +122,20 @@ func marshalTreeNode(children []fileEntry, hashes map[string]string) ([]byte, er
 		node.Entries = append(node.Entries, te)
 	}
 	slices.SortFunc(node.Entries, func(a, b treeEntry) int { return strings.Compare(a.Name, b.Name) })
-	data, err := json.Marshal(node)
+	for i := 1; i < len(node.Entries); i++ {
+		if name := node.Entries[i].Name; name == node.Entries[i-1].Name {
+			return nil, fmt.Errorf("tree: the source yielded %q more than once", path.Join(dir, name))
+		}
+	}
+	data, err := encodeTreeNode(&node)
 	if err != nil {
-		return nil, fmt.Errorf("tree: failed to marshal node: %w", err)
+		return nil, fmt.Errorf("tree: directory %q: %w", dir, err)
 	}
 	return data, nil
 }
 
-// storedType reports whether t is a file type a tree node of this format
-// holds.
+// storedType reports whether t is a file type the readers of a tree handle.
+// The node format also holds fifos and devices, which no reader does yet.
 func storedType(t FileType) bool {
 	return t == FileTypeRegular || t == FileTypeDirectory || t == FileTypeSymlink || t == FileTypeHardlink
 }
@@ -141,48 +145,20 @@ func loadTreeNode(ctx context.Context, trees *objectStore, hash string) (*treeNo
 	if err != nil {
 		return nil, fmt.Errorf("tree: failed to load node %s: %w", hash, err)
 	}
-	var node treeNode
-	if err := json.Unmarshal(data, &node); err != nil {
-		return nil, fmt.Errorf("tree: failed to unmarshal node %s: %w", hash, err)
+	node, err := decodeTreeNode(data)
+	if err != nil {
+		return nil, fmt.Errorf("tree: node %s: %w", hash, err)
 	}
+	// Every reader of a tree loads its nodes here, so none of them meets a
+	// type it would have to skip: a restore that leaves the entry out and a
+	// prune that counts it as holding nothing are both wrong.
 	for i := range node.Entries {
-		e := &node.Entries[i]
-		if err := fillChunkOffsets(e); err != nil {
-			return nil, fmt.Errorf("%w: node %s: %q: %w", ErrCorruptTree, hash, e.Name, err)
-		}
-		if e.Mode&^storedModeMask != 0 {
-			return nil, fmt.Errorf("%w: node %s: mode %#o of %q has a bit outside 07777",
-				ErrCorruptTree, hash, e.Mode, e.Name)
-		}
-		// Every reader of a tree loads its nodes here, so none of them meets
-		// a type it would have to skip: a restore that leaves the entry out
-		// and a prune that counts it as holding nothing are both wrong.
-		if !storedType(e.Type) {
+		if e := &node.Entries[i]; !storedType(e.Type) {
 			return nil, fmt.Errorf("%w: node %s: %q has the file type %q, which this build does not know",
 				ErrUnsupportedFormat, hash, e.Name, e.Type)
 		}
-		if len(e.Chunks) > 0 && e.Type != FileTypeRegular {
-			return nil, fmt.Errorf("%w: node %s: %q is a %s and holds chunks",
-				ErrCorruptTree, hash, e.Name, e.Type)
-		}
 	}
-	return &node, nil
-}
-
-// fillChunkOffsets derives what a node does not store: every chunk's offset is
-// the sum of the lengths before it, and the entry's size is the sum of all.
-func fillChunkOffsets(e *treeEntry) error {
-	var off int64
-	for i := range e.Chunks {
-		c := &e.Chunks[i]
-		if c.Length <= 0 || c.Length > math.MaxInt64-off {
-			return fmt.Errorf("chunk length %d is out of range", c.Length)
-		}
-		c.Offset = off
-		off += c.Length
-	}
-	e.Size = off
-	return nil
+	return node, nil
 }
 
 // linkTarget is the regular file a hardlink at link names. A tree that holds
@@ -301,7 +277,7 @@ func storeTreeLevel(
 	w := newChunkWriter(ctx, trees, workers)
 	stored := make(map[string]string, len(dirs))
 	for _, dir := range dirs {
-		data, err := marshalTreeNode(dirChildren[dir], hashes)
+		data, err := marshalTreeNode(dir, dirChildren[dir], hashes)
 		if err == nil {
 			name := trees.name(data)
 			stored[dir] = name
@@ -325,20 +301,25 @@ func storeTreeLevel(
 func newTreeEntry(child fileEntry, hashes map[string]string) (treeEntry, error) {
 	norm := normEntryPath(child.Path)
 	te := treeEntry{
-		Name:     filepath.Base(norm),
-		Type:     child.Type,
-		Mode:     UnixMode(child.Mode),
-		UID:      child.UID,
-		GID:      child.GID,
-		ModTime:  child.ModTime,
-		LinkDest: child.LinkDest,
-		Xattrs:   child.Xattrs,
+		Name:    filepath.Base(norm),
+		Type:    child.Type,
+		Mode:    UnixMode(child.Mode),
+		UID:     child.UID,
+		GID:     child.GID,
+		ModTime: child.ModTime,
+		Xattrs:  child.Xattrs,
 
 		ChangeTime: child.ChangeTime,
 		Inode:      child.Inode,
 	}
-	if child.Type == FileTypeRegular {
+	// What the type has no place for is left out, as a directory's size is.
+	switch child.Type {
+	case FileTypeRegular:
 		te.Chunks = child.Chunks
+		te.Size = refsSize(child.Chunks)
+	case FileTypeSymlink, FileTypeHardlink:
+		te.LinkDest = child.LinkDest
+	case FileTypeDirectory, FileTypeUnsupported:
 	}
 	if child.Type == FileTypeDirectory {
 		hash, ok := hashes[norm]

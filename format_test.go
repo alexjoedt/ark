@@ -270,30 +270,57 @@ func TestTreeNodesLiveInTheTreesNamespace(t *testing.T) {
 	}
 }
 
-func TestTreeNodeJSONIsCanonical(t *testing.T) {
-	b := arkmem.New()
-	repo, _ := backupFixture(t, b)
+// TestEveryStoredTreeNodeIsTheBinaryNode: a backup and an import write their
+// trees through the one node codec. A node in the JSON that earlier builds
+// stored is of another format, which no reader takes for a damaged node.
+func TestEveryStoredTreeNodeIsTheBinaryNode(t *testing.T) {
+	ctx := context.Background()
+	repo, id := backupFixture(t, arkmem.New())
+	var archive bytes.Buffer
+	if err := repo.Export(ctx, id, &archive); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	target := openRepo(t, arkmem.New())
+	if _, err := target.Import(ctx, &archive); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	for name, r := range map[string]*ark.Repository{"backup": repo, "import": target} {
+		nodes := blobNames(t, r, ark.TreeFile)
+		if len(nodes) != 2 {
+			t.Errorf("the %s stored %d tree nodes, want 2", name, len(nodes))
+		}
+		for _, node := range nodes {
+			if err := ark.DecodeTreeNode(openObject(t, r, ark.TreeFile, node)); err != nil {
+				t.Errorf("%s: tree %s: %v", name, node, err)
+			}
+		}
+	}
 
-	for _, name := range blobNames(t, repo, ark.TreeFile) {
-		data := openObject(t, repo, ark.TreeFile, name)
-		if bytes.ContainsAny(data, "\n\t") {
-			t.Errorf("tree %s is indented, want canonical JSON: %s", name, data)
-		}
-		var node struct {
-			Entries []struct {
-				Name string `json:"name"`
-			} `json:"entries"`
-		}
-		if err := json.Unmarshal(data, &node); err != nil {
-			t.Fatalf("parse tree %s: %v", name, err)
-		}
-		names := make([]string, 0, len(node.Entries))
-		for _, e := range node.Entries {
-			names = append(names, e.Name)
-		}
-		if !slices.IsSorted(names) {
-			t.Errorf("tree %s entries are not sorted by name: %v", name, names)
-		}
+	if err := ark.ReplaceRootTree(ctx, repo, id, []byte(`{"entries":[]}`)); err != nil {
+		t.Fatalf("ReplaceRootTree: %v", err)
+	}
+	for name, read := range readers(repo, id) {
+		wantUnsupported(t, name, read(ctx), "tree node of version 123")
+	}
+}
+
+// TestBackupRefusesANameTwiceInOneDirectory: a tree node holds a name once,
+// and a snapshot without one of the two entries would be a backup that lost a
+// file without a word.
+func TestBackupRefusesANameTwiceInOneDirectory(t *testing.T) {
+	repo := openRepo(t, arkmem.New())
+	src := multiSource{
+		name:  "app",
+		dirs:  []string{"dir"},
+		files: map[string]string{"dir/a": "one", "dir/b": "two"},
+		order: []string{"dir/a", "dir/b", "dir/a"},
+	}
+	_, err := repo.Backup(context.Background(), src)
+	if err == nil || !strings.Contains(err.Error(), `"dir/a" more than once`) {
+		t.Fatalf("Backup = %v, want an error that names dir/a", err)
+	}
+	if snaps, err := repo.Snapshots(context.Background(), ark.SnapshotFilter{}); err != nil || len(snaps) != 0 {
+		t.Errorf("the failed backup left %d snapshots (%v), want none", len(snaps), err)
 	}
 }
 
