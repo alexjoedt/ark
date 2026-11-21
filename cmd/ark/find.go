@@ -73,8 +73,13 @@ func findCommand() *cli.Command {
 				if m.JSON {
 					last = s.ID
 					return p.JSONLine(matchJSON{
-						SnapshotID: s.ID, Path: f.Path, Type: string(f.Type), Size: f.Size, Mtime: f.ModTime,
-						Labels: out.Labels(s.Labels),
+						SnapshotID: s.ID,
+						Path:       f.Path,
+						PathRaw:    out.RawName(f.Path),
+						Type:       string(f.Type),
+						Size:       f.Size,
+						Mtime:      f.ModTime,
+						Labels:     out.Labels(s.Labels),
 					})
 				}
 				if s.ID != last && !m.Quiet {
@@ -84,7 +89,7 @@ func findCommand() *cli.Command {
 					p.Linef("snapshot %s from %s", out.ShortID(s.ID), out.TimeLong(s.CreatedAt))
 				}
 				last = s.ID
-				p.Linef("%s", f.Path)
+				p.Linef("%s", p.Name(f.Path))
 				return nil
 			})
 			if err != nil {
@@ -102,6 +107,7 @@ func findCommand() *cli.Command {
 type matchJSON struct {
 	SnapshotID ark.SnapshotID    `json:"snapshot_id"`
 	Path       string            `json:"path"`
+	PathRaw    string            `json:"path_raw,omitempty"`
 	Type       string            `json:"type"`
 	Size       int64             `json:"size"`
 	Mtime      time.Time         `json:"mtime"`

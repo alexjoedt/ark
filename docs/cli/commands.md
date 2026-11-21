@@ -189,6 +189,11 @@ ark ls [--long] <id> [path]
 Lists the entries of a snapshot, optionally only those below `path`. It streams, so it works on a
 snapshot of any size. `--long`, `-l` adds mode, uid, gid, size, and mtime.
 
+Names are raw bytes. On a terminal, `ls` and `find` write a name that isn't valid UTF-8 or holds a
+control character with every such byte as `\xNN` and every backslash in it as `\\`. In a pipe they
+write the bytes as stored. With `--json`, `path` stays and `path_raw` holds the base64 of the bytes,
+only for such a name; `link_dest_raw` does the same for a link target.
+
 ## find
 
 ```

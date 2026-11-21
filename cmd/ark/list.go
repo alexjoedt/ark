@@ -132,15 +132,13 @@ func lsCommand() *cli.Command {
 					return nil
 				}
 				if p.Mode().JSON {
-					return p.JSONLine(entryJSON{
-						Path: f.Path, Type: string(f.Type), Size: f.Size, Mode: ark.UnixMode(f.Mode),
-						UID: f.UID, GID: f.GID, Mtime: f.ModTime, LinkDest: f.LinkDest,
-					})
+					return p.JSONLine(newEntryJSON(f))
 				}
 				if long {
-					p.Linef("%s %5d %5d %10d %s %s", f.Mode, f.UID, f.GID, f.Size, out.TimeLong(f.ModTime), f.Path)
+					name := p.Name(f.Path)
+					p.Linef("%s %5d %5d %10d %s %s", f.Mode, f.UID, f.GID, f.Size, out.TimeLong(f.ModTime), name)
 				} else {
-					p.Linef("%s", f.Path)
+					p.Linef("%s", p.Name(f.Path))
 				}
 				return nil
 			})
@@ -154,14 +152,24 @@ func lsCommand() *cli.Command {
 
 // entryJSON is one line of ark ls --json, frozen for 1.x.
 type entryJSON struct {
-	Path     string    `json:"path"`
-	Type     string    `json:"type"`
-	Size     int64     `json:"size"`
-	Mode     uint32    `json:"mode"`
-	UID      int       `json:"uid"`
-	GID      int       `json:"gid"`
-	Mtime    time.Time `json:"mtime"`
-	LinkDest string    `json:"link_dest"`
+	Path        string    `json:"path"`
+	PathRaw     string    `json:"path_raw,omitempty"`
+	Type        string    `json:"type"`
+	Size        int64     `json:"size"`
+	Mode        uint32    `json:"mode"`
+	UID         int       `json:"uid"`
+	GID         int       `json:"gid"`
+	Mtime       time.Time `json:"mtime"`
+	LinkDest    string    `json:"link_dest"`
+	LinkDestRaw string    `json:"link_dest_raw,omitempty"`
+}
+
+func newEntryJSON(f ark.FileInfo) entryJSON {
+	return entryJSON{
+		Path: f.Path, PathRaw: out.RawName(f.Path), Type: string(f.Type), Size: f.Size,
+		Mode: ark.UnixMode(f.Mode), UID: f.UID, GID: f.GID, Mtime: f.ModTime,
+		LinkDest: f.LinkDest, LinkDestRaw: out.RawName(f.LinkDest),
+	}
 }
 
 func inspectCommand() *cli.Command {
