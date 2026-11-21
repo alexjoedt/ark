@@ -264,8 +264,9 @@ func TestOpenRejectsAMasterKeyWithoutConfigHash(t *testing.T) {
 	}
 	resealMasterKey(t, b, repo, blob)
 
-	if _, err := Open(ctx, b, NoPassword()); !errors.Is(err, ErrCorruptConfig) {
-		t.Errorf("Open = %v, want ErrCorruptConfig", err)
+	_, err = Open(ctx, b, NoPassword())
+	if !errors.Is(err, ErrCorruptConfig) || !strings.Contains(err.Error(), "no config binding") {
+		t.Errorf("Open = %v, want ErrCorruptConfig naming the missing binding", err)
 	}
 }
 
@@ -396,8 +397,7 @@ func TestDecodeStrict(t *testing.T) {
 
 // TestArchiveMetadataIsDecodedStrictly: an import stores the manifest of its
 // archive, so a key it dropped there would be lost to every later reader. The
-// metadata is refused like a stored manifest a later build wrote. The pre-v1
-// shape has no version and is read for its own few fields only.
+// metadata is refused like a stored manifest a later build wrote.
 func TestArchiveMetadataIsDecodedStrictly(t *testing.T) {
 	for in, names := range map[string]string{
 		`{"version":1,"source_name":"app"}`:             "",

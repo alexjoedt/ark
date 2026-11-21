@@ -421,6 +421,13 @@ func TestSnapshotUnderAnotherNameIsRefused(t *testing.T) {
 	if _, err := repo.Snapshot(ctx, dated); !errors.Is(err, ark.ErrUnsupportedFormat) {
 		t.Errorf("Snapshot(%s) = %v, want ErrUnsupportedFormat", dated, err)
 	}
+	res, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{dated}})
+	if err != nil || len(res.Remove) != 1 || res.Remove[0].ID != dated {
+		t.Fatalf("Forget(%s) = %+v, %v, want it removed", dated, res, err)
+	}
+	if all, err := repo.Snapshots(ctx, ark.SnapshotFilter{}); err != nil || len(all) != 1 {
+		t.Errorf("Snapshots after Forget = %d, %v, want 1", len(all), err)
+	}
 }
 
 // TestLockNamesCarryTheirTime pins an accepted leak: a lock name starts with

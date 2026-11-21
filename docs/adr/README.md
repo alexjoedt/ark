@@ -20,7 +20,7 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0003 | [Unchanged-file detection](0003-unchanged-file-detection.md) | accepted | 2026-11-07 |
 | 0004 | [v0 line and release tagging](0004-v0-line-and-release-tagging.md) | accepted | 2026-11-07 |
 | 0005 | [Sync barrier instead of per-object fsync](0005-sync-barrier-instead-of-per-object-fsync.md) | partly superseded by 0012 | 2026-11-08 |
-| 0006 | [Threat model boundaries](0006-threat-model-boundaries.md) | partly superseded by 0016 | 2026-11-08 |
+| 0006 | [Threat model boundaries](0006-threat-model-boundaries.md) | partly superseded by 0016, 0035 | 2026-11-08 |
 | 0007 | [Embedding hooks on Open](0007-embedding-hooks-on-open.md) | accepted | 2026-11-08 |
 | 0008 | [Path matcher package](0008-path-matcher-package.md) | accepted | 2026-11-11 |
 | 0009 | [Exclude patterns on the snapshot](0009-exclude-patterns-on-the-snapshot.md) | accepted | 2026-11-11 |

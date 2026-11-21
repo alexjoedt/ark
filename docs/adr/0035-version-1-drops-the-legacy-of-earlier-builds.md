@@ -36,7 +36,9 @@ until the freeze, so nothing is migrated and nothing is read for compatibility.
   other form. A manifest that opens under another name is `ErrUnsupportedFormat`. The name is
   judged after the tag, like an unknown format byte (0034): an object that does not authenticate
   is corrupt whatever it is called and is still removed by a forget of its name, so nobody
-  without the key can make a repository read as unsupported.
+  without the key can make a repository read as unsupported. A forget of the name removes an
+  object under a name that is not hex without reading it, so there is a way out of a
+  repository that a listing refuses.
 - An archive is outside input, so import still takes an ID of any form. It keeps a hex ID and
   names the copy of any other by the first 128 bits of the SHA-256 of that ID
   (`importedSnapshotID` in `ulid.go`).
@@ -72,6 +74,10 @@ again.
 
 This supersedes the part of 0022 that keeps the manifest key `source_meta`, and the sentence of
 0006 that has Open report a master key without `config_hash` as an older format.
+
+The tree node is outside this decision. Its JSON form is replaced by a binary encoding before
+the freeze, which drops the stored offset and size of a chunk reference; until then a node is
+decoded without refusing unknown keys, and no test pins a key of an earlier build.
 
 `docs/SECURITY.md` no longer lists dated snapshot names as an accepted risk. Lock names still
 carry their time.

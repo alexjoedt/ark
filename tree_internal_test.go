@@ -213,8 +213,7 @@ func TestBuildTreeStopsOnFirstError(t *testing.T) {
 
 // TestTreeNodeChunkRefsCarryNoStoredSize pins the node format: a chunk
 // reference is id, length and offset, so a node of unchanged files is
-// byte-identical to the one the parent snapshot stored. Nodes older builds
-// wrote with a size per reference still load.
+// byte-identical to the one the parent snapshot stored.
 func TestTreeNodeChunkRefsCarryNoStoredSize(t *testing.T) {
 	entries := []fileEntry{{
 		FileInfo: FileInfo{Path: "f", Type: FileTypeRegular, Size: 3},
@@ -237,15 +236,6 @@ func TestTreeNodeChunkRefsCarryNoStoredSize(t *testing.T) {
 		t.Errorf("chunk ref keys %v, want %v", got, want)
 	}
 
-	legacy := `{"entries":[{"name":"f","type":"regular","mode":420,"uid":0,"gid":0,"mtime":"2026-01-02T03:04:05Z",` +
-		`"size":3,"chunks":[{"id":"c","size":40,"length":3,"offset":0}]}]}`
-	var node treeNode
-	if err := json.Unmarshal([]byte(legacy), &node); err != nil {
-		t.Fatalf("legacy node: %v", err)
-	}
-	if len(node.Entries) != 1 || len(node.Entries[0].Chunks) != 1 || node.Entries[0].Chunks[0].ID != "c" {
-		t.Errorf("legacy node loaded as %+v", node)
-	}
 }
 
 // TestTreeNodeModeIsModeTAnd07777 pins the meaning of mode in a node: the

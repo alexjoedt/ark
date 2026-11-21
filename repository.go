@@ -417,7 +417,8 @@ func (r *Repository) deleteSnapshot(ctx context.Context, id SnapshotID) error {
 //
 // Removing named ids without a policy reads only those manifests, and one
 // that fails with ErrCorruptManifest is still removed, reported with its ID
-// alone. This is how a corrupt manifest leaves the repository.
+// alone. So is one stored under a name that is not a snapshot ID of this
+// format. This is how such a manifest leaves the repository.
 func (r *Repository) Forget(
 	ctx context.Context,
 	policy ForgetPolicy,
@@ -503,6 +504,10 @@ func (r *Repository) forgetNamed(ctx context.Context, filter SnapshotFilter) (*F
 			continue
 		}
 		seen[full] = true
+		if !isHexSnapshotID(string(full)) {
+			result.Remove = append(result.Remove, &Snapshot{ID: full})
+			continue
+		}
 		m, err := r.loadManifest(ctx, full)
 		if errors.Is(err, ErrCorruptManifest) {
 			result.Remove = append(result.Remove, &Snapshot{ID: full})

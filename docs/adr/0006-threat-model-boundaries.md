@@ -1,6 +1,6 @@
 # 0006: Threat model boundaries
 
-Status: partly superseded by 0016
+Status: partly superseded by 0016, 0035
 Date: 2026-11-08
 
 ## Context
@@ -28,7 +28,8 @@ The config is bound into the master key: the key file holds the SHA-256 of the e
 Init stored as `config_hash`, and Open rejects a config that does not match with
 `ErrCorruptConfig`. The field is mandatory from format version 2: a master key without it belongs
 to a version 1 repository, which Open refuses with `ErrUnsupportedFormat` and the stored version,
-so an old repository is not mistaken for a tampered one. There is no legacy path that skips the
+so an old repository is not mistaken for a tampered one (superseded by 0035: such a key fails with
+`ErrCorruptConfig`, naming the missing binding). There is no legacy path that skips the
 check. A wrong chunker, compression or version in a swapped config can therefore no longer pass as
 the repository's own.
 
@@ -77,4 +78,5 @@ a leaked master key has no answer yet: append-only mode and key rotation stay op
 service that wants rollback detection must keep its own record of the snapshot set.
 
 The parts on `ark serve` (the browser attacker, the loopback binding) are superseded by 0016, which
-removes the command.
+removes the command. The refusal of a master key without `config_hash` as an older format is
+superseded by 0035, which reports it as `ErrCorruptConfig`.
