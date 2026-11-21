@@ -123,6 +123,7 @@ func runConcurrentOnce(t *testing.T, newRepo func(context.Context, *testing.T) (
 			_, _ = bytesSrc.Read(data)
 			writeTestFile(t, filepath.Join(src, fmt.Sprintf("own%d.bin", j)), data)
 		}
+		writeOddEntries(t, src)
 		want[tag] = readTree(t, src)
 		env := []string{concEnvRepo + "=" + ref, concEnvOp + "=backup", concEnvSrc + "=" + src, concEnvTag + "=" + tag}
 		if sequential {
