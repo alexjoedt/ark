@@ -145,7 +145,9 @@ func (rd *Reader) FS(snapshotID SnapshotID) (*SnapshotFS, error) {
 // reads as a regular file with its target's content. Symlinks are not
 // followed: Lstat and ReadLink serve them, while Open and Stat on one fail
 // with an error wrapping [fs.ErrInvalid], because a link's target is often a
-// path of the host the snapshot was taken on.
+// path of the host the snapshot was taken on. A fifo and a device node are
+// listed and described (Mode carries [fs.ModeNamedPipe] or [fs.ModeDevice],
+// Sys the device numbers) but have no content: Open on one fails the same way.
 type SnapshotFS struct {
 	rd   *Reader
 	root string
@@ -167,10 +169,9 @@ func (s *SnapshotFS) Open(name string) (fs.File, error) {
 	switch e.te.Type {
 	case FileTypeDirectory:
 		return &dirFile{fsys: s, e: e}, nil
-	case FileTypeSymlink:
+	case FileTypeSymlink, FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice:
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
-	case FileTypeRegular, FileTypeHardlink, FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice,
-		FileTypeUnsupported:
+	case FileTypeRegular, FileTypeHardlink, FileTypeUnsupported:
 	}
 	c := &content{rd: s.rd, chunks: e.chunks}
 	return &file{sr: io.NewSectionReader(c, 0, e.size), e: e}, nil
@@ -338,8 +339,13 @@ func (e *fsEntry) Mode() fs.FileMode {
 		m |= fs.ModeDir
 	case FileTypeSymlink:
 		m |= fs.ModeSymlink
-	case FileTypeRegular, FileTypeHardlink, FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice,
-		FileTypeUnsupported:
+	case FileTypeFifo:
+		m |= fs.ModeNamedPipe
+	case FileTypeCharDevice:
+		m |= fs.ModeDevice | fs.ModeCharDevice
+	case FileTypeBlockDevice:
+		m |= fs.ModeDevice
+	case FileTypeRegular, FileTypeHardlink, FileTypeUnsupported:
 	}
 	return m
 }

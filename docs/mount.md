@@ -87,6 +87,12 @@ they wait that long first.
 | macOS | [macFUSE](https://macfuse.github.io/); best effort |
 | Windows, 32-bit Linux | not supported |
 
+## Details: special files
+
+A fifo or a device node of a snapshot shows up with its type and, for a device, its major and
+minor number. It has no content: a read fails. ark mounts with `nodev` on Linux, so a device node
+never opens the device of your machine.
+
 ## Details: directory names
 
 Hosts and source names are free text, and not every one of them works as a directory name. ark

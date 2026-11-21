@@ -16,6 +16,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,6 +31,7 @@ import (
 	gofs "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/urfave/cli/v3"
+	"golang.org/x/sys/unix"
 )
 
 // mountCacheTimeout is how long the kernel may cache entries and attributes:
@@ -91,10 +93,15 @@ func mountCommand() *cli.Command {
 			p := printer(cmd)
 			p.Notef("the mount holds a shared lock: prune is blocked until %s is unmounted", dir)
 			timeout := mountCacheTimeout
+			opts := []string{"ro"}
+			if runtime.GOOS == "linux" {
+				// A device node of a snapshot must never open the host's device.
+				opts = append(opts, "nodev")
+			}
 			srv, err := gofs.Mount(dir, root, &gofs.Options{
 				FsName:          "ark",
 				Name:            "ark",
-				Options:         []string{"ro"},
+				Options:         opts,
 				EntryTimeout:    &timeout,
 				AttrTimeout:     &timeout,
 				NegativeTimeout: &timeout,
@@ -688,6 +695,9 @@ func fillAttr(a *fuse.Attr, info fs.FileInfo, ino uint64) {
 	if fi, ok := info.Sys().(ark.FileInfo); ok {
 		a.Uid = uint32(max(fi.UID, 0))
 		a.Gid = uint32(max(fi.GID, 0))
+		if info.Mode()&fs.ModeDevice != 0 {
+			a.Rdev = uint32(unix.Mkdev(fi.DevMajor, fi.DevMinor))
+		}
 		if !fi.ChangeTime.IsZero() {
 			a.SetTimes(nil, nil, &fi.ChangeTime)
 		}
@@ -702,6 +712,12 @@ func fileMode(m fs.FileMode) uint32 {
 		mode |= syscall.S_IFDIR
 	case m&fs.ModeSymlink != 0:
 		mode |= syscall.S_IFLNK
+	case m&fs.ModeNamedPipe != 0:
+		mode |= syscall.S_IFIFO
+	case m&fs.ModeCharDevice != 0:
+		mode |= syscall.S_IFCHR
+	case m&fs.ModeDevice != 0:
+		mode |= syscall.S_IFBLK
 	default:
 		mode |= syscall.S_IFREG
 	}

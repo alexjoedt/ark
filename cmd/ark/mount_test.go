@@ -20,6 +20,7 @@ import (
 	"github.com/alexjoedt/ark/arkdocker"
 	"github.com/alexjoedt/ark/arklocal"
 	"github.com/alexjoedt/ark/cmd/ark/internal/out"
+	"golang.org/x/sys/unix"
 )
 
 func TestBuildLayout(t *testing.T) {
@@ -446,6 +447,84 @@ func TestMountAttributes(t *testing.T) {
 		nlink := fi.Sys().(*syscall.Stat_t).Nlink
 		if d := fi.ModTime().Sub(snap.CreatedAt); d < -time.Second || d > time.Second || nlink != 1 {
 			t.Errorf("%s: mtime %v nlink %d, want the snapshot time %v and 1", dir, fi.ModTime(), nlink, snap.CreatedAt)
+		}
+	}
+}
+
+// pipeSource holds a file, a fifo and the two device kinds.
+type pipeSource struct{}
+
+func (pipeSource) Meta() ark.SourceMeta {
+	return ark.SourceMeta{Name: "pipes", Type: ark.SourceTypeFile}
+}
+
+func (pipeSource) Walk(_ context.Context, fn ark.WalkFunc) error {
+	mtime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, fi := range []ark.FileInfo{
+		{Path: "pipe", Mode: 0o640, Type: ark.FileTypeFifo},
+		{Path: "null", Mode: 0o666, Type: ark.FileTypeCharDevice, DevMajor: 1, DevMinor: 3},
+		{Path: "loop", Mode: 0o660, Type: ark.FileTypeBlockDevice, DevMajor: 7, DevMinor: 5},
+	} {
+		fi.ModTime = mtime
+		if err := fn(fi, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func TestMountListsSpecialFiles(t *testing.T) {
+	mountable(t)
+	repo := initRepo(t)
+	t.Setenv("ARK_REPOSITORY", repo)
+	b, err := arklocal.New(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := ark.Open(context.Background(), b, ark.NoPassword())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := r.Backup(context.Background(), pipeSource{})
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mnt := t.TempDir()
+	done := startMount(t, mnt)
+	defer func() {
+		if code := interrupt(t, done); code != 0 {
+			t.Errorf("exit after SIGINT = %d, want 0", code)
+		}
+	}()
+	snapDir := filepath.Join(mnt, "ids", out.ShortID(snap.ID))
+	for _, c := range []struct {
+		name         string
+		typ          uint32
+		major, minor uint32
+	}{
+		{"pipe", syscall.S_IFIFO, 0, 0},
+		{"null", syscall.S_IFCHR, 1, 3},
+		{"loop", syscall.S_IFBLK, 7, 5},
+	} {
+		var st syscall.Stat_t
+		if err := syscall.Stat(filepath.Join(snapDir, c.name), &st); err != nil {
+			t.Fatal(err)
+		}
+		rdev := uint64(st.Rdev) //nolint:unconvert // uint32 on 32-bit targets
+		if st.Mode&syscall.S_IFMT != c.typ || unix.Major(rdev) != c.major || unix.Minor(rdev) != c.minor {
+			t.Errorf("%s: mode %o rdev %d:%d, want type %o and %d:%d",
+				c.name, st.Mode, unix.Major(rdev), unix.Minor(rdev), c.typ, c.major, c.minor)
+		}
+		if c.typ == syscall.S_IFIFO {
+			continue
+		}
+		if f, err := os.Open(filepath.Join(snapDir, c.name)); err == nil {
+			if n, _ := f.Read(make([]byte, 1)); n != 0 {
+				t.Errorf("%s: read %d bytes through the mount", c.name, n)
+			}
+			f.Close()
 		}
 	}
 }

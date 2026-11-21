@@ -388,3 +388,56 @@ func TestReaderFileFailsAfterClose(t *testing.T) {
 		t.Errorf("ReadDir after Close = %v, want fs.ErrClosed", err)
 	}
 }
+
+func TestReaderFSListsSpecialFiles(t *testing.T) {
+	repo := chunkyRepo(t, arkmem.New())
+	snap, err := repo.Backup(context.Background(), specialSource{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rd, err := repo.OpenReader(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rd.Close() })
+	fsys, err := rd.FS(snap.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]struct {
+		mode         fs.FileMode
+		major, minor uint32
+	}{
+		"pipe": {fs.ModeNamedPipe, 0, 0},
+		"null": {fs.ModeDevice | fs.ModeCharDevice, 1, 3},
+		"loop": {fs.ModeDevice, 7, 5},
+	}
+	entries, err := fsys.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		w, ok := want[e.Name()]
+		if !ok {
+			continue
+		}
+		delete(want, e.Name())
+		if e.Type() != w.mode {
+			t.Errorf("ReadDir %s: type %v, want %v", e.Name(), e.Type(), w.mode)
+		}
+		info, err := fsys.Stat(e.Name())
+		if err != nil {
+			t.Fatalf("Stat %s: %v", e.Name(), err)
+		}
+		fi, ok := info.Sys().(ark.FileInfo)
+		if info.Mode().Type() != w.mode || !ok || fi.DevMajor != w.major || fi.DevMinor != w.minor || info.Size() != 0 {
+			t.Errorf("Stat %s: %v, %+v, size %d", e.Name(), info.Mode(), fi, info.Size())
+		}
+		if _, err := fsys.Open(e.Name()); !errors.Is(err, fs.ErrInvalid) {
+			t.Errorf("Open(%s) = %v, want fs.ErrInvalid", e.Name(), err)
+		}
+	}
+	if len(want) != 0 {
+		t.Errorf("not listed: %v", want)
+	}
+}
