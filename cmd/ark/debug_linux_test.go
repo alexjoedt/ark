@@ -98,7 +98,10 @@ func TestDebugNodeKeepsRawNames(t *testing.T) {
 	t.Setenv("ARK_REPOSITORY", repo)
 	src := t.TempDir()
 	odd := "a\xffb"
-	if err := os.WriteFile(filepath.Join(src, odd), []byte("x"), 0o644); err != nil {
+	if err := os.Mkdir(filepath.Join(src, odd), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, odd, "in.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(odd, filepath.Join(src, "link")); err != nil {
@@ -116,5 +119,9 @@ func TestDebugNodeKeepsRawNames(t *testing.T) {
 	if code != 0 || strings.Count(stdout, `"name_raw": "`+want+`"`) != 1 ||
 		strings.Count(stdout, `"target_raw": "`+want+`"`) != 1 {
 		t.Fatalf("exit %d, output %q", code, stdout)
+	}
+	code, stdout = runCapture(t, "debug", "node", s.ID, odd)
+	if code != 0 || !strings.Contains(stdout, `"name": "in.txt"`) {
+		t.Fatalf("debug node of the odd directory: exit %d, output %q", code, stdout)
 	}
 }

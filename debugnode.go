@@ -13,24 +13,32 @@ import (
 
 // DebugNode returns the stored tree node of the directory dir ("." for the
 // snapshot root) decoded as indented JSON, for people who inspect a
-// repository. A name, link target or xattr name that is not valid UTF-8 keeps
+// repository. dir is a slash-separated path of stored names; unlike the
+// io/fs methods it may hold bytes that are not UTF-8. A name, link target or xattr name that is not valid UTF-8 keeps
 // its bytes in a sibling *_raw field as base64. The shape may change in any
 // release.
 func (s *SnapshotFS) DebugNode(dir string) ([]byte, error) {
-	e, err := s.resolve("debug node", dir)
-	if err != nil {
-		return nil, err
-	}
-	if e.te.Type != FileTypeDirectory {
-		return nil, &fs.PathError{Op: "debug node", Path: dir, Err: fmt.Errorf("not a directory: %w", fs.ErrInvalid)}
+	fail := func(err error) ([]byte, error) {
+		return nil, &fs.PathError{Op: "read node", Path: dir, Err: err}
 	}
 	if err := s.rd.enter(); err != nil {
-		return nil, &fs.PathError{Op: "debug node", Path: dir, Err: err}
+		return fail(err)
 	}
 	defer s.rd.leave()
-	node, err := s.node(e.te.TreeHash)
+	hash := s.root
+	if normEntryPath(dir) != "" {
+		te, err := s.entryAt(dir)
+		if err != nil {
+			return fail(err)
+		}
+		if te.Type != FileTypeDirectory {
+			return fail(fmt.Errorf("not a directory: %w", fs.ErrInvalid))
+		}
+		hash = te.TreeHash
+	}
+	node, err := s.node(hash)
 	if err != nil {
-		return nil, &fs.PathError{Op: "debug node", Path: dir, Err: err}
+		return fail(err)
 	}
 	entries := make([]debugEntry, 0, len(node.Entries))
 	for _, te := range node.Entries {

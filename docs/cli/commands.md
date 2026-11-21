@@ -385,7 +385,8 @@ Prints the stored tree node of a snapshot as JSON: the root directory, or the di
 Every entry shows its name, type, mode (octal), uid, gid, times in nanoseconds since the epoch,
 inode, and the fields of its type: chunks, the tree of a directory, the target of a link, the
 device numbers, xattrs. A name, link target, or xattr name that isn't valid UTF-8 also appears as
-base64 in a `name_raw`, `target_raw`, or xattr `name_raw` field.
+base64 in a `name_raw`, `target_raw`, or xattr `name_raw` field. `path` takes the stored bytes as
+they are, so a directory whose name isn't valid UTF-8 opens too.
 
 - Exits 1 when `path` isn't a directory of the snapshot.
 - The output is for people, and may change in any release.
