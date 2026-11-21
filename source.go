@@ -62,8 +62,13 @@ const (
 // The JSON tags are a convenience for callers that log or print entries. They
 // are not the repository wire format; the tree entry type owns that.
 type FileInfo struct {
-	Path     string            `json:"path"`
-	Size     int64             `json:"size"`
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+	// Mode is the permission bits plus [os.ModeSetuid], [os.ModeSetgid] and
+	// [os.ModeSticky]. A backup stores these and ignores every other bit a
+	// Source sets; the file type is in Type. A Sink receives exactly these
+	// bits and no type bit. A Sink that sets an owner sets it before the
+	// mode: chown clears setuid and setgid.
 	Mode     os.FileMode       `json:"mode"`
 	UID      int               `json:"uid"`
 	GID      int               `json:"gid"`

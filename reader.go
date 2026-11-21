@@ -243,7 +243,7 @@ func (s *SnapshotFS) resolve(op, name string) (*fsEntry, error) {
 // find returns the entry at name, a valid io/fs path. The caller has entered.
 func (s *SnapshotFS) find(name string) (*fsEntry, error) {
 	if name == "." {
-		root := treeEntry{Type: FileTypeDirectory, Mode: fs.ModeDir | 0o755, ModTime: s.time, TreeHash: s.root}
+		root := treeEntry{Type: FileTypeDirectory, Mode: 0o755, ModTime: s.time, TreeHash: s.root}
 		return &fsEntry{path: ".", te: root}, nil
 	}
 	te, err := s.entryAt(name)
@@ -335,7 +335,7 @@ func (e *fsEntry) IsDir() bool        { return e.te.Type == FileTypeDirectory }
 func (e *fsEntry) Type() fs.FileMode  { return e.Mode().Type() }
 
 func (e *fsEntry) Mode() fs.FileMode {
-	m := e.te.Mode &^ fs.ModeType
+	m := goMode(e.te.Mode)
 	switch e.te.Type {
 	case FileTypeDirectory:
 		m |= fs.ModeDir

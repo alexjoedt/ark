@@ -97,7 +97,7 @@ func (r *Repository) runExport(ctx context.Context, snapshotID SnapshotID, w io.
 		files++
 		header := &tar.Header{
 			Name:       exportDataPrefix + fe.Path,
-			Mode:       int64(fe.Mode),
+			Mode:       int64(storedMode(fe.Mode)),
 			Uid:        fe.UID,
 			Gid:        fe.GID,
 			ModTime:    fe.ModTime,

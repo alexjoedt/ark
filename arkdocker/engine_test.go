@@ -69,7 +69,9 @@ func onEachBackend(t *testing.T, fn func(t *testing.T, e *Engine)) {
 // fixture is what the round trip carries: files, a directory, a hardlink and
 // a symlink, with a private mode on one file.
 const fixture = "mkdir -p /data/d && echo hello > /data/d/a.txt && printf 'bin\\0\\377' > /data/b.bin && " +
-	"chmod 600 /data/b.bin && ln /data/d/a.txt /data/hard.txt && ln -s d/a.txt /data/soft"
+	"chmod 600 /data/b.bin && ln /data/d/a.txt /data/hard.txt && ln -s d/a.txt /data/soft && " +
+	"echo x > /data/suid && chmod 4755 /data/suid && mkdir /data/sgid /data/sticky && " +
+	"chmod 2775 /data/sgid && chmod 1777 /data/sticky"
 
 // listing prints every entry with type, mode and link count, the file
 // hashes and the symlink targets, so two volumes compare as strings.
@@ -160,6 +162,11 @@ func volumeRoundTrip(t *testing.T, c *Client, e *Engine) {
 	want := volumeListing(t, c, vol)
 	if !strings.Contains(want, "./hard.txt regular file 644 2") {
 		t.Fatalf("fixture has no hardlink pair:\n%s", want)
+	}
+	for _, line := range []string{"./suid regular file 4755 1", "./sgid directory 2775 2", "./sticky directory 1777 2"} {
+		if !strings.Contains(want, line) {
+			t.Fatalf("fixture lacks %q:\n%s", line, want)
+		}
 	}
 
 	user := sleeper(t, c, vol)

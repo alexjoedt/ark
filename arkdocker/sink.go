@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 
 	ark "github.com/alexjoedt/ark"
 )
@@ -92,7 +93,7 @@ func (s *dockerVolumeSink) Close() error {
 func fileInfoToTarHeader(fi ark.FileInfo) *tar.Header {
 	hdr := &tar.Header{
 		Name:    fi.Path,
-		Mode:    int64(fi.Mode.Perm()),
+		Mode:    tarMode(fi.Mode),
 		Uid:     fi.UID,
 		Gid:     fi.GID,
 		ModTime: fi.ModTime,
@@ -114,4 +115,20 @@ func fileInfoToTarHeader(fi ark.FileInfo) *tar.Header {
 		hdr.Size = fi.Size
 	}
 	return hdr
+}
+
+// tarMode is m as a tar header holds it: the permission bits with setuid
+// 04000, setgid 02000 and sticky 01000.
+func tarMode(m fs.FileMode) int64 {
+	mode := int64(m.Perm())
+	if m&fs.ModeSetuid != 0 {
+		mode |= 0o4000
+	}
+	if m&fs.ModeSetgid != 0 {
+		mode |= 0o2000
+	}
+	if m&fs.ModeSticky != 0 {
+		mode |= 0o1000
+	}
+	return mode
 }

@@ -1,11 +1,15 @@
 package ark_test
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/alexjoedt/ark"
@@ -246,5 +250,127 @@ func TestExportKeepsHardlinksAndXattrs(t *testing.T) {
 		if got := string(entries["a.txt"].Xattrs["user.ark"]); got != "value" {
 			t.Errorf("a.txt imported with user.ark = %q, want %q", got, "value")
 		}
+	}
+}
+
+// specialModes fills root with a setuid file, a setgid directory, a sticky
+// directory and a symlink, and returns the mode of each of the first three.
+func specialModes(t *testing.T, root string) map[string]os.FileMode {
+	t.Helper()
+	want := map[string]os.FileMode{
+		"suid":   os.ModeSetuid | 0o755,
+		"sgid":   os.ModeSetgid | 0o775,
+		"sticky": os.ModeSticky | 0o777,
+	}
+	if err := os.WriteFile(filepath.Join(root, "suid"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	for _, dir := range []string{"sgid", "sticky"} {
+		if err := os.Mkdir(filepath.Join(root, dir), 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+	if err := os.Symlink("suid", filepath.Join(root, "link")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	for name, mode := range want {
+		path := filepath.Join(root, name)
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatalf("chmod %s: %v", name, err)
+		}
+		if got := statMode(t, path); got != mode {
+			t.Skipf("this filesystem keeps %v of %v on %s", got, mode, name)
+		}
+	}
+	return want
+}
+
+// statMode is the mode of path without its type bits.
+func statMode(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	fi, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("lstat: %v", err)
+	}
+	return fi.Mode() &^ os.ModeType
+}
+
+func TestSetuidSetgidAndStickySurviveTheRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	want := specialModes(t, root)
+
+	repo, snap, restored := roundTrip(t, root)
+
+	// Walk and Export name a directory with a trailing slash.
+	entries := make(map[string]ark.FileInfo)
+	for path, info := range entriesOf(t, repo, snap.ID) {
+		entries[strings.TrimSuffix(path, "/")] = info
+	}
+	for name, mode := range want {
+		if got := entries[name].Mode; got != mode {
+			t.Errorf("the snapshot holds %s with mode %v, want %v", name, got, mode)
+		}
+		if got := statMode(t, filepath.Join(restored, name)); got != mode {
+			t.Errorf("%s restored with mode %v, want %v", name, got, mode)
+		}
+	}
+}
+
+// tarModes reads an uncompressed tar and returns the mode of every entry
+// under data/, a directory without its trailing slash.
+func tarModes(t *testing.T, archive []byte) map[string]int64 {
+	t.Helper()
+	modes := make(map[string]int64)
+	tr := tar.NewReader(bytes.NewReader(archive))
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return modes
+		}
+		if err != nil {
+			t.Fatalf("reading the archive: %v", err)
+		}
+		if strings.HasPrefix(h.Name, "data/") {
+			modes[strings.TrimSuffix(h.Name, "/")] = h.Mode
+		}
+	}
+}
+
+// TestExportOfAnImportedSnapshotWritesTheSameTarModes: a tar header holds
+// mode_t & 07777 like the tree node, so an archive that went through Import
+// comes out of Export with the modes it went in with.
+func TestExportOfAnImportedSnapshotWritesTheSameTarModes(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	specialModes(t, root)
+	if err := os.WriteFile(filepath.Join(root, "sgid", "plain.txt"), []byte("y"), 0o640); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	repo, snap, _ := roundTrip(t, root)
+	var original bytes.Buffer
+	if err := repo.Export(ctx, snap.ID, &original); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	want := tarModes(t, original.Bytes())
+	for name, mode := range map[string]int64{
+		"data/suid": 0o4755, "data/sgid": 0o2775, "data/sticky": 0o1777, "data/sgid/plain.txt": 0o640, "data/link": 0o777,
+	} {
+		if want[name] != mode {
+			t.Errorf("the export holds %s with tar mode %#o, want %#o", name, want[name], mode)
+		}
+	}
+
+	target := openRepo(t, arkmem.New())
+	imported, err := target.Import(ctx, bytes.NewReader(original.Bytes()))
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	var again bytes.Buffer
+	if err := target.Export(ctx, imported.ID, &again); err != nil {
+		t.Fatalf("Export of the imported snapshot: %v", err)
+	}
+	if got := tarModes(t, again.Bytes()); !maps.Equal(got, want) {
+		t.Errorf("the imported snapshot exports with modes %v, want %v", got, want)
 	}
 }

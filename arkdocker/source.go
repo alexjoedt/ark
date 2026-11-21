@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"slices"
 	"strconv"
@@ -127,7 +128,7 @@ func (s *dockerVolumeSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 
 		entry := ark.FileInfo{
 			Path:    path,
-			Mode:    hdr.FileInfo().Mode().Perm(),
+			Mode:    hdr.FileInfo().Mode() & (fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky),
 			UID:     hdr.Uid,
 			GID:     hdr.Gid,
 			ModTime: hdr.ModTime,

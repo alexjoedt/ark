@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"slices"
 	"strings"
@@ -244,5 +245,72 @@ func TestTreeNodeChunkRefsCarryNoStoredSize(t *testing.T) {
 	}
 	if len(node.Entries) != 1 || len(node.Entries[0].Chunks) != 1 || node.Entries[0].Chunks[0].ID != "c" {
 		t.Errorf("legacy node loaded as %+v", node)
+	}
+}
+
+// TestTreeNodeModeIsModeTAnd07777 pins the meaning of mode in a node: the
+// permission bits with setuid 04000, setgid 02000 and sticky 01000, whatever
+// else the source left in FileInfo.Mode, and the same bits in Go's form on
+// the way back out.
+func TestTreeNodeModeIsModeTAnd07777(t *testing.T) {
+	for _, tc := range []struct {
+		in   fs.FileMode
+		want uint32
+		back fs.FileMode
+	}{
+		{0o644, 0o644, 0o644},
+		{fs.ModeSetuid | 0o755, 0o4755, fs.ModeSetuid | 0o755},
+		{fs.ModeSetgid | 0o775, 0o2775, fs.ModeSetgid | 0o775},
+		{fs.ModeSticky | 0o777, 0o1777, fs.ModeSticky | 0o777},
+		{fs.ModeDir | fs.ModeSetgid | 0o775, 0o2775, fs.ModeSetgid | 0o775},
+		{fs.ModeSymlink | 0o777, 0o777, 0o777},
+		{fs.ModeDevice | fs.ModeCharDevice | fs.ModeAppend | fs.ModeTemporary | 0o600, 0o600, 0o600},
+	} {
+		typ := FileTypeRegular
+		if tc.in.IsDir() {
+			typ = FileTypeDirectory
+		}
+		entry := fileEntry{Path: "e", Type: typ, Mode: tc.in}
+		te, err := newTreeEntry(entry, map[string]string{"e": "hash"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if te.Mode != tc.want {
+			t.Errorf("mode %v is stored as %#o, want %#o", tc.in, te.Mode, tc.want)
+		}
+		if got := te.fileInfo("e").Mode; got != tc.back {
+			t.Errorf("stored mode %#o reads as %v, want %v", te.Mode, got, tc.back)
+		}
+	}
+}
+
+// TestLoadTreeNodeRefusesAModeOutside07777: a type bit or any other bit above
+// 07777 in a stored mode is not something this format writes.
+func TestLoadTreeNodeRefusesAModeOutside07777(t *testing.T) {
+	ctx := context.Background()
+	codec := newObjectCodec()
+	defer codec.Close()
+	session := testSession(newStubBackend(), codec, newMasterKey("repo"))
+
+	wantErr := map[uint32]bool{0o7777: false, 0o10000: true, uint32(fs.ModeDir) | 0o755: true}
+	hashes := make(map[uint32]string)
+	for mode := range wantErr {
+		data, err := json.Marshal(treeNode{Entries: []treeEntry{{Name: "e", Type: FileTypeRegular, Mode: mode}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		hashes[mode] = session.trees.name(data)
+		if _, err := session.trees.putNamed(ctx, hashes[mode], data); err != nil {
+			t.Fatalf("putNamed: %v", err)
+		}
+	}
+	if err := session.finish(ctx); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	for mode, want := range wantErr {
+		_, err := loadTreeNode(ctx, session.trees, hashes[mode])
+		if want != errors.Is(err, ErrCorruptTree) || (!want && err != nil) {
+			t.Errorf("mode %#o: loadTreeNode returned %v, want ErrCorruptTree: %v", mode, err, want)
+		}
 	}
 }
