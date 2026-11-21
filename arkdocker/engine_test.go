@@ -302,6 +302,9 @@ func TestVolumeKeepsSpecialFiles(t *testing.T) {
 	ctx := context.Background()
 	vol := testVolume(t, c)
 
+	if err := runInVolume(ctx, c, vol, []string{"sh", "-c", "mknod /data/probe c 1 3 && rm /data/probe"}); err != nil {
+		t.Skipf("no privilege to create device nodes in a container: %v", err)
+	}
 	fixture := "cd /data && mkfifo -m 640 pipe && mknod -m 666 null c 1 3 && mknod -m 660 loop b 7 5 && " +
 		"chown 1000:1000 pipe null loop && echo x > file"
 	if err := runInVolume(ctx, c, vol, []string{"sh", "-c", fixture}); err != nil {

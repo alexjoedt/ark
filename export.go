@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,13 +72,45 @@ var (
 	}
 )
 
+// paxDevice holds the PAX keys for a device major and minor beyond the seven
+// octal digits of the header fields, written and read by libarchive and star.
+// PAX has no record of its own for them, and the GNU format that holds such a
+// number in the field carries no PAX records, so no xattrs.
+var paxDevice = [2]string{"SCHILY.devmajor", "SCHILY.devminor"}
+
+const tarDeviceFieldMax = 0o7777777
+
+// setTarDevice writes the device numbers into a header. A PAX header gets a
+// record for a number its field cannot hold; any other header is left to
+// archive/tar, which picks the GNU format for such a number.
+func setTarDevice(h *tar.Header, major, minor uint32) {
+	h.Devmajor, h.Devminor = int64(major), int64(minor)
+	if h.Format != tar.FormatPAX {
+		return
+	}
+	for i, field := range [2]*int64{&h.Devmajor, &h.Devminor} {
+		if *field > tarDeviceFieldMax {
+			h.PAXRecords[paxDevice[i]] = strconv.FormatInt(*field, 10)
+			*field = 0
+		}
+	}
+}
+
 // tarDevice returns the device numbers of a character or block device
 // header, refusing a number the tree cannot hold.
 func tarDevice(h *tar.Header) (major, minor uint32, err error) {
-	if h.Devmajor < 0 || h.Devmajor > math.MaxUint32 || h.Devminor < 0 || h.Devminor > math.MaxUint32 {
-		return 0, 0, fmt.Errorf("device number %d,%d out of range", h.Devmajor, h.Devminor)
+	nums := [2]int64{h.Devmajor, h.Devminor}
+	for i, key := range paxDevice {
+		if rec, ok := h.PAXRecords[key]; ok {
+			if nums[i], err = strconv.ParseInt(rec, 10, 64); err != nil {
+				return 0, 0, fmt.Errorf("device number record %s=%q: %w", key, rec, err)
+			}
+		}
 	}
-	return uint32(h.Devmajor), uint32(h.Devminor), nil
+	if nums[0] < 0 || nums[0] > math.MaxUint32 || nums[1] < 0 || nums[1] > math.MaxUint32 {
+		return 0, 0, fmt.Errorf("device number %d,%d out of range", nums[0], nums[1])
+	}
+	return uint32(nums[0]), uint32(nums[1]), nil
 }
 
 func (r *Repository) runExport(ctx context.Context, snapshotID SnapshotID, w io.Writer) error {
@@ -156,7 +189,7 @@ func (r *Repository) runExport(ctx context.Context, snapshotID SnapshotID, w io.
 			}
 		case FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice:
 			header.Typeflag = specialTarType[fe.Type]
-			header.Devmajor, header.Devminor = int64(fe.DevMajor), int64(fe.DevMinor)
+			setTarDevice(header, fe.DevMajor, fe.DevMinor)
 			if err := tw.WriteHeader(header); err != nil {
 				return fmt.Errorf("export: failed to write %s header %s: %w", fe.Type, fe.Path, err)
 			}
@@ -238,7 +271,10 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader, session *p
 				Xattrs:  xattrsFromPAX(header.PAXRecords),
 			}}
 			switch header.Typeflag {
-			case tar.TypeReg:
+			case tar.TypeReg, tar.TypeCont, tar.TypeGNUSparse:
+				// A contiguous file is a regular file to every system without
+				// the notion, and archive/tar reads a sparse entry as the
+				// whole file, holes filled in.
 				fe.Type = FileTypeRegular
 			case tar.TypeDir:
 				fe.Type = FileTypeDirectory

@@ -12,8 +12,8 @@ import (
 // dockerVolumeSink assembles the entries into a tar stream and pipes it into
 // a helper container that extracts it into the volume.
 //
-// Open rejects incompatible source types, then opens an [io.Pipe] and starts
-// the restore goroutine. Receive writes one entry per call. Close flushes the
+// Open rejects incompatible source types, empties the volume, then opens an
+// [io.Pipe] and starts the restore goroutine. Receive writes one entry per call. Close flushes the
 // tar stream, closes the pipe and waits for the goroutine.
 type dockerVolumeSink struct {
 	client *Client
@@ -23,6 +23,10 @@ type dockerVolumeSink struct {
 	tw   *tar.Writer
 	pw   *io.PipeWriter
 	done chan error
+
+	// special holds, per fifo and device type, whether the daemon creates
+	// such an entry in the volume. Receive probes at the first one.
+	special map[ark.FileType]bool
 }
 
 // NewVolumeSink returns a Sink that restores into the named volume, for
@@ -32,11 +36,16 @@ func NewVolumeSink(client *Client, volume string) ark.Sink {
 	return &dockerVolumeSink{client: client, volume: volume}
 }
 
-// Open validates the snapshot source type and starts the Docker restore goroutine.
+// Open validates the snapshot source type, empties the volume and starts the
+// Docker restore goroutine. The volume is empty before the first entry
+// arrives, so the probe in Receive never races the clearing.
 func (s *dockerVolumeSink) Open(ctx context.Context, meta ark.SourceMeta) error {
 	if meta.Type != SourceTypeDockerVolume {
 		return fmt.Errorf("%w: expected %q, got %q",
 			ark.ErrIncompatibleSourceType, SourceTypeDockerVolume, meta.Type)
+	}
+	if err := s.client.clearVolume(ctx, s.volume); err != nil {
+		return err
 	}
 
 	pr, pw := io.Pipe()
@@ -44,7 +53,7 @@ func (s *dockerVolumeSink) Open(ctx context.Context, meta ark.SourceMeta) error 
 	done := make(chan error, 1)
 
 	go func() {
-		err := s.client.restoreVolume(ctx, s.volume, pr)
+		err := s.client.extractVolume(ctx, s.volume, pr)
 		// Drain the reader in case the pipeline stopped early.
 		_, _ = io.Copy(io.Discard, pr)
 		_ = pr.CloseWithError(err)
@@ -58,13 +67,27 @@ func (s *dockerVolumeSink) Open(ctx context.Context, meta ark.SourceMeta) error 
 }
 
 // Receive writes one filesystem entry into the tar stream. Unsupported
-// entries never reach a sink, the core drops them during backup.
-func (s *dockerVolumeSink) Receive(_ context.Context, entry ark.FileInfo, r io.Reader) error {
+// entries never reach a sink, the core drops them during backup. A fifo or a
+// device node the daemon does not create in this volume is skipped with
+// ark.ErrEntrySkipped: the extraction would leave it out without a word in a
+// user namespace, and fail as a whole on a filesystem that cannot hold it.
+func (s *dockerVolumeSink) Receive(ctx context.Context, entry ark.FileInfo, r io.Reader) error {
 	switch entry.Type {
 	case ark.FileTypeUnsupported:
 		return nil
-	case ark.FileTypeRegular, ark.FileTypeDirectory, ark.FileTypeSymlink, ark.FileTypeHardlink,
-		ark.FileTypeFifo, ark.FileTypeCharDevice, ark.FileTypeBlockDevice:
+	case ark.FileTypeFifo, ark.FileTypeCharDevice, ark.FileTypeBlockDevice:
+		if s.special == nil {
+			special, err := s.client.specialFiles(ctx, s.volume)
+			if err != nil {
+				return err
+			}
+			s.special = special
+		}
+		if !s.special[entry.Type] {
+			return fmt.Errorf("arkdocker: the daemon creates no %s in volume %s, %s is left out (%w)",
+				entry.Type, s.volume, entry.Path, ark.ErrEntrySkipped)
+		}
+	case ark.FileTypeRegular, ark.FileTypeDirectory, ark.FileTypeSymlink, ark.FileTypeHardlink:
 	}
 	hdr := fileInfoToTarHeader(entry)
 	if err := s.tw.WriteHeader(hdr); err != nil {

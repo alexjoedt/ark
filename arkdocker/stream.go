@@ -1,13 +1,17 @@
 package arkdocker
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
 	"time"
 
+	ark "github.com/alexjoedt/ark"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
@@ -84,10 +88,19 @@ func (c *Client) streamVolume(ctx context.Context, volume string) (io.ReadCloser
 	return &volumeStream{ReadCloser: res.Content, cleanup: cleanup}, nil
 }
 
-// restoreVolume empties the volume, then has the daemon extract the
-// uncompressed tar stream r into it through the archive endpoint of a helper
-// container that never starts. Entries are relative to the volume root.
-func (c *Client) restoreVolume(ctx context.Context, volume string, r io.Reader) error {
+// volumeMount mounts the volume read-write at /data.
+func volumeMount(volume string) *container.HostConfig {
+	return &container.HostConfig{
+		Mounts: []mount.Mount{{
+			Type:   mount.TypeVolume,
+			Source: volume,
+			Target: "/data",
+		}},
+	}
+}
+
+// clearVolume removes everything the volume holds.
+func (c *Client) clearVolume(ctx context.Context, volume string) error {
 	logger := c.logger.With("volume", volume)
 	logger.InfoContext(ctx, "starting streaming restore")
 
@@ -99,28 +112,25 @@ func (c *Client) restoreVolume(ctx context.Context, volume string, r io.Reader) 
 	}
 
 	cleanupConfig := c.helperConfig("sh", "-c", "rm -rf /data/* /data/.[!.]* /data/..?* 2>/dev/null || true")
-	cleanupHostConfig := &container.HostConfig{
-		Mounts: []mount.Mount{{
-			Type:   mount.TypeVolume,
-			Source: volume,
-			Target: "/data",
-		}},
-	}
-	if _, err := c.runContainer(ctx, cleanupConfig, cleanupHostConfig); err != nil {
+	if _, err := c.runContainer(ctx, cleanupConfig, volumeMount(volume)); err != nil {
 		return fmt.Errorf("arkdocker: failed to clear volume: %w", err)
 	}
 	logger.InfoContext(ctx, "volume cleanup completed")
+	return nil
+}
 
-	hostConfig := &container.HostConfig{
-		Mounts: []mount.Mount{{
-			Type:   mount.TypeVolume,
-			Source: volume,
-			Target: "/data",
-		}},
-	}
+// extractVolume has the daemon extract the uncompressed tar stream r into
+// the volume through the archive endpoint of a helper container that never
+// starts. Entries are relative to the volume root.
+func (c *Client) extractVolume(ctx context.Context, volume string, r io.Reader) error {
+	logger := c.logger.With("volume", volume)
+
+	ctx, cancel := context.WithTimeout(ctx, containerTimeout)
+	defer cancel()
+
 	resp, err := c.cli.ContainerCreate(
 		ctx,
-		dockerclient.ContainerCreateOptions{Config: c.helperConfig("true"), HostConfig: hostConfig},
+		dockerclient.ContainerCreateOptions{Config: c.helperConfig("true"), HostConfig: volumeMount(volume)},
 	)
 	if err != nil {
 		return fmt.Errorf("arkdocker: failed to create restore container: %w", err)
@@ -138,6 +148,72 @@ func (c *Client) restoreVolume(ctx context.Context, volume string, r io.Reader) 
 
 	logger.InfoContext(ctx, "streaming restore completed")
 	return nil
+}
+
+// specialFiles reports which of fifo, character device and block device the
+// daemon creates in the volume. It extracts one of each through the archive
+// endpoint, the way a restore does, and looks for it afterwards: a daemon in
+// a user namespace leaves out a node it may not create without an error, and
+// a filesystem that cannot hold one fails the extraction. The probe entries
+// are removed again, so the volume must not be cleared concurrently.
+func (c *Client) specialFiles(ctx context.Context, volume string) (map[ark.FileType]bool, error) {
+	logger := c.logger.With("volume", volume)
+
+	ctx, cancel := context.WithTimeout(ctx, containerTimeout)
+	defer cancel()
+
+	resp, err := c.cli.ContainerCreate(
+		ctx,
+		dockerclient.ContainerCreateOptions{Config: c.helperConfig("true"), HostConfig: volumeMount(volume)},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("arkdocker: failed to create probe container: %w", err)
+	}
+	defer c.removeContainer(resp.ID)
+
+	// A random name keeps the probe off the entries the restore writes.
+	var suffix [8]byte
+	_, _ = rand.Read(suffix[:])
+	prefix := ".ark-probe-" + hex.EncodeToString(suffix[:]) + "-"
+
+	// Mode 0 on each; the block device 0,0 names no driver.
+	probes := []ark.FileInfo{
+		{Type: ark.FileTypeFifo},
+		{Type: ark.FileTypeCharDevice, DevMajor: 1, DevMinor: 3},
+		{Type: ark.FileTypeBlockDevice},
+	}
+	takes := make(map[ark.FileType]bool, len(probes))
+	remove := []string{"rm", "-f"}
+	for _, probe := range probes {
+		probe.Path = prefix + string(probe.Type)
+		remove = append(remove, "/data/"+probe.Path)
+
+		var archive bytes.Buffer
+		tw := tar.NewWriter(&archive)
+		if err := tw.WriteHeader(fileInfoToTarHeader(probe)); err != nil {
+			return nil, fmt.Errorf("arkdocker: probe header: %w", err)
+		}
+		if err := tw.Close(); err != nil {
+			return nil, fmt.Errorf("arkdocker: probe archive: %w", err)
+		}
+		if _, err := c.cli.CopyToContainer(ctx, resp.ID, dockerclient.CopyToContainerOptions{
+			DestinationPath: "/data",
+			Content:         &archive,
+		}); err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			logger.InfoContext(ctx, "volume refuses a special file", "type", probe.Type, "error", err)
+			continue
+		}
+		stat := dockerclient.ContainerStatPathOptions{Path: "/data/" + probe.Path}
+		_, err := c.cli.ContainerStatPath(ctx, resp.ID, stat)
+		takes[probe.Type] = err == nil
+	}
+	if _, err := c.runContainer(ctx, c.helperConfig(remove...), volumeMount(volume)); err != nil {
+		return nil, fmt.Errorf("arkdocker: failed to remove the probe entries: %w", err)
+	}
+	return takes, nil
 }
 
 // ensureHelperImage pulls the helper image when it is not present locally.
