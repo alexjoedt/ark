@@ -55,7 +55,7 @@ func DefaultConfig() Config {
 // Chunk represents a single chunk produced by the chunker.
 type Chunk struct {
 	Start  uint64 // Byte offset of this chunk in the original stream
-	Data   []byte // Raw chunk data, the caller's own unless SetAlloc provides the buffers
+	Data   []byte // Raw chunk data
 	Length int    // Same as len(Data)
 	Hash   string // HMAC-SHA256 of Data under Config.IDKey, hex
 }
@@ -84,8 +84,6 @@ type Chunker struct {
 	n   int    // number of valid bytes in buf
 	eof bool   // true when reader is exhausted
 	pos uint64 // absolute byte offset in the stream (start of next chunk)
-
-	alloc func(size int) []byte // nil: Next allocates Data
 }
 
 // New creates a new FastCDC chunker that reads from r.
@@ -130,13 +128,6 @@ func (c *Chunker) Reset(r io.Reader) {
 	c.off, c.n, c.pos = 0, 0, 0
 	c.eof = false
 }
-
-// SetAlloc makes Next take the buffer of every chunk from alloc, which
-// returns a slice of length size, instead of allocating it. Data then belongs
-// to whoever set alloc: a pool may hand the same memory out again once the
-// chunk is released to it. Without SetAlloc, Data belongs to the caller of
-// Next.
-func (c *Chunker) SetAlloc(alloc func(size int) []byte) { c.alloc = alloc }
 
 // Next returns the next chunk from the input stream.
 // Returns [io.EOF] when the stream is exhausted.
@@ -192,12 +183,7 @@ func (c *Chunker) Next() (Chunk, error) {
 // emit creates a chunk from c.buf[c.off : c.off+size] and advances the offset.
 func (c *Chunker) emit(size int) Chunk {
 	start := c.pos
-	var data []byte
-	if c.alloc != nil {
-		data = c.alloc(size)
-	} else {
-		data = make([]byte, size)
-	}
+	data := make([]byte, size)
 	copy(data, c.buf[c.off:c.off+size])
 	c.off += size
 	c.pos += uint64(size)
