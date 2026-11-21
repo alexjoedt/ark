@@ -184,7 +184,7 @@ func (r *Repository) readManifests(ctx context.Context) ([]*manifest, error) {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("snapshot %s: %w", info.Name, err)
+			return err // names the snapshot
 		}
 		manifests = append(manifests, m)
 		return nil

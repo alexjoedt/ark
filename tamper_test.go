@@ -114,6 +114,11 @@ func TestTamperedConfigIsRejected(t *testing.T) {
 			cfg[bytes.Index(cfg, []byte(`"version":`))+len(`"version":`)] ^= 0x01
 			return cfg
 		}, ark.ErrCorruptConfig},
+		// The binding is checked before the config is parsed, so a key added
+		// without the master key is a changed config, not a later format.
+		{"added key", func(_ *testing.T, cfg []byte) []byte {
+			return bytes.Replace(cfg, []byte(`{`), []byte(`{"later":true,`), 1)
+		}, ark.ErrCorruptConfig},
 	}
 	for _, c := range cells {
 		t.Run(c.name, func(t *testing.T) {

@@ -216,6 +216,7 @@ func parseRepositoryConfig(data []byte) (repositoryConfig, error) {
 // into v. A key v has no field for is ErrUnsupportedFormat and named in the
 // message: a later build wrote it, and this one cannot know what the key
 // asks of a reader. Config, key file, manifest and lock are read with it.
+// After an error v holds nothing to use.
 func decodeStrict(what string, data []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -226,9 +227,14 @@ func decodeStrict(what string, data []byte, v any) error {
 		}
 		return nil
 	}
-	// encoding/json has no type for this error, only the text.
+	// encoding/json has no type for an unknown key, only a text that may
+	// change. So the text decides nothing: what this decode refuses and one
+	// without the option accepts has such a key.
+	if json.Unmarshal(data, v) != nil {
+		return err //nolint:wrapcheck // the caller names the object
+	}
 	if key, ok := strings.CutPrefix(err.Error(), "json: unknown field "); ok {
 		return fmt.Errorf("%w: %s has the key %s, which this build does not know", ErrUnsupportedFormat, what, key)
 	}
-	return err //nolint:wrapcheck // the caller names the object
+	return fmt.Errorf("%w: %s has a key this build does not know: %w", ErrUnsupportedFormat, what, err)
 }

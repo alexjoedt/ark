@@ -366,8 +366,8 @@ func TestOpenRefusesUnknownKeys(t *testing.T) {
 // TestDecodeStrict pins what the readers of config, key file, manifest and
 // lock rely on: an unknown key is ErrUnsupportedFormat and named, at any
 // depth, and input [json.Unmarshal] refuses stays refused, as a plain error.
-// The unknown key is told from the text of encoding/json's error, so this
-// test is what notices a Go release that words it differently.
+// Only the name of the key is taken from the text of encoding/json's error,
+// so this test is what notices a Go release that words it differently.
 func TestDecodeStrict(t *testing.T) {
 	for in, unsupported := range map[string]bool{
 		`{"version":1,"chunker":{"min":1}}`:           false,
@@ -383,10 +383,35 @@ func TestDecodeStrict(t *testing.T) {
 			t.Errorf("%s: decodeStrict = %q, want it to name the object and the key", in, err)
 		}
 	}
-	for _, in := range []string{`{"version":1}{}`, `{"version":1}}`, `{"version":"1"}`, `{"version":1`, ``} {
+	for _, in := range []string{
+		`{"version":1}{}`, `{"version":1}}`, `{"version":"1"}`, `{"version":1`, ``,
+		`{"later":0,"version":"1"}`, `{"later":0,"version":1}{}`,
+	} {
 		var cfg repositoryConfig
 		if err := decodeStrict("config", []byte(in), &cfg); err == nil || errors.Is(err, ErrUnsupportedFormat) {
 			t.Errorf("%q: decodeStrict = %v, want an error that is not ErrUnsupportedFormat", in, err)
+		}
+	}
+}
+
+// TestArchiveMetadataIsDecodedStrictly: an import stores the manifest of its
+// archive, so a key it dropped there would be lost to every later reader. The
+// metadata is refused like a stored manifest a later build wrote. The pre-v1
+// shape has no version and is read for its own few fields only.
+func TestArchiveMetadataIsDecodedStrictly(t *testing.T) {
+	for in, names := range map[string]string{
+		`{"version":1,"source_name":"app"}`:                                 "",
+		`{"id":"01ab","source":{"volume":"pgdata"},"stats":{"files":"12"}}`: "",
+		`{"version":1,"later":true}`:                                        `the archive metadata has the key "later"`,
+		`{"version":1,"stats":{"later":1}}`:                                 `stats has the key "later"`,
+		`{"version":2}`:                                                     "manifest version 2",
+	} {
+		_, err := parseArchiveMetadata([]byte(in))
+		switch {
+		case names == "" && err != nil:
+			t.Errorf("%s: parseArchiveMetadata = %v, want it read", in, err)
+		case names != "" && (!errors.Is(err, ErrUnsupportedFormat) || !strings.Contains(err.Error(), names)):
+			t.Errorf("%s: parseArchiveMetadata = %v, want ErrUnsupportedFormat naming %s", in, err, names)
 		}
 	}
 }

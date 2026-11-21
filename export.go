@@ -338,18 +338,30 @@ type legacyMetadata struct {
 }
 
 // parseArchiveMetadata reads the archive's metadata entry, in this version's
-// shape or in the one the pre-v1 binary wrote.
+// shape or in the one the pre-v1 binary wrote. This version's shape is read
+// as strictly as a stored manifest: the import stores it, and a key it
+// dropped on the way would be gone for every later reader.
 func parseArchiveMetadata(data []byte) (*manifest, error) {
-	var m manifest
-	if err := json.Unmarshal(data, &m); err != nil {
+	var probe struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
 		return nil, fmt.Errorf("import: failed to parse the archive metadata: %w", err)
 	}
-	if m.Version == manifestVersion {
+	if probe.Version == manifestVersion {
+		var m manifest
+		if err := decodeStrict("the archive metadata", data, &m); err != nil {
+			if errors.Is(err, ErrUnsupportedFormat) {
+				return nil, fmt.Errorf("import: %w", err)
+			}
+			return nil, fmt.Errorf("import: failed to parse the archive metadata: %w", err)
+		}
 		return &m, nil
 	}
-	if m.Version != 0 {
-		// Saved as is, it would be a manifest no reader loads and prune sweeps.
-		return nil, fmt.Errorf("import: unsupported manifest version %d (only v1 is supported)", m.Version)
+	if probe.Version != 0 {
+		// Saved as is, it would be a manifest no reader loads.
+		return nil, fmt.Errorf("import: %w: the archive metadata has manifest version %d, this build reads version %d",
+			ErrUnsupportedFormat, probe.Version, manifestVersion)
 	}
 
 	// No version field: an archive from before the manifest was the metadata.

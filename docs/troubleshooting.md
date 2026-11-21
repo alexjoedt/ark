@@ -49,8 +49,9 @@ object format byte, a file type, or a JSON key.
   repository and back up again. ark doesn't migrate repositories.
 - For anything else, use the newer release. An older release refuses what it doesn't know
   instead of skipping it.
-- If the message names a lock, a newer release holds it or left it behind. Once no operation of
-  that release is running, `ark unlock --force` removes it.
+- If the message names a lock, a newer release holds it or left it behind. `ark unlock --force`
+  removes it together with every other lock. Run it only when no ark command of any release is
+  using the repository.
 
 ## Passwords
 

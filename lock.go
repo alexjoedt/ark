@@ -208,7 +208,10 @@ func (r *Repository) loadLocks(ctx context.Context) (
 		case errors.Is(err, ErrNotFound):
 			continue // released since the listing
 		case errors.Is(err, ErrUnsupportedFormat) && refused == nil:
-			refused = fmt.Errorf("%w; Unlock with WithForce removes it once no operation of that build runs", err)
+			refused = fmt.Errorf(
+				"%w; Unlock with WithForce removes it with every other lock, so no operation of any build may be running",
+				err,
+			)
 			fallthrough
 		case err != nil:
 			unreadable = append(unreadable, name)

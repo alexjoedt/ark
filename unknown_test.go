@@ -101,6 +101,73 @@ func TestUnknownFileTypeFailsEveryReader(t *testing.T) {
 	}
 }
 
+// linkIntoDirSource yields a file in a directory and a hardlink to it from
+// the root, so the link's target is in another tree node than the link.
+type linkIntoDirSource struct{}
+
+func (linkIntoDirSource) Meta() ark.SourceMeta {
+	return ark.SourceMeta{Name: "linked", Type: ark.SourceTypeFile}
+}
+
+func (linkIntoDirSource) Walk(_ context.Context, fn ark.WalkFunc) error {
+	if err := fn(ark.FileInfo{Path: "dir", Mode: 0o755, Type: ark.FileTypeDirectory}, nil); err != nil {
+		return err
+	}
+	file := ark.FileInfo{Path: "dir/file", Size: 2, Mode: 0o644, Type: ark.FileTypeRegular}
+	if err := fn(file, openReader(strings.NewReader("ok"))); err != nil {
+		return err
+	}
+	return fn(ark.FileInfo{Path: "link", Mode: 0o644, Type: ark.FileTypeHardlink, LinkDest: "dir/file"}, nil)
+}
+
+// TestHardlinkIntoAnUnknownNodeIsUnsupported: a Reader resolves a hardlink
+// through the node of its target. When a later build wrote that node, the
+// link is unsupported like the node and is not a corrupt tree.
+func TestHardlinkIntoAnUnknownNodeIsUnsupported(t *testing.T) {
+	ctx := context.Background()
+	b := arkmem.New()
+	repo := openRepo(t, b)
+	snap, err := repo.Backup(ctx, linkIntoDirSource{})
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	nodes := blobNames(t, repo, ark.TreeFile)
+	if len(nodes) != 2 {
+		t.Fatalf("the snapshot has %d tree nodes, want the root and dir", len(nodes))
+	}
+
+	// One of the two fails on the way to the link, the other at its target.
+	var atTarget int
+	for _, name := range nodes {
+		h := ark.Handle{Type: ark.TreeFile, Name: name}
+		stored := readBlob(t, b, repo, h.Type, h.Name)
+		later, err := ark.Retag(repo, h, stored, 0x04)
+		if err != nil {
+			t.Fatalf("retag: %v", err)
+		}
+		writeBlob(t, b, repo, h.Type, h.Name, later)
+
+		rd, err := repo.OpenReader(ctx)
+		if err != nil {
+			t.Fatalf("OpenReader: %v", err)
+		}
+		fsys, err := rd.FS(snap.ID)
+		if err != nil {
+			t.Fatalf("FS: %v", err)
+		}
+		_, err = fs.Stat(fsys, "link")
+		wantUnsupported(t, "Stat(link)", err, "0x04")
+		if err != nil && strings.Contains(err.Error(), "hardlink link to dir/file") {
+			atTarget++
+		}
+		_ = rd.Close()
+		writeBlob(t, b, repo, h.Type, h.Name, stored)
+	}
+	if atTarget != 1 {
+		t.Errorf("%d of the two reads failed at the link's target, want 1", atTarget)
+	}
+}
+
 // TestUnknownFormatByteIsRejected stores one object per namespace as a later
 // build with another codec would: sealed, under a format byte this build
 // does not know. The operation fails as unsupported and names the byte: no

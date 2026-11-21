@@ -38,6 +38,8 @@ is never skipped and never reported as corruption:
   behind mount, and prune all stop.
 - A config, a key file, the master key inside it, a manifest with its statistics, or a lock with
   a JSON key the build does not know (`decodeStrict` in `config.go`). The message names the key.
+  The metadata of an import archive is a manifest and is read the same way, because the import
+  stores it.
 - A config, key file or manifest of another version, as before.
 
 A check does not list such an object among its findings. It fails, because a build that cannot
@@ -45,7 +47,8 @@ read what is stored cannot say whether it is sound.
 
 A lock the build cannot read in full stops every operation that would take a lock, and `Locks`
 too. A lock that fails its tag is still passed over, as before. `Unlock` with `WithForce` removes
-both kinds.
+both kinds. It removes every other lock with them, so it is for a repository that no operation
+of any build is using.
 
 A repository can carry one more sealed object, `features`, a JSON object of the shape
 `{"required": ["name", ...]}`. A build that finds a name it does not know there refuses to open
@@ -114,4 +117,5 @@ does not know. Only the file type is checked here.
 
 Tests: `TestUnknownFormatByteIsRejected`, `TestUnknownFileTypeFailsEveryReader`,
 `TestManifestIsDecodedStrictly`, `TestLockWithAnUnknownKeyStopsTheOperation`,
-`TestOpenRefusesUnknownKeys`, `TestOpenRejectsUnknownKeyFiles`, `TestDecodeStrict`.
+`TestOpenRefusesUnknownKeys`, `TestOpenRejectsUnknownKeyFiles`, `TestDecodeStrict`,
+`TestArchiveMetadataIsDecodedStrictly`, `TestHardlinkIntoAnUnknownNodeIsUnsupported`.
