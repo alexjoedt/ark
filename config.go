@@ -71,9 +71,6 @@ func checkFeatures(ctx context.Context, b Backend, codec *objectCodec, key *mast
 // repoIDBytes is the length of the random repository id before hex encoding.
 const repoIDBytes = 32
 
-// compressionZstd is the only compression codec the format defines.
-const compressionZstd = "zstd"
-
 // repositoryConfig is the JSON object Init writes into the config namespace.
 // It is plain JSON with no header byte, so it always starts with '{'. The
 // master key carries the SHA-256 of the stored bytes (configHash), so Open
@@ -82,11 +79,10 @@ const compressionZstd = "zstd"
 // Field order is part of the format: the JSON is marshalled with Go's
 // encoding/json in the order declared here.
 type repositoryConfig struct {
-	Version     int           `json:"version"`
-	ID          string        `json:"id"`
-	CreatedAt   time.Time     `json:"created_at"`
-	Chunker     chunkerParams `json:"chunker"`
-	Compression string        `json:"compression"`
+	Version   int           `json:"version"`
+	ID        string        `json:"id"`
+	CreatedAt time.Time     `json:"created_at"`
+	Chunker   chunkerParams `json:"chunker"`
 }
 
 // chunkerParams are the FastCDC boundaries a repository was created with.
@@ -181,11 +177,10 @@ func Init(ctx context.Context, b Backend, pw Password, opts ...InitOption) error
 
 	id := randomHex(repoIDBytes)
 	data, err := json.Marshal(repositoryConfig{
-		Version:     repoFormatVersion,
-		ID:          id,
-		CreatedAt:   time.Now().UTC(),
-		Chunker:     params,
-		Compression: compressionZstd,
+		Version:   repoFormatVersion,
+		ID:        id,
+		CreatedAt: time.Now().UTC(),
+		Chunker:   params,
 	})
 	if err != nil {
 		return fmt.Errorf("ark: failed to encode the repository config: %w", err)
@@ -259,9 +254,6 @@ func parseRepositoryConfig(data []byte) (repositoryConfig, error) {
 	}
 	if invalid := cfg.Chunker.validate(); invalid != nil {
 		return repositoryConfig{}, fmt.Errorf("%w: %w", ErrUnsupportedFormat, invalid)
-	}
-	if cfg.Compression != compressionZstd {
-		return repositoryConfig{}, fmt.Errorf("%w: unknown compression %q", ErrUnsupportedFormat, cfg.Compression)
 	}
 	return cfg, nil
 }

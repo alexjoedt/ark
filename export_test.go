@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"testing"
-	"time"
 
+	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkmem"
 )
 
@@ -134,86 +136,47 @@ func TestImportRechunksIntoANewSnapshot(t *testing.T) {
 	}
 }
 
-// legacyArchive builds what the pre-v1 binary wrote: a gzipped tar
-// whose metadata.json is the old backup metadata, not an ark manifest.
-func legacyArchive(t *testing.T) []byte {
-	t.Helper()
+// TestImportNamesAForeignIDByItsHash: an archive is outside input and may
+// carry an ID of any form. The copy is named by a hash of it, so the name is
+// hex, shows nothing of the ID, and a second import of the archive collides.
+func TestImportNamesAForeignIDByItsHash(t *testing.T) {
+	ctx := context.Background()
+	const foreign = "01jd3k9s5w0000000000000000"
+	meta := `{"version":1,"id":"` + foreign + `","created_at":"2025-03-02T10:00:00Z",` +
+		`"source_name":"app","source_type":"file","host":"h","stats":{}}`
 
-	meta := map[string]any{
-		"id":         "01abcdefghijklmnopqrstuvwx",
-		"created_at": time.Date(2025, 3, 2, 10, 0, 0, 0, time.UTC),
-		"source": map[string]any{
-			"volume": "pgdata",
-			"labels": map[string]string{"env": "prod"},
-		},
-		"backup": map[string]any{
-			"strategy": "offline",
-			"comment":  "nightly",
-		},
-	}
-	metaJSON, err := json.Marshal(meta)
-	if err != nil {
-		t.Fatalf("marshal legacy metadata: %v", err)
-	}
-
-	var raw bytes.Buffer
-	gw := gzip.NewWriter(&raw)
-	tw := tar.NewWriter(gw)
-
-	write := func(h *tar.Header, body string) {
-		t.Helper()
-		if err := tw.WriteHeader(h); err != nil {
-			t.Fatalf("write header %s: %v", h.Name, err)
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	for _, f := range []struct{ name, body string }{{"metadata.json", meta}, {"data/data.txt", "payload"}} {
+		if err := tw.WriteHeader(&tar.Header{Name: f.name, Mode: 0o644, Size: int64(len(f.body))}); err != nil {
+			t.Fatalf("write header %s: %v", f.name, err)
 		}
-		if body != "" {
-			if _, err := tw.Write([]byte(body)); err != nil {
-				t.Fatalf("write body %s: %v", h.Name, err)
-			}
+		if _, err := tw.Write([]byte(f.body)); err != nil {
+			t.Fatalf("write body %s: %v", f.name, err)
 		}
 	}
-
-	write(&tar.Header{Name: "metadata.json", Mode: 0o644, Size: int64(len(metaJSON))}, string(metaJSON))
-	write(&tar.Header{Name: "data/conf", Mode: 0o755, Typeflag: tar.TypeDir}, "")
-	write(&tar.Header{
-		Name: "data/conf/pg.conf", Mode: 0o644, Size: int64(len("shared_buffers = 128MB")),
-		Typeflag: tar.TypeReg,
-	}, "shared_buffers = 128MB")
-
 	if err := tw.Close(); err != nil {
 		t.Fatalf("close tar: %v", err)
 	}
-	if err := gw.Close(); err != nil {
-		t.Fatalf("close gzip: %v", err)
-	}
-	return raw.Bytes()
-}
 
-func TestImportAcceptsAnArchiveFromThePreV1Binary(t *testing.T) {
-	ctx := context.Background()
 	repo := openRepo(t, arkmem.New())
-
-	imported, err := repo.Import(ctx, bytes.NewReader(legacyArchive(t)))
+	imported, err := repo.Import(ctx, bytes.NewReader(archive.Bytes()))
 	if err != nil {
-		t.Fatalf("Import of a pre-v1 archive: %v", err)
+		t.Fatalf("Import: %v", err)
 	}
-
-	if imported.SourceName != "pgdata" {
-		t.Errorf("imported source is %q, want pgdata", imported.SourceName)
+	sum := sha256.Sum256([]byte(foreign))
+	if want := ark.SnapshotID(hex.EncodeToString(sum[:16])); imported.ID != want {
+		t.Errorf("imported ID %q, want %q", imported.ID, want)
 	}
-	if imported.Comment != "nightly" {
-		t.Errorf("imported comment is %q, want nightly", imported.Comment)
-	}
-	if imported.Stats.FileCount != 1 || imported.Stats.DirCount != 1 {
-		t.Errorf("imported stats count %d files and %d dirs, want 1 and 1",
-			imported.Stats.FileCount, imported.Stats.DirCount)
-	}
-
 	sink := &recordingSink{}
-	if _, err := repo.Restore(ctx, imported.ID, sink); err != nil {
-		t.Fatalf("Restore of the imported legacy snapshot: %v", err)
+	if _, err := repo.Restore(ctx, imported.ID, sink); err != nil || sink.written["data.txt"] != "payload" {
+		t.Errorf("Restore of the copy: %v, %q", err, sink.written["data.txt"])
 	}
-	if got := sink.written["conf/pg.conf"]; got != "shared_buffers = 128MB" {
-		t.Errorf("restored %q from the legacy archive", got)
+	if _, err := repo.Import(ctx, bytes.NewReader(archive.Bytes())); err == nil {
+		t.Error("a second import of the same archive succeeded")
+	}
+	if all, err := repo.Snapshots(ctx, ark.SnapshotFilter{}); err != nil || len(all) != 1 {
+		t.Errorf("after two imports Snapshots = %d, %v, want 1", len(all), err)
 	}
 }
 

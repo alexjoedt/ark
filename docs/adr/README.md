@@ -36,7 +36,7 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0019 | [Find and the arkfind package](0019-find-and-the-arkfind-package.md) | accepted | 2026-11-15 |
 | 0020 | [Read session with an io/fs view per snapshot](0020-read-session-with-an-io-fs-view.md) | accepted | 2026-11-15 |
 | 0021 | [One series key: source type, source name and host](0021-one-series-key-type-source-host.md) | accepted | 2026-11-16 |
-| 0022 | [Snapshot labels](0022-snapshot-labels.md) | accepted | 2026-11-16 |
+| 0022 | [Snapshot labels](0022-snapshot-labels.md) | partly superseded by 0035 | 2026-11-16 |
 | 0023 | [A VitePress docs site with Node only in docs/](0023-vitepress-docs-site.md) | accepted | 2026-11-16 |
 | 0024 | [Forget periods count in the local time of the forget run](0024-forget-periods-in-the-local-time-of-the-forget-run.md) | partly superseded by 0027 | 2026-11-17 |
 | 0025 | [A typed keep count with a named unlimited value](0025-typed-keep-count-with-unlimited.md) | accepted | 2026-11-17 |
@@ -49,3 +49,4 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0032 | [A raw codec and an authenticated format byte](0032-raw-codec-and-authenticated-format-byte.md) | accepted | 2026-11-21 |
 | 0033 | [A pack table that opens from the tail of its pack](0033-pack-table-opens-from-a-tail-read.md) | accepted | 2026-11-21 |
 | 0034 | [What a build does not know it refuses, per object](0034-unknown-input-is-refused-not-skipped.md) | accepted | 2026-11-21 |
+| 0035 | [Version 1 drops the legacy of earlier builds](0035-version-1-drops-the-legacy-of-earlier-builds.md) | accepted | 2026-11-21 |

@@ -323,7 +323,7 @@ func TestConfigHoldsOnlyItsPlaintextFields(t *testing.T) {
 		fields map[string]json.RawMessage
 		want   []string
 	}{
-		{cfg, []string{"chunker", "compression", "created_at", "id", "version"}},
+		{cfg, []string{"chunker", "created_at", "id", "version"}},
 		{chunkerFields, []string{"avg", "max", "min"}},
 	} {
 		if got := slices.Sorted(maps.Keys(tc.fields)); !slices.Equal(got, tc.want) {
@@ -397,63 +397,29 @@ func TestSnapshotIDsCarryNoTimestamp(t *testing.T) {
 	}
 }
 
-// TestBase32SnapshotIDsStillWork: a repository written before hex IDs keeps
-// its 26 character names; they list, resolve by full ID and by prefix next to
-// hex ones, and an export imports as a copy under a hex ID.
-func TestBase32SnapshotIDsStillWork(t *testing.T) {
+// TestSnapshotUnderAnotherNameIsRefused: a repository holds snapshots under
+// 32 lowercase hex characters only. A manifest that opens under any other
+// name, such as the dated 26 character names of early builds, is one this
+// format does not have, and the listing fails instead of showing it.
+func TestSnapshotUnderAnotherNameIsRefused(t *testing.T) {
 	ctx := context.Background()
 	repo := openRepo(t, arkmem.New())
-	hexSnap, err := repo.Backup(ctx, stubSource{name: "app", content: "payload"})
+	snap, err := repo.Backup(ctx, stubSource{name: "app", content: "payload"})
 	if err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
-	oldID, err := ark.WriteBase32Snapshot(ctx, repo, hexSnap.ID)
-	if err != nil || len(oldID) != 26 {
-		t.Fatalf("WriteBase32Snapshot = %q, %v", oldID, err)
+	if all, err := repo.Snapshots(ctx, ark.SnapshotFilter{}); err != nil || len(all) != 1 {
+		t.Fatalf("Snapshots = %d, %v, want 1", len(all), err)
 	}
-
-	all, err := repo.Snapshots(ctx, ark.SnapshotFilter{})
-	if err != nil || len(all) != 2 {
-		t.Fatalf("Snapshots = %d, %v, want 2", len(all), err)
+	const dated = "01jd3k9s5w0000000000000000"
+	if err := ark.WriteSnapshotCopy(ctx, repo, snap.ID, dated); err != nil {
+		t.Fatalf("WriteSnapshotCopy: %v", err)
 	}
-	upper := ark.SnapshotID(strings.ToUpper(string(hexSnap.ID)))
-	for _, ref := range []ark.SnapshotID{oldID, oldID[:8], hexSnap.ID, hexSnap.ID[:8], upper, upper[:8]} {
-		got, err := repo.Snapshot(ctx, ref)
-		if err != nil || (got.ID != oldID && got.ID != hexSnap.ID) ||
-			!strings.HasPrefix(string(got.ID), strings.ToLower(string(ref))) {
-			t.Errorf("Snapshot(%q) = %v, %v", ref, got, err)
-		}
+	if _, err := repo.Snapshots(ctx, ark.SnapshotFilter{}); !errors.Is(err, ark.ErrUnsupportedFormat) {
+		t.Errorf("Snapshots = %v, want ErrUnsupportedFormat", err)
 	}
-	sink := &recordingSink{}
-	if _, err := repo.Restore(ctx, oldID[:8], sink); err != nil || sink.written["data.txt"] != "payload" {
-		t.Errorf("Restore by base32 prefix: %v, %q", err, sink.written["data.txt"])
-	}
-
-	var archive bytes.Buffer
-	if err := repo.Export(ctx, oldID, &archive); err != nil {
-		t.Fatalf("Export: %v", err)
-	}
-	target := openRepo(t, arkmem.New())
-	imported, err := target.Import(ctx, bytes.NewReader(archive.Bytes()))
-	if err != nil {
-		t.Fatalf("Import: %v", err)
-	}
-	if len(imported.ID) != 32 || strings.ToLower(string(imported.ID)) != string(imported.ID) {
-		t.Errorf("imported ID %q is not 32 lowercase hex characters", imported.ID)
-	}
-	if _, err := target.Import(ctx, bytes.NewReader(archive.Bytes())); err == nil {
-		t.Error("a second import of the same base32 archive succeeded")
-	}
-	if all, err := target.Snapshots(ctx, ark.SnapshotFilter{}); err != nil || len(all) != 1 {
-		t.Errorf("after two imports Snapshots = %d, %v, want 1", len(all), err)
-	}
-
-	archive.Reset()
-	if err := repo.Export(ctx, hexSnap.ID, &archive); err != nil {
-		t.Fatalf("Export: %v", err)
-	}
-	if _, err := repo.Import(ctx, &archive); err == nil {
-		t.Error("importing a hex snapshot into the repository that holds it replaced it")
+	if _, err := repo.Snapshot(ctx, dated); !errors.Is(err, ark.ErrUnsupportedFormat) {
+		t.Errorf("Snapshot(%s) = %v, want ErrUnsupportedFormat", dated, err)
 	}
 }
 

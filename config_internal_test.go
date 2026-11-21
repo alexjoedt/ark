@@ -232,9 +232,9 @@ func rebindConfigBytes(t *testing.T, b Backend, change func([]byte) []byte) {
 	}
 }
 
-// TestOpenRejectsAMasterKeyWithoutConfigHash pins that there is no legacy
-// path: a master key that carries no config_hash, as an older format wrote
-// it, does not open the repository and reports the older format.
+// TestOpenRejectsAMasterKeyWithoutConfigHash pins that there is no path
+// around the config binding: a master key that carries no config_hash does
+// not match the config, like one that carries another hash.
 func TestOpenRejectsAMasterKeyWithoutConfigHash(t *testing.T) {
 	ctx := context.Background()
 	b := newStubBackend()
@@ -264,8 +264,8 @@ func TestOpenRejectsAMasterKeyWithoutConfigHash(t *testing.T) {
 	}
 	resealMasterKey(t, b, repo, blob)
 
-	if _, err := Open(ctx, b, NoPassword()); !errors.Is(err, ErrUnsupportedFormat) {
-		t.Errorf("Open = %v, want ErrUnsupportedFormat", err)
+	if _, err := Open(ctx, b, NoPassword()); !errors.Is(err, ErrCorruptConfig) {
+		t.Errorf("Open = %v, want ErrCorruptConfig", err)
 	}
 }
 
@@ -400,11 +400,13 @@ func TestDecodeStrict(t *testing.T) {
 // shape has no version and is read for its own few fields only.
 func TestArchiveMetadataIsDecodedStrictly(t *testing.T) {
 	for in, names := range map[string]string{
-		`{"version":1,"source_name":"app"}`:                                 "",
-		`{"id":"01ab","source":{"volume":"pgdata"},"stats":{"files":"12"}}`: "",
-		`{"version":1,"later":true}`:                                        `the archive metadata has the key "later"`,
-		`{"version":1,"stats":{"later":1}}`:                                 `stats has the key "later"`,
-		`{"version":2}`:                                                     "manifest version 2",
+		`{"version":1,"source_name":"app"}`:             "",
+		`{"id":"01ab","source":{"volume":"pgdata"}}`:    `the archive metadata has the key "source"`,
+		`{"version":1,"later":true}`:                    `the archive metadata has the key "later"`,
+		`{"version":1,"stats":{"later":1}}`:             `the archive metadata has the key "later"`,
+		`{"version":1,"stats":{"compression_ratio":0}}`: `the archive metadata has the key "compression_ratio"`,
+		`{"source_name":"app"}`:                         "manifest version 0",
+		`{"version":2}`:                                 "manifest version 2",
 	} {
 		_, err := parseArchiveMetadata([]byte(in))
 		switch {

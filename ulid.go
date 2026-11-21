@@ -10,7 +10,6 @@ import (
 
 // newSnapshotID returns 128 random bits as 32 lowercase hex characters.
 // A snapshot name carries no time: the backend listing must not date them.
-// Snapshots written before the hex form keep their 26 character base32 names.
 func newSnapshotID() SnapshotID {
 	b := make([]byte, 16)
 	rand.Read(b)
@@ -25,8 +24,8 @@ func isHexSnapshotID(id string) bool {
 
 // importedSnapshotID names the copy an import makes of a snapshot whose
 // archive carries id. A hex id is kept. Any other form maps to a hex id
-// derived from it, so importing one archive twice yields one name, and the
-// time a legacy base32 name encodes does not show through; an archive without
+// derived from it, so importing one archive twice yields one name, and
+// whatever the foreign id encodes does not show through; an archive without
 // an id gets a random one.
 func importedSnapshotID(id SnapshotID) SnapshotID {
 	if isHexSnapshotID(string(id)) {

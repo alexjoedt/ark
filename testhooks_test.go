@@ -3,7 +3,6 @@ package ark
 import (
 	"bytes"
 	"context"
-	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -162,18 +161,15 @@ func SetPackLimits(r *Repository, packBytes, checkpointBlobs int) {
 	r.packTarget, r.checkpointBlobs = packBytes, checkpointBlobs
 }
 
-// WriteBase32Snapshot stores a copy of snapshot id under a 26 character
-// Crockford base32 name, the form snapshots had before hex IDs, and returns
-// that name.
-func WriteBase32Snapshot(ctx context.Context, r *Repository, id SnapshotID) (SnapshotID, error) {
+// WriteSnapshotCopy stores a copy of snapshot id under name, sealed for that
+// name as a build that names snapshots otherwise would store it.
+func WriteSnapshotCopy(ctx context.Context, r *Repository, id, name SnapshotID) error {
 	m, err := r.loadManifest(ctx, id)
 	if err != nil {
-		return "", err
+		return err
 	}
-	b := make([]byte, 16)
-	_, _ = cryptorand.Read(b)
-	m.ID = SnapshotID(encodeBase32(b))
-	return m.ID, r.saveManifest(ctx, m)
+	m.ID = name
+	return r.saveManifest(ctx, m)
 }
 
 // ChunkOffsets returns where each chunk of the regular file name of s starts,

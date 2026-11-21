@@ -63,11 +63,11 @@ writer, every accepted risk included.
 - Chunk, tree and index names are the hex HMAC-SHA256 of their plaintext under the repository's ID
   key, the lost-pack marker's that of its namespace name, manifests and locks are sealed under
   chosen names: snapshot IDs are 128 random bits in 32 lowercase hex characters, lock names a
-  millisecond timestamp plus 80 random bits. A repository may also hold snapshots under 26
-  character Crockford base32 IDs, which ark resolves but does not write; an import of an archive
-  whose ID has another form names the copy by the first 128 bits of the SHA-256 of that ID:
+  millisecond timestamp plus 80 random bits. A manifest that opens under a name of any other form
+  is refused with `ErrUnsupportedFormat`, and an import of an archive whose ID has another form
+  names the copy by the first 128 bits of the SHA-256 of that ID:
   `TestChunksAndTreesAreSealedUnderKeyedNames`, `TestSnapshotIDsCarryNoTimestamp`,
-  `TestBase32SnapshotIDsStillWork`.
+  `TestSnapshotUnderAnotherNameIsRefused`, `TestImportNamesAForeignIDByItsHash`.
 - The master key holds the data key, the ID key, the chunker seed (which keys the chunk boundaries),
   the repository ID and `config_hash`, the SHA-256 of the config bytes Init stored.
 - A key file seals the master key under a wrap key derived with argon2id from the password and a
@@ -77,7 +77,7 @@ writer, every accepted risk included.
 - Open refuses a key file asking for more than time 16 or 1 GiB of memory and tries at most 20 key
   files, so a forged key file cannot make it allocate or spin without bound:
   `TestOpenRejectsUnknownKeyFiles`, `TestOpenTriesAtMostTwentyKeyFiles`.
-- The config is plain JSON (version, id, created_at, chunker, compression), authenticated through
+- The config is plain JSON (version, id, created_at, chunker), authenticated through
   `config_hash`: `TestConfigHoldsOnlyItsPlaintextFields`, `TestTamperedConfigIsRejected`.
 
 ## Guarantees at rest
@@ -142,8 +142,8 @@ writer, every accepted risk included.
 - A key file with any byte changed, or one from another repository, does not open:
   `TestEveryFlippedKeyFileByteFailsOpen`, `TestKeyFileDoesNotOpenElsewhere`.
 - A config that is flipped, truncated, reformatted or replaced by another repository's fails Open
-  with `ErrCorruptConfig`, also after ChangePassword, and a master key without `config_hash` is
-  refused: `TestTamperedConfigIsRejected`, `TestOpenRejectsAMasterKeyWithoutConfigHash`.
+  with `ErrCorruptConfig`, also after ChangePassword, and so does a master key without
+  `config_hash`: `TestTamperedConfigIsRejected`, `TestOpenRejectsAMasterKeyWithoutConfigHash`.
 - A replayed snapshot manifest restores exactly the bytes its snapshot held, never newer ones;
   after a prune it fails with `ErrNotFound` on its root tree: `TestReplayedManifestRestoresOnlyItsOwnBytes`.
 - An old config put back beside the current key files fails Open with `ErrCorruptConfig`:
@@ -197,9 +197,6 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
 - The argon2id parameters and the config are plaintext: `TestInitWritesOneKeyFile`,
   `TestConfigHoldsOnlyItsPlaintextFields`.
 - Lock names carry the millisecond they were created: `TestLockNamesCarryTheirTime`.
-- A 26 character base32 snapshot ID begins with the millisecond its snapshot was created in its
-  first 10 characters, so whoever can list `snapshots/` dates those snapshots:
-  `TestBase32SnapshotIDsStillWork`.
 - `ARK_PASSWORD` and `ARK_NEW_PASSWORD` are visible to every process of the same user;
   `--password-file` and `--new-password-file` are the safer inputs: `TestNoPasswordFlag`.
 

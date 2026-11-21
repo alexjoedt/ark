@@ -236,7 +236,7 @@ func (r *Repository) runBackup(
 
 	stats.computeRatios()
 
-	m.Stats = stats
+	m.Stats = storedStats(stats)
 
 	if err := r.saveManifest(ctx, m); err != nil {
 		return nil, err

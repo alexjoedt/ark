@@ -35,7 +35,11 @@ lostpacks/   at most one sealed marker, see below
   objects, one per file.
 - Chunks and directory nodes are never stored alone. They live in packs, and the index finds them.
 - A manifest holds the source type, source name, host, tags, comment, statistics, and the labels
-  under the key `source_meta`. See [Labels](labels.md) and [Series](series.md).
+  under the key `labels`. See [Labels](labels.md) and [Series](series.md).
+- A snapshot ID is 128 random bits as 32 lowercase hex characters. A manifest that opens under a
+  name of any other form is refused with `ErrUnsupportedFormat`.
+- The statistics are counters and the duration. The deduplication and compression ratios follow
+  from the counters and aren't stored.
 - A lock is stale once its recorded time is 30 minutes old, or at once when it's from this host
   and its process is gone.
 
@@ -47,7 +51,8 @@ the content as it is. A reader opens both, for every object. The associated data
 byte followed by `<namespace>/<name>`, for example `snapshots/<id>` for a manifest, so an object
 moved to another name or relabelled with the other codec fails on its tag. An object that
 authenticates under any other format byte is one a later build wrote, and a reader refuses it
-with `ErrUnsupportedFormat`.
+with `ErrUnsupportedFormat`. The byte `0x01` is retired: no object of version 1 carries it, and no
+later codec is ever assigned to it.
 
 Index objects, manifests, locks, the marker, and `features` are sealed this way with the data key under their
 own name. The `key` field of a key file is sealed the same way under the key derived from the

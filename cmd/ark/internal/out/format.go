@@ -60,8 +60,7 @@ func Time(t time.Time) string {
 
 // ShortID cuts a snapshot ID to the 8 characters the tables show. Every
 // command taking an ID resolves that prefix; one that two snapshots share
-// fails with the ambiguous-ID error, as two legacy base32 IDs taken within
-// about a second of each other do.
+// fails with the ambiguous-ID error.
 func ShortID(id ark.SnapshotID) string {
 	if len(id) > 8 {
 		return string(id[:8])

@@ -220,7 +220,7 @@ func loadMasterKey(
 	// foreign key, then a password or no-password mismatch, then an
 	// unreadable header.
 	var failed bool
-	var changed, legacy, unknown, foreign, mismatch, unsupported error
+	var changed, unknown, foreign, mismatch, unsupported error
 	for _, name := range names {
 		kf, err := readKeyFile(ctx, b, name)
 		if errors.Is(err, ErrNotFound) {
@@ -249,8 +249,6 @@ func loadMasterKey(
 			failed = true
 		case mk.ConfigHash == hash:
 			return mk, name, nil
-		case mk.ConfigHash == "":
-			legacy = fmt.Errorf("%w: key file %s has no config binding, an older repository format wrote it", ErrUnsupportedFormat, name)
 		case mk.RepositoryID == stored.ID:
 			changed = fmt.Errorf("%w: the config was changed after Init", ErrCorruptConfig)
 		default:
@@ -262,8 +260,6 @@ func loadMasterKey(
 	switch {
 	case changed != nil:
 		return nil, "", changed
-	case legacy != nil:
-		return nil, "", legacy
 	case unknown != nil:
 		return nil, "", unknown
 	case failed:
