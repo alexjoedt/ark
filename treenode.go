@@ -86,7 +86,9 @@ var (
 )
 
 // unixNano is t in nanoseconds since the epoch. A time outside the range of
-// an int64, the zero Time among them, becomes the nearest bound.
+// an int64, the zero Time among them, becomes the nearest bound. The lowest
+// value is therefore what an entry without an mtime stores, and the decoder
+// reads it back as the zero Time.
 func unixNano(t time.Time) int64 {
 	switch {
 	case t.Before(minNodeTime):
@@ -97,17 +99,27 @@ func unixNano(t time.Time) int64 {
 	return t.UnixNano()
 }
 
-// id32 is a uid or gid as stored. Where int has 32 bits an id above its
-// positive range is a negative int of the same bits, which is how a source
-// there reports it; where int has 64, anything outside 32 bits is refused.
+// id32 is a uid or gid as stored: the 32 bits of v. Where int has 32 bits an
+// id above its positive range is a negative int of the same bits, and a
+// source without owners reports -1, so a negative int32 is the id of its bits
+// on every build. Anything else outside 32 bits is refused.
 func id32(v int) (uint32, bool) {
-	return uint32(v), uint64(uint(v)) <= math.MaxUint32
+	return uint32(v), int64(v) >= math.MinInt32 && int64(v) <= math.MaxUint32
+}
+
+// nodeName reports whether name can name an entry: one path element, so
+// neither empty nor "." nor "..", without a slash or a NUL. Every path a tree
+// yields is joined from such names and cannot leave the tree.
+func nodeName(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, "/\x00")
 }
 
 // encodeTreeNode is the stored form of node. It refuses a node that
 // decodeTreeNode would refuse, and an entry with a field its file type has no
 // place for, so nothing a caller filled in is dropped. Size and the chunk
-// offsets are not stored: both follow from the chunk lengths.
+// offsets are not stored: both follow from the chunk lengths, and a regular
+// file whose Size is not their sum is refused. The Size of any other entry is
+// not looked at; that of a hardlink is its target's.
 func encodeTreeNode(node *treeNode) ([]byte, error) {
 	b := make([]byte, 0, 16+96*len(node.Entries))
 	b = append(b, treeNodeVersion)
@@ -132,8 +144,8 @@ func appendTreeEntry(b []byte, e *treeEntry) ([]byte, error) {
 	isLink := e.Type == FileTypeSymlink || e.Type == FileTypeHardlink
 	isDev := e.Type == fileTypeCharDevice || e.Type == fileTypeBlockDevice
 	switch {
-	case e.Name == "" || strings.ContainsAny(e.Name, "/\x00"):
-		return nil, errors.New("the name is empty or holds a slash or a NUL")
+	case !nodeName(e.Name):
+		return nil, errors.New(`the name is empty, ".", ".." or holds a slash or a NUL`)
 	case typ < 1:
 		return nil, fmt.Errorf("the file type %q has no place in a tree node", e.Type)
 	case e.Mode&^storedModeMask != 0:
@@ -145,6 +157,8 @@ func appendTreeEntry(b []byte, e *treeEntry) ([]byte, error) {
 		e.LinkDest != "" && !isLink,
 		e.DevMajor|e.DevMinor != 0 && !isDev:
 		return nil, fmt.Errorf("the file type %q does not hold every field that is set", e.Type)
+	case isLink && e.LinkDest == "":
+		return nil, errors.New("the link has no target")
 	}
 	var flags byte
 	if !e.ChangeTime.IsZero() {
@@ -183,6 +197,9 @@ func appendTreeEntry(b []byte, e *treeEntry) ([]byte, error) {
 			b = append(b, id[:]...)
 			b = binary.AppendUvarint(b, uint64(c.Length))
 		}
+		if e.Size != size {
+			return nil, fmt.Errorf("the size %d is not the %d bytes of its chunks", e.Size, size)
+		}
 	case e.Type == FileTypeDirectory:
 		hash, ok := parseName(e.TreeHash)
 		if !ok {
@@ -214,7 +231,8 @@ func appendNodeBytes[T string | []byte](b []byte, p T) []byte {
 // or a flag bit this build does not know is ErrUnsupportedFormat; everything
 // else that is not the one encoding of a node is ErrCorruptTree. Nothing it
 // returns shares memory with data. Size and the chunk offsets are the running
-// sums of the chunk lengths; times are in UTC.
+// sums of the chunk lengths; times are in UTC, and the lowest mtime a node can
+// hold is the zero Time.
 func decodeTreeNode(data []byte) (*treeNode, error) {
 	r := nodeReader{b: data}
 	if v := r.byte(); r.err == nil && v != treeNodeVersion {
@@ -339,8 +357,8 @@ func (r *nodeReader) name() string {
 
 func (r *nodeReader) entry(e *treeEntry) {
 	e.Name = r.string()
-	if r.err == nil && (e.Name == "" || strings.ContainsAny(e.Name, "/\x00")) {
-		r.corruptf("the name %q is empty or holds a slash or a NUL", e.Name)
+	if r.err == nil && !nodeName(e.Name) {
+		r.corruptf(`the name %q is empty, ".", ".." or holds a slash or a NUL`, e.Name)
 	}
 	typ, flags := r.byte(), r.byte()
 	switch {
@@ -360,7 +378,9 @@ func (r *nodeReader) entry(e *treeEntry) {
 	}
 	e.UID = int(r.uint32("uid"))
 	e.GID = int(r.uint32("gid"))
-	e.ModTime = time.Unix(0, r.int64()).UTC()
+	if ns := r.int64(); ns != math.MinInt64 {
+		e.ModTime = time.Unix(0, ns).UTC()
+	}
 	if flags&nodeFlagChangeTime != 0 {
 		e.ChangeTime = time.Unix(0, r.int64()).UTC()
 	}
@@ -372,7 +392,9 @@ func (r *nodeReader) entry(e *treeEntry) {
 	case FileTypeDirectory:
 		e.TreeHash = r.name()
 	case FileTypeSymlink, FileTypeHardlink:
-		e.LinkDest = r.string()
+		if e.LinkDest = r.string(); r.err == nil && e.LinkDest == "" {
+			r.corruptf("the link %q has no target", e.Name)
+		}
 	case fileTypeCharDevice, fileTypeBlockDevice:
 		e.DevMajor = r.uint32("device major")
 		e.DevMinor = r.uint32("device minor")

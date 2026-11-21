@@ -217,6 +217,20 @@ func TestTreeNodeDecodeRefuses(t *testing.T) {
 		{name: "empty name", stored: rawNode(2, rawFifo(""), rawFifo("ab")), want: corrupt},
 		{name: "name with a slash", stored: rawNode(1, rawFifo("a/b")), want: corrupt},
 		{name: "name with a NUL", stored: rawNode(1, rawFifo("a\x00")), want: corrupt},
+		{name: "name that is a dot", stored: rawNode(1, rawFifo(".")), want: corrupt, text: `".."`},
+		{name: "name that is two dots", stored: rawNode(1, rawFifo("..")), want: corrupt, text: `".."`},
+		{
+			name:   "symlink without a target",
+			stored: rawNode(1, rawEntry("a", 3, 0).str("")),
+			want:   corrupt,
+			text:   "no target",
+		},
+		{
+			name:   "hardlink without a target",
+			stored: rawNode(1, rawEntry("a", 4, 0).str("")),
+			want:   corrupt,
+			text:   "no target",
+		},
 		{name: "mode above 07777", stored: rawNode(1, rawHead("a", 5, 0, 0o10000, 0, 0).uv(0)), want: corrupt},
 		{name: "uid above 32 bits", stored: rawNode(1, rawHead("a", 5, 0, 0o644, tooWide, 0).uv(0)), want: corrupt},
 		{name: "gid above 32 bits", stored: rawNode(1, rawHead("a", 5, 0, 0o644, 0, tooWide).uv(0)), want: corrupt},
@@ -357,6 +371,8 @@ func TestTreeNodeEncodeRefuses(t *testing.T) {
 		"empty name":            fifos(""),
 		"name with a slash":     fifos("a/b"),
 		"name with a NUL":       fifos("a\x00b"),
+		"name that is a dot":    fifos("."),
+		"name that is two dots": fifos(".."),
 		"no file type":          file(func(e *treeEntry) { e.Type = "" }),
 		"file type of no node":  file(func(e *treeEntry) { e.Type = FileTypeUnsupported }),
 		"mode above 07777":      file(func(e *treeEntry) { e.Mode = 0o10000 }),
@@ -371,9 +387,18 @@ func TestTreeNodeEncodeRefuses(t *testing.T) {
 		"directory with chunks": file(func(e *treeEntry) {
 			e.Type, e.TreeHash, e.Chunks = FileTypeDirectory, nodeID(1), []chunkRef{{ID: nodeID(1), Length: 1}}
 		}),
-		"file with a tree hash":   file(func(e *treeEntry) { e.TreeHash = nodeID(1) }),
-		"file with a link target": file(func(e *treeEntry) { e.LinkDest = "x" }),
-		"fifo with a device":      file(func(e *treeEntry) { e.Type, e.DevMinor = fileTypeFifo, 1 }),
+		"file with a tree hash":     file(func(e *treeEntry) { e.TreeHash = nodeID(1) }),
+		"file with a link target":   file(func(e *treeEntry) { e.LinkDest = "x" }),
+		"fifo with a device":        file(func(e *treeEntry) { e.Type, e.DevMinor = fileTypeFifo, 1 }),
+		"symlink without a target":  file(func(e *treeEntry) { e.Type = FileTypeSymlink }),
+		"hardlink without a target": file(func(e *treeEntry) { e.Type = FileTypeHardlink }),
+		"size above the chunks": file(func(e *treeEntry) {
+			e.Size, e.Chunks = 2, []chunkRef{{ID: nodeID(1), Length: 1}}
+		}),
+		"size without chunks": file(func(e *treeEntry) { e.Size = 1 }),
+		"chunks without a size": file(func(e *treeEntry) {
+			e.Chunks = []chunkRef{{ID: nodeID(1), Length: 1}}
+		}),
 		"chunk lengths above an int64 together": file(func(e *treeEntry) {
 			e.Chunks = []chunkRef{{ID: nodeID(1), Length: math.MaxInt64}, {ID: nodeID(2), Length: 1}}
 		}),
@@ -383,8 +408,10 @@ func TestTreeNodeEncodeRefuses(t *testing.T) {
 		wide := int(wide64)
 		cases["uid above 32 bits"] = file(func(e *treeEntry) { e.UID = wide })
 		cases["gid above 32 bits"] = file(func(e *treeEntry) { e.GID = wide })
-		cases["negative uid"] = file(func(e *treeEntry) { e.UID = -1 })
-		cases["negative gid"] = file(func(e *treeEntry) { e.GID = -1 })
+		var narrow64 int64 = math.MinInt32 - 1
+		narrow := int(narrow64)
+		cases["uid below 32 bits"] = file(func(e *treeEntry) { e.UID = narrow })
+		cases["gid below 32 bits"] = file(func(e *treeEntry) { e.GID = narrow })
 	}
 	for name, node := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -393,6 +420,28 @@ func TestTreeNodeEncodeRefuses(t *testing.T) {
 				t.Errorf("encodeTreeNode stored %x, want an error", b)
 			}
 		})
+	}
+}
+
+// TestTreeNodeStoresANegativeIDAsItsBits pins what a source without owners
+// gets: -1 is the id 4294967295, where int has 32 bits and where it has 64.
+func TestTreeNodeStoresANegativeIDAsItsBits(t *testing.T) {
+	t.Parallel()
+	entry := func(uid, gid int) *treeNode {
+		return &treeNode{Entries: []treeEntry{
+			{Name: "a", Type: fileTypeFifo, ModTime: time.Unix(0, 0), UID: uid, GID: gid},
+		}}
+	}
+	stored := mustEncodeNode(t, entry(-1, math.MinInt32))
+	if want := rawNode(1, rawHead("a", 5, 0, 0, math.MaxUint32, 1<<31).uv(0)); !bytes.Equal(stored, want) {
+		t.Fatalf("encoded:\n got %x\nwant %x", stored, want)
+	}
+	got, err := decodeTreeNode(stored)
+	if err != nil {
+		t.Fatalf("decodeTreeNode: %v", err)
+	}
+	if e := got.Entries[0]; uint32(e.UID) != math.MaxUint32 || uint32(e.GID) != 1<<31 {
+		t.Errorf("decoded uid %d and gid %d, want the ids 4294967295 and 2147483648", e.UID, e.GID)
 	}
 }
 
@@ -431,9 +480,16 @@ func TestTreeNodeTimesHaveNoZoneAndSaturate(t *testing.T) {
 				e.ChangeTime.Location(),
 			)
 		}
-		if e.ModTime.UnixNano() != tc.wantM || e.ChangeTime.UnixNano() != tc.wantC {
-			t.Errorf("%s: decoded %d and %d, want %d and %d",
-				name, e.ModTime.UnixNano(), e.ChangeTime.UnixNano(), tc.wantM, tc.wantC)
+		// The lowest mtime is no mtime: a source that knows none stores it.
+		gotM := e.ModTime.UnixNano()
+		if tc.wantM == math.MinInt64 {
+			if !e.ModTime.IsZero() {
+				t.Errorf("%s: decoded the mtime %v, want the zero Time", name, e.ModTime)
+			}
+			gotM = math.MinInt64
+		}
+		if gotM != tc.wantM || e.ChangeTime.UnixNano() != tc.wantC {
+			t.Errorf("%s: decoded %d and %d, want %d and %d", name, gotM, e.ChangeTime.UnixNano(), tc.wantM, tc.wantC)
 		}
 	}
 }

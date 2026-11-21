@@ -67,7 +67,8 @@ What the fields mean:
   is the type byte and nowhere else.
 - `mtime` and `ctime` are nanoseconds since the Unix epoch without a zone. A time outside the
   range of an int64 is stored as the nearest bound, so a source that knows no mtime stores the
-  lowest value. A reader gets both in UTC.
+  lowest value. A reader gets both in UTC, and the lowest `mtime` back as the zero time, which is
+  no mtime. `ctime` has its flag for that.
 - A file is its chunks in order, each the 32-byte id and the length of the content it holds. The
   size of the file is the sum of the lengths and the offset of a chunk is the sum of the lengths
   before it. Neither is stored. A reader builds both once when it decodes the node.
@@ -81,7 +82,8 @@ belongs to one tree and no other. It refuses, as a corrupt tree:
 
 - a uvarint that is not in its shortest form, or that does not fit 64 bits,
 - entries, or the xattrs of an entry, that are not in strictly ascending order,
-- an empty name, and a name that holds `/` or NUL,
+- an empty name, the names `.` and `..`, and a name that holds `/` or NUL,
+- a symlink or a hardlink without a target,
 - a mode above 07777,
 - a uid, a gid or a device number above 32 bits,
 - a chunk of length zero, and chunk lengths that add up to more than an int64 holds,
@@ -92,8 +94,10 @@ belongs to one tree and no other. It refuses, as a corrupt tree:
 
 A version byte other than 1, a type byte outside 1 to 7 and a flag bit other than the two above
 are `ErrUnsupportedFormat` (0034): a later build wrote them. The writer refuses every node the
-reader would refuse, and an entry with a field its type has no place for, such as a link target
-on a regular file, so nothing a source filled in is dropped without a word.
+reader would refuse, an entry with a field its type has no place for, such as a link target on a
+regular file, and a regular file whose size is not the sum of its chunk lengths, so nothing a
+source filled in is dropped without a word. The size of any other entry is not stored and not
+looked at. That of a hardlink is its target's.
 
 The version byte is the only way the layout grows. There are no reserved bytes and no optional
 fields beyond the two flags. Any change is node version 2, and a build that writes it into an
@@ -146,11 +150,14 @@ one.
 The node is no longer lenient about anything. What 0034 says about a tree node that accepts keys
 it does not know is replaced by the rules above.
 
-The reader checks a name for nothing but the rules above. `.` and `..` are names like any other
-to it, and an empty link target or xattr name decodes. A sink that writes to a file system has to
-judge a path itself, as before.
+No name in a tree is `.` or `..`, so a path joined from the names of a tree stays inside it,
+whatever wrote the node. The reader checks a name for nothing else beyond the rules above, a link
+target only for being there, and an empty xattr name decodes. A sink that writes to a file system
+has to judge a link target itself, as before.
 
-A uid or gid above 32 bits cannot be stored and fails the backup that meets one.
+A uid or gid above 32 bits cannot be stored and fails the backup that meets one. A negative one
+that fits 32 bits is stored as the id of the same bits on every build, so the -1 of a source
+without owners is 4294967295, the id that changes no owner.
 
 The layout is frozen with the first stable release. What holds it in place until then and after
 are the tests that pin every refusal by name, the bytes of one node written out by hand, and the
@@ -158,4 +165,5 @@ check that whatever a changed bit leaves decodable encodes back to itself.
 
 Tests: `TestTreeNodeLayout`, `TestTreeNodeRoundTrips`, `TestTreeNodeDecodeRefuses`,
 `TestTreeNodeHasOneEncoding`, `TestTreeNodeEncodeRefuses`,
-`TestTreeNodeTimesHaveNoZoneAndSaturate`, `TestTreeNodeDecodeSharesNoMemoryWithItsInput`.
+`TestTreeNodeStoresANegativeIDAsItsBits`, `TestTreeNodeTimesHaveNoZoneAndSaturate`,
+`TestTreeNodeDecodeSharesNoMemoryWithItsInput`.
