@@ -160,7 +160,7 @@ func TestChunkWriterReleasesBuffersOnErrors(t *testing.T) {
 
 // TestChunkBufsReuseByCapacity pins the pool itself: a buffer is less than
 // twice its chunk, a released one serves the next chunk of its class, and a
-// buffer the pool did not hand out is not taken in.
+// buffer of no class is not taken in, and a put does not allocate.
 func TestChunkBufsReuseByCapacity(t *testing.T) {
 	p := new(chunkBufs)
 	for size, wantCap := range map[int]int{0: 1, 1: 1, 2: 2, 3: 4, 1000: 1024, 1024: 1024, 1025: 2048} {
@@ -183,6 +183,11 @@ func TestChunkBufsReuseByCapacity(t *testing.T) {
 	}
 	if !reused {
 		t.Error("a released buffer never came back for a chunk of its class")
+	}
+
+	warm := p.get(600)
+	if n := testing.AllocsPerRun(100, func() { p.put(warm); warm = p.get(600) }); n > 0 {
+		t.Errorf("a get and put cycle allocates %v times", n)
 	}
 
 	foreign := make([]byte, 600)

@@ -39,21 +39,35 @@ type chunkWriter struct {
 // flight and raised the peak memory by 45%.
 type chunkBufs struct {
 	pools [bits.UintSize]sync.Pool
+	// heads recycles the *[]byte a pool stores, so a put does not allocate
+	// a slice header of its own.
+	heads sync.Pool
 }
 
 func (p *chunkBufs) get(size int) []byte {
 	class := bits.Len(uint(max(size, 1) - 1))
-	if b, ok := p.pools[class].Get().(*[]byte); ok {
-		return (*b)[:size]
+	if h, ok := p.pools[class].Get().(*[]byte); ok {
+		b := (*h)[:size]
+		*h = nil
+		p.heads.Put(h)
+		return b
 	}
 	return make([]byte, size, 1<<class)
 }
 
-// put takes b back. A buffer that is not from get is left to the collector.
+// put takes b back. b must come from get and nothing may read it afterwards:
+// any buffer with a power-of-two capacity is pooled, whatever made it.
 func (p *chunkBufs) put(b []byte) {
-	if c := uint(cap(b)); bits.OnesCount(c) == 1 {
-		p.pools[bits.TrailingZeros(c)].Put(&b)
+	c := uint(cap(b))
+	if bits.OnesCount(c) != 1 {
+		return
 	}
+	h, ok := p.heads.Get().(*[]byte)
+	if !ok {
+		h = new([]byte)
+	}
+	*h = b
+	p.pools[bits.TrailingZeros(c)].Put(h)
 }
 
 // pooled makes w the owner of the chunk buffers: the chunkers w.chunker
