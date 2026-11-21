@@ -62,6 +62,10 @@ const (
 // The JSON tags are a convenience for callers that log or print entries. They
 // are not the repository wire format; the tree entry type owns that.
 type FileInfo struct {
+	// Path is slash-separated and relative to the root of the source. It
+	// carries the raw bytes of each name, which need not be valid UTF-8; so
+	// do LinkDest and the Xattrs keys. Encoding FileInfo as JSON replaces
+	// such bytes with U+FFFD.
 	Path string `json:"path"`
 	Size int64  `json:"size"`
 	// Mode is the permission bits plus [os.ModeSetuid], [os.ModeSetgid] and
