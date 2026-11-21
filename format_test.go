@@ -433,7 +433,8 @@ func TestImportRefusesAnEntryBeforeItReadsIt(t *testing.T) {
 					h.Typeflag = tar.TypeSymlink
 				case ark.FileTypeHardlink:
 					h.Typeflag = tar.TypeLink
-				case ark.FileTypeRegular, ark.FileTypeUnsupported:
+				case ark.FileTypeRegular, ark.FileTypeFifo, ark.FileTypeCharDevice, ark.FileTypeBlockDevice,
+					ark.FileTypeUnsupported:
 					h.Typeflag = tar.TypeReg
 				}
 				write(h, strings.Repeat("x", int(e.Size)))

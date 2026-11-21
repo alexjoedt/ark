@@ -169,7 +169,8 @@ func (s *SnapshotFS) Open(name string) (fs.File, error) {
 		return &dirFile{fsys: s, e: e}, nil
 	case FileTypeSymlink:
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
-	case FileTypeRegular, FileTypeHardlink, FileTypeUnsupported:
+	case FileTypeRegular, FileTypeHardlink, FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice,
+		FileTypeUnsupported:
 	}
 	c := &content{rd: s.rd, chunks: e.chunks}
 	return &file{sr: io.NewSectionReader(c, 0, e.size), e: e}, nil
@@ -271,7 +272,7 @@ func (s *SnapshotFS) complete(name string, te treeEntry) (*fsEntry, error) {
 			return nil, fmt.Errorf("hardlink %s to %s: %w", name, te.LinkDest, err)
 		}
 		e.size, e.chunks = target.Size, target.Chunks
-	case FileTypeRegular, FileTypeUnsupported:
+	case FileTypeRegular, FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice, FileTypeUnsupported:
 	}
 	return e, nil
 }
@@ -337,7 +338,8 @@ func (e *fsEntry) Mode() fs.FileMode {
 		m |= fs.ModeDir
 	case FileTypeSymlink:
 		m |= fs.ModeSymlink
-	case FileTypeRegular, FileTypeHardlink, FileTypeUnsupported:
+	case FileTypeRegular, FileTypeHardlink, FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice,
+		FileTypeUnsupported:
 	}
 	return m
 }

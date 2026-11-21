@@ -293,7 +293,11 @@ func (r *Repository) Restore(
 	if err != nil {
 		return nil, err
 	}
-	return &RestoreResult{FilesRestored: stats.FilesRestored, BytesRestored: stats.BytesRestored}, nil
+	return &RestoreResult{
+		FilesRestored: stats.FilesRestored,
+		BytesRestored: stats.BytesRestored,
+		Skipped:       stats.Skipped,
+	}, nil
 }
 
 // resolveID turns a full snapshot ID or a unique prefix into the full ID,

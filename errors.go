@@ -41,6 +41,12 @@ var (
 	// Sink type that is incompatible with the snapshot's SourceType.
 	ErrIncompatibleSourceType = errors.New("ark: incompatible source type")
 
+	// ErrEntrySkipped is wrapped by a Sink that leaves out an entry without
+	// content it cannot create, such as a device node without the privilege
+	// to make one. Restore goes on and lists the entry in
+	// RestoreResult.Skipped.
+	ErrEntrySkipped = errors.New("ark: entry skipped")
+
 	// ErrCorruptManifest is returned when a snapshot manifest does not
 	// authenticate: it was changed, truncated or moved from another snapshot.
 	// Snapshots, Prune and a Forget policy fail while one exists; remove it

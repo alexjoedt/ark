@@ -138,6 +138,17 @@ func (s *fileSink) Receive(_ context.Context, entry ark.FileInfo, r io.Reader) e
 			}
 		}
 
+	case ark.FileTypeFifo, ark.FileTypeCharDevice, ark.FileTypeBlockDevice:
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return fmt.Errorf("arkfs: mkdir parent of %s: %w", target, err)
+		}
+		_ = os.Remove(target) // remove stale entry if present
+		if err := makeNode(target, entry); err != nil {
+			return err
+		}
+		_ = os.Chmod(target, setOwner(target, entry.UID, entry.GID, entry.Mode))
+		_ = os.Chtimes(target, entry.ModTime, entry.ModTime)
+
 	case ark.FileTypeUnsupported:
 		// The core drops these during backup; nothing reaches a sink.
 	}

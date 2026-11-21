@@ -41,11 +41,11 @@ func nodeEntries() []treeEntry {
 	symlink.LinkDest = "../a/\xff"
 	hardlink := base("hardlink", FileTypeHardlink)
 	hardlink.LinkDest = "dir/file"
-	chardev := base("chardev", fileTypeCharDevice)
+	chardev := base("chardev", FileTypeCharDevice)
 	chardev.DevMajor, chardev.DevMinor = 1, 3
-	blockdev := base("blockdev", fileTypeBlockDevice)
+	blockdev := base("blockdev", FileTypeBlockDevice)
 	blockdev.DevMajor, blockdev.DevMinor = 259, 1<<20
-	return []treeEntry{file, empty, dir, symlink, hardlink, base("fifo", fileTypeFifo), chardev, blockdev}
+	return []treeEntry{file, empty, dir, symlink, hardlink, base("fifo", FileTypeFifo), chardev, blockdev}
 }
 
 // fullNode holds every entry of nodeEntries plain and with ctime and xattrs.
@@ -125,7 +125,7 @@ func TestTreeNodeLayout(t *testing.T) {
 			Size: 65536, Chunks: []chunkRef{{ID: nodeID(0x11), Length: 65536}},
 			Xattrs: map[string][]byte{"user.k": []byte("v")},
 		},
-		{Name: "b", Type: fileTypeCharDevice, Mode: 0o600, ModTime: time.Unix(0, 0).UTC(), DevMajor: 1, DevMinor: 3},
+		{Name: "b", Type: FileTypeCharDevice, Mode: 0o600, ModTime: time.Unix(0, 0).UTC(), DevMajor: 1, DevMinor: 3},
 	}}
 	if got := mustEncodeNode(t, node); !bytes.Equal(got, stored) {
 		t.Errorf("encoded:\n got %x\nwant %x", got, stored)
@@ -367,7 +367,7 @@ func TestTreeNodeEncodeRefuses(t *testing.T) {
 	fifos := func(names ...string) *treeNode {
 		node := &treeNode{}
 		for _, name := range names {
-			node.Entries = append(node.Entries, treeEntry{Name: name, Type: fileTypeFifo})
+			node.Entries = append(node.Entries, treeEntry{Name: name, Type: FileTypeFifo})
 		}
 		return node
 	}
@@ -395,7 +395,7 @@ func TestTreeNodeEncodeRefuses(t *testing.T) {
 		}),
 		"file with a tree hash":     file(func(e *treeEntry) { e.TreeHash = nodeID(1) }),
 		"file with a link target":   file(func(e *treeEntry) { e.LinkDest = "x" }),
-		"fifo with a device":        file(func(e *treeEntry) { e.Type, e.DevMinor = fileTypeFifo, 1 }),
+		"fifo with a device":        file(func(e *treeEntry) { e.Type, e.DevMinor = FileTypeFifo, 1 }),
 		"symlink without a target":  file(func(e *treeEntry) { e.Type = FileTypeSymlink }),
 		"hardlink without a target": file(func(e *treeEntry) { e.Type = FileTypeHardlink }),
 		"size above the chunks": file(func(e *treeEntry) {
@@ -436,7 +436,7 @@ func TestTreeNodeStoresANegativeIDAsItsBits(t *testing.T) {
 	t.Parallel()
 	entry := func(uid, gid int) *treeNode {
 		return &treeNode{Entries: []treeEntry{
-			{Name: "a", Type: fileTypeFifo, ModTime: time.Unix(0, 0), UID: uid, GID: gid},
+			{Name: "a", Type: FileTypeFifo, ModTime: time.Unix(0, 0), UID: uid, GID: gid},
 		}}
 	}
 	stored := mustEncodeNode(t, entry(-1, math.MinInt32))
@@ -455,7 +455,7 @@ func TestTreeNodeStoresANegativeIDAsItsBits(t *testing.T) {
 func TestTreeNodeTimesHaveNoZoneAndSaturate(t *testing.T) {
 	t.Parallel()
 	entry := func(mtime, ctime time.Time) *treeNode {
-		return &treeNode{Entries: []treeEntry{{Name: "a", Type: fileTypeFifo, ModTime: mtime, ChangeTime: ctime}}}
+		return &treeNode{Entries: []treeEntry{{Name: "a", Type: FileTypeFifo, ModTime: mtime, ChangeTime: ctime}}}
 	}
 	tokyo := time.FixedZone("JST", 9*60*60)
 	utc := mustEncodeNode(t, entry(nodeMTime, nodeCTime))

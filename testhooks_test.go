@@ -234,12 +234,12 @@ func RetypeEntry(ctx context.Context, r *Repository, id SnapshotID, name string,
 	// to change. The head has to be in the node once: the same bytes in a
 	// chunk id, a link target or an xattr of another entry would be patched
 	// in its place.
-	node.Entries[i] = treeEntry{Name: name, Type: fileTypeFifo}
+	node.Entries[i] = treeEntry{Name: name, Type: FileTypeFifo}
 	data, err := encodeTreeNode(node)
 	if err != nil {
 		return err
 	}
-	head := append(appendNodeBytes(nil, name), byte(slices.Index(nodeTypes[:], fileTypeFifo)))
+	head := append(appendNodeBytes(nil, name), byte(slices.Index(nodeTypes[:], FileTypeFifo)))
 	if n := bytes.Count(data, head); n != 1 {
 		return fmt.Errorf("the head of entry %s is in its node %d times, want once", name, n)
 	}

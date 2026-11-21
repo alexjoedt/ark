@@ -132,6 +132,8 @@ func (r *Repository) runExport(ctx context.Context, snapshotID SnapshotID, w io.
 			if _, err := io.Copy(tw, entry.stream); err != nil {
 				return fmt.Errorf("export: failed to write chunk data for %s: %w", fe.Path, err)
 			}
+		case FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice:
+			return fmt.Errorf("export: %s is a %s, which an export does not carry yet", fe.Path, fe.Type)
 		case FileTypeUnsupported:
 			// Never stored, so never exported.
 		}
@@ -237,7 +239,7 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader, session *p
 				stats.DirCount++
 			case FileTypeHardlink:
 				stats.FileCount++
-			case FileTypeSymlink, FileTypeUnsupported:
+			case FileTypeSymlink, FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice, FileTypeUnsupported:
 			}
 			collectedEntries = append(collectedEntries, fe)
 		}

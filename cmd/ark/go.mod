@@ -10,6 +10,7 @@ require (
 	github.com/moby/moby/api v1.57.0
 	github.com/moby/moby/client v0.6.3
 	github.com/urfave/cli/v3 v3.14.0
+	golang.org/x/sys v0.50.0
 	golang.org/x/term v0.48.0
 )
 
@@ -38,7 +39,6 @@ require (
 	go.opentelemetry.io/otel/metric v1.47.0 // indirect
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	golang.org/x/crypto v0.59.0 // indirect
-	golang.org/x/sys v0.50.0 // indirect
 )
 
 // Published before the API and the on-disk format had settled; v0.x is the

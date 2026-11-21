@@ -153,6 +153,10 @@ The complete program is
 - **Modification time.** A zero `ModTime` means unknown. Such a file never counts as unchanged and
   is read on every backup. Set `ModTime`, and `ChangeTime` and `Inode` where the medium has them,
   if unchanged files should be skipped.
+- **Special files.** Yield a fifo as `ark.FileTypeFifo` and a device node as
+  `ark.FileTypeCharDevice` or `ark.FileTypeBlockDevice` with `DevMajor` and `DevMinor`, all with
+  open `nil`. Yield anything else the format doesn't model, such as a socket, as
+  `ark.FileTypeUnsupported`: the backup leaves it out and counts it in `SnapshotStats.Skipped`.
 - **Source type.** `Meta` returns your own `ark.SourceType`, a string that is stored with the
   snapshot. Sinks use it to reject snapshots they can't restore.
 
@@ -228,8 +232,9 @@ func (s *zipSink) Receive(_ context.Context, e ark.FileInfo, r io.Reader) error 
 		}
 		_, err = io.Copy(w, r)
 		return err
-	case ark.FileTypeSymlink, ark.FileTypeHardlink, ark.FileTypeUnsupported:
-		// Links are left out of the archive.
+	case ark.FileTypeSymlink, ark.FileTypeHardlink, ark.FileTypeFifo, ark.FileTypeCharDevice,
+		ark.FileTypeBlockDevice, ark.FileTypeUnsupported:
+		// Links, fifos and devices are left out of the archive.
 	}
 	return nil
 }
@@ -255,10 +260,14 @@ The complete program is
 | Method | Called | Rule |
 |---|---|---|
 | `Open` | once, before any entry | reject a source type the sink can't restore with an error that wraps `ark.ErrIncompatibleSourceType` |
-| `Receive` | once per entry | read a regular file's reader to the end; the reader is `nil` for every other type |
+| `Receive` | once per entry | read a regular file's reader to the end; the reader is `nil` for every other type; return an error that wraps `ark.ErrEntrySkipped` for a fifo or device node the sink can't create |
 | `Close` | once after a successful `Open` | also runs after a failed `Receive` or a cancelled restore; doesn't run when `Open` fails or the restore fails before `Open` |
 
 Entries arrive in walk order: parents before children, and a hardlink after its target.
+
+An entry skipped with `ark.ErrEntrySkipped` doesn't fail the restore: `RestoreResult.Skipped`
+lists one error per such entry, and every other entry is restored. `arkfs` skips a device node this
+way when the restore runs without the privilege to create one.
 
 ## Test your source and sink
 

@@ -58,10 +58,17 @@ func (s *dockerVolumeSink) Open(ctx context.Context, meta ark.SourceMeta) error 
 }
 
 // Receive writes one filesystem entry into the tar stream. Unsupported
-// entries never reach a sink, the core drops them during backup.
+// entries never reach a sink, the core drops them during backup. A fifo or a
+// device node is skipped with ark.ErrEntrySkipped: the volume stream does not
+// carry them.
 func (s *dockerVolumeSink) Receive(_ context.Context, entry ark.FileInfo, r io.Reader) error {
-	if entry.Type == ark.FileTypeUnsupported {
+	switch entry.Type {
+	case ark.FileTypeUnsupported:
 		return nil
+	case ark.FileTypeFifo, ark.FileTypeCharDevice, ark.FileTypeBlockDevice:
+		return fmt.Errorf("arkdocker: a volume stream does not carry the %s %s (%w)",
+			entry.Type, entry.Path, ark.ErrEntrySkipped)
+	case ark.FileTypeRegular, ark.FileTypeDirectory, ark.FileTypeSymlink, ark.FileTypeHardlink:
 	}
 	hdr := fileInfoToTarHeader(entry)
 	if err := s.tw.WriteHeader(hdr); err != nil {
@@ -109,7 +116,8 @@ func fileInfoToTarHeader(fi ark.FileInfo) *tar.Header {
 		// to the sink after their target.
 		hdr.Typeflag = tar.TypeLink
 		hdr.Linkname = fi.LinkDest
-	case ark.FileTypeRegular, ark.FileTypeUnsupported:
+	case ark.FileTypeRegular, ark.FileTypeFifo, ark.FileTypeCharDevice, ark.FileTypeBlockDevice,
+		ark.FileTypeUnsupported:
 		hdr.Typeflag = tar.TypeReg
 		hdr.Size = fi.Size
 	}

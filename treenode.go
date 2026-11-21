@@ -50,15 +50,6 @@ const (
 	nodeFlagXattrs
 )
 
-// The file types a tree node holds beside the exported ones. They are untyped
-// so that the switches over FileType, none of which handles them yet, stay
-// exhaustive.
-const (
-	fileTypeFifo        = "fifo"
-	fileTypeCharDevice  = "chardev"
-	fileTypeBlockDevice = "blockdev"
-)
-
 // nodeTypes maps the type byte of a stored entry to its FileType. Zero is no
 // type.
 var nodeTypes = [...]FileType{
@@ -66,9 +57,9 @@ var nodeTypes = [...]FileType{
 	2: FileTypeDirectory,
 	3: FileTypeSymlink,
 	4: FileTypeHardlink,
-	5: fileTypeFifo,
-	6: fileTypeCharDevice,
-	7: fileTypeBlockDevice,
+	5: FileTypeFifo,
+	6: FileTypeCharDevice,
+	7: FileTypeBlockDevice,
 }
 
 // The fewest bytes an entry, a chunk ref and an xattr take. A count is
@@ -153,7 +144,7 @@ func appendTreeEntry(b []byte, e *treeEntry) ([]byte, error) {
 	uid, uidOK := id32(e.UID)
 	gid, gidOK := id32(e.GID)
 	isLink := e.Type == FileTypeSymlink || e.Type == FileTypeHardlink
-	isDev := e.Type == fileTypeCharDevice || e.Type == fileTypeBlockDevice
+	isDev := e.Type == FileTypeCharDevice || e.Type == FileTypeBlockDevice
 	switch {
 	case !nodeName(e.Name):
 		return nil, errors.New(`the name is empty, ".", ".." or holds a slash or a NUL`)
@@ -406,10 +397,10 @@ func (r *nodeReader) entry(e *treeEntry) {
 		if e.LinkDest = r.string(); r.err == nil && e.LinkDest == "" {
 			r.corruptf("the link %q has no target", e.Name)
 		}
-	case fileTypeCharDevice, fileTypeBlockDevice:
+	case FileTypeCharDevice, FileTypeBlockDevice:
 		e.DevMajor = r.uint32("device major")
 		e.DevMinor = r.uint32("device minor")
-	case fileTypeFifo, FileTypeUnsupported:
+	case FileTypeFifo, FileTypeUnsupported:
 		// Nothing follows.
 	}
 	if flags&nodeFlagXattrs != 0 {

@@ -261,6 +261,10 @@ func WithRestoreCache(bytes int64) RestoreOption {
 type RestoreResult struct {
 	FilesRestored int
 	BytesRestored int64
+	// Skipped holds one error per entry the sink left out with an error
+	// wrapping ErrEntrySkipped, in restore order. Each names the entry's
+	// path; the restore of every other entry went on.
+	Skipped []error
 }
 
 // PruneResult is returned by Prune. A dry run fills it with what the same

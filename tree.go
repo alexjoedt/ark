@@ -104,6 +104,8 @@ func (e treeEntry) fileInfo(path string) FileInfo {
 
 		ChangeTime: e.ChangeTime,
 		Inode:      e.Inode,
+		DevMajor:   e.DevMajor,
+		DevMinor:   e.DevMinor,
 	}
 }
 
@@ -156,10 +158,16 @@ func (s sourcePaths) add(fi FileInfo) error {
 	return nil
 }
 
-// storedType reports whether t is a file type the readers of a tree handle.
-// The node format also holds fifos and devices, which no reader does yet.
+// storedType reports whether a tree stores an entry of type t; a backup drops
+// the others.
 func storedType(t FileType) bool {
-	return t == FileTypeRegular || t == FileTypeDirectory || t == FileTypeSymlink || t == FileTypeHardlink
+	switch t {
+	case FileTypeRegular, FileTypeDirectory, FileTypeSymlink, FileTypeHardlink,
+		FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice:
+		return true
+	case FileTypeUnsupported:
+	}
+	return false
 }
 
 func loadTreeNode(ctx context.Context, trees *objectStore, hash string) (*treeNode, error) {
@@ -170,15 +178,6 @@ func loadTreeNode(ctx context.Context, trees *objectStore, hash string) (*treeNo
 	node, err := decodeTreeNode(data)
 	if err != nil {
 		return nil, fmt.Errorf("tree: node %s: %w", hash, err)
-	}
-	// Every reader of a tree loads its nodes here, so none of them meets a
-	// type it would have to skip: a restore that leaves the entry out and a
-	// prune that counts it as holding nothing are both wrong.
-	for i := range node.Entries {
-		if e := &node.Entries[i]; !storedType(e.Type) {
-			return nil, fmt.Errorf("%w: node %s: %q has the file type %q, which this build does not know",
-				ErrUnsupportedFormat, hash, e.Name, e.Type)
-		}
 	}
 	return node, nil
 }
@@ -341,7 +340,9 @@ func newTreeEntry(child fileEntry, hashes map[string]string) (treeEntry, error) 
 		te.Size = refsSize(child.Chunks)
 	case FileTypeSymlink, FileTypeHardlink:
 		te.LinkDest = child.LinkDest
-	case FileTypeDirectory, FileTypeUnsupported:
+	case FileTypeCharDevice, FileTypeBlockDevice:
+		te.DevMajor, te.DevMinor = child.DevMajor, child.DevMinor
+	case FileTypeDirectory, FileTypeFifo, FileTypeUnsupported:
 	}
 	if child.Type == FileTypeDirectory {
 		hash, ok := hashes[norm]
@@ -454,7 +455,7 @@ func visitTreeEntry(
 		}
 		return walkTreeWithPrefix(load, e.TreeHash, fullPath, filter, fn)
 
-	case FileTypeSymlink, FileTypeHardlink:
+	case FileTypeSymlink, FileTypeHardlink, FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice:
 		if !filter.keep(fullPath) {
 			return nil
 		}
@@ -467,7 +468,7 @@ func visitTreeEntry(
 		return fn(fileEntry{FileInfo: info, Chunks: e.Chunks})
 
 	case FileTypeUnsupported:
-		// Never stored, and loadTreeNode refuses a node that holds one.
+		// Never stored: no type byte stands for it.
 	}
 	return nil
 }

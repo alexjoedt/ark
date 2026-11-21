@@ -146,6 +146,9 @@ ark restore [options] <id> <dest>
 Restores a snapshot into `<dest>`. The directory is created if missing. Existing files are
 overwritten.
 
+A device node needs the privilege to create one, usually root. Without it the restore skips each
+device with a warning on stderr, restores everything else, and exits 0.
+
 | Flag | Meaning |
 |---|---|
 | `--path PREFIX`, `-p` | restore only the entries under PREFIX; repeatable |

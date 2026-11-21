@@ -3,9 +3,15 @@
 package arkfs
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
+
+	"github.com/alexjoedt/ark"
 )
 
 func fileOwner(fi os.FileInfo) (uid, gid int) {
@@ -48,6 +54,41 @@ func fileID(fi os.FileInfo) (inodeKey, uint64, bool) {
 	//nolint:unconvert // field widths differ per platform
 	dev, ino, nlink := uint64(stat.Dev), uint64(stat.Ino), uint64(stat.Nlink)
 	return inodeKey{dev: dev, ino: ino}, nlink, true
+}
+
+// deviceNumbers returns the major and minor number of the device node fi.
+func deviceNumbers(fi os.FileInfo) (major, minor uint32) {
+	stat, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, 0
+	}
+	dev := uint64(stat.Rdev) //nolint:unconvert // int32 on darwin, its low bits are the number
+	return unix.Major(dev), unix.Minor(dev)
+}
+
+// makeNode creates the fifo or device node of entry at path. A device without
+// the privilege to make one is ark.ErrEntrySkipped.
+func makeNode(path string, entry ark.FileInfo) error {
+	perm := uint32(entry.Mode.Perm())
+	if entry.Type == ark.FileTypeFifo {
+		if err := unix.Mkfifo(path, perm); err != nil {
+			return fmt.Errorf("arkfs: create the fifo %s: %w", path, err)
+		}
+		return nil
+	}
+	kind := uint32(unix.S_IFBLK)
+	if entry.Type == ark.FileTypeCharDevice {
+		kind = unix.S_IFCHR
+	}
+	dev := int(unix.Mkdev(entry.DevMajor, entry.DevMinor))
+	err := unix.Mknod(path, kind|perm, dev)
+	if errors.Is(err, unix.EPERM) {
+		return fmt.Errorf("arkfs: create the %s %s: %w (%w)", entry.Type, path, err, ark.ErrEntrySkipped)
+	}
+	if err != nil {
+		return fmt.Errorf("arkfs: create the %s %s: %w", entry.Type, path, err)
+	}
+	return nil
 }
 
 // changeID returns the ctime and inode number of fi, which a backup compares

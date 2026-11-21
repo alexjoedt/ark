@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"maps"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -176,7 +177,9 @@ func TestXattrsSurviveTheRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSpecialFilesAreSkippedAndCounted(t *testing.T) {
+// A socket is the one file type the format does not model: the backup drops
+// and counts it. A fifo beside it is stored and restored.
+func TestSocketsAreSkippedAndCounted(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "keep.txt"), []byte("keep"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -184,6 +187,11 @@ func TestSpecialFilesAreSkippedAndCounted(t *testing.T) {
 	if err := unix.Mkfifo(filepath.Join(root, "pipe"), 0o644); err != nil {
 		t.Skipf("fifos unsupported here: %v", err)
 	}
+	l, err := net.Listen("unix", filepath.Join(root, "sock"))
+	if err != nil {
+		t.Skipf("unix sockets unsupported here: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
 
 	repo, snap, dst := roundTrip(t, root)
 
@@ -193,11 +201,18 @@ func TestSpecialFilesAreSkippedAndCounted(t *testing.T) {
 	if snap.Stats.FileCount != 1 {
 		t.Errorf("stats count %d files, want 1, the fifo is not one", snap.Stats.FileCount)
 	}
-	if _, ok := entriesOf(t, repo, snap.ID)["pipe"]; ok {
-		t.Error("the fifo made it into the snapshot tree")
+	entries := entriesOf(t, repo, snap.ID)
+	if _, ok := entries["sock"]; ok {
+		t.Error("the socket made it into the snapshot tree")
 	}
-	if _, err := os.Lstat(filepath.Join(dst, "pipe")); !os.IsNotExist(err) {
-		t.Errorf("restore recreated the fifo: %v", err)
+	if e := entries["pipe"]; e.Type != ark.FileTypeFifo {
+		t.Errorf("the fifo is in the snapshot as %q, want %q", e.Type, ark.FileTypeFifo)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "sock")); !os.IsNotExist(err) {
+		t.Errorf("restore recreated the socket: %v", err)
+	}
+	if fi, err := os.Lstat(filepath.Join(dst, "pipe")); err != nil || fi.Mode().Type() != os.ModeNamedPipe {
+		t.Errorf("restore did not recreate the fifo: %v", err)
 	}
 }
 

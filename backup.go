@@ -116,7 +116,7 @@ func (r *Repository) runBackup(
 		case FileTypeDirectory:
 			stats.DirCount++
 
-		case FileTypeSymlink:
+		case FileTypeSymlink, FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice:
 			// no extra stats
 
 		case FileTypeHardlink:
@@ -172,8 +172,8 @@ func (r *Repository) runBackup(
 			}
 
 		case FileTypeUnsupported:
-			// Devices, fifos, sockets: the v1 format does not model them.
-			// Drop the entry and count it.
+			// Sockets and the like: the format does not model them. Drop
+			// the entry and count it.
 			stats.Skipped++
 			return nil
 

@@ -84,6 +84,9 @@ func restoreCommand() *cli.Command {
 			pr.Done(out.R("files", "%s", out.Count(res.FilesRestored)),
 				out.R("size", "%s", out.Bytes(res.BytesRestored)),
 				out.R("into", "%s", dest))
+			for _, err := range res.Skipped {
+				p.Warnf("%v", err)
+			}
 
 			if p.Mode().JSON {
 				return p.JSON(map[string]any{

@@ -56,8 +56,9 @@ func (s *zipSink) Receive(_ context.Context, e ark.FileInfo, r io.Reader) error 
 		}
 		_, err = io.Copy(w, r)
 		return err
-	case ark.FileTypeSymlink, ark.FileTypeHardlink, ark.FileTypeUnsupported:
-		// Links are left out of the archive.
+	case ark.FileTypeSymlink, ark.FileTypeHardlink, ark.FileTypeFifo, ark.FileTypeCharDevice,
+		ark.FileTypeBlockDevice, ark.FileTypeUnsupported:
+		// Links, fifos and devices are left out of the archive.
 	}
 	return nil
 }

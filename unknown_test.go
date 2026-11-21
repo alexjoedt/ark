@@ -86,9 +86,8 @@ func readers(repo *ark.Repository, id ark.SnapshotID) map[string]func(context.Co
 // entry holding nothing would delete what it references.
 func TestUnknownFileTypeFailsEveryReader(t *testing.T) {
 	ctx := context.Background()
-	// 8 is a type no build writes yet. A fifo decodes, and no reader of this
-	// build handles one.
-	for typ, want := range map[byte]string{8: "file type 8", 5: `file type "fifo"`} {
+	// 8 is a type no build writes yet.
+	for typ, want := range map[byte]string{8: "file type 8"} {
 		b := arkmem.New()
 		repo, id := backupFixture(t, b)
 		if err := ark.RetypeEntry(ctx, repo, id, "zeta.txt", typ); err != nil {
