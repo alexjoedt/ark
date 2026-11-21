@@ -33,7 +33,8 @@ func TestCopyFallbackSetsTheOwnerBeforeTheMode(t *testing.T) {
 
 // TestSinkDropsSetuidAndSetgidWithoutTheOwner: an unprivileged restore cannot
 // give an entry to another user, and a setuid file left behind would run as
-// whoever restored it. The sticky bit names no owner and stays.
+// whoever restored it. The sticky bit names no owner and stays, and a
+// directory keeps all three: nothing runs as it.
 func TestSinkDropsSetuidAndSetgidWithoutTheOwner(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root can set any owner")
@@ -59,7 +60,7 @@ func TestSinkDropsSetuidAndSetgidWithoutTheOwner(t *testing.T) {
 	if err := sink.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	for name, want := range map[string]os.FileMode{"dir": os.ModeSticky | 0o775, "file": 0o755} {
+	for name, want := range map[string]os.FileMode{"dir": special | 0o775, "file": 0o755} {
 		fi, err := os.Lstat(filepath.Join(root, name))
 		if err != nil {
 			t.Fatalf("lstat: %v", err)
