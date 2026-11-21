@@ -186,8 +186,7 @@ var errStopList = errors.New("stop listing")
 // was changed, or the key file belongs to another repository. The config's
 // unauthenticated id only tells the two apart, so a foreign key yields to a
 // key file that failed to open (ErrWrongPassword), a changed config does not.
-// A key that opens without a binding predates format version 2 and is
-// ErrUnsupportedFormat.
+// A key that opens without a binding is ErrCorruptConfig too.
 func loadMasterKey(
 	ctx context.Context,
 	b Backend,
@@ -323,8 +322,9 @@ func readKeyFile(ctx context.Context, b Backend, name string) (*keyFile, error) 
 // open unseals the master key of kf, the key file name, under pw. A key that
 // does not open is an error the caller reports as a wrong password: that and
 // a tampered key are indistinguishable by design. A key that opens under a
-// format byte this build does not know, or with a JSON key it does not know,
-// is ErrUnsupportedFormat.
+// format byte this build does not know, or does not decode into the master
+// key of this build, is ErrUnsupportedFormat: only a holder of the wrap key
+// can have sealed it.
 func (kf *keyFile) open(codec *objectCodec, name string, pw Password) (*masterKey, error) {
 	sealed, err := hex.DecodeString(kf.Key)
 	if err != nil {
@@ -342,7 +342,11 @@ func (kf *keyFile) open(codec *objectCodec, name string, pw Password) (*masterKe
 	}
 	var mk masterKey
 	if err := decodeStrict("the master key of key file "+name, blob, &mk); err != nil {
-		return nil, err
+		if errors.Is(err, ErrUnsupportedFormat) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: the master key of key file %s does not decode: %w", ErrUnsupportedFormat, name, err)
 	}
+	mk.Created = mk.Created.UTC()
 	return &mk, nil
 }

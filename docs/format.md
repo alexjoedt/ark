@@ -95,13 +95,17 @@ such an object and never reports it as damaged.
 | a key the reader has no field for | every JSON object on this page |
 | a `version` other than 1 | config, key file, manifest |
 | a `kdf` other than `argon2id` or `none` | key file |
+| with `argon2id`, a `time`, `memory`, or `threads` outside the range its row gives, or a `salt` that is empty or isn't hex | key file |
+| a `chunker` size below 1, a `min` above `avg`, or an `avg` above `max` | config |
 | a name in `required` | features |
 | a name that isn't 32 lowercase hex characters | manifest, once its tag verifies |
 
 - Keys match without regard to case, as Go's `encoding/json` does. A later version never adds a
   key that differs from an existing one only in case.
-- A config, key file, or features object whose value has another type, or that has data after
-  its JSON value, is `ErrUnsupportedFormat` too. Such a manifest is `ErrCorruptManifest`.
+- An object can also fail to decode: it isn't valid JSON, a value has another type, or data
+  follows its JSON value. A config, key file, master key, or features object like that is
+  `ErrUnsupportedFormat` too, the sealed ones once their tag verifies. Such a manifest is
+  `ErrCorruptManifest`. Such a lock is passed over, like one whose tag doesn't verify.
 - An object whose tag doesn't verify is damaged, not unsupported. It gets the error of its
   namespace, for example `ErrCorruptManifest`.
 - A lock that a reader refuses stops every operation that would take a lock. A lock whose tag
@@ -162,6 +166,9 @@ The JSON inside a key file's `key`. Every key file of a repository seals the sam
 | `config_hash` | string, 64 lowercase hex | no | the SHA-256 of the config bytes |
 | `created` | string, time | no | when the master key was made |
 | `label` | string | yes | free text; no build of version 1 writes it |
+
+A master key whose tag doesn't verify is `ErrWrongPassword`. One that opens with a `config_hash`
+that is empty or isn't the hash of the config bytes fails `Open` with `ErrCorruptConfig`.
 
 ### Manifest
 

@@ -255,6 +255,7 @@ func parseRepositoryConfig(data []byte) (repositoryConfig, error) {
 	if invalid := cfg.Chunker.validate(); invalid != nil {
 		return repositoryConfig{}, fmt.Errorf("%w: %w", ErrUnsupportedFormat, invalid)
 	}
+	cfg.CreatedAt = cfg.CreatedAt.UTC()
 	return cfg, nil
 }
 

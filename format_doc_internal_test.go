@@ -1,6 +1,7 @@
 package ark
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -55,7 +56,9 @@ func docKeys(t *testing.T) map[string]map[string]bool {
 
 // TestFormatPageNamesEveryJSONKey fails when a stored JSON object has a key
 // docs/format.md does not name, names a key the code does not have, or marks
-// a key optional that the code always writes, or the other way round.
+// a key optional that the code always writes, or the other way round. An
+// object nested in a field, also behind a pointer, slice, array or map, needs
+// a section of its own. The Type column of the page is not compared.
 func TestFormatPageNamesEveryJSONKey(t *testing.T) {
 	documented := docKeys(t)
 	known := map[reflect.Type]bool{}
@@ -78,6 +81,9 @@ func TestFormatPageNamesEveryJSONKey(t *testing.T) {
 			}
 			code[name] = slices.Contains(strings.Split(opts, ","), "omitempty")
 			ft := f.Type
+			for slices.Contains([]reflect.Kind{reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map}, ft.Kind()) {
+				ft = ft.Elem()
+			}
 			if ft.Kind() == reflect.Struct && ft != reflect.TypeFor[time.Time]() && !known[ft] {
 				t.Errorf("%s.%s is the object %s, which no section of docs/format.md describes",
 					typ.Name(), f.Name, ft.Name())
@@ -185,4 +191,89 @@ func TestJSONObjectsStoreTimesInUTC(t *testing.T) {
 			t.Errorf("%s %s is %s, want a time in UTC", tc.object, tc.key, at)
 		}
 	}
+}
+
+// TestReadersKeepNoZone pins the reader rule of docs/format.md: a time stored
+// with an offset is the same instant, and the reader hands it on in UTC.
+func TestReadersKeepNoZone(t *testing.T) {
+	ctx := context.Background()
+	zone := time.FixedZone("UTC+5", 5*60*60)
+	at := time.Date(2026, 11, 21, 23, 35, 7, 0, zone)
+	b := newStubBackend()
+	if err := Init(ctx, b, NoPassword()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	repo, err := Open(ctx, b, NoPassword())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer repo.Close()
+	snap, err := repo.Backup(ctx, NewStreamSource("f", strings.NewReader("content")))
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	check := func(object string, got time.Time) {
+		t.Helper()
+		if !got.Equal(at) || got.Location() != time.UTC {
+			t.Errorf("%s time = %v, want %v in UTC", object, got, at.UTC())
+		}
+	}
+
+	m, err := repo.loadManifest(ctx, snap.ID)
+	if err != nil {
+		t.Fatalf("loadManifest: %v", err)
+	}
+	m.CreatedAt = at
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal the manifest: %v", err)
+	}
+	if !bytes.Contains(data, []byte("+05:00")) {
+		t.Fatalf("the manifest %s carries no offset", data)
+	}
+	if err := repo.putSealed(ctx, Handle{Type: SnapshotFile, Name: string(snap.ID)}, data); err != nil {
+		t.Fatalf("store the manifest: %v", err)
+	}
+	if m, err = repo.loadManifest(ctx, snap.ID); err != nil {
+		t.Fatalf("loadManifest: %v", err)
+	}
+	check("manifest", m.CreatedAt)
+
+	if err := repo.putLock(ctx, "lock", lockObject{Time: at}); err != nil {
+		t.Fatalf("putLock: %v", err)
+	}
+	l, err := repo.loadLock(ctx, "lock")
+	if err != nil {
+		t.Fatalf("loadLock: %v", err)
+	}
+	check("lock", l.Time)
+
+	if data, err = readRepositoryConfig(ctx, b); err != nil {
+		t.Fatalf("readRepositoryConfig: %v", err)
+	}
+	cfg, err := parseRepositoryConfig(data)
+	if err != nil {
+		t.Fatalf("parseRepositoryConfig: %v", err)
+	}
+	cfg.CreatedAt = at
+	if data, err = json.Marshal(cfg); err != nil {
+		t.Fatalf("marshal the config: %v", err)
+	}
+	if cfg, err = parseRepositoryConfig(data); err != nil {
+		t.Fatalf("parseRepositoryConfig: %v", err)
+	}
+	check("config", cfg.CreatedAt)
+
+	key := *repo.key
+	key.Created = at
+	if data, err = json.Marshal(key); err != nil {
+		t.Fatalf("marshal the master key: %v", err)
+	}
+	resealMasterKey(t, b, repo, data)
+	again, err := Open(ctx, b, NoPassword())
+	if err != nil {
+		t.Fatalf("Open with the resealed key: %v", err)
+	}
+	defer again.Close()
+	check("master key", again.key.Created)
 }

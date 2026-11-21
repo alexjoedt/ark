@@ -234,6 +234,7 @@ func (r *Repository) loadLock(ctx context.Context, name string) (lockObject, err
 		}
 		return lockObject{}, fmt.Errorf("lock: failed to parse %s: %w", name, err)
 	}
+	l.Time = l.Time.UTC()
 	return l, nil
 }
 

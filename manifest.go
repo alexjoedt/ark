@@ -233,6 +233,7 @@ func (r *Repository) loadManifest(ctx context.Context, id SnapshotID) (*manifest
 		return nil, fmt.Errorf("snapshot %s: %w: manifest has version %d, this build reads version %d",
 			id, ErrUnsupportedFormat, m.Version, manifestVersion)
 	}
+	m.CreatedAt = m.CreatedAt.UTC()
 	return &m, nil
 }
 

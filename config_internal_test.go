@@ -293,8 +293,8 @@ func resealMasterKey(t *testing.T, b Backend, repo *Repository, blob []byte) {
 // is something a later build wrote for a reader to act on, so Open refuses
 // the repository and names the key instead of dropping it. The key file
 // header is a row of TestOpenRejectsUnknownKeyFiles. A master key sealed
-// under a format byte this build does not know is refused the same way, not
-// taken for a wrong password.
+// under a format byte this build does not know, or with a value of another
+// type, is refused the same way, not taken for a wrong password.
 func TestOpenRefusesUnknownKeys(t *testing.T) {
 	ctx := context.Background()
 	later := func(data []byte, before string) []byte {
@@ -345,6 +345,18 @@ func TestOpenRefusesUnknownKeys(t *testing.T) {
 			}
 			resealMasterKey(t, b, repo, later(blob, `"data_key"`))
 		}, laterKey},
+		"master key value of another type": {func(t *testing.T, b Backend) {
+			repo, err := Open(ctx, b, NoPassword())
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer repo.Close()
+			blob, err := json.Marshal(repo.key)
+			if err != nil {
+				t.Fatalf("marshal master key: %v", err)
+			}
+			resealMasterKey(t, b, repo, bytes.Replace(blob, []byte(`"created":"`), []byte(`"created":1,"label":"`), 1))
+		}, "master key"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := newStubBackend()
