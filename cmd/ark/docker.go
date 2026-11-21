@@ -494,6 +494,7 @@ func dockerRestoreCommand() *cli.Command {
 			}
 			pr.Done(out.R("files", "%s", out.Count(res.FilesRestored)),
 				out.R("size", "%s", out.Bytes(res.BytesRestored)))
+			skipped := warnSkipped(p, res.Skipped)
 
 			if p.Mode().JSON {
 				return p.JSON(map[string]any{
@@ -501,6 +502,7 @@ func dockerRestoreCommand() *cli.Command {
 					"volume":         volume,
 					"files_restored": res.FilesRestored,
 					"bytes_restored": res.BytesRestored,
+					"skipped":        skipped,
 				})
 			}
 			return nil

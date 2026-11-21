@@ -200,7 +200,9 @@ var (
 // device node carry no xattrs.
 //
 // A file with more than one name reaches fn as a regular file under the name
-// the walk sees first and as ark.FileTypeHardlink under every later one.
+// the walk sees first and as ark.FileTypeHardlink under every later one. A
+// fifo or device node with more than one name is yielded as its own node
+// under each name: a restore recreates them unlinked.
 func (s *fileSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 	return s.walk(ctx, func(path string, fi os.FileInfo, entry ark.FileInfo) error {
 		var err error

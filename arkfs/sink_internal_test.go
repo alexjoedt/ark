@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/alexjoedt/ark"
 )
 
@@ -67,6 +69,26 @@ func TestSinkDropsSetuidAndSetgidWithoutTheOwner(t *testing.T) {
 		}
 		if got := fi.Mode() &^ os.ModeType; got != want {
 			t.Errorf("%s of root restored with mode %v, want %v", name, got, want)
+		}
+	}
+}
+
+// TestRefusedNode: the errnos a filesystem without fifos or device nodes
+// returns skip the entry; any other error still fails the restore.
+func TestRefusedNode(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{unix.EPERM, true},
+		{unix.EOPNOTSUPP, true},
+		{unix.ENOTSUP, true},
+		{&os.PathError{Op: "mkfifo", Path: "p", Err: unix.EPERM}, true},
+		{unix.EACCES, false},
+		{unix.ENOSPC, false},
+	} {
+		if got := refusedNode(tc.err); got != tc.want {
+			t.Errorf("refusedNode(%v) = %v, want %v", tc.err, got, tc.want)
 		}
 	}
 }

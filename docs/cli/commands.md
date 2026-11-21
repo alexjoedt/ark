@@ -146,8 +146,10 @@ ark restore [options] <id> <dest>
 Restores a snapshot into `<dest>`. The directory is created if missing. Existing files are
 overwritten.
 
-A device node needs the privilege to create one, usually root. Without it the restore skips each
-device with a warning on stderr, restores everything else, and exits 0.
+A device node needs the privilege to create one, usually root, and a fifo or device node needs a
+filesystem that holds them; vfat, exFAT and SMB shares don't. Otherwise the restore skips each such
+entry with a warning on stderr, restores everything else, and exits 0. `--json` lists the skipped
+entries' errors under `skipped`.
 
 | Flag | Meaning |
 |---|---|

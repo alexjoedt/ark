@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -62,5 +63,15 @@ func TestRestoreWarnsAboutASkippedDevice(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(dest, "a.txt")); err != nil || string(got) != "keep" {
 		t.Errorf("a.txt restored %q (%v), want keep", got, err)
+	}
+
+	jsonDest := filepath.Join(t.TempDir(), "json")
+	code, stdout, _ := runCaptureAll(t, "-r", repo, "--json", "restore", string(snap.ID), jsonDest)
+	var res struct{ Skipped []string }
+	if err := json.Unmarshal([]byte(stdout), &res); code != 0 || err != nil {
+		t.Fatalf("--json restore: exit %d, %v, stdout %q", code, err, stdout)
+	}
+	if len(res.Skipped) != 1 || !strings.Contains(res.Skipped[0], "null") {
+		t.Errorf("--json skipped = %q, want one entry naming null", res.Skipped)
 	}
 }

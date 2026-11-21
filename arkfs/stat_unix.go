@@ -67,28 +67,35 @@ func deviceNumbers(fi os.FileInfo) (major, minor uint32) {
 }
 
 // makeNode creates the fifo or device node of entry at path. A device without
-// the privilege to make one is ark.ErrEntrySkipped.
+// the privilege to make one, or a node the target filesystem cannot hold, is
+// ark.ErrEntrySkipped.
 func makeNode(path string, entry ark.FileInfo) error {
 	perm := uint32(entry.Mode.Perm())
+	var err error
 	if entry.Type == ark.FileTypeFifo {
-		if err := unix.Mkfifo(path, perm); err != nil {
-			return fmt.Errorf("arkfs: create the fifo %s: %w", path, err)
+		err = unix.Mkfifo(path, perm)
+	} else {
+		kind := uint32(unix.S_IFBLK)
+		if entry.Type == ark.FileTypeCharDevice {
+			kind = unix.S_IFCHR
 		}
+		err = unix.Mknod(path, kind|perm, int(unix.Mkdev(entry.DevMajor, entry.DevMinor)))
+	}
+	switch {
+	case err == nil:
 		return nil
-	}
-	kind := uint32(unix.S_IFBLK)
-	if entry.Type == ark.FileTypeCharDevice {
-		kind = unix.S_IFCHR
-	}
-	dev := int(unix.Mkdev(entry.DevMajor, entry.DevMinor))
-	err := unix.Mknod(path, kind|perm, dev)
-	if errors.Is(err, unix.EPERM) {
+	case refusedNode(err):
 		return fmt.Errorf("arkfs: create the %s %s: %w (%w)", entry.Type, path, err, ark.ErrEntrySkipped)
-	}
-	if err != nil {
+	default:
 		return fmt.Errorf("arkfs: create the %s %s: %w", entry.Type, path, err)
 	}
-	return nil
+}
+
+// refusedNode reports whether a mkfifo or mknod error means the node cannot
+// exist here: no privilege for a device, or a filesystem such as vfat, exFAT
+// or an SMB share that holds no such nodes.
+func refusedNode(err error) bool {
+	return errors.Is(err, unix.EPERM) || errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.ENOTSUP)
 }
 
 // changeID returns the ctime and inode number of fi, which a backup compares

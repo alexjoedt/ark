@@ -90,7 +90,8 @@
 // then Close exactly once, also after a failed Receive or a cancelled restore.
 // A fifo and a device node arrive with their type, DevMajor and DevMinor for
 // a device, and r nil. A sink that cannot create one, such as a device node
-// without the privilege to make it, returns an error wrapping ErrEntrySkipped:
+// without the privilege to make it or a fifo on a filesystem without fifos,
+// returns an error wrapping ErrEntrySkipped:
 // the restore goes on and lists the error in RestoreResult.Skipped.
 //
 // Prove both with the conformance suites in package arktest, which a foreign

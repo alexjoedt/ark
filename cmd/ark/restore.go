@@ -84,20 +84,30 @@ func restoreCommand() *cli.Command {
 			pr.Done(out.R("files", "%s", out.Count(res.FilesRestored)),
 				out.R("size", "%s", out.Bytes(res.BytesRestored)),
 				out.R("into", "%s", dest))
-			for _, err := range res.Skipped {
-				p.Warnf("%v", err)
-			}
+			skipped := warnSkipped(p, res.Skipped)
 
 			if p.Mode().JSON {
 				return p.JSON(map[string]any{
 					"snapshot_id":    snap.ID,
 					"files_restored": res.FilesRestored,
 					"bytes_restored": res.BytesRestored,
+					"skipped":        skipped,
 				})
 			}
 			return nil
 		},
 	}
+}
+
+// warnSkipped warns about each entry a restore skipped and returns their
+// messages for --json, an empty list when none was skipped.
+func warnSkipped(p *out.Printer, skipped []error) []string {
+	msgs := make([]string, 0, len(skipped))
+	for _, err := range skipped {
+		p.Warnf("%v", err)
+		msgs = append(msgs, err.Error())
+	}
+	return msgs
 }
 
 // cacheSize parses --cache. "0" disables the cache, which ParseBytes alone
