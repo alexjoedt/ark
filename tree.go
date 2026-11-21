@@ -44,6 +44,11 @@ type treeEntry struct {
 	// file; snapshots from older builds and tar sources carry neither.
 	ChangeTime time.Time `json:"ctime,omitzero"`
 	Inode      uint64    `json:"inode,omitempty"`
+
+	// DevMajor and DevMinor are the device numbers of a character or block
+	// device. Only the binary node holds them.
+	DevMajor uint32 `json:"-"`
+	DevMinor uint32 `json:"-"`
 }
 
 // storedModeMask is every bit a stored mode may carry.
