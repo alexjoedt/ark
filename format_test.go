@@ -1,6 +1,7 @@
 package ark_test
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -321,6 +322,136 @@ func TestBackupRefusesANameTwiceInOneDirectory(t *testing.T) {
 	}
 	if snaps, err := repo.Snapshots(context.Background(), ark.SnapshotFilter{}); err != nil || len(snaps) != 0 {
 		t.Errorf("the failed backup left %d snapshots (%v), want none", len(snaps), err)
+	}
+}
+
+// entrySource yields its entries in order, every regular file with a content
+// of its size, and counts the files a backup opened.
+type entrySource struct {
+	entries []ark.FileInfo
+	opened  *int
+}
+
+func (entrySource) Meta() ark.SourceMeta {
+	return ark.SourceMeta{Name: "app", Type: ark.SourceTypeFile}
+}
+
+func (s entrySource) Walk(_ context.Context, fn ark.WalkFunc) error {
+	for _, e := range s.entries {
+		open := func() (io.ReadCloser, error) {
+			*s.opened++
+			return io.NopCloser(strings.NewReader(strings.Repeat("x", int(e.Size)))), nil
+		}
+		if err := fn(e, open); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// unread is the size of the file behind every refused entry: more than a
+// reader takes in ahead of what it was asked for.
+const unread = 1 << 16
+
+// refusedEntries are entries no tree node holds: a path a second time and a
+// link without a target, each ahead of a file that must not be read.
+var refusedEntries = map[string]struct {
+	entries []ark.FileInfo
+	text    string
+}{
+	"a path twice": {
+		entries: []ark.FileInfo{
+			{Path: "dir", Mode: 0o755, Type: ark.FileTypeDirectory},
+			{Path: "dir/a", Size: 1, Mode: 0o644, Type: ark.FileTypeRegular},
+			{Path: "./dir/a", Size: 1, Mode: 0o644, Type: ark.FileTypeRegular},
+			{Path: "z", Size: unread, Mode: 0o644, Type: ark.FileTypeRegular},
+		},
+		text: `"dir/a" more than once`,
+	},
+	"a symlink without a target": {
+		entries: []ark.FileInfo{
+			{Path: "dir/a", Size: 1, Mode: 0o644, Type: ark.FileTypeRegular},
+			{Path: "l", Mode: 0o777, Type: ark.FileTypeSymlink},
+			{Path: "z", Size: unread, Mode: 0o644, Type: ark.FileTypeRegular},
+		},
+		text: `link "l" without a target`,
+	},
+	"a hardlink without a target": {
+		entries: []ark.FileInfo{
+			{Path: "dir/a", Size: 1, Mode: 0o644, Type: ark.FileTypeRegular},
+			{Path: "l", Mode: 0o644, Type: ark.FileTypeHardlink},
+			{Path: "z", Size: unread, Mode: 0o644, Type: ark.FileTypeRegular},
+		},
+		text: `link "l" without a target`,
+	},
+}
+
+// TestBackupRefusesAnEntryBeforeItReadsIt: what the tree cannot hold fails
+// the backup at the entry, not after every file behind it was read and
+// stored.
+func TestBackupRefusesAnEntryBeforeItReadsIt(t *testing.T) {
+	for name, tt := range refusedEntries {
+		t.Run(name, func(t *testing.T) {
+			repo := openRepo(t, arkmem.New())
+			opened := 0
+			_, err := repo.Backup(context.Background(), entrySource{entries: tt.entries, opened: &opened})
+			if err == nil || !strings.Contains(err.Error(), tt.text) {
+				t.Fatalf("Backup = %v, want an error holding %s", err, tt.text)
+			}
+			if opened != 1 {
+				t.Errorf("the backup opened %d files, want only the one ahead of the refused entry", opened)
+			}
+		})
+	}
+}
+
+// TestImportRefusesAnEntryBeforeItReadsIt: an archive is a source like any
+// other, and the member behind the refused one is never chunked.
+func TestImportRefusesAnEntryBeforeItReadsIt(t *testing.T) {
+	const meta = `{"version":1,"id":"01jd3k9s5w0000000000000000","created_at":"2025-03-02T10:00:00Z",` +
+		`"source_name":"app","source_type":"file","host":"h","stats":{}}`
+	for name, tt := range refusedEntries {
+		t.Run(name, func(t *testing.T) {
+			var archive bytes.Buffer
+			tw := tar.NewWriter(&archive)
+			write := func(h *tar.Header, body string) {
+				h.Size = int64(len(body))
+				if err := tw.WriteHeader(h); err != nil {
+					t.Fatalf("write header %s: %v", h.Name, err)
+				}
+				if _, err := tw.Write([]byte(body)); err != nil {
+					t.Fatalf("write body %s: %v", h.Name, err)
+				}
+			}
+			write(&tar.Header{Name: "metadata.json", Mode: 0o644}, meta)
+			for _, e := range tt.entries {
+				h := &tar.Header{Name: "data/" + e.Path, Mode: int64(e.Mode.Perm())}
+				switch e.Type {
+				case ark.FileTypeDirectory:
+					h.Typeflag = tar.TypeDir
+				case ark.FileTypeSymlink:
+					h.Typeflag = tar.TypeSymlink
+				case ark.FileTypeHardlink:
+					h.Typeflag = tar.TypeLink
+				case ark.FileTypeRegular, ark.FileTypeUnsupported:
+					h.Typeflag = tar.TypeReg
+				}
+				write(h, strings.Repeat("x", int(e.Size)))
+			}
+			if err := tw.Close(); err != nil {
+				t.Fatalf("close tar: %v", err)
+			}
+
+			repo := openRepo(t, arkmem.New())
+			_, err := repo.Import(context.Background(), &archive)
+			if err == nil || !strings.Contains(err.Error(), tt.text) {
+				t.Fatalf("Import = %v, want an error holding %s", err, tt.text)
+			}
+			if archive.Len() < unread/2 {
+				t.Errorf("the import left %d bytes of the archive unread, want the %d of the last file",
+					archive.Len(), unread)
+			}
+		})
 	}
 }
 

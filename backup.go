@@ -105,7 +105,11 @@ func (r *Repository) runBackup(
 	scan = startScan(ctx, src, opts, &progressMu, logger)
 	defer scan.stop()
 
+	taken := sourcePaths{}
 	err = src.Walk(ctx, func(entry FileInfo, open func() (io.ReadCloser, error)) error {
+		if err := taken.add(entry); err != nil {
+			return err
+		}
 		fe := fileEntry{FileInfo: entry}
 
 		switch entry.Type {

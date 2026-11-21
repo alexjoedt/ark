@@ -157,7 +157,12 @@ has to judge a link target itself, as before.
 
 A uid or gid above 32 bits cannot be stored and fails the backup that meets one. A negative one
 that fits 32 bits is stored as the id of the same bits on every build, so the -1 of a source
-without owners is 4294967295, the id that changes no owner.
+without owners is 4294967295, the id that changes no owner. A reader gets that one id back as -1,
+on every build.
+
+A time before 1677 or after 2262 is stored as the bound next to it. A restore writes that time
+and not the one the source had, and since the stored time never equals the one the source
+reports, every later backup reads the file again.
 
 The layout is frozen with the first stable release. What holds it in place until then and after
 are the tests that pin every refusal by name, the bytes of one node written out by hand, and the

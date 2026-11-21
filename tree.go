@@ -134,6 +134,28 @@ func marshalTreeNode(dir string, children []fileEntry, hashes map[string]string)
 	return data, nil
 }
 
+// sourcePaths holds the path of every entry a backup or an import took from
+// its source. add refuses, before any data of the entry is read and stored,
+// what the tree could not hold at the end: a path a second time and a link
+// without a target. An entry no node gets, the root and a type that is
+// skipped, is not looked at.
+type sourcePaths map[string]struct{}
+
+func (s sourcePaths) add(fi FileInfo) error {
+	norm := normEntryPath(fi.Path)
+	if norm == "" || !storedType(fi.Type) {
+		return nil
+	}
+	if _, ok := s[norm]; ok {
+		return fmt.Errorf("the source yielded %q more than once", norm)
+	}
+	s[norm] = struct{}{}
+	if (fi.Type == FileTypeSymlink || fi.Type == FileTypeHardlink) && fi.LinkDest == "" {
+		return fmt.Errorf("the source yielded the link %q without a target", norm)
+	}
+	return nil
+}
+
 // storedType reports whether t is a file type the readers of a tree handle.
 // The node format also holds fifos and devices, which no reader does yet.
 func storedType(t FileType) bool {

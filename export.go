@@ -164,6 +164,7 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader, session *p
 	w := newChunkWriter(ctx, session.chunks, r.concurrency)
 	defer func() { _ = w.wait() }()
 	var collectedEntries []fileEntry
+	taken := sourcePaths{}
 	var stats SnapshotStats
 	start := time.Now()
 
@@ -200,71 +201,45 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader, session *p
 			}
 
 		case strings.HasPrefix(header.Name, exportDataPrefix):
-			path := strings.TrimPrefix(header.Name, exportDataPrefix)
+			fe := fileEntry{FileInfo: FileInfo{
+				Path:    strings.TrimPrefix(header.Name, exportDataPrefix),
+				Mode:    header.FileInfo().Mode(),
+				UID:     header.Uid,
+				GID:     header.Gid,
+				ModTime: header.ModTime,
+				Xattrs:  xattrsFromPAX(header.PAXRecords),
+			}}
 			switch header.Typeflag {
 			case tar.TypeReg:
+				fe.Type = FileTypeRegular
+			case tar.TypeDir:
+				fe.Type = FileTypeDirectory
+			case tar.TypeSymlink:
+				fe.Type, fe.LinkDest = FileTypeSymlink, header.Linkname
+			case tar.TypeLink:
+				fe.Type, fe.LinkDest = FileTypeHardlink, strings.TrimPrefix(header.Linkname, exportDataPrefix)
+			default:
+				continue
+			}
+			if err := taken.add(fe.FileInfo); err != nil {
+				return nil, fmt.Errorf("import: %w", err)
+			}
+			switch fe.Type {
+			case FileTypeRegular:
 				chunks, err := chunkFileData(w, cr, tr)
 				if err != nil {
-					return nil, fmt.Errorf("import: failed to chunk file %s: %w", path, err)
+					return nil, fmt.Errorf("import: failed to chunk file %s: %w", fe.Path, err)
 				}
-
+				fe.Size, fe.Chunks = header.Size, chunks
 				stats.FileCount++
 				stats.TotalSize += header.Size
-
-				collectedEntries = append(collectedEntries, fileEntry{
-					FileInfo: FileInfo{
-						Path:    path,
-						Size:    header.Size,
-						Mode:    header.FileInfo().Mode(),
-						UID:     header.Uid,
-						GID:     header.Gid,
-						ModTime: header.ModTime,
-						Type:    FileTypeRegular,
-						Xattrs:  xattrsFromPAX(header.PAXRecords),
-					},
-					Chunks: chunks,
-				})
-			case tar.TypeDir:
+			case FileTypeDirectory:
 				stats.DirCount++
-				collectedEntries = append(collectedEntries, fileEntry{
-					FileInfo: FileInfo{
-						Path:    path,
-						Mode:    header.FileInfo().Mode(),
-						UID:     header.Uid,
-						GID:     header.Gid,
-						ModTime: header.ModTime,
-						Type:    FileTypeDirectory,
-						Xattrs:  xattrsFromPAX(header.PAXRecords),
-					},
-				})
-			case tar.TypeSymlink:
-				collectedEntries = append(collectedEntries, fileEntry{
-					FileInfo: FileInfo{
-						Path:     path,
-						Mode:     header.FileInfo().Mode(),
-						UID:      header.Uid,
-						GID:      header.Gid,
-						ModTime:  header.ModTime,
-						Type:     FileTypeSymlink,
-						LinkDest: header.Linkname,
-						Xattrs:   xattrsFromPAX(header.PAXRecords),
-					},
-				})
-			case tar.TypeLink:
+			case FileTypeHardlink:
 				stats.FileCount++
-				collectedEntries = append(collectedEntries, fileEntry{
-					FileInfo: FileInfo{
-						Path:     path,
-						Mode:     header.FileInfo().Mode(),
-						UID:      header.Uid,
-						GID:      header.Gid,
-						ModTime:  header.ModTime,
-						Type:     FileTypeHardlink,
-						LinkDest: strings.TrimPrefix(header.Linkname, exportDataPrefix),
-						Xattrs:   xattrsFromPAX(header.PAXRecords),
-					},
-				})
+			case FileTypeSymlink, FileTypeUnsupported:
 			}
+			collectedEntries = append(collectedEntries, fe)
 		}
 	}
 

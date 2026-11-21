@@ -231,19 +231,19 @@ func RetypeEntry(ctx context.Context, r *Repository, id SnapshotID, name string,
 		return fmt.Errorf("%w: root entry %s", ErrNotFound, name)
 	}
 	// A fifo holds nothing behind its head, so its type byte is the only one
-	// to change.
-	const fifo = 5
+	// to change. The head has to be in the node once: the same bytes in a
+	// chunk id, a link target or an xattr of another entry would be patched
+	// in its place.
 	node.Entries[i] = treeEntry{Name: name, Type: fileTypeFifo}
 	data, err := encodeTreeNode(node)
 	if err != nil {
 		return err
 	}
-	head := append(appendNodeBytes(nil, name), fifo)
-	at := bytes.Index(data, head)
-	if at < 0 {
-		return fmt.Errorf("entry %s not found in its node", name)
+	head := append(appendNodeBytes(nil, name), byte(slices.Index(nodeTypes[:], fileTypeFifo)))
+	if n := bytes.Count(data, head); n != 1 {
+		return fmt.Errorf("the head of entry %s is in its node %d times, want once", name, n)
 	}
-	data[at+len(head)-1] = typ
+	data[bytes.Index(data, head)+len(head)-1] = typ
 	return ReplaceRootTree(ctx, r, id, data)
 }
 

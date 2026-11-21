@@ -107,6 +107,17 @@ func id32(v int) (uint32, bool) {
 	return uint32(v), int64(v) >= math.MinInt32 && int64(v) <= math.MaxUint32
 }
 
+// ownerID is a stored uid or gid as a FileInfo holds it. The id of 32 set
+// bits owns no file: chown takes it as "keep the owner", and it is what the
+// -1 of a source without owners is stored as, so it reads back as -1 where
+// int has 64 bits as it does where int has 32.
+func ownerID(v uint32) int {
+	if v == math.MaxUint32 {
+		return -1
+	}
+	return int(v)
+}
+
 // nodeName reports whether name can name an entry: one path element, so
 // neither empty nor "." nor "..", without a slash or a NUL. Every path a tree
 // yields is joined from such names and cannot leave the tree.
@@ -376,8 +387,8 @@ func (r *nodeReader) entry(e *treeEntry) {
 			r.corruptf("mode %#o of %q has a bit outside 07777", e.Mode, e.Name)
 		}
 	}
-	e.UID = int(r.uint32("uid"))
-	e.GID = int(r.uint32("gid"))
+	e.UID = ownerID(r.uint32("uid"))
+	e.GID = ownerID(r.uint32("gid"))
 	if ns := r.int64(); ns != math.MinInt64 {
 		e.ModTime = time.Unix(0, ns).UTC()
 	}

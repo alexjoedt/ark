@@ -35,11 +35,11 @@ type manifest struct {
 
 // fileEntry is the internal representation of a file inside a snapshot.
 // FileInfo is embedded so that CAS lookups can pass fe.FileInfo directly
-// to sinks without a field-by-field copy. The JSON layout is identical to
-// the previous flat struct because Go flattens embedded fields.
+// to sinks without a field-by-field copy. It is never stored: a tree node
+// holds a treeEntry.
 type fileEntry struct {
 	FileInfo
-	Chunks []chunkRef `json:"chunks,omitempty"`
+	Chunks []chunkRef
 }
 
 // manifestStats is what a manifest stores of SnapshotStats: the counters and

@@ -430,7 +430,8 @@ func TestTreeNodeEncodeRefuses(t *testing.T) {
 }
 
 // TestTreeNodeStoresANegativeIDAsItsBits pins what a source without owners
-// gets: -1 is the id 4294967295, where int has 32 bits and where it has 64.
+// gets: -1 is stored as the id 4294967295 and read back as -1, where int has
+// 32 bits and where it has 64.
 func TestTreeNodeStoresANegativeIDAsItsBits(t *testing.T) {
 	t.Parallel()
 	entry := func(uid, gid int) *treeNode {
@@ -446,8 +447,8 @@ func TestTreeNodeStoresANegativeIDAsItsBits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decodeTreeNode: %v", err)
 	}
-	if e := got.Entries[0]; uint32(e.UID) != math.MaxUint32 || uint32(e.GID) != 1<<31 {
-		t.Errorf("decoded uid %d and gid %d, want the ids 4294967295 and 2147483648", e.UID, e.GID)
+	if e := got.Entries[0]; e.UID != -1 || uint32(e.GID) != 1<<31 {
+		t.Errorf("decoded uid %d and gid %d, want -1 and the id 2147483648", e.UID, e.GID)
 	}
 }
 
