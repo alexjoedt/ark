@@ -24,7 +24,7 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0007 | [Embedding hooks on Open](0007-embedding-hooks-on-open.md) | accepted | 2026-11-08 |
 | 0008 | [Path matcher package](0008-path-matcher-package.md) | accepted | 2026-11-11 |
 | 0009 | [Exclude patterns on the snapshot](0009-exclude-patterns-on-the-snapshot.md) | accepted | 2026-11-11 |
-| 0010 | [Pack object layout and blob binding](0010-pack-object-layout-and-blob-binding.md) | accepted | 2026-11-11 |
+| 0010 | [Pack object layout and blob binding](0010-pack-object-layout-and-blob-binding.md) | partly superseded by 0033 | 2026-11-11 |
 | 0011 | [Pack index format and loading](0011-pack-index-format-and-loading.md) | partly superseded by 0014 | 2026-11-11 |
 | 0012 | [Crash and concurrent-writer model for packs](0012-crash-and-writer-model-for-packs.md) | partly superseded by 0014 | 2026-11-11 |
 | 0013 | [Prune repacks by a repository-wide unused budget](0013-prune-repacks-by-an-unused-budget.md) | accepted | 2026-11-11 |
@@ -47,3 +47,4 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0030 | [ark profile backup runs the backup a profile names](0030-profile-backup-runs-the-backup-a-profile-names.md) | accepted | 2026-11-20 |
 | 0031 | [No pool for chunk buffers](0031-no-pool-for-chunk-buffers.md) | accepted | 2026-11-21 |
 | 0032 | [A raw codec and an authenticated format byte](0032-raw-codec-and-authenticated-format-byte.md) | accepted | 2026-11-21 |
+| 0033 | [A pack table that opens from the tail of its pack](0033-pack-table-opens-from-a-tail-read.md) | accepted | 2026-11-21 |

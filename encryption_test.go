@@ -570,11 +570,11 @@ func TestListingRevealsCountsAndSizes(t *testing.T) {
 	if sealed != snap.Stats.StoredSize {
 		t.Errorf("chunks are sealed to %d bytes, the snapshot counts %d stored", sealed, snap.Stats.StoredSize)
 	}
-	// The rest of the pack is the sealed table, at most 36 bytes per chunk,
-	// and its 4 byte length.
-	const tableEntry = 36
+	// The rest of the pack is the sealed table, the 32-byte hash of the
+	// chunks and at most 36 bytes per chunk, and its 4 byte length.
+	const tableSum, tableEntry = 32, 36
 	table := sizes[ark.DataPackFile] - sealed
-	if limit := int64(len(chunks)*tableEntry + ark.SealOverhead + 4); table <= 4 || table > limit {
+	if limit := int64(tableSum + len(chunks)*tableEntry + ark.SealOverhead + 4); table <= 4 || table > limit {
 		t.Errorf("the data pack holds %d bytes besides its chunks, want a table of at most %d", table, limit)
 	}
 }

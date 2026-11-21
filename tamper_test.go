@@ -55,12 +55,15 @@ import (
 // The blob table is the one sealed object inside a pack that no read through
 // the index opens: only RebuildIndex does. Its cells change the table and
 // store the pack under the name its bytes then hash to, so nothing but the
-// table's tag rejects it, and they delete the index before the rebuild.
+// table itself rejects it, and they delete the index before the rebuild.
 //
 // The tag binds key, namespace and name (objectAAD), so it alone rejects
-// every cell: Restore reads through a non-verifying store and still fails on
-// a moved or swapped chunk or tree. No cell restores other bytes than the
-// backup held.
+// every cell but two: Restore reads through a non-verifying store and still
+// fails on a moved or swapped chunk or tree. Every blob table of a namespace
+// is sealed under one name, so the table of another pack authenticates in
+// the swapped and moved cells; RebuildIndex has the whole pack and rejects
+// it by the hash of the blob section the table carries. No cell restores
+// other bytes than the backup held.
 func TestTamperedObjectsAreRejected(t *testing.T) {
 	for _, ns := range tamperNamespaces {
 		for _, mut := range tamperMutations {
@@ -147,8 +150,9 @@ type tamperFixture struct {
 	victim, other *ark.Snapshot
 	// index names the index object each backup wrote, the victim's first.
 	index map[ark.HandleType][2]string
-	// tables maps the name a blob table is sealed under, the hex SHA-256 of
-	// its pack's blob section, to the pack. Only the pack table rows fill it.
+	// tables maps the name a blob table goes by in the cells, the hex SHA-256
+	// of its pack's blob section, to the pack. Only the pack table rows fill
+	// it. Every table is sealed under ark.PackTableName.
 	tables map[string]ark.Handle
 }
 
@@ -195,7 +199,7 @@ func (f *tamperFixture) stored(t *testing.T, typ ark.HandleType, name string) (a
 }
 
 // whole returns the stored object of name and its handle. A blob table is
-// its own object here, under the name it is sealed with.
+// its own object here, under the name the cells know it by.
 func (f *tamperFixture) whole(t *testing.T, typ ark.HandleType, name string) (ark.Handle, []byte) {
 	t.Helper()
 	if _, ok := f.tables[name]; ok {
@@ -206,8 +210,8 @@ func (f *tamperFixture) whole(t *testing.T, typ ark.HandleType, name string) (ar
 	return h, readObject(t, f.b, h.Type, h.Name)
 }
 
-// table returns the blob section of the pack whose table is sealed under
-// name, and that sealed table.
+// table returns the blob section of the pack whose table goes by name, and
+// that sealed table.
 func (f *tamperFixture) table(t *testing.T, name string) (section, table []byte) {
 	t.Helper()
 	h := f.tables[name]
@@ -261,8 +265,8 @@ func (f *tamperFixture) plaintext(t *testing.T, typ ark.HandleType, name string)
 		return readObject(t, f.b, typ, name)
 	}
 	if _, ok := f.tables[name]; ok {
-		h, table := f.whole(t, typ, name)
-		data, err := ark.UnsealObject(f.repo, h, table)
+		_, table := f.whole(t, typ, name)
+		data, err := ark.UnsealObject(f.repo, f.sealedUnder(typ, name), table)
 		if err != nil {
 			t.Fatalf("open the blob table %s/%s: %v", typ, name, err)
 		}
@@ -273,6 +277,16 @@ func (f *tamperFixture) plaintext(t *testing.T, typ ark.HandleType, name string)
 		t.Fatalf("open %s/%s: %v", typ, name, err)
 	}
 	return data
+}
+
+// sealedUnder returns the handle whose namespace and name the object that
+// goes by name is sealed with: its own, for a blob table the one name all
+// tables of the namespace share.
+func (f *tamperFixture) sealedUnder(typ ark.HandleType, name string) ark.Handle {
+	if _, ok := f.tables[name]; ok {
+		name = ark.PackTableName
+	}
+	return ark.Handle{Type: typ, Name: name}
 }
 
 // sealedAs returns data sealed by repo the way it would store it under h.
@@ -391,7 +405,8 @@ var tamperMutations = []tamperMutation{
 		f.del(t, ho.Type, ho.Name)
 	}},
 	{"other namespace", func(t *testing.T, f *tamperFixture, typ ark.HandleType, victim, _ string) {
-		h := ark.Handle{Type: foreignNamespace[typ], Name: victim}
+		h := f.sealedUnder(typ, victim)
+		h.Type = foreignNamespace[typ]
 		obj := sealedAs(t, f.repo, f.b, h, f.plaintext(t, typ, victim))
 		f.editSealed(t, typ, victim, func([]byte) []byte { return obj })
 	}},
@@ -403,8 +418,7 @@ var tamperMutations = []tamperMutation{
 			f.put(t, typ, victim, body)
 			return
 		}
-		h := ark.Handle{Type: typ, Name: victim}
-		obj := sealedAs(t, repo2, b2, h, f.plaintext(t, typ, victim))
+		obj := sealedAs(t, repo2, b2, f.sealedUnder(typ, victim), f.plaintext(t, typ, victim))
 		f.editSealed(t, typ, victim, func([]byte) []byte { return obj })
 	}},
 }

@@ -56,7 +56,7 @@ writer, every accepted risk included.
   byte was changed to the other does not open: `TestUnknownFormatByteIsRejected`,
   `TestWriterStoresABlobRawWhenZstdIsNotSmaller`. A key file's `key` field is sealed the same way.
 - Chunks and trees are stored inside pack objects: each one sealed on its own as above, followed
-  by a sealed table of their names and lengths that is bound to the SHA-256 of the bytes before
+  by a sealed table of their names and lengths that carries the SHA-256 of the bytes before
   it. A pack is named by the SHA-256 of its bytes, which are ciphertext throughout. The layout
   of packs and index objects is in [Repository format](format.md).
 - Chunk, tree and index names are the hex HMAC-SHA256 of their plaintext under the repository's ID
@@ -100,10 +100,15 @@ writer, every accepted risk included.
   missing: Restore and Verify fail with `ErrNotFound` or report the chunk missing, Check lists it
   under errors, and prune deletes nothing while a snapshot references a blob no index lists:
   `TestTamperedObjectsAreRejected`, `TestPruneAbortsWhenTheIndexHidesALiveBlob`.
-- The blob table of a pack under the same mutations does not open, also when the pack is stored
+- The blob table of a pack under the same mutations is refused, also when the pack is stored
   under the name its changed bytes hash to: RebuildIndex names the pack unreadable and takes no
-  entry from it, so a rebuilt index never points a name at other bytes:
-  `TestTamperedObjectsAreRejected`.
+  entry from it, so a rebuilt index never points a name at other bytes. A changed table does not
+  open. The table of another pack of the repository opens, since all tables of a namespace are
+  sealed under one name, and is refused by the hash of the blobs it carries, which RebuildIndex
+  compares with the pack it read: `TestTamperedObjectsAreRejected`,
+  `TestPackTableDoesNotOpenBehindOtherBlobs`. A table read from the tail of a pack alone lacks
+  that comparison; the blobs it lists then fail to open under their names:
+  `TestPackTableOfAnotherPackOpensFromATailReadAndNoBlobDoes`.
 - A pack that is gone while the index lists it is an error of Check whether or not a snapshot
   references it, as is a pack whose own table disagrees with the index. A backup passes over what
   the index lists in a pack that is gone and stores again what it reads. Once an index load has

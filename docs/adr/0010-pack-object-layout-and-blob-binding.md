@@ -1,6 +1,6 @@
 # 0010: Pack object layout and blob binding
 
-Status: accepted
+Status: partly superseded by 0033
 Date: 2026-11-11
 
 ## Context

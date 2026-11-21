@@ -73,10 +73,17 @@ A pack has three parts, in this order:
 hex name. No object is stored under `chunks` or `trees`. The associated data only binds a blob to
 its codec, type and name, so the bytes of one blob, read where the index lists another, don't open.
 
-**Table.** The table has one entry per blob: its 32-byte name and its sealed length as 4 bytes
-little endian. Offsets follow from the order. The table is sealed with the data key and, behind
-its format byte, the associated data `datapacks/<hex SHA-256 of the blob section>`, or
-`treepacks/<...>`, by the pack's namespace. It therefore opens only behind the blobs it describes.
+**Table.** The table starts with the SHA-256 of the blob section, 32 bytes. One entry per blob
+follows: its 32-byte name and its sealed length as 4 bytes little endian. Offsets follow from the
+order. The table is sealed with the data key and, behind its format byte, the associated data
+`datapacks/table` or `treepacks/table`, by the pack's namespace. That is the same for every pack
+of a namespace, so the table opens from the tail of a pack alone: the last 4 bytes give its
+length, the bytes before them are the table.
+
+A reader that holds the whole pack hashes the blob section and refuses a table that carries
+another hash. A reader that holds only the tail can't make that comparison. For such a reader, a
+table moved in from another pack of the repository opens. Each blob that it lists then fails to
+open, because a blob is bound to its own name and not to the table.
 
 **Names.** A pack is named by the hex SHA-256 of all its bytes. Chunk and node names are the hex
 HMAC-SHA256 of their plaintext under the repository's ID key. The name of a pack isn't keyed.
@@ -291,11 +298,12 @@ runs it:
 3. It writes a new index from the tables.
 4. It deletes the old index objects.
 
-A pack whose table doesn't open, or whose name isn't the hash of its bytes, is named in the result
-and contributes nothing. For that pack, the new index keeps what the old one listed, except for
+A pack whose table doesn't open or carries the hash of other blobs, or whose name isn't the hash
+of its bytes, is named in the result and contributes nothing. For that pack, the new index keeps what the old one listed, except for
 blobs that a pack which opens holds as well.
 
-A rebuild needs the repository to itself, like prune, and it downloads every pack.
+A rebuild needs the repository to itself, like prune, and it downloads every pack. The format
+doesn't require that: a table opens from the tail of its pack (see [Packs](#packs)).
 
 ## Everything else
 

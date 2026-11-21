@@ -39,6 +39,9 @@ func UnsealObject(r *Repository, h Handle, obj []byte) ([]byte, error) {
 	return r.codec.open((*[32]byte)(&r.key.DataKey), objectAAD(h), obj)
 }
 
+// PackTableName is the name the blob table of every pack is sealed under.
+const PackTableName = packTableName
+
 // LostPackMarker returns the handle of the lost-pack marker of r.
 func LostPackMarker(r *Repository) Handle { return r.lostPacksMarker() }
 
