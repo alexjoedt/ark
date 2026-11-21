@@ -3,7 +3,6 @@ package arkdocker
 import (
 	"context"
 	"fmt"
-	"io"
 	"testing"
 	"time"
 
@@ -55,34 +54,6 @@ func TestSourceSinkConformance(t *testing.T) {
 			return NewVolumeSink(c, v), v
 		},
 	)
-}
-
-// A fifo in the volume comes back as unsupported, so the core counts it
-// instead of the source dropping it silently.
-func TestSourceYieldsSpecialFilesAsUnsupported(t *testing.T) {
-	c := testClient(t)
-	v := testVolume(t, c)
-	ctx := context.Background()
-
-	fixture := []string{"sh", "-c", "mkfifo /data/pipe && echo x > /data/file"}
-	if err := runInVolume(ctx, c, v, fixture); err != nil {
-		t.Fatalf("fixture: %v", err)
-	}
-
-	got := map[string]ark.FileType{}
-	err := NewVolumeSource(c, v).Walk(ctx, func(info ark.FileInfo, _ func() (io.ReadCloser, error)) error {
-		got[info.Path] = info.Type
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("Walk: %v", err)
-	}
-	if got["pipe"] != ark.FileTypeUnsupported {
-		t.Errorf("pipe came back as %q, want %q", got["pipe"], ark.FileTypeUnsupported)
-	}
-	if got["file"] != ark.FileTypeRegular {
-		t.Errorf("file came back as %q, want %q", got["file"], ark.FileTypeRegular)
-	}
 }
 
 // runInVolume runs cmd in a helper container with the volume mounted at /data.

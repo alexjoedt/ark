@@ -293,6 +293,51 @@ func TestVolumeKeepsRawNames(t *testing.T) {
 	}
 }
 
+// TestVolumeKeepsSpecialFiles backs up a volume holding a fifo and both
+// device kinds and restores it into a removed volume with type, mode, owner
+// and device numbers.
+func TestVolumeKeepsSpecialFiles(t *testing.T) {
+	c := testClient(t)
+	e := testEngine(t)
+	ctx := context.Background()
+	vol := testVolume(t, c)
+
+	fixture := "cd /data && mkfifo -m 640 pipe && mknod -m 666 null c 1 3 && mknod -m 660 loop b 7 5 && " +
+		"chown 1000:1000 pipe null loop && echo x > file"
+	if err := runInVolume(ctx, c, vol, []string{"sh", "-c", fixture}); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	const specials = "cd /data && stat -c '%n %F %a %u:%g %t,%T' pipe null loop file"
+	want := runListing(t, c, vol, specials)
+	for _, line := range []string{"pipe fifo 640 1000:1000", "null character special file 666 1000:1000 1,3",
+		"loop block special file 660 1000:1000 7,5"} {
+		if !strings.Contains(want, line) {
+			t.Fatalf("fixture lacks %q:\n%s", line, want)
+		}
+	}
+
+	snap, err := e.BackupVolume(ctx, vol)
+	if err != nil {
+		t.Fatalf("BackupVolume: %v", err)
+	}
+	if snap.Stats.Skipped != 0 {
+		t.Errorf("the backup skipped %d entries, want 0", snap.Stats.Skipped)
+	}
+	if _, err := c.cli.VolumeRemove(ctx, vol, dockerclient.VolumeRemoveOptions{Force: true}); err != nil {
+		t.Fatalf("remove volume: %v", err)
+	}
+	result, err := e.RestoreVolume(ctx, snap.ID, vol)
+	if err != nil {
+		t.Fatalf("RestoreVolume: %v", err)
+	}
+	if len(result.Skipped) != 0 {
+		t.Errorf("the restore skipped %v", result.Skipped)
+	}
+	if got := runListing(t, c, vol, specials); got != want {
+		t.Errorf("restored volume differs\n--- want\n%s--- got\n%s", want, got)
+	}
+}
+
 // TestVolumeRestoresAfterARepack backs a volume up twice with one directory
 // changed in between, forgets the first snapshot and prunes. The first backup
 // stored the nodes of both directories in one tree pack and only one of them

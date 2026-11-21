@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -56,6 +57,27 @@ func xattrsFromPAX(records map[string]string) map[string][]byte {
 		xattrs[name] = []byte(value)
 	}
 	return xattrs
+}
+
+// specialTarType and specialFileType map the entries without content that tar
+// and the tree both model.
+var (
+	//exhaustive:ignore // the other types carry a link or content
+	specialTarType = map[FileType]byte{
+		FileTypeFifo: tar.TypeFifo, FileTypeCharDevice: tar.TypeChar, FileTypeBlockDevice: tar.TypeBlock,
+	}
+	specialFileType = map[byte]FileType{
+		tar.TypeFifo: FileTypeFifo, tar.TypeChar: FileTypeCharDevice, tar.TypeBlock: FileTypeBlockDevice,
+	}
+)
+
+// tarDevice returns the device numbers of a character or block device
+// header, refusing a number the tree cannot hold.
+func tarDevice(h *tar.Header) (major, minor uint32, err error) {
+	if h.Devmajor < 0 || h.Devmajor > math.MaxUint32 || h.Devminor < 0 || h.Devminor > math.MaxUint32 {
+		return 0, 0, fmt.Errorf("device number %d,%d out of range", h.Devmajor, h.Devminor)
+	}
+	return uint32(h.Devmajor), uint32(h.Devminor), nil
 }
 
 func (r *Repository) runExport(ctx context.Context, snapshotID SnapshotID, w io.Writer) error {
@@ -133,7 +155,11 @@ func (r *Repository) runExport(ctx context.Context, snapshotID SnapshotID, w io.
 				return fmt.Errorf("export: failed to write chunk data for %s: %w", fe.Path, err)
 			}
 		case FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice:
-			return fmt.Errorf("export: %s is a %s, which an export does not carry yet", fe.Path, fe.Type)
+			header.Typeflag = specialTarType[fe.Type]
+			header.Devmajor, header.Devminor = int64(fe.DevMajor), int64(fe.DevMinor)
+			if err := tw.WriteHeader(header); err != nil {
+				return fmt.Errorf("export: failed to write %s header %s: %w", fe.Type, fe.Path, err)
+			}
 		case FileTypeUnsupported:
 			// Never stored, so never exported.
 		}
@@ -220,7 +246,16 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader, session *p
 				fe.Type, fe.LinkDest = FileTypeSymlink, header.Linkname
 			case tar.TypeLink:
 				fe.Type, fe.LinkDest = FileTypeHardlink, strings.TrimPrefix(header.Linkname, exportDataPrefix)
+			case tar.TypeFifo, tar.TypeChar, tar.TypeBlock:
+				fe.Type = specialFileType[header.Typeflag]
+				if fe.Type != FileTypeFifo {
+					fe.DevMajor, fe.DevMinor, err = tarDevice(header)
+					if err != nil {
+						return nil, fmt.Errorf("import: %s: %w", header.Name, err)
+					}
+				}
 			default:
+				stats.Skipped++
 				continue
 			}
 			if err := taken.add(fe.FileInfo); err != nil {

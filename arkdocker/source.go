@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -102,8 +103,9 @@ func (s *dockerVolumeSource) Meta() ark.SourceMeta {
 
 // Walk streams the volume's tar archive and calls fn for every entry. The
 // "data/" prefix the helper container adds is stripped from paths and from
-// hardlink targets. Devices, fifos and sockets are yielded as
-// ark.FileTypeUnsupported so the core can count them.
+// hardlink targets. Fifos and devices are yielded with their type and device
+// numbers; any other tar type is yielded as ark.FileTypeUnsupported so the
+// core can count it.
 func (s *dockerVolumeSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 	rc, err := s.client.streamVolume(ctx, s.volume)
 	if err != nil {
@@ -151,8 +153,21 @@ func (s *dockerVolumeSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 			// tr.Next skips what the caller leaves unread, so a file
 			// the parent snapshot holds unchanged costs no copy here.
 			open = func() (io.ReadCloser, error) { return io.NopCloser(io.LimitReader(tr, hdr.Size)), nil }
+		case tar.TypeFifo:
+			entry.Type = ark.FileTypeFifo
+		case tar.TypeChar:
+			entry.Type = ark.FileTypeCharDevice
+		case tar.TypeBlock:
+			entry.Type = ark.FileTypeBlockDevice
 		default:
 			entry.Type = ark.FileTypeUnsupported
+		}
+		if entry.Type == ark.FileTypeCharDevice || entry.Type == ark.FileTypeBlockDevice {
+			if hdr.Devmajor < 0 || hdr.Devmajor > math.MaxUint32 || hdr.Devminor < 0 || hdr.Devminor > math.MaxUint32 {
+				return fmt.Errorf("arkdocker: %s in volume %s has device number %d,%d out of range",
+					path, s.volume, hdr.Devmajor, hdr.Devminor)
+			}
+			entry.DevMajor, entry.DevMinor = uint32(hdr.Devmajor), uint32(hdr.Devminor)
 		}
 		if err := fn(entry, open); err != nil {
 			return err
