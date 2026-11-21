@@ -22,6 +22,7 @@ Conventions on this page:
 | [`mount`](#mount) | serve every snapshot read-only through FUSE |
 | [`inspect`](#inspect) | show one snapshot in detail |
 | [`info`](#info) | show what a repository holds |
+| [`debug node`](#debug-node) | print a stored tree node as JSON |
 | [`forget`](#forget) | remove snapshots by ID or policy |
 | [`prune`](#prune) | delete packs that no snapshot references |
 | [`repair index`](#repair-index) | rebuild the index from the stored packs |
@@ -372,6 +373,21 @@ the old index objects.
 - A pack whose own table doesn't open is listed, and the command exits 5. The new index keeps for
   that pack what the old one listed.
 - Takes the exclusive lock, so no backup, restore, or prune can run meanwhile.
+
+## debug node
+
+```
+ark debug node <id> [path]
+```
+
+Prints the stored tree node of a snapshot as JSON: the root directory, or the directory at `path`.
+Every entry shows its name, type, mode (octal), uid, gid, times in nanoseconds since the epoch,
+inode, and the fields of its type: chunks, the tree of a directory, the target of a link, the
+device numbers, xattrs. A name, link target, or xattr name that isn't valid UTF-8 also appears as
+base64 in a `name_raw`, `target_raw`, or xattr `name_raw` field.
+
+- Exits 1 when `path` isn't a directory of the snapshot.
+- The output is for people, and may change in any release.
 
 ## verify
 

@@ -239,6 +239,7 @@ func newApp() *cli.Command {
 			findCommand(),
 			mountCommand(),
 			inspectCommand(),
+			debugCommand(),
 			infoCommand(),
 			forgetCommand(),
 			pruneCommand(),
