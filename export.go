@@ -11,8 +11,6 @@ import (
 	"io"
 	"strings"
 	"time"
-
-	"github.com/alexjoedt/ark/chunker"
 )
 
 // The export archive is part of the v1 promise: an uncompressed tar stream,
@@ -163,8 +161,8 @@ func (r *Repository) runImport(ctx context.Context, reader io.Reader, session *p
 	tr := tar.NewReader(rd)
 
 	var m *manifest
-	cr := chunker.New(nil, r.chunker)
-	w := newChunkWriter(ctx, session.chunks, r.concurrency)
+	w := newChunkWriter(ctx, session.chunks, r.concurrency).pooled()
+	cr := w.chunker(r.chunker)
 	defer func() { _ = w.wait() }()
 	var collectedEntries []fileEntry
 	var stats SnapshotStats

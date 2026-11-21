@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -40,13 +41,7 @@ func run(args []string) int {
 	// Load --env-file before app.Run so the flag env sources see the values.
 	err := config.PreloadEnvFile(args)
 	if err == nil {
-		var stop func() error
-		if stop, err = startCPUProfile(os.Getenv("ARK_CPUPROFILE")); err == nil {
-			err = newApp().Run(ctx, args)
-			if stopErr := stop(); err == nil {
-				err = stopErr
-			}
-		}
+		err = runProfiled(ctx, args)
 	}
 	// A command that returned without Done or Fail must not leave the live
 	// block drawing over its results or the error line.
@@ -70,6 +65,24 @@ func run(args []string) int {
 	return code
 }
 
+// runProfiled runs the app between startProfiles and its stop. A failed
+// profile write is returned only when the command itself succeeded; otherwise
+// it goes to stderr so the command's error stays the one reported.
+func runProfiled(ctx context.Context, args []string) error {
+	stop, err := startProfiles(os.Getenv("ARK_CPUPROFILE"), os.Getenv("ARK_MEMPROFILE"))
+	if err != nil {
+		return err
+	}
+	err = newApp().Run(ctx, args)
+	if stopErr := stop(); stopErr != nil {
+		if err == nil {
+			return stopErr
+		}
+		fmt.Fprintf(os.Stderr, "ark: %s\n", stopErr)
+	}
+	return err
+}
+
 // startCPUProfile writes a CPU profile of the whole run to path, for
 // finding bottlenecks with go tool pprof. An empty path profiles nothing.
 // The returned func ends the profile and reports a failed write.
@@ -89,6 +102,55 @@ func startCPUProfile(path string) (func() error, error) {
 		pprof.StopCPUProfile()
 		if err := f.Close(); err != nil {
 			return fmt.Errorf("write cpu profile %s: %w", path, err)
+		}
+		return nil
+	}, nil
+}
+
+// startProfiles starts the CPU and heap profile of the run; an empty path
+// skips that profile. The returned func ends both and reports the first
+// failed write.
+func startProfiles(cpuPath, memPath string) (func() error, error) {
+	if cpuPath != "" && cpuPath == memPath {
+		return nil, errors.New("ARK_CPUPROFILE and ARK_MEMPROFILE must name different files")
+	}
+	stopCPU, err := startCPUProfile(cpuPath)
+	if err != nil {
+		return nil, err
+	}
+	stopMem, err := startMemProfile(memPath)
+	if err != nil {
+		_ = stopCPU()
+		return nil, err
+	}
+	return func() error {
+		cpuErr := stopCPU()
+		if memErr := stopMem(); cpuErr == nil {
+			return memErr
+		}
+		return cpuErr
+	}, nil
+}
+
+// startMemProfile creates the heap profile file at path before the run, so a
+// bad path fails early. The returned func writes the profile after a GC; it
+// holds the alloc_* and inuse_* sample views. An empty path profiles nothing.
+func startMemProfile(path string) (func() error, error) {
+	if path == "" {
+		return func() error { return nil }, nil
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, fmt.Errorf("create heap profile: %w", err)
+	}
+	return func() error {
+		runtime.GC()
+		if err := pprof.Lookup("heap").WriteTo(f, 0); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("write heap profile %s: %w", path, err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("write heap profile %s: %w", path, err)
 		}
 		return nil
 	}, nil

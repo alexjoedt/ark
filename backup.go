@@ -58,7 +58,7 @@ func (r *Repository) runBackup(
 	defer cancel()
 
 	var cr *chunker.Chunker
-	w := newChunkWriter(ctx, session.chunks, r.concurrency)
+	w := newChunkWriter(ctx, session.chunks, r.concurrency).pooled()
 	var scannedEntries []fileEntry
 	// reused numbers the entries that kept their parent's chunks unread and
 	// unchecked: taken before a finished load of the data index could tell
@@ -156,7 +156,7 @@ func (r *Repository) runBackup(
 				pending = append(pending, p)
 			default:
 				if cr == nil {
-					cr = chunker.New(nil, r.chunker)
+					cr = w.chunker(r.chunker)
 				}
 				chunks, err := chunkFile(w, cr, open)
 				if err != nil {
@@ -471,7 +471,7 @@ func newFileReaders(
 	fr := &fileReaders{firstError: firstError{cancel: cancel}, ctx: ctx, jobs: make(chan fileJob)}
 	for range max(workers, 1) {
 		fr.wg.Go(func() {
-			cr := chunker.New(nil, cfg)
+			cr := w.chunker(cfg)
 			for job := range fr.jobs {
 				if fr.ctx.Err() != nil {
 					_ = fr.fail(fr.ctx.Err())
