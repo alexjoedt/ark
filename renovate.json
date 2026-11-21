@@ -3,7 +3,6 @@
   "extends": ["config:recommended"],
   "postUpdateOptions": ["gomodTidy"],
   "osvVulnerabilityAlerts": true,
-  "transitiveRemediation": true,
   "vulnerabilityAlerts": {
     "automerge": true
   }
