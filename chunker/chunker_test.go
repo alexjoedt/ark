@@ -99,6 +99,58 @@ func TestCutPointsAndNamesFollowTheKeys(t *testing.T) {
 	}
 }
 
+// TestDataBelongsToTheCallerUnlessAllocIsSet pins the ownership of Data:
+// by default every chunk has memory of its own that later calls of Next leave
+// alone, and with SetAlloc the chunk is the buffer alloc returned.
+func TestDataBelongsToTheCallerUnlessAllocIsSet(t *testing.T) {
+	data := make([]byte, 256<<10)
+	rng := rand.New(rand.NewPCG(1, 2))
+	for i := range data {
+		data[i] = byte(rng.Uint32())
+	}
+	cfg := Config{MinSize: 2 << 10, AvgSize: 8 << 10, MaxSize: 32 << 10}
+
+	c := New(&reader{b: data}, cfg)
+	var chunks []Chunk
+	for {
+		chunk, err := c.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		chunks = append(chunks, chunk)
+	}
+	var joined []byte
+	for _, chunk := range chunks {
+		joined = append(joined, chunk.Data...)
+	}
+	if !slices.Equal(joined, data) {
+		t.Error("chunks kept after later Next calls no longer hold the stream")
+	}
+
+	buf := make([]byte, cfg.MaxSize)
+	var calls int
+	c = New(&reader{b: data}, cfg)
+	c.SetAlloc(func(size int) []byte {
+		calls++
+		return buf[:size]
+	})
+	for i, want := range chunks {
+		chunk, err := c.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if &chunk.Data[0] != &buf[0] || !slices.Equal(chunk.Data, want.Data) || chunk.Hash != want.Hash {
+			t.Fatalf("chunk %d is not the buffer from alloc with the same content and name", i)
+		}
+	}
+	if calls != len(chunks) {
+		t.Errorf("alloc ran %d times for %d chunks", calls, len(chunks))
+	}
+}
+
 // BenchmarkChunker measures cut point detection and the chunk HMAC over
 // random data with the default bounds.
 func BenchmarkChunker(b *testing.B) {
