@@ -87,8 +87,13 @@ var (
 	// holds a repository config.
 	ErrAlreadyInitialized = errors.New("ark: repository is already initialized")
 
-	// ErrUnsupportedFormat is returned by Open when the repository config
-	// names a format this build does not read.
+	// ErrUnsupportedFormat is returned when the repository holds something
+	// this build does not read: by Open for a config or key file of another
+	// version, and by every operation for a sealed object under an unknown
+	// format byte, a tree entry of an unknown file type, or a config, key
+	// file, manifest or lock with a JSON key the build does not know. Such
+	// an object is never skipped and never reported as corrupt; a later
+	// build wrote it.
 	ErrUnsupportedFormat = errors.New("ark: unsupported repository format")
 
 	// ErrWrongPassword is returned by Open when no key file of the

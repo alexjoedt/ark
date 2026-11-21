@@ -52,8 +52,9 @@ writer, every accepted risk included.
   data key as `format byte | 24-byte nonce | XChaCha20-Poly1305(payload)` with the associated data
   `format byte | <namespace>/<name>`. Under format byte `0x02` the payload is the zstd frame of
   the content. Under `0x03` it is the content as it is, which the writer picks when the zstd frame
-  would not be smaller. An object with any other format byte is rejected, and one whose format
-  byte was changed to the other does not open: `TestUnknownFormatByteIsRejected`,
+  would not be smaller. An object that authenticates under any other format byte is refused with
+  `ErrUnsupportedFormat`, and one whose format byte was changed, to the other or to any byte,
+  does not open: `TestUnknownFormatByteIsRejected`,
   `TestWriterStoresABlobRawWhenZstdIsNotSmaller`. A key file's `key` field is sealed the same way.
 - Chunks and trees are stored inside pack objects: each one sealed on its own as above, followed
   by a sealed table of their names and lengths that carries the SHA-256 of the bytes before
@@ -129,6 +130,15 @@ writer, every accepted risk included.
 - A lock under the same mutations is treated as absent, Check lists it under warnings, and only a
   forced unlock deletes it: `TestTamperedObjectsAreRejected`,
   `TestTamperedLockIsIgnoredUntilForced`.
+- What a build does not know is refused with `ErrUnsupportedFormat`, never skipped and never
+  reported as corrupt: a sealed object under an unknown format byte, a tree entry of an unknown
+  file type, and a config, key file, manifest or lock with a JSON key the build does not know.
+  Restore, Verify, Check, Export, a Reader and prune stop at such a chunk, tree entry or
+  manifest, and no operation starts while such a lock is stored. Only a holder of the key can
+  store one of these, the key file header aside, which is plaintext:
+  `TestUnknownFormatByteIsRejected`, `TestUnknownFileTypeFailsEveryReader`,
+  `TestManifestIsDecodedStrictly`, `TestLockWithAnUnknownKeyStopsTheOperation`,
+  `TestOpenRefusesUnknownKeys`.
 - A key file with any byte changed, or one from another repository, does not open:
   `TestEveryFlippedKeyFileByteFailsOpen`, `TestKeyFileDoesNotOpenElsewhere`.
 - A config that is flipped, truncated, reformatted or replaced by another repository's fails Open

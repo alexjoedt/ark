@@ -48,3 +48,4 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0031 | [No pool for chunk buffers](0031-no-pool-for-chunk-buffers.md) | accepted | 2026-11-21 |
 | 0032 | [A raw codec and an authenticated format byte](0032-raw-codec-and-authenticated-format-byte.md) | accepted | 2026-11-21 |
 | 0033 | [A pack table that opens from the tail of its pack](0033-pack-table-opens-from-a-tail-read.md) | accepted | 2026-11-21 |
+| 0034 | [What a build does not know it refuses, per object](0034-unknown-input-is-refused-not-skipped.md) | accepted | 2026-11-21 |

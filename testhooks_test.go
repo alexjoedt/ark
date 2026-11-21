@@ -6,10 +6,13 @@ import (
 	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"slices"
 	"time"
+
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 // OpenObject returns the raw content of an object of r for the tests in
@@ -189,4 +192,55 @@ func ChunkOffsets(s *SnapshotFS, name string) ([]int64, error) {
 		offsets[i] = c.Offset
 	}
 	return offsets, nil
+}
+
+// RetypeEntry stores the root tree node of snapshot id again with the type of
+// its entry name set to typ and points the manifest at it: the snapshot a
+// build that knows typ would have written.
+func RetypeEntry(ctx context.Context, r *Repository, id SnapshotID, name string, typ FileType) error {
+	m, err := r.loadManifest(ctx, id)
+	if err != nil {
+		return err
+	}
+	session := r.writeSession()
+	node, err := loadTreeNode(ctx, session.trees, m.RootTree)
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(node.Entries, func(e treeEntry) bool { return e.Name == name })
+	if i < 0 {
+		return fmt.Errorf("%w: root entry %s", ErrNotFound, name)
+	}
+	node.Entries[i].Type = typ
+	data, err := json.Marshal(node)
+	if err != nil {
+		return err
+	}
+	m.RootTree = session.trees.name(data)
+	if _, err := session.trees.putNamed(ctx, m.RootTree, data); err != nil {
+		return err
+	}
+	if err := session.finish(ctx); err != nil {
+		return err
+	}
+	return r.saveManifest(ctx, m)
+}
+
+// Retag returns obj, an object of r sealed under h, sealed again under the
+// format byte format with the same nonce and payload: what a later build
+// with a codec of that byte stores. A blob table is sealed under
+// PackTableName in its pack namespace.
+func Retag(r *Repository, h Handle, obj []byte, format byte) ([]byte, error) {
+	return retag((*[32]byte)(&r.key.DataKey), objectAAD(h), obj, format)
+}
+
+func retag(key *[32]byte, aad string, obj []byte, format byte) ([]byte, error) {
+	payload, err := unseal(key, aad, obj)
+	if err != nil {
+		return nil, err
+	}
+	aead, _ := chacha20poly1305.NewX(key[:])
+	const hdr = 1 + chacha20poly1305.NonceSizeX
+	out := append([]byte{format}, obj[1:hdr]...)
+	return aead.Seal(out, obj[1:hdr], payload, sealAAD(format, aad)), nil
 }

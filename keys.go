@@ -215,11 +215,12 @@ func loadMasterKey(
 	_ = json.Unmarshal(data, &stored) // a zero value only means no id matches
 
 	// Precedence when nothing opens bound: a changed config, a key without a
-	// binding, a file that was tried with a matching kind of passphrase, a
+	// binding, a key this build does not read, a file that was tried with a
+	// matching kind of passphrase, a
 	// foreign key, then a password or no-password mismatch, then an
 	// unreadable header.
 	var failed bool
-	var changed, legacy, foreign, mismatch, unsupported error
+	var changed, legacy, unknown, foreign, mismatch, unsupported error
 	for _, name := range names {
 		kf, err := readKeyFile(ctx, b, name)
 		if errors.Is(err, ErrNotFound) {
@@ -240,9 +241,11 @@ func loadMasterKey(
 			mismatch = ErrPasswordRequired
 			continue
 		}
-		mk := kf.open(codec, name, pw)
+		mk, err := kf.open(codec, name, pw)
 		switch {
-		case mk == nil:
+		case errors.Is(err, ErrUnsupportedFormat):
+			unknown = err
+		case err != nil:
 			failed = true
 		case mk.ConfigHash == hash:
 			return mk, name, nil
@@ -261,6 +264,8 @@ func loadMasterKey(
 		return nil, "", changed
 	case legacy != nil:
 		return nil, "", legacy
+	case unknown != nil:
+		return nil, "", unknown
 	case failed:
 		return nil, "", ErrWrongPassword
 	case foreign != nil:
@@ -288,7 +293,10 @@ func readKeyFile(ctx context.Context, b Backend, name string) (*keyFile, error) 
 	}
 
 	var kf keyFile
-	if err := json.Unmarshal(data, &kf); err != nil {
+	if err := decodeStrict("key file "+name, data, &kf); err != nil {
+		if errors.Is(err, ErrUnsupportedFormat) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("%w: key file %s is not valid JSON: %w", ErrUnsupportedFormat, name, err)
 	}
 	if kf.Version != keyFileVersion {
@@ -312,13 +320,15 @@ func readKeyFile(ctx context.Context, b Backend, name string) (*keyFile, error) 
 	return &kf, nil
 }
 
-// open unseals the master key of kf, the key file name, under pw. It returns
-// nil when the key does not open; a wrong password and a tampered key are
-// indistinguishable by design.
-func (kf *keyFile) open(codec *objectCodec, name string, pw Password) *masterKey {
+// open unseals the master key of kf, the key file name, under pw. A key that
+// does not open is an error the caller reports as a wrong password: that and
+// a tampered key are indistinguishable by design. A key that opens under a
+// format byte this build does not know, or with a JSON key it does not know,
+// is ErrUnsupportedFormat.
+func (kf *keyFile) open(codec *objectCodec, name string, pw Password) (*masterKey, error) {
 	sealed, err := hex.DecodeString(kf.Key)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("key file %s: %w", name, err)
 	}
 	var wrap [32]byte
 	if kf.KDF == kdfArgon2id {
@@ -328,11 +338,11 @@ func (kf *keyFile) open(codec *objectCodec, name string, pw Password) *masterKey
 	}
 	blob, err := codec.open(&wrap, objectAAD(Handle{Type: KeyFile, Name: name}), sealed)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("key file %s: %w", name, err)
 	}
 	var mk masterKey
-	if err := json.Unmarshal(blob, &mk); err != nil {
-		return nil
+	if err := decodeStrict("the master key of key file "+name, blob, &mk); err != nil {
+		return nil, err
 	}
-	return &mk
+	return &mk, nil
 }

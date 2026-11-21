@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/alexjoedt/ark/chunker"
@@ -193,7 +194,10 @@ func errFormatVersion(v int) error {
 // build cannot use is ErrUnsupportedFormat.
 func parseRepositoryConfig(data []byte) (repositoryConfig, error) {
 	var cfg repositoryConfig
-	if jsonErr := json.Unmarshal(data, &cfg); jsonErr != nil {
+	if jsonErr := decodeStrict("config", data, &cfg); jsonErr != nil {
+		if errors.Is(jsonErr, ErrUnsupportedFormat) {
+			return repositoryConfig{}, jsonErr
+		}
 		return repositoryConfig{}, fmt.Errorf("%w: config is not valid JSON: %w", ErrUnsupportedFormat, jsonErr)
 	}
 	if cfg.Version != repoFormatVersion {
@@ -206,4 +210,25 @@ func parseRepositoryConfig(data []byte) (repositoryConfig, error) {
 		return repositoryConfig{}, fmt.Errorf("%w: unknown compression %q", ErrUnsupportedFormat, cfg.Compression)
 	}
 	return cfg, nil
+}
+
+// decodeStrict decodes the JSON object data, which the message calls what,
+// into v. A key v has no field for is ErrUnsupportedFormat and named in the
+// message: a later build wrote it, and this one cannot know what the key
+// asks of a reader. Config, key file, manifest and lock are read with it.
+func decodeStrict(what string, data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	err := dec.Decode(v)
+	if err == nil {
+		if _, more := dec.Token(); !errors.Is(more, io.EOF) {
+			return fmt.Errorf("%s has data after its JSON value", what)
+		}
+		return nil
+	}
+	// encoding/json has no type for this error, only the text.
+	if key, ok := strings.CutPrefix(err.Error(), "json: unknown field "); ok {
+		return fmt.Errorf("%w: %s has the key %s, which this build does not know", ErrUnsupportedFormat, what, key)
+	}
+	return err //nolint:wrapcheck // the caller names the object
 }

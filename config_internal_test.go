@@ -192,6 +192,22 @@ func TestOpenRejectsTheFormatBeforePacks(t *testing.T) {
 // written them.
 func rebindConfig(t *testing.T, b Backend, change func(*repositoryConfig)) {
 	t.Helper()
+	rebindConfigBytes(t, b, func(data []byte) []byte {
+		cfg, err := parseRepositoryConfig(data)
+		if err != nil {
+			t.Fatalf("parseRepositoryConfig: %v", err)
+		}
+		change(&cfg)
+		if data, err = json.Marshal(cfg); err != nil {
+			t.Fatalf("marshal config: %v", err)
+		}
+		return data
+	})
+}
+
+// rebindConfigBytes is rebindConfig for a change to the stored bytes.
+func rebindConfigBytes(t *testing.T, b Backend, change func([]byte) []byte) {
+	t.Helper()
 	ctx := context.Background()
 	repo, err := Open(ctx, b, NoPassword())
 	if err != nil {
@@ -203,14 +219,7 @@ func rebindConfig(t *testing.T, b Backend, change func(*repositoryConfig)) {
 	if err != nil {
 		t.Fatalf("readRepositoryConfig: %v", err)
 	}
-	cfg, err := parseRepositoryConfig(data)
-	if err != nil {
-		t.Fatalf("parseRepositoryConfig: %v", err)
-	}
-	change(&cfg)
-	if data, err = json.Marshal(cfg); err != nil {
-		t.Fatalf("marshal config: %v", err)
-	}
+	data = change(data)
 	if err := b.Put(ctx, Handle{Type: ConfigFile, Name: configName}, bytes.NewReader(data)); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -253,6 +262,16 @@ func TestOpenRejectsAMasterKeyWithoutConfigHash(t *testing.T) {
 	if blob, err = json.Marshal(fields); err != nil {
 		t.Fatalf("marshal master key: %v", err)
 	}
+	resealMasterKey(t, b, repo, blob)
+
+	if _, err := Open(ctx, b, NoPassword()); !errors.Is(err, ErrUnsupportedFormat) {
+		t.Errorf("Open = %v, want ErrUnsupportedFormat", err)
+	}
+}
+
+// resealMasterKey replaces the key file of repo by one that seals blob.
+func resealMasterKey(t *testing.T, b Backend, repo *Repository, blob []byte) {
+	t.Helper()
 	var wrap [32]byte
 	h := Handle{Type: KeyFile, Name: repo.keyName}
 	kf, err := json.Marshal(keyFile{
@@ -263,11 +282,111 @@ func TestOpenRejectsAMasterKeyWithoutConfigHash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal key file: %v", err)
 	}
-	if err := b.Put(ctx, h, bytes.NewReader(kf)); err != nil {
+	if err := b.Put(context.Background(), h, bytes.NewReader(kf)); err != nil {
 		t.Fatalf("put key file: %v", err)
 	}
+}
 
-	if _, err := Open(ctx, b, NoPassword()); !errors.Is(err, ErrUnsupportedFormat) {
-		t.Errorf("Open = %v, want ErrUnsupportedFormat", err)
+// TestOpenRefusesUnknownKeys: the config and the master key are decoded
+// strictly. A key this build does not know, in the object or in a nested one,
+// is something a later build wrote for a reader to act on, so Open refuses
+// the repository and names the key instead of dropping it. The key file
+// header is a row of TestOpenRejectsUnknownKeyFiles. A master key sealed
+// under a format byte this build does not know is refused the same way, not
+// taken for a wrong password.
+func TestOpenRefusesUnknownKeys(t *testing.T) {
+	ctx := context.Background()
+	later := func(data []byte, before string) []byte {
+		return bytes.Replace(data, []byte(before), []byte(`"later":true,`+before), 1)
+	}
+	const laterKey = `key "later"`
+	for name, tc := range map[string]struct {
+		change func(t *testing.T, b Backend)
+		names  string
+	}{
+		"config": {func(t *testing.T, b Backend) {
+			rebindConfigBytes(t, b, func(data []byte) []byte { return later(data, `"version"`) })
+		}, laterKey},
+		"config chunker": {func(t *testing.T, b Backend) {
+			rebindConfigBytes(t, b, func(data []byte) []byte { return later(data, `"min"`) })
+		}, laterKey},
+		"master key format byte": {func(t *testing.T, b Backend) {
+			repo, err := Open(ctx, b, NoPassword())
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer repo.Close()
+			kf, err := readKeyFile(ctx, b, repo.keyName)
+			if err != nil {
+				t.Fatalf("readKeyFile: %v", err)
+			}
+			sealed, _ := hex.DecodeString(kf.Key)
+			var wrap [32]byte
+			h := Handle{Type: KeyFile, Name: repo.keyName}
+			if sealed, err = retag(&wrap, objectAAD(h), sealed, 0x04); err != nil {
+				t.Fatalf("retag: %v", err)
+			}
+			kf.Key = hex.EncodeToString(sealed)
+			data, _ := json.Marshal(kf)
+			if err := b.Put(ctx, h, bytes.NewReader(data)); err != nil {
+				t.Fatalf("put key file: %v", err)
+			}
+		}, "0x04"},
+		"master key": {func(t *testing.T, b Backend) {
+			repo, err := Open(ctx, b, NoPassword())
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer repo.Close()
+			blob, err := json.Marshal(repo.key)
+			if err != nil {
+				t.Fatalf("marshal master key: %v", err)
+			}
+			resealMasterKey(t, b, repo, later(blob, `"data_key"`))
+		}, laterKey},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newStubBackend()
+			if err := Init(ctx, b, NoPassword()); err != nil {
+				t.Fatalf("Init: %v", err)
+			}
+			tc.change(t, b)
+
+			_, err := Open(ctx, b, NoPassword())
+			if !errors.Is(err, ErrUnsupportedFormat) || errors.Is(err, ErrCorruptConfig) {
+				t.Fatalf("Open = %v, want ErrUnsupportedFormat alone", err)
+			}
+			if !strings.Contains(err.Error(), tc.names) {
+				t.Errorf("Open = %q, want it to name %s", err, tc.names)
+			}
+		})
+	}
+}
+
+// TestDecodeStrict pins what the readers of config, key file, manifest and
+// lock rely on: an unknown key is ErrUnsupportedFormat and named, at any
+// depth, and input [json.Unmarshal] refuses stays refused, as a plain error.
+// The unknown key is told from the text of encoding/json's error, so this
+// test is what notices a Go release that words it differently.
+func TestDecodeStrict(t *testing.T) {
+	for in, unsupported := range map[string]bool{
+		`{"version":1,"chunker":{"min":1}}`:           false,
+		`{"version":1,"later":0}`:                     true,
+		`{"version":1,"chunker":{"min":1,"later":0}}`: true,
+	} {
+		var cfg repositoryConfig
+		err := decodeStrict("config", []byte(in), &cfg)
+		if unsupported != errors.Is(err, ErrUnsupportedFormat) || (!unsupported && err != nil) {
+			t.Errorf("%s: decodeStrict = %v, want ErrUnsupportedFormat: %v", in, err, unsupported)
+		}
+		if unsupported && !strings.Contains(err.Error(), `config has the key "later"`) {
+			t.Errorf("%s: decodeStrict = %q, want it to name the object and the key", in, err)
+		}
+	}
+	for _, in := range []string{`{"version":1}{}`, `{"version":1}}`, `{"version":"1"}`, `{"version":1`, ``} {
+		var cfg repositoryConfig
+		if err := decodeStrict("config", []byte(in), &cfg); err == nil || errors.Is(err, ErrUnsupportedFormat) {
+			t.Errorf("%q: decodeStrict = %v, want an error that is not ErrUnsupportedFormat", in, err)
+		}
 	}
 }

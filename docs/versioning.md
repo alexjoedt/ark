@@ -27,7 +27,7 @@ The first stable release will be `v1.1.0`. From then on:
 | Area | Promise |
 |---|---|
 | Go API | follows the Go compatibility rules: minor releases add, only a major release removes |
-| repository format | every 1.x release reads the 1.x format; minor releases may add optional fields |
+| repository format | every 1.x release reads what an earlier 1.x release wrote; an older release refuses what it doesn't know with `ErrUnsupportedFormat` |
 | CLI flags | keep their meaning |
 | `--json` output | only gains fields |
 | `ark export` | writes plain tar, and `ark import` reads it |

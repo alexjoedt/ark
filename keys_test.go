@@ -281,6 +281,7 @@ func TestOpenRejectsUnknownKeyFiles(t *testing.T) {
 		"too much time":   `{"version":1,"kdf":"argon2id","time":17,"memory":64,"threads":1,"salt":"00","key":"00"}`,
 		"too much memory": `{"version":1,"kdf":"argon2id","time":1,"memory":1048577,"threads":1,"salt":"00","key":"00"}`,
 		"not json":        `not a key file`,
+		"unknown key":     `{"version":1,"kdf":"none","key":"00","later":true}`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

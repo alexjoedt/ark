@@ -1,6 +1,7 @@
 package ark
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -176,10 +177,17 @@ func (r *Repository) putLock(ctx context.Context, name string, l lockObject) err
 // and so is a zero-byte object named older than lockStaleAge or not named
 // like a lock: that is a truncated lock (or, briefly, a refresh in flight on
 // a backend whose Put is not atomic).
-func (r *Repository) loadLocks(ctx context.Context) (map[string]lockObject, []string, error) {
+//
+// A lock under a format byte or with a JSON key this build does not know is
+// not skipped: a later build holds it, and what it guards is unknown here. It
+// is returned by name like the others and as refused, the ErrUnsupportedFormat
+// of the first one, which stops every caller but Unlock.
+func (r *Repository) loadLocks(ctx context.Context) (
+	locks map[string]lockObject, unreadable []string, refused, err error,
+) {
 	now := r.now()
-	var names, unreadable []string
-	err := r.backend.List(ctx, LockFile, func(info BlobInfo) error {
+	var names []string
+	err = r.backend.List(ctx, LockFile, func(info BlobInfo) error {
 		if info.Size == 0 {
 			if t, ok := idTime(info.Name); !ok || now.Sub(t) >= lockStaleAge {
 				unreadable = append(unreadable, info.Name)
@@ -190,22 +198,25 @@ func (r *Repository) loadLocks(ctx context.Context) (map[string]lockObject, []st
 		return nil
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("lock: failed to list locks: %w", err)
+		return nil, nil, nil, fmt.Errorf("lock: failed to list locks: %w", err)
 	}
 
-	locks := make(map[string]lockObject, len(names))
+	locks = make(map[string]lockObject, len(names))
 	for _, name := range names {
 		l, err := r.loadLock(ctx, name)
 		switch {
 		case errors.Is(err, ErrNotFound):
 			continue // released since the listing
+		case errors.Is(err, ErrUnsupportedFormat) && refused == nil:
+			refused = fmt.Errorf("%w; Unlock with WithForce removes it once no operation of that build runs", err)
+			fallthrough
 		case err != nil:
 			unreadable = append(unreadable, name)
 			continue
 		}
 		locks[name] = l
 	}
-	return locks, unreadable, nil
+	return locks, unreadable, refused, nil
 }
 
 func (r *Repository) loadLock(ctx context.Context, name string) (lockObject, error) {
@@ -214,7 +225,10 @@ func (r *Repository) loadLock(ctx context.Context, name string) (lockObject, err
 		return lockObject{}, err
 	}
 	var l lockObject
-	if err := json.Unmarshal(data, &l); err != nil {
+	if err := decodeStrict("lock "+name, data, &l); err != nil {
+		if errors.Is(err, ErrUnsupportedFormat) {
+			return lockObject{}, err
+		}
 		return lockObject{}, fmt.Errorf("lock: failed to parse %s: %w", name, err)
 	}
 	return l, nil
@@ -344,8 +358,8 @@ func (r *Repository) lockNow() time.Time { return r.now().Round(0) }
 func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Context, *repoLock, error) {
 	now := r.lockNow()
 
-	locks, unreadable, err := r.loadLocks(ctx)
-	if err != nil {
+	locks, unreadable, refused, err := r.loadLocks(ctx)
+	if err = cmp.Or(err, refused); err != nil {
 		return nil, nil, err
 	}
 	for _, name := range unreadable {
@@ -370,8 +384,8 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 		return nil, nil, err
 	}
 
-	locks, _, err = r.loadLocks(ctx)
-	if err != nil {
+	locks, _, refused, err = r.loadLocks(ctx)
+	if err = cmp.Or(err, refused); err != nil {
 		r.dropLock(ctx, name, exclusive)
 		return nil, nil, err
 	}
@@ -540,8 +554,8 @@ func (r *Repository) removeLock(ctx context.Context, name string) bool {
 // Locks lists the lock objects in the repository, newest first, stale ones
 // included.
 func (r *Repository) Locks(ctx context.Context) ([]LockInfo, error) {
-	locks, _, err := r.loadLocks(ctx)
-	if err != nil {
+	locks, _, refused, err := r.loadLocks(ctx)
+	if err = cmp.Or(err, refused); err != nil {
 		return nil, err
 	}
 	now := r.now()
@@ -573,7 +587,7 @@ func (r *Repository) Unlock(ctx context.Context, opts ...UnlockOption) (int, err
 		o(cfg)
 	}
 
-	locks, unreadable, err := r.loadLocks(ctx)
+	locks, unreadable, _, err := r.loadLocks(ctx)
 	if err != nil {
 		return 0, err
 	}

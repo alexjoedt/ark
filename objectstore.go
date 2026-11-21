@@ -93,8 +93,9 @@ func (c *objectCodec) seal(key *[32]byte, aad string, data []byte) []byte {
 	return aead.Seal(out[:hdr], out[1:hdr], out[hdr:], sealAAD(out[0], aad))
 }
 
-// open reverses seal. A changed byte, an unknown format byte, a different key
-// or a different aad all return errSealBroken.
+// open reverses seal. A changed byte, the format byte among them, a different
+// key or a different aad return errSealBroken. An object that authenticates
+// under a format byte this build does not know is ErrUnsupportedFormat.
 func (c *objectCodec) open(key *[32]byte, aad string, obj []byte) ([]byte, error) {
 	payload, err := unseal(key, aad, obj)
 	if err != nil {
@@ -108,12 +109,16 @@ func (c *objectCodec) open(key *[32]byte, aad string, obj []byte) ([]byte, error
 
 // unseal authenticates obj and returns the payload it seals, a zstd frame or
 // the content by the format byte: all of open but the decompression.
+//
+// The format byte is judged after the tag, which covers it. An unknown byte
+// on an object that authenticates was put there by a holder of the key, a
+// later build with another codec, and is ErrUnsupportedFormat. An unknown
+// byte on anything else is damage like any other: were it judged first, a
+// zeroed object would read as a format this build lacks, and nothing that
+// skips, lists or repairs corruption would touch it.
 func unseal(key *[32]byte, aad string, obj []byte) ([]byte, error) {
 	if len(obj) == 0 {
 		return nil, fmt.Errorf("%w: object is empty", errSealBroken)
-	}
-	if !knownFormat(obj[0]) {
-		return nil, fmt.Errorf("%w: unknown object format byte 0x%02x", errSealBroken, obj[0])
 	}
 	if len(obj) < sealOverhead {
 		return nil, errSealBroken
@@ -123,6 +128,9 @@ func unseal(key *[32]byte, aad string, obj []byte) ([]byte, error) {
 	payload, err := aead.Open(nil, nonce, obj[1+chacha20poly1305.NonceSizeX:], sealAAD(obj[0], aad))
 	if err != nil {
 		return nil, errSealBroken
+	}
+	if !knownFormat(obj[0]) {
+		return nil, fmt.Errorf("%w: unknown object format byte 0x%02x", ErrUnsupportedFormat, obj[0])
 	}
 	return payload, nil
 }
@@ -159,7 +167,8 @@ func (r *Repository) getSealed(ctx context.Context, h Handle) ([]byte, error) {
 }
 
 // readSealed reads and opens the object under h. Errors wrap ErrNotFound from
-// the backend, and errSealBroken for an object that was changed or moved.
+// the backend, errSealBroken for an object that was changed or moved, and
+// ErrUnsupportedFormat for one under a format byte this build does not know.
 func readSealed(ctx context.Context, b Backend, c *objectCodec, key *[32]byte, h Handle) ([]byte, error) {
 	obj, err := readWhole(ctx, b, h)
 	if err != nil {

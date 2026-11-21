@@ -178,7 +178,7 @@ func (s *packSpace) parse(pack []byte) ([]packEntry, error) {
 func (s *packSpace) openTable(sealed []byte) (entries []packEntry, sum [sha256.Size]byte, err error) {
 	table, err := s.codec.open(s.dataKey, s.tableAAD(), sealed)
 	if err != nil {
-		return nil, sum, fmt.Errorf("%w: failed to open the table of a %s object: %w", s.corruptErr, s.packs, err)
+		return nil, sum, s.sealErr(err, "failed to open the table of a %s object", s.packs)
 	}
 	if len(table) < len(sum) || (len(table)-len(sum))%packEntrySize != 0 {
 		return nil, sum, fmt.Errorf("%w: table of a %s object has %d bytes", s.corruptErr, s.packs, len(table))
@@ -222,7 +222,7 @@ func (s *packSpace) openBlob(pack string, e packEntry, obj []byte) ([]byte, erro
 	name := hex.EncodeToString(e.name[:])
 	data, err := s.codec.open(s.dataKey, objectAAD(Handle{Type: s.blobs, Name: name}), obj)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to open %s in %s object %s: %w", s.corruptErr, name, s.packs, pack, err)
+		return nil, s.sealErr(err, "failed to open %s in %s object %s", name, s.packs, pack)
 	}
 	return data, nil
 }
@@ -232,9 +232,21 @@ func (s *packSpace) openBlob(pack string, e packEntry, obj []byte) ([]byte, erro
 func (s *packSpace) checkSeal(pack string, e packEntry, obj []byte) error {
 	name := hex.EncodeToString(e.name[:])
 	if _, err := unseal(s.dataKey, objectAAD(Handle{Type: s.blobs, Name: name}), obj); err != nil {
-		return fmt.Errorf("%w: failed to open %s in %s object %s: %w", s.corruptErr, name, s.packs, pack, err)
+		return s.sealErr(err, "failed to open %s in %s object %s", name, s.packs, pack)
 	}
 	return nil
+}
+
+// sealErr is the error of a table or blob that did not open with err: the
+// corrupt error of the namespace, unless the build does not read the object.
+// That one stays ErrUnsupportedFormat alone, so nothing that handles
+// corruption skips, retries or repairs what a later build may have written.
+func (s *packSpace) sealErr(err error, format string, args ...any) error {
+	what := fmt.Sprintf(format, args...)
+	if errors.Is(err, ErrUnsupportedFormat) {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	return fmt.Errorf("%w: %s: %w", s.corruptErr, what, err)
 }
 
 // packWriter collects sealed blobs of one type into pack objects. It is safe

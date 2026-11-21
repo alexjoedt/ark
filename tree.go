@@ -121,6 +121,12 @@ func marshalTreeNode(children []fileEntry, hashes map[string]string) ([]byte, er
 	return data, nil
 }
 
+// storedType reports whether t is a file type a tree node of this format
+// holds.
+func storedType(t FileType) bool {
+	return t == FileTypeRegular || t == FileTypeDirectory || t == FileTypeSymlink || t == FileTypeHardlink
+}
+
 func loadTreeNode(ctx context.Context, trees *objectStore, hash string) (*treeNode, error) {
 	data, err := trees.Get(ctx, hash)
 	if err != nil {
@@ -134,6 +140,13 @@ func loadTreeNode(ctx context.Context, trees *objectStore, hash string) (*treeNo
 		if e.Mode&^storedModeMask != 0 {
 			return nil, fmt.Errorf("%w: node %s: mode %#o of %q has a bit outside 07777",
 				ErrCorruptTree, hash, e.Mode, e.Name)
+		}
+		// Every reader of a tree loads its nodes here, so none of them meets
+		// a type it would have to skip: a restore that leaves the entry out
+		// and a prune that counts it as holding nothing are both wrong.
+		if !storedType(e.Type) {
+			return nil, fmt.Errorf("%w: node %s: %q has the file type %q, which this build does not know",
+				ErrUnsupportedFormat, hash, e.Name, e.Type)
 		}
 	}
 	return &node, nil
@@ -400,7 +413,7 @@ func visitTreeEntry(
 		return fn(fileEntry{FileInfo: info, Chunks: e.Chunks})
 
 	case FileTypeUnsupported:
-		// Never written: the backup drops these before the tree is built.
+		// Never stored, and loadTreeNode refuses a node that holds one.
 	}
 	return nil
 }

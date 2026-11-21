@@ -44,7 +44,9 @@ Every sealed object has one layout: `format byte | 24-byte nonce | XChaCha20-Pol
 The format byte is `0x02` when the payload is the zstd frame of the content, and `0x03` when it is
 the content as it is. A reader opens both, for every object. The associated data is the format
 byte followed by `<namespace>/<name>`, for example `snapshots/<id>` for a manifest, so an object
-moved to another name or relabelled with the other codec fails on its tag.
+moved to another name or relabelled with the other codec fails on its tag. An object that
+authenticates under any other format byte is one a later build wrote, and a reader refuses it
+with `ErrUnsupportedFormat`.
 
 Index objects, manifests, locks, and the marker are sealed this way with the data key under their
 own name. The `key` field of a key file is sealed the same way under the key derived from the

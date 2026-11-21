@@ -1,6 +1,7 @@
 package ark
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -660,8 +661,8 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 	slices.Sort(ids)
 	slices.Reverse(ids)
 
-	_, unreadable, err := r.loadLocks(ctx)
-	if err != nil {
+	_, unreadable, refused, err := r.loadLocks(ctx)
+	if err = cmp.Or(err, refused); err != nil {
 		return nil, err
 	}
 	result := &CheckResult{SnapshotsChecked: len(ids)}
@@ -693,6 +694,11 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 			return nil, ctx.Err() //nolint:wrapcheck // the caller's own cancellation
 		}
 		progress(ProgressEvent{Phase: PhaseFetch, CurrentPath: string(id), FilesDone: i + 1, FilesTotal: len(ids)})
+		if errors.Is(err, ErrUnsupportedFormat) {
+			// Not a finding: a build that does not read what is stored
+			// cannot say whether it is sound.
+			return nil, fmt.Errorf("check: snapshot %s: %w", id, err)
+		}
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("snapshot %s: %v", id, err))
 			continue

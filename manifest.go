@@ -86,10 +86,14 @@ func (s SnapshotStats) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON reads the manifest shape. An unparsable duration leaves the
-// field zero rather than failing the whole manifest.
+// field zero rather than failing the whole manifest. A key the shape does not
+// have is ErrUnsupportedFormat, as in the manifest around it.
 func (s *SnapshotStats) UnmarshalJSON(data []byte) error {
 	var raw statsJSON
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := decodeStrict("stats", data, &raw); err != nil {
+		if errors.Is(err, ErrUnsupportedFormat) {
+			return err
+		}
 		return fmt.Errorf("manifest: failed to parse stats: %w", err)
 	}
 	d, err := time.ParseDuration(raw.Duration)
@@ -143,7 +147,9 @@ func (r *Repository) saveManifest(ctx context.Context, m *manifest) error {
 }
 
 // loadManifest reads and opens a manifest. One that was changed or moved
-// from another snapshot id fails with ErrCorruptManifest.
+// from another snapshot id fails with ErrCorruptManifest, one with a format
+// byte, a JSON key or a version this build does not know with
+// ErrUnsupportedFormat.
 func (r *Repository) loadManifest(ctx context.Context, id SnapshotID) (*manifest, error) {
 	data, err := r.getSealed(ctx, Handle{Type: SnapshotFile, Name: string(id)})
 	if errors.Is(err, errSealBroken) {
@@ -153,11 +159,15 @@ func (r *Repository) loadManifest(ctx context.Context, id SnapshotID) (*manifest
 		return nil, err // wraps ErrNotFound as appropriate
 	}
 	var m manifest
-	if err := json.Unmarshal(data, &m); err != nil {
+	if err := decodeStrict("manifest", data, &m); err != nil {
+		if errors.Is(err, ErrUnsupportedFormat) {
+			return nil, fmt.Errorf("snapshot %s: %w", id, err)
+		}
 		return nil, fmt.Errorf("%w: snapshot %s: %w", ErrCorruptManifest, id, err)
 	}
 	if m.Version != manifestVersion {
-		return nil, fmt.Errorf("manifest: unsupported version %d (only v1 is supported)", m.Version)
+		return nil, fmt.Errorf("snapshot %s: %w: manifest has version %d, this build reads version %d",
+			id, ErrUnsupportedFormat, m.Version, manifestVersion)
 	}
 	return &m, nil
 }

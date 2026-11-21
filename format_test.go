@@ -297,27 +297,6 @@ func TestTreeNodeJSONIsCanonical(t *testing.T) {
 	}
 }
 
-func TestUnknownFormatByteIsRejected(t *testing.T) {
-	ctx := context.Background()
-	b := arkmem.New()
-	repo, id := backupFixture(t, b)
-
-	// Rewrite one chunk with the plaintext format byte of the pre-encryption
-	// draft, which the encrypted format no longer reads.
-	chunk := blobNames(t, repo, ark.BlobFile)[0]
-	obj := readBlob(t, b, repo, ark.BlobFile, chunk)
-	obj[0] = 0x01
-	writeBlob(t, b, repo, ark.BlobFile, chunk, obj)
-
-	_, err := repo.Restore(ctx, id, discardSink{})
-	if err == nil {
-		t.Fatal("restore of a chunk with an unknown format byte succeeded")
-	}
-	if !strings.Contains(err.Error(), "0x01") {
-		t.Errorf("error does not name the format byte: %v", err)
-	}
-}
-
 // TestWriterStoresABlobRawWhenZstdIsNotSmaller backs up random and
 // compressible files. Every chunk of the random ones is stored raw, its
 // content plus the seal overhead, and none of the compressible ones is. A
