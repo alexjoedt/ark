@@ -667,9 +667,17 @@ func BenchmarkTreeNodeDecode(b *testing.B) {
 // FuzzDecodeTreeNode feeds the decoder arbitrary bytes. It must not panic,
 // must refuse with one of the two named errors, and must accept only the one
 // encoding of a node: what it returns encodes to the same bytes. The seeds are
-// in testdata/fuzz: a node of every type and an input per refusal, which plain
-// go test runs.
+// a node of every type and the input of every refusal, which plain go test
+// runs; a crasher a fuzz run finds is committed to testdata/fuzz.
 func FuzzDecodeTreeNode(f *testing.F) {
+	f.Add(mustEncodeNode(f, &treeNode{Entries: []treeEntry{}}))
+	f.Add(mustEncodeNode(f, fullNode()))
+	for _, e := range nodeEntries() {
+		f.Add(mustEncodeNode(f, &treeNode{Entries: []treeEntry{e}}))
+	}
+	for _, r := range nodeRefusals() {
+		f.Add(r.stored)
+	}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		node, err := decodeTreeNode(data)
 		if err != nil {
