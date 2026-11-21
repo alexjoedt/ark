@@ -481,6 +481,25 @@ func TestOpenReadsTheFeaturesObject(t *testing.T) {
 			t.Fatalf("Open = %v, want ErrUnsupportedFormat", err)
 		}
 	})
+	for _, body := range []string{`{"required":"packv2"}`, `{"required":{"packv2":1}}`, `[]`, `{"required":[]} {}`} {
+		t.Run("undecodable "+body, func(t *testing.T) {
+			b := newRepo(t)
+			putFeatures(t, b, body)
+			if err := open(t, b); !errors.Is(err, ErrUnsupportedFormat) || errors.Is(err, ErrCorruptConfig) {
+				t.Fatalf("Open = %v, want ErrUnsupportedFormat", err)
+			}
+		})
+	}
+	t.Run("init over a features object", func(t *testing.T) {
+		b := newRepo(t)
+		putFeatures(t, b, `{"required":[]}`)
+		if err := b.Delete(ctx, Handle{Type: ConfigFile, Name: configName}); err != nil {
+			t.Fatal(err)
+		}
+		if err := Init(ctx, b, NoPassword()); !errors.Is(err, ErrAlreadyInitialized) {
+			t.Fatalf("Init = %v, want ErrAlreadyInitialized", err)
+		}
+	})
 	t.Run("damaged", func(t *testing.T) {
 		b := newRepo(t)
 		putFeatures(t, b, `{"required":[]}`)

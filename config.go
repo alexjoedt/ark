@@ -21,7 +21,8 @@ import (
 // The format is frozen with v1.1.0; later changes are additive or bump it.
 const repoFormatVersion = 1
 
-// configName is the name of the single object in the config namespace.
+// configName is the name of the repository config object in the config
+// namespace. The namespace holds one other object, the optional features.
 const configName = "config"
 
 // featuresName is the optional sealed object in the config namespace that
@@ -37,7 +38,9 @@ type repositoryFeatures struct {
 
 // checkFeatures reads the features object, when there is one, and refuses a
 // repository that requires a feature this build does not know. A tag that
-// does not verify is ErrCorruptConfig.
+// does not verify is ErrCorruptConfig. An object that authenticates but does
+// not decode was written by a holder of the data key, so a later build, and
+// is ErrUnsupportedFormat like the config.
 func checkFeatures(ctx context.Context, b Backend, codec *objectCodec, key *masterKey) error {
 	data, err := readSealed(ctx, b, codec, (*[32]byte)(&key.DataKey), Handle{Type: ConfigFile, Name: featuresName})
 	if errors.Is(err, ErrNotFound) {
@@ -54,7 +57,7 @@ func checkFeatures(ctx context.Context, b Backend, codec *objectCodec, key *mast
 		if errors.Is(err, ErrUnsupportedFormat) {
 			return err
 		}
-		return fmt.Errorf("%w: features: %w", ErrCorruptConfig, err)
+		return fmt.Errorf("%w: features: %w", ErrUnsupportedFormat, err)
 	}
 	for _, name := range f.Required {
 		if _, ok := knownFeatures[name]; !ok {
@@ -135,8 +138,10 @@ func WithChunkerConfig(c chunker.Config) InitOption {
 // NoPassword. The password only unlocks the master key; without it the
 // repository cannot be read, and nothing recovers it.
 //
-// It returns ErrAlreadyInitialized if b already holds a config, so a typo in a
-// repository path cannot silently create a second repository next to the first.
+// It returns ErrAlreadyInitialized if b already holds a config or a features
+// object, so a typo in a repository path cannot silently create a second
+// repository next to the first, and a features object an earlier repository
+// left behind cannot make the new one fail every Open.
 // The config is written last, so a failed Init leaves no repository behind.
 func Init(ctx context.Context, b Backend, pw Password, opts ...InitOption) error {
 	if err := pw.validate(); err != nil {
@@ -164,6 +169,14 @@ func Init(ctx context.Context, b Backend, pw Password, opts ...InitOption) error
 	}
 	if exists {
 		return ErrAlreadyInitialized
+	}
+	exists, err = b.Exists(ctx, Handle{Type: ConfigFile, Name: featuresName})
+	if err != nil {
+		return fmt.Errorf("ark: failed to check for an existing repository: %w", err)
+	}
+	if exists {
+		return fmt.Errorf("%w: the config namespace holds a features object of an earlier repository",
+			ErrAlreadyInitialized)
 	}
 
 	id := randomHex(repoIDBytes)

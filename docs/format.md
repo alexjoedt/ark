@@ -19,7 +19,8 @@ The `config` object carries `version`.
 ## Layout
 
 ```
-config       plaintext JSON, authenticated through a hash sealed in the master key
+config/      config: plaintext JSON, authenticated through a hash sealed in the master key
+             features: optional sealed JSON, the features the repository requires
 keys/        key files: the master key sealed under the password
 datapacks/   packs of file content chunks
 treepacks/   packs of directory nodes
@@ -30,8 +31,8 @@ locks/       sealed shared and exclusive locks
 lostpacks/   at most one sealed marker, see below
 ```
 
-- `config`, the key files, the manifests, the locks, and the marker are single objects, one per
-  file.
+- `config`, `features`, the key files, the manifests, the locks, and the marker are single
+  objects, one per file.
 - Chunks and directory nodes are never stored alone. They live in packs, and the index finds them.
 - A manifest holds the source type, source name, host, tags, comment, statistics, and the labels
   under the key `source_meta`. See [Labels](labels.md) and [Series](series.md).
@@ -48,9 +49,31 @@ moved to another name or relabelled with the other codec fails on its tag. An ob
 authenticates under any other format byte is one a later build wrote, and a reader refuses it
 with `ErrUnsupportedFormat`.
 
-Index objects, manifests, locks, and the marker are sealed this way with the data key under their
+Index objects, manifests, locks, the marker, and `features` are sealed this way with the data key under their
 own name. The `key` field of a key file is sealed the same way under the key derived from the
 password, with the associated data `keys/<name>`. The `config` isn't sealed.
+
+### Features
+
+`config/features` is a sealed JSON object of the shape `{"required": ["name", ...]}`. It's optional,
+and a repository without it requires nothing. No build of version 1 writes it. A later release
+writes it when it changes what a whole repository means, so every earlier build refuses that
+repository.
+
+- `Open` reads it with one `Get` after the master key is unsealed.
+- A name the build doesn't know refuses the repository with `ErrUnsupportedFormat`. Version 1
+  knows no name, so any name refuses.
+- It's decoded strictly: an unknown key, a value of another type, or data after the object is
+  `ErrUnsupportedFormat`, because only a holder of the data key could have written it.
+- A tag that doesn't verify is `ErrCorruptConfig`.
+- `Init` refuses a backend that holds a `features` object with `ErrAlreadyInitialized`.
+
+### JSON objects
+
+`config`, `features`, key files, manifests, and locks are JSON objects. A key a reader has no
+field for is `ErrUnsupportedFormat`. A version 1 reader matches keys without regard to case, as Go's
+`encoding/json` does, so a later version never adds a key that differs from an existing one only
+in case.
 
 ### Sharding
 
