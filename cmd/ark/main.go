@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -40,13 +41,7 @@ func run(args []string) int {
 	// Load --env-file before app.Run so the flag env sources see the values.
 	err := config.PreloadEnvFile(args)
 	if err == nil {
-		var stop func() error
-		if stop, err = startProfiles(os.Getenv("ARK_CPUPROFILE"), os.Getenv("ARK_MEMPROFILE")); err == nil {
-			err = newApp().Run(ctx, args)
-			if stopErr := stop(); err == nil {
-				err = stopErr
-			}
-		}
+		err = runProfiled(ctx, args)
 	}
 	// A command that returned without Done or Fail must not leave the live
 	// block drawing over its results or the error line.
@@ -68,6 +63,24 @@ func run(args []string) int {
 		fmt.Fprintf(os.Stderr, "ark: %s\n", err.Error())
 	}
 	return code
+}
+
+// runProfiled runs the app between startProfiles and its stop. A failed
+// profile write is returned only when the command itself succeeded; otherwise
+// it goes to stderr so the command's error stays the one reported.
+func runProfiled(ctx context.Context, args []string) error {
+	stop, err := startProfiles(os.Getenv("ARK_CPUPROFILE"), os.Getenv("ARK_MEMPROFILE"))
+	if err != nil {
+		return err
+	}
+	err = newApp().Run(ctx, args)
+	if stopErr := stop(); stopErr != nil {
+		if err == nil {
+			return stopErr
+		}
+		fmt.Fprintf(os.Stderr, "ark: %s\n", stopErr)
+	}
+	return err
 }
 
 // startCPUProfile writes a CPU profile of the whole run to path, for
@@ -98,6 +111,9 @@ func startCPUProfile(path string) (func() error, error) {
 // skips that profile. The returned func ends both and reports the first
 // failed write.
 func startProfiles(cpuPath, memPath string) (func() error, error) {
+	if cpuPath != "" && cpuPath == memPath {
+		return nil, errors.New("ARK_CPUPROFILE and ARK_MEMPROFILE must name different files")
+	}
 	stopCPU, err := startCPUProfile(cpuPath)
 	if err != nil {
 		return nil, err
@@ -108,11 +124,11 @@ func startProfiles(cpuPath, memPath string) (func() error, error) {
 		return nil, err
 	}
 	return func() error {
-		memErr := stopMem()
-		if err := stopCPU(); err != nil {
-			return err
+		cpuErr := stopCPU()
+		if memErr := stopMem(); cpuErr == nil {
+			return memErr
 		}
-		return memErr
+		return cpuErr
 	}, nil
 }
 

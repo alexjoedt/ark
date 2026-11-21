@@ -1220,7 +1220,10 @@ func TestMemProfileEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("heap profile is not a gzipped pprof: %v", err)
 	}
-	raw, _ := io.ReadAll(zr)
+	raw, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("read heap profile: %v", err)
+	}
 	for _, view := range []string{"alloc_space", "inuse_space"} {
 		if !bytes.Contains(raw, []byte(view)) {
 			t.Errorf("heap profile lacks sample type %s", view)
@@ -1240,6 +1243,13 @@ func TestMemProfileEnv(t *testing.T) {
 	t.Setenv("ARK_MEMPROFILE", filepath.Join(dir, "missing", "mem.prof"))
 	if code, _ := runCapture(t, "--version"); code == 0 {
 		t.Fatal("unwritable profile path exited 0")
+	}
+
+	same := filepath.Join(dir, "same.prof")
+	t.Setenv("ARK_MEMPROFILE", same)
+	t.Setenv("ARK_CPUPROFILE", same)
+	if code, _ := runCapture(t, "--version"); code == 0 {
+		t.Fatal("identical profile paths exited 0")
 	}
 }
 
