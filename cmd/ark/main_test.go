@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -32,6 +34,7 @@ const envCLIChild = "ARK_TEST_CLI_CHILD"
 func TestMain(m *testing.M) {
 	os.Setenv("ARK_INSECURE_NO_PASSWORD", "1")
 	os.Unsetenv("ARK_CPUPROFILE")
+	os.Unsetenv("ARK_MEMPROFILE")
 	if os.Getenv(envCLIChild) != "" {
 		os.Exit(run(os.Args))
 	}
@@ -1190,6 +1193,51 @@ func TestCPUProfileEnv(t *testing.T) {
 	}
 
 	t.Setenv("ARK_CPUPROFILE", filepath.Join(t.TempDir(), "missing", "cpu.prof"))
+	if code, _ := runCapture(t, "--version"); code == 0 {
+		t.Fatal("unwritable profile path exited 0")
+	}
+}
+
+func TestMemProfileEnv(t *testing.T) {
+	dir := t.TempDir()
+	mem := filepath.Join(dir, "mem.prof")
+	t.Setenv("ARK_MEMPROFILE", mem)
+	t.Setenv("ARK_CPUPROFILE", filepath.Join(dir, "cpu.prof"))
+	if code, _ := runCapture(t, "--version"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	for _, name := range []string{"mem.prof", "cpu.prof"} {
+		if fi, err := os.Stat(filepath.Join(dir, name)); err != nil || fi.Size() == 0 {
+			t.Fatalf("%s not written: %v", name, err)
+		}
+	}
+	f, err := os.Open(mem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatalf("heap profile is not a gzipped pprof: %v", err)
+	}
+	raw, _ := io.ReadAll(zr)
+	for _, view := range []string{"alloc_space", "inuse_space"} {
+		if !bytes.Contains(raw, []byte(view)) {
+			t.Errorf("heap profile lacks sample type %s", view)
+		}
+	}
+
+	// the profile is also written when the command fails
+	failed := filepath.Join(dir, "failed.prof")
+	t.Setenv("ARK_MEMPROFILE", failed)
+	if code, _ := runCapture(t, "--no-such-flag"); code == 0 {
+		t.Fatal("unknown flag exited 0")
+	}
+	if fi, err := os.Stat(failed); err != nil || fi.Size() == 0 {
+		t.Fatalf("profile not written after a failure: %v", err)
+	}
+
+	t.Setenv("ARK_MEMPROFILE", filepath.Join(dir, "missing", "mem.prof"))
 	if code, _ := runCapture(t, "--version"); code == 0 {
 		t.Fatal("unwritable profile path exited 0")
 	}
