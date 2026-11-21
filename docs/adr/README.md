@@ -50,3 +50,4 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0033 | [A pack table that opens from the tail of its pack](0033-pack-table-opens-from-a-tail-read.md) | accepted | 2026-11-21 |
 | 0034 | [What a build does not know it refuses, per object](0034-unknown-input-is-refused-not-skipped.md) | accepted | 2026-11-21 |
 | 0035 | [Version 1 drops the legacy of earlier builds](0035-version-1-drops-the-legacy-of-earlier-builds.md) | accepted | 2026-11-21 |
+| 0036 | [Manifest names stay random](0036-manifest-names-stay-random.md) | accepted | 2026-11-21 |

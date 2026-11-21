@@ -44,7 +44,7 @@ func (r *Repository) runBackup(
 		Version:    manifestVersion,
 		ID:         newSnapshotID(),
 		ParentID:   parentID,
-		CreatedAt:  createdAt.UTC(),
+		CreatedAt:  createdAt,
 		SourceName: meta.Name,
 		SourceType: meta.Type,
 		Labels:     mergeLabels(meta.Labels, opts.labels),

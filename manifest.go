@@ -187,6 +187,7 @@ type chunkRef struct {
 // references durable before anything can point at them, the second makes the
 // manifest itself durable before the caller reports the snapshot.
 func (r *Repository) saveManifest(ctx context.Context, m *manifest) error {
+	m.CreatedAt = m.CreatedAt.UTC()
 	data, err := json.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("manifest: failed to marshal: %w", err)

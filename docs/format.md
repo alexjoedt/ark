@@ -34,51 +34,8 @@ lostpacks/   at most one sealed marker, see below
 - `config`, `features`, the key files, the manifests, the locks, and the marker are single
   objects, one per file.
 - Chunks and directory nodes are never stored alone. They live in packs, and the index finds them.
-- A manifest holds the source type, source name, host, tags, comment, statistics, and the labels
-  under the key `labels`. See [Labels](labels.md) and [Series](series.md).
-- A snapshot ID is 128 random bits as 32 lowercase hex characters. A manifest that opens under a
-  name of any other form is refused with `ErrUnsupportedFormat`.
-- The statistics are counters and the duration. The deduplication and compression ratios follow
-  from the counters and aren't stored.
-- A lock is stale once its recorded time is 30 minutes old, or at once when it's from this host
-  and its process is gone.
-
-### Sealed objects
-
-Every sealed object has one layout: `format byte | 24-byte nonce | XChaCha20-Poly1305(payload)`.
-The format byte is `0x02` when the payload is the zstd frame of the content, and `0x03` when it is
-the content as it is. A reader opens both, for every object. The associated data is the format
-byte followed by `<namespace>/<name>`, for example `snapshots/<id>` for a manifest, so an object
-moved to another name or relabelled with the other codec fails on its tag. An object that
-authenticates under any other format byte is one a later build wrote, and a reader refuses it
-with `ErrUnsupportedFormat`. The byte `0x01` is retired: no object of version 1 carries it, and no
-later codec is ever assigned to it.
-
-Index objects, manifests, locks, the marker, and `features` are sealed this way with the data key under their
-own name. The `key` field of a key file is sealed the same way under the key derived from the
-password, with the associated data `keys/<name>`. The `config` isn't sealed.
-
-### Features
-
-`config/features` is a sealed JSON object of the shape `{"required": ["name", ...]}`. It's optional,
-and a repository without it requires nothing. No build of version 1 writes it. A later release
-writes it when it changes what a whole repository means, so every earlier build refuses that
-repository.
-
-- `Open` reads it with one `Get` after the master key is unsealed.
-- A name the build doesn't know refuses the repository with `ErrUnsupportedFormat`. Version 1
-  knows no name, so any name refuses.
-- It's decoded strictly: an unknown key, a value of another type, or data after the object is
-  `ErrUnsupportedFormat`, because only a holder of the data key could have written it.
-- A tag that doesn't verify is `ErrCorruptConfig`.
-- `Init` refuses a backend that holds a `features` object with `ErrAlreadyInitialized`.
-
-### JSON objects
-
-`config`, `features`, key files, manifests, and locks are JSON objects. A key a reader has no
-field for is `ErrUnsupportedFormat`. A version 1 reader matches keys without regard to case, as Go's
-`encoding/json` does, so a later version never adds a key that differs from an existing one only
-in case.
+- A snapshot ID is 128 random bits as 32 lowercase hex characters. It says nothing about the
+  snapshot's series or time.
 
 ### Sharding
 
@@ -88,6 +45,196 @@ namespace, created when first needed. All other namespaces are flat.
 
 Sharding is a property of those backends, not of the format. The memory backend and any other
 implementation of `ark.Backend` store the same names.
+
+## Sealed objects
+
+A sealed object is these bytes, in this order:
+
+| Bytes | Content |
+|---|---|
+| 1 | the format byte |
+| 24 | the nonce, random for every object |
+| rest | the XChaCha20-Poly1305 ciphertext of the payload, its 16-byte tag at the end |
+
+- Under format byte `0x02`, the payload is one zstd frame of the content.
+- Under format byte `0x03`, the payload is the content as it is. The writer picks it when the
+  zstd frame wouldn't be smaller.
+- The byte `0x01` is retired. No object of version 1 carries it, and no later codec is ever
+  assigned to it.
+- The associated data is the format byte followed by `<namespace>/<name>` in ASCII, for example
+  `snapshots/<id>` for a manifest. An object moved to another name or relabelled with the other
+  codec fails on its tag.
+- A reader opens both format bytes, for every object. It checks the tag first and judges the byte
+  after it.
+
+Index objects, manifests, locks, the lost-pack marker, and `features` are sealed with the data key
+under their own name. The `key` field of a key file is sealed under the wrap key, with the
+associated data `keys/<name>`. The config isn't sealed. Blobs and pack tables have their own
+associated data, see [Packs](#packs).
+
+## JSON objects
+
+`config`, `features`, key files, the master key, manifests, and locks are JSON objects. The
+tables below name every key a version 1 build writes or reads. A key marked optional is left out
+when it's empty or zero.
+
+### Times
+
+- A writer stores every time in these objects as an RFC 3339 string in UTC, with up to nine
+  fractional digits, for example `2026-11-21T18:35:07.123456789Z`.
+- A reader accepts any offset and takes the instant. It keeps no zone.
+
+### What a reader refuses
+
+A reader refuses what a later build may have written with `ErrUnsupportedFormat`. It never skips
+such an object and never reports it as damaged.
+
+| Input | Where |
+|---|---|
+| a format byte other than `0x02` or `0x03`, on an object whose tag verifies | every sealed object |
+| a key the reader has no field for | every JSON object on this page |
+| a `version` other than 1 | config, key file, manifest |
+| a `kdf` other than `argon2id` or `none` | key file |
+| a name in `required` | features |
+| a name that isn't 32 lowercase hex characters | manifest, once its tag verifies |
+
+- Keys match without regard to case, as Go's `encoding/json` does. A later version never adds a
+  key that differs from an existing one only in case.
+- A config, key file, or features object whose value has another type, or that has data after
+  its JSON value, is `ErrUnsupportedFormat` too. Such a manifest is `ErrCorruptManifest`.
+- An object whose tag doesn't verify is damaged, not unsupported. It gets the error of its
+  namespace, for example `ErrCorruptManifest`.
+- A lock that a reader refuses stops every operation that would take a lock. A lock whose tag
+  doesn't verify is passed over.
+
+### Config
+
+`config/config` is plain JSON, not sealed, with no byte before it. Its bytes are written once, by
+`Init`, with the keys in this order and no whitespace. The SHA-256 of these bytes is the master
+key's `config_hash`, so a changed byte fails `Open` with `ErrCorruptConfig`.
+
+| Key | Type | Optional | Content |
+|---|---|---|---|
+| `version` | number | no | the format version, 1 |
+| `id` | string, 64 lowercase hex | no | the repository ID, 32 random bytes |
+| `created_at` | string, time | no | when `Init` ran |
+| `chunker` | object | no | the chunk boundaries, see [Chunker](#chunker) |
+
+### Chunker
+
+The `chunker` object of the config. Every backup into the repository cuts chunks with these sizes,
+in bytes.
+
+| Key | Type | Optional | Content |
+|---|---|---|---|
+| `min` | number | no | the smallest chunk, except at the end of a file |
+| `avg` | number | no | the target size |
+| `max` | number | no | the largest chunk |
+
+### Key file
+
+A key file is plain JSON, named by 16 random bytes as 32 lowercase hex characters. `Open` tries at
+most 20 of them.
+
+| Key | Type | Optional | Content |
+|---|---|---|---|
+| `version` | number | no | 1 |
+| `kdf` | string | no | `argon2id`, or `none` for a repository without a password |
+| `time` | number | yes, absent with `none` | argon2id passes, 1 to 16 |
+| `memory` | number | yes, absent with `none` | argon2id memory in KiB, at least 8 per thread, at most 1 GiB |
+| `threads` | number | yes, absent with `none` | argon2id lanes, at least 1 |
+| `salt` | string, lowercase hex | yes, absent with `none` | 16 random bytes |
+| `key` | string, lowercase hex | no | the sealed [master key](#master-key) |
+
+The wrap key is the 32-byte argon2id key of the password and the salt. With `none` it's 32 zero
+bytes.
+
+### Master key
+
+The JSON inside a key file's `key`. Every key file of a repository seals the same master key.
+
+| Key | Type | Optional | Content |
+|---|---|---|---|
+| `data_key` | string, 64 lowercase hex | no | the key every other sealed object is sealed with |
+| `id_key` | string, 64 lowercase hex | no | the HMAC key of chunk, node, index, and marker names |
+| `chunker_seed` | string, 64 lowercase hex | no | the key of the chunk boundaries |
+| `repository_id` | string, 64 lowercase hex | no | the config's `id` |
+| `config_hash` | string, 64 lowercase hex | no | the SHA-256 of the config bytes |
+| `created` | string, time | no | when the master key was made |
+| `label` | string | yes | free text; no build of version 1 writes it |
+
+### Manifest
+
+`snapshots/<id>` is a sealed JSON object. `<id>` is the snapshot ID.
+
+| Key | Type | Optional | Content |
+|---|---|---|---|
+| `version` | number | no | 1 |
+| `id` | string, 32 lowercase hex | no | the snapshot ID, the object's name |
+| `parent_id` | string, 32 lowercase hex | yes | the snapshot the backup compared its files against |
+| `created_at` | string, time | no | the snapshot time |
+| `source_name` | string | no | the source name, see [Series](series.md) |
+| `source_type` | string | no | the source type: `file`, `stream`, `docker-volume`, or the name a custom source gives |
+| `labels` | object of strings | yes | the labels, see [Labels](labels.md) |
+| `excludes` | array of strings | yes | the exclude patterns of the source |
+| `tags` | array of strings | yes | the tags |
+| `host` | string | no | the host name |
+| `comment` | string | yes | the comment |
+| `root_tree` | string, 64 lowercase hex | yes | the name of the root directory node; every build writes it, and a snapshot without it has no entries |
+| `stats` | object | no | the counters, see [Statistics](#statistics) |
+
+### Statistics
+
+The `stats` object of a manifest. Sizes are in bytes. The deduplication and compression ratios
+follow from the counters and aren't stored.
+
+| Key | Type | Optional | Content |
+|---|---|---|---|
+| `total_files` | number | no | regular files in the snapshot |
+| `total_dirs` | number | no | directories in the snapshot |
+| `skipped` | number | no | entries the source offered and the snapshot leaves out |
+| `files_unchanged` | number | yes | files taken from the parent without being read |
+| `total_size` | number | no | the content size of the regular files |
+| `stored_size` | number | no | the sealed size of the chunks this snapshot stored first |
+| `new_chunks_raw_size` | number | no | the content size of those chunks |
+| `chunks_total` | number | no | chunk references of all files |
+| `chunks_new` | number | no | distinct chunks this snapshot stored first |
+| `chunks_reused` | number | no | `chunks_total` minus `chunks_new` |
+| `duration` | string | no | the run time in Go's duration syntax, for example `1m2.5s` |
+
+### Lock
+
+`locks/<name>` is a sealed JSON object. `<name>` is 26 characters: a millisecond timestamp and 80
+random bits, both in lowercase Crockford base32.
+
+| Key | Type | Optional | Content |
+|---|---|---|---|
+| `time` | string, time | no | when the lock was taken or last refreshed |
+| `exclusive` | boolean | no | true for an exclusive lock, false for a shared one |
+| `hostname` | string | no | the host of the holder |
+| `username` | string | no | the user of the holder, empty when unknown |
+| `pid` | number | no | the process ID of the holder |
+| `uid` | number | no | the user ID of the holder |
+| `gid` | number | no | the group ID of the holder |
+
+A lock is stale once its `time` is 30 minutes old, or at once when its `hostname` is this host and
+its process is gone.
+
+### Features
+
+`config/features` is a sealed JSON object. It's optional, and a repository without it requires
+nothing. No build of version 1 writes it. A later release writes it when it changes what a whole
+repository means, so every earlier build refuses that repository.
+
+| Key | Type | Optional | Content |
+|---|---|---|---|
+| `required` | array of strings | no | the features a reader must know to open the repository |
+
+- `Open` reads it with one `Get` after the master key is unsealed.
+- A name the build doesn't know refuses the repository with `ErrUnsupportedFormat`. Version 1
+  knows no name, so any name refuses.
+- A tag that doesn't verify is `ErrCorruptConfig`.
+- `Init` refuses a backend that holds a `features` object with `ErrAlreadyInitialized`.
 
 ## Packs
 
@@ -335,8 +482,3 @@ what the old one listed, except for blobs that a pack which opens holds as well.
 
 A rebuild needs the repository to itself, like prune, and it downloads every pack. The format
 doesn't require that: a table opens from the tail of its pack (see [Packs](#packs)).
-
-## Everything else
-
-The master key, the key files, the config, the manifests, the locks, and the sealing of every
-object are described in [Security](SECURITY.md#format).
