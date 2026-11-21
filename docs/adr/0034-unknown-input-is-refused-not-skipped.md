@@ -55,7 +55,10 @@ A repository can carry one more sealed object, `features`, a JSON object of the 
 the repository with `ErrUnsupportedFormat`. A repository without the object requires nothing. No
 build of version 1 writes it. It exists so that a later release can change what a whole
 repository means, where refusing single objects is not enough, and still be refused by every
-earlier build. The reader for this object is not in the code yet when this record is written.
+earlier build. It lives in the config namespace under the name `features`, sealed with the data key
+and bound to that name like every sealed object. `Open` reads it with one more `Get` and no
+`List`. A tag that does not verify is `ErrCorruptConfig`; deleting the object is within what a
+storage attacker can already do. This build knows no feature name, so any name refuses.
 
 A later format byte keeps the envelope of a sealed object: one byte, a 24-byte nonce,
 XChaCha20-Poly1305 under the same key, the byte and `<namespace>/<name>` as associated data.

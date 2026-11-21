@@ -125,7 +125,9 @@ func (r *Repository) now() time.Time {
 // returns ErrWrongPassword when no key file opens, ErrPasswordRequired for
 // NoPassword on a protected repository and ErrNotPasswordProtected for a
 // password on a repository created with NoPassword, and ErrCorruptConfig
-// when a key opens but the config is not the one it was sealed with. Unsealing
+// when a key opens but the config is not the one it was sealed with. An
+// optional features object that requires a feature this build does not know
+// returns ErrUnsupportedFormat. Unsealing
 // a password protected key file runs argon2id with 64 MiB of memory.
 func Open(ctx context.Context, b Backend, pw Password, opts ...Option) (*Repository, error) {
 	if err := pw.validate(); err != nil {
@@ -152,6 +154,10 @@ func Open(ctx context.Context, b Backend, pw Password, opts ...Option) (*Reposit
 	}
 	rc, err := parseRepositoryConfig(data)
 	if err != nil {
+		codec.Close()
+		return nil, err
+	}
+	if err := checkFeatures(ctx, b, codec, key); err != nil {
 		codec.Close()
 		return nil, err
 	}

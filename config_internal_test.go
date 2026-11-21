@@ -415,3 +415,115 @@ func TestArchiveMetadataIsDecodedStrictly(t *testing.T) {
 		}
 	}
 }
+
+func putFeatures(t *testing.T, b Backend, body string) {
+	t.Helper()
+	ctx := context.Background()
+	repo, err := Open(ctx, b, NoPassword())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer repo.Close()
+	h := Handle{Type: ConfigFile, Name: featuresName}
+	if err := repo.putSealed(ctx, h, []byte(body)); err != nil {
+		t.Fatalf("write features: %v", err)
+	}
+}
+
+func TestOpenReadsTheFeaturesObject(t *testing.T) {
+	ctx := context.Background()
+	open := func(t *testing.T, b Backend) error {
+		t.Helper()
+		repo, err := Open(ctx, b, NoPassword())
+		if err == nil {
+			repo.Close()
+		}
+		return err
+	}
+	newRepo := func(t *testing.T) Backend {
+		t.Helper()
+		b := newStubBackend()
+		if err := Init(ctx, b, NoPassword()); err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+
+	t.Run("none", func(t *testing.T) {
+		b := newRepo(t)
+		if ok, _ := b.Exists(ctx, Handle{Type: ConfigFile, Name: featuresName}); ok {
+			t.Fatal("Init wrote a features object")
+		}
+		if err := open(t, b); err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+	})
+	t.Run("empty", func(t *testing.T) {
+		b := newRepo(t)
+		putFeatures(t, b, `{"required":[]}`)
+		if err := open(t, b); err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+	})
+	t.Run("unknown feature", func(t *testing.T) {
+		b := newRepo(t)
+		putFeatures(t, b, `{"required":["packv2"]}`)
+		err := open(t, b)
+		if !errors.Is(err, ErrUnsupportedFormat) || !strings.Contains(err.Error(), "packv2") ||
+			!strings.Contains(err.Error(), "newer ark") {
+			t.Fatalf("Open = %v, want ErrUnsupportedFormat naming the feature", err)
+		}
+	})
+	t.Run("unknown key", func(t *testing.T) {
+		b := newRepo(t)
+		putFeatures(t, b, `{"required":[],"optional":[]}`)
+		if err := open(t, b); !errors.Is(err, ErrUnsupportedFormat) {
+			t.Fatalf("Open = %v, want ErrUnsupportedFormat", err)
+		}
+	})
+	t.Run("damaged", func(t *testing.T) {
+		b := newRepo(t)
+		putFeatures(t, b, `{"required":[]}`)
+		h := Handle{Type: ConfigFile, Name: featuresName}
+		obj, err := readWhole(ctx, b, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		obj[len(obj)-1] ^= 1
+		if err := b.Put(ctx, h, bytes.NewReader(obj)); err != nil {
+			t.Fatal(err)
+		}
+		if err := open(t, b); !errors.Is(err, ErrCorruptConfig) {
+			t.Fatalf("Open = %v, want ErrCorruptConfig", err)
+		}
+	})
+}
+
+func TestOpenCostsOneGetForTheFeatures(t *testing.T) {
+	ctx := context.Background()
+	count := func(t *testing.T, b *InstrumentedBackend) (gets, lists int64) {
+		t.Helper()
+		before := b.Stats()
+		repo, err := Open(ctx, b, NoPassword())
+		if err != nil {
+			t.Fatal(err)
+		}
+		repo.Close()
+		after := b.Stats()
+		return after.Get.Calls - before.Get.Calls, after.List.Calls - before.List.Calls
+	}
+	b := Instrument(newStubBackend())
+	if err := Init(ctx, b, NoPassword()); err != nil {
+		t.Fatal(err)
+	}
+	// config, key file and features: the features Get is issued whether or
+	// not the object exists. The one List is the key file listing.
+	for _, with := range []bool{false, true} {
+		if with {
+			putFeatures(t, b, `{"required":[]}`)
+		}
+		if gets, lists := count(t, b); gets != 3 || lists != 1 {
+			t.Errorf("features object %v: Open issued %d Gets and %d Lists, want 3 and 1", with, gets, lists)
+		}
+	}
+}

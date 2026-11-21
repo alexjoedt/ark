@@ -24,6 +24,47 @@ const repoFormatVersion = 1
 // configName is the name of the single object in the config namespace.
 const configName = "config"
 
+// featuresName is the optional sealed object in the config namespace that
+// names the features a repository requires. No build of version 1 writes it.
+const featuresName = "features"
+
+// knownFeatures are the feature names this build supports. Version 1 has none.
+var knownFeatures = map[string]struct{}{}
+
+type repositoryFeatures struct {
+	Required []string `json:"required"`
+}
+
+// checkFeatures reads the features object, when there is one, and refuses a
+// repository that requires a feature this build does not know. A tag that
+// does not verify is ErrCorruptConfig.
+func checkFeatures(ctx context.Context, b Backend, codec *objectCodec, key *masterKey) error {
+	data, err := readSealed(ctx, b, codec, (*[32]byte)(&key.DataKey), Handle{Type: ConfigFile, Name: featuresName})
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if errors.Is(err, errSealBroken) {
+		return fmt.Errorf("%w: features: %w", ErrCorruptConfig, err)
+	}
+	if err != nil {
+		return err
+	}
+	var f repositoryFeatures
+	if err := decodeStrict("features", data, &f); err != nil {
+		if errors.Is(err, ErrUnsupportedFormat) {
+			return err
+		}
+		return fmt.Errorf("%w: features: %w", ErrCorruptConfig, err)
+	}
+	for _, name := range f.Required {
+		if _, ok := knownFeatures[name]; !ok {
+			return fmt.Errorf("%w: the repository requires the feature %q, a newer ark is needed",
+				ErrUnsupportedFormat, name)
+		}
+	}
+	return nil
+}
+
 // repoIDBytes is the length of the random repository id before hex encoding.
 const repoIDBytes = 32
 
