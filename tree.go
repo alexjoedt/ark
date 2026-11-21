@@ -49,9 +49,10 @@ type treeEntry struct {
 // storedModeMask is every bit a stored mode may carry.
 const storedModeMask = 0o7777
 
-// storedMode is m as a tree node and a tar header hold it: mode_t & 07777.
-// Type bits and every other bit of m are dropped.
-func storedMode(m os.FileMode) uint32 {
+// UnixMode returns m as mode_t & 07777, the form a snapshot stores and a tar
+// header holds: the permission bits plus setuid, setgid and sticky. Type bits
+// and every other bit of m are dropped.
+func UnixMode(m os.FileMode) uint32 {
 	mode := uint32(m.Perm())
 	if m&os.ModeSetuid != 0 {
 		mode |= 0o4000
@@ -65,7 +66,7 @@ func storedMode(m os.FileMode) uint32 {
 	return mode
 }
 
-// goMode is the inverse of storedMode: the permission bits plus ModeSetuid,
+// goMode is the inverse of UnixMode: the permission bits plus ModeSetuid,
 // ModeSetgid and ModeSticky, and no type bit.
 func goMode(mode uint32) os.FileMode {
 	m := os.FileMode(mode).Perm()
@@ -260,7 +261,7 @@ func newTreeEntry(child fileEntry, hashes map[string]string) (treeEntry, error) 
 	te := treeEntry{
 		Name:     filepath.Base(norm),
 		Type:     child.Type,
-		Mode:     storedMode(child.Mode),
+		Mode:     UnixMode(child.Mode),
 		UID:      child.UID,
 		GID:      child.GID,
 		ModTime:  child.ModTime,

@@ -149,7 +149,7 @@ func dryRunRestore(
 		}
 		if p.Mode().JSON {
 			return p.JSONLine(entryJSON{
-				Path: f.Path, Type: string(f.Type), Size: f.Size, Mode: uint32(f.Mode.Perm()),
+				Path: f.Path, Type: string(f.Type), Size: f.Size, Mode: ark.UnixMode(f.Mode),
 				UID: f.UID, GID: f.GID, Mtime: f.ModTime, LinkDest: f.LinkDest,
 			})
 		}
