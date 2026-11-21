@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"maps"
 	"math"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -320,5 +321,34 @@ func TestLoadTreeNodeRefusesAModeOutside07777(t *testing.T) {
 		if want != errors.Is(err, ErrCorruptTree) || (!want && err != nil) {
 			t.Errorf("mode %#o: loadTreeNode returned %v, want ErrCorruptTree: %v", mode, err, want)
 		}
+	}
+}
+
+func TestLinkTargetRefusesWhatIsNotAFile(t *testing.T) {
+	t.Parallel()
+	nodes := map[string]*treeNode{
+		"root": {Entries: []treeEntry{
+			{Name: "dir", Type: FileTypeDirectory, TreeHash: "dir"},
+			{Name: "file", Type: FileTypeRegular, Chunks: []chunkRef{{ID: "c", Length: 4}}, Size: 4},
+			{Name: "sym", Type: FileTypeSymlink},
+		}},
+		"dir": {},
+	}
+	load := func(hash string) (*treeNode, error) {
+		if n, ok := nodes[hash]; ok {
+			return n, nil
+		}
+		return nil, fmt.Errorf("get %s: %w", hash, os.ErrNotExist)
+	}
+	if size, err := linkSize(load, "root", "file"); err != nil || size != 4 {
+		t.Errorf("linkSize(file) = %d, %v, want 4", size, err)
+	}
+	for _, link := range []string{"missing", "dir/missing", "sym", "dir"} {
+		if _, err := linkSize(load, "root", link); !errors.Is(err, ErrCorruptTree) {
+			t.Errorf("linkSize(%q) = %v, want ErrCorruptTree", link, err)
+		}
+	}
+	if _, err := linkSize(load, "gone", "file"); errors.Is(err, ErrCorruptTree) || !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a node that does not load = %v, want its own error", err)
 	}
 }

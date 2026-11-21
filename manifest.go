@@ -304,7 +304,7 @@ func walkSnapshot(
 		return cache.load(hash, func() (*treeNode, error) { return loadTreeNode(ctx, trees, hash) })
 	}
 	var links []fileEntry
-	err := walkTreeWithPrefix(ctx, trees, m.RootTree, "", filter, func(e fileEntry) error {
+	err := walkTreeWithPrefix(load, m.RootTree, "", filter, func(e fileEntry) error {
 		if e.Type == FileTypeHardlink {
 			links = append(links, e)
 			return nil
@@ -319,7 +319,7 @@ func walkSnapshot(
 		// A path filter can keep a link and drop its target. The link then
 		// arrives as a regular file with the target's content.
 		if !filter.keep(e.LinkDest) {
-			target, err := lookupTreeEntry(load, m.RootTree, e.LinkDest)
+			target, err := linkTarget(load, m.RootTree, e.LinkDest)
 			if err != nil {
 				return fmt.Errorf("manifest: hardlink %s: %w", e.Path, err)
 			}

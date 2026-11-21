@@ -161,6 +161,10 @@ func loadTreeNode(ctx context.Context, trees *objectStore, hash string) (*treeNo
 			return nil, fmt.Errorf("%w: node %s: %q has the file type %q, which this build does not know",
 				ErrUnsupportedFormat, hash, e.Name, e.Type)
 		}
+		if len(e.Chunks) > 0 && e.Type != FileTypeRegular {
+			return nil, fmt.Errorf("%w: node %s: %q is a %s and holds chunks",
+				ErrCorruptTree, hash, e.Name, e.Type)
+		}
 	}
 	return &node, nil
 }
@@ -171,7 +175,7 @@ func fillChunkOffsets(e *treeEntry) error {
 	var off int64
 	for i := range e.Chunks {
 		c := &e.Chunks[i]
-		if c.Length < 0 || c.Length > math.MaxInt64-off {
+		if c.Length <= 0 || c.Length > math.MaxInt64-off {
 			return fmt.Errorf("chunk length %d is out of range", c.Length)
 		}
 		c.Offset = off
@@ -181,13 +185,23 @@ func fillChunkOffsets(e *treeEntry) error {
 	return nil
 }
 
-// linkSize is the size of the file a hardlink at link names, 0 when the tree
-// holds no entry there; restore reports that as the sink's error.
-func linkSize(load func(hash string) (*treeNode, error), root, link string) (int64, error) {
+// linkTarget is the regular file a hardlink at link names. A tree that holds
+// no entry there, or one that is not a regular file, is corrupt; a node on the
+// way that does not load keeps its own error.
+func linkTarget(load func(hash string) (*treeNode, error), root, link string) (treeEntry, error) {
 	target, err := lookupTreeEntry(load, root, link)
-	if errors.Is(err, os.ErrNotExist) {
-		return 0, nil
+	switch {
+	case errors.Is(err, errNoTreeEntry):
+		err = fmt.Errorf("%w: %w", ErrCorruptTree, err)
+	case err == nil && target.Type != FileTypeRegular:
+		err = fmt.Errorf("%w: target is not a regular file", ErrCorruptTree)
 	}
+	return target, err
+}
+
+// linkSize is the size of the file a hardlink at link names.
+func linkSize(load func(hash string) (*treeNode, error), root, link string) (int64, error) {
+	target, err := linkTarget(load, root, link)
 	return target.Size, err
 }
 
@@ -317,13 +331,14 @@ func newTreeEntry(child fileEntry, hashes map[string]string) (treeEntry, error) 
 		UID:      child.UID,
 		GID:      child.GID,
 		ModTime:  child.ModTime,
-		Size:     child.Size,
 		LinkDest: child.LinkDest,
-		Chunks:   child.Chunks,
 		Xattrs:   child.Xattrs,
 
 		ChangeTime: child.ChangeTime,
 		Inode:      child.Inode,
+	}
+	if child.Type == FileTypeRegular {
+		te.Chunks = child.Chunks
 	}
 	if child.Type == FileTypeDirectory {
 		hash, ok := hashes[norm]
@@ -331,7 +346,6 @@ func newTreeEntry(child fileEntry, hashes map[string]string) (treeEntry, error) 
 			return treeEntry{}, fmt.Errorf("tree: directory %s has no stored node", norm)
 		}
 		te.TreeHash = hash
-		te.Chunks = nil
 	}
 	return te, nil
 }
@@ -385,18 +399,17 @@ func (f pathFilter) descend(dir string) bool {
 }
 
 // walkTree visits every fileEntry in the Merkle tree rooted at rootHash.
-func walkTree(ctx context.Context, trees *objectStore, rootHash string, fn func(fileEntry) error) error {
-	return walkTreeWithPrefix(ctx, trees, rootHash, "", pathFilter{}, fn)
+func walkTree(load func(hash string) (*treeNode, error), rootHash string, fn func(fileEntry) error) error {
+	return walkTreeWithPrefix(load, rootHash, "", pathFilter{}, fn)
 }
 
 func walkTreeWithPrefix(
-	ctx context.Context,
-	trees *objectStore,
+	load func(hash string) (*treeNode, error),
 	hash, prefix string,
 	filter pathFilter,
 	fn func(fileEntry) error,
 ) error {
-	node, err := loadTreeNode(ctx, trees, hash)
+	node, err := load(hash)
 	if err != nil {
 		return err
 	}
@@ -405,7 +418,7 @@ func walkTreeWithPrefix(
 		if prefix != "" {
 			fullPath = prefix + "/" + e.Name
 		}
-		if err := visitTreeEntry(ctx, trees, e, fullPath, filter, fn); err != nil {
+		if err := visitTreeEntry(load, e, fullPath, filter, fn); err != nil {
 			return err
 		}
 	}
@@ -415,8 +428,7 @@ func walkTreeWithPrefix(
 // visitTreeEntry hands one tree entry to fn, or skips it when the filter does
 // not want it, and descends into a directory's own node.
 func visitTreeEntry(
-	ctx context.Context,
-	trees *objectStore,
+	load func(hash string) (*treeNode, error),
 	e treeEntry,
 	fullPath string,
 	filter pathFilter,
@@ -437,7 +449,7 @@ func visitTreeEntry(
 		if e.TreeHash == "" {
 			return nil
 		}
-		return walkTreeWithPrefix(ctx, trees, e.TreeHash, fullPath, filter, fn)
+		return walkTreeWithPrefix(load, e.TreeHash, fullPath, filter, fn)
 
 	case FileTypeSymlink, FileTypeHardlink:
 		if !filter.keep(fullPath) {
@@ -457,9 +469,13 @@ func visitTreeEntry(
 	return nil
 }
 
+// errNoTreeEntry marks a lookup that found no entry, as opposed to one whose
+// node failed to load, whatever that error wraps.
+var errNoTreeEntry = fmt.Errorf("%w", os.ErrNotExist)
+
 // lookupTreeEntry returns the entry at path, a slash path relative to the
 // tree rooted at rootHash, loading each node with load. A missing entry wraps
-// [os.ErrNotExist].
+// [os.ErrNotExist] and errNoTreeEntry; a node that does not load wraps neither.
 func lookupTreeEntry(load func(hash string) (*treeNode, error), rootHash, path string) (treeEntry, error) {
 	hash := rootHash
 	parts := strings.Split(normEntryPath(path), "/")
@@ -483,7 +499,7 @@ func lookupTreeEntry(load func(hash string) (*treeNode, error), rootHash, path s
 		}
 		hash = e.TreeHash
 	}
-	return treeEntry{}, fmt.Errorf("tree: no entry at %s: %w", path, os.ErrNotExist)
+	return treeEntry{}, fmt.Errorf("tree: no entry at %s: %w", path, errNoTreeEntry)
 }
 
 func normEntryPath(path string) string {

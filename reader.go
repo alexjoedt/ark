@@ -266,15 +266,7 @@ func (s *SnapshotFS) complete(name string, te treeEntry) (*fsEntry, error) {
 	case FileTypeDirectory, FileTypeSymlink:
 		e.size = 0
 	case FileTypeHardlink:
-		// Only a target the tree does not hold as a file is a corrupt tree.
-		// A node on the way that does not load keeps its own error.
-		target, err := s.entryAt(normEntryPath(te.LinkDest))
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			err = fmt.Errorf("%w: %w", ErrCorruptTree, err)
-		case err == nil && target.Type != FileTypeRegular:
-			err = fmt.Errorf("%w: target is not a regular file", ErrCorruptTree)
-		}
+		target, err := linkTarget(s.node, s.root, te.LinkDest)
 		if err != nil {
 			return nil, fmt.Errorf("hardlink %s to %s: %w", name, te.LinkDest, err)
 		}

@@ -760,7 +760,7 @@ func (r *Repository) Walk(ctx context.Context, snapshotID SnapshotID, fn func(Fi
 	load := func(hash string) (*treeNode, error) {
 		return cache.load(hash, func() (*treeNode, error) { return loadTreeNode(ctx, trees, hash) })
 	}
-	return walkTree(ctx, trees, m.RootTree, func(e fileEntry) error {
+	return walkTree(load, m.RootTree, func(e fileEntry) error {
 		if e.Type == FileTypeHardlink {
 			var err error
 			if e.Size, err = linkSize(load, m.RootTree, e.LinkDest); err != nil {
