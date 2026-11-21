@@ -31,6 +31,9 @@ const (
 	formatRaw byte = 0x03
 )
 
+// knownFormat reports whether b is a format byte this build opens.
+func knownFormat(b byte) bool { return b == formatZstd || b == formatRaw }
+
 // sealOverhead is what seal adds to the payload: format byte, nonce, tag.
 const sealOverhead = 1 + chacha20poly1305.NonceSizeX + chacha20poly1305.Overhead
 
@@ -109,7 +112,7 @@ func unseal(key *[32]byte, aad string, obj []byte) ([]byte, error) {
 	if len(obj) == 0 {
 		return nil, fmt.Errorf("%w: object is empty", errSealBroken)
 	}
-	if obj[0] != formatZstd && obj[0] != formatRaw {
+	if !knownFormat(obj[0]) {
 		return nil, fmt.Errorf("%w: unknown object format byte 0x%02x", errSealBroken, obj[0])
 	}
 	if len(obj) < sealOverhead {

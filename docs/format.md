@@ -38,6 +38,18 @@ lostpacks/   at most one sealed marker, see below
 - A lock is stale once its recorded time is 30 minutes old, or at once when it's from this host
   and its process is gone.
 
+### Sealed objects
+
+Every sealed object has one layout: `format byte | 24-byte nonce | XChaCha20-Poly1305(payload)`.
+The format byte is `0x02` when the payload is the zstd frame of the content, and `0x03` when it is
+the content as it is. A reader opens both, for every object. The associated data is the format
+byte followed by `<namespace>/<name>`, for example `snapshots/<id>` for a manifest, so an object
+moved to another name or relabelled with the other codec fails on its tag.
+
+Index objects, manifests, locks, and the marker are sealed this way with the data key under their
+own name. The `key` field of a key file is sealed the same way under the key derived from the
+password, with the associated data `keys/<name>`. The `config` isn't sealed.
+
 ### Sharding
 
 The directory and SFTP backends shard `datapacks/` and `treepacks/` one level deep by the first two
@@ -55,9 +67,8 @@ A pack has three parts, in this order:
 2. the sealed blob table
 3. the length of the sealed table, 4 bytes little endian
 
-**Blobs.** A blob is one chunk or one directory node, sealed on its own like a single object. Its
-first byte is the format byte: `0x02` when the sealed payload is the zstd frame of the content,
-`0x03` when it is the content as it is. Its associated data is that format byte followed by
+**Blobs.** A blob is one chunk or one directory node, sealed on its own like a single object (see
+[Sealed objects](#sealed-objects)). Its associated data is the format byte followed by
 `chunks/<name>` for a chunk and `trees/<name>` for a directory node, where `<name>` is the blob's
 hex name. No object is stored under `chunks` or `trees`. The associated data only binds a blob to
 its codec, type and name, so the bytes of one blob, read where the index lists another, don't open.

@@ -60,5 +60,7 @@ pinned by `TestCodecOpensBothFormatBytes`, `TestWriterStoresABlobRawWhenZstdIsNo
 format-byte cell of `TestTamperedObjectsAreRejected`.
 
 The associated data changed for every object, so a repository sealed by an earlier build does not
-open. That was free before the first stable release and is fixed after it: a third codec is a new
+open. The repository format version stays 1, since version 1 is not frozen before that release,
+so such a repository fails on the `key` field and Open reports `ErrWrongPassword`, not
+`ErrUnsupportedFormat`. That was free before the first stable release and is fixed after it: a third codec is a new
 format byte with the same binding, and builds that do not know it refuse the object.
