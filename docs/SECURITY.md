@@ -106,9 +106,10 @@ writer, every accepted risk included.
   open. The table of another pack of the repository opens, since all tables of a namespace are
   sealed under one name, and is refused by the hash of the blobs it carries, which RebuildIndex
   compares with the pack it read: `TestTamperedObjectsAreRejected`,
-  `TestPackTableDoesNotOpenBehindOtherBlobs`. A table read from the tail of a pack alone lacks
-  that comparison; the blobs it lists then fail to open under their names:
-  `TestPackTableOfAnotherPackOpensFromATailReadAndNoBlobDoes`.
+  `TestPackTableBehindOtherBlobsIsRefusedByItsSum`. A table read from the tail of a pack alone
+  lacks that comparison. It leads to no content other than the blob a name stands for: each blob
+  it lists that the pack does not also hold at that place fails to open under its name:
+  `TestPackTableOfAnotherPackOpensFromATailReadAndNoOtherBlobDoes`.
 - A pack that is gone while the index lists it is an error of Check whether or not a snapshot
   references it, as is a pack whose own table disagrees with the index. A backup passes over what
   the index lists in a pack that is gone and stores again what it reads. Once an index load has

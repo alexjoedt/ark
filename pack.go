@@ -94,7 +94,7 @@ func parseName(name string) (b [sha256.Size]byte, ok bool) {
 }
 
 // packTableName is the name every blob table of a pack namespace is sealed
-// under. Nothing else is sealed under a pack namespace.
+// under. Nothing else is sealed under a pack namespace: putSealed refuses one.
 const packTableName = "table"
 
 // tableAAD binds a blob table to its pack namespace. What binds it to its
@@ -164,15 +164,17 @@ func (s *packSpace) parse(pack []byte) ([]packEntry, error) {
 	return entries, nil
 }
 
-// openTable opens a sealed blob table without its pack, which is what a
-// reader of the pack's tail holds: the last packTrailerSize bytes give the
-// table's length, the bytes before them are the table. It returns the placed
-// entries and the SHA-256 of the blob section they describe.
+// openTable opens a sealed blob table without its pack. It returns the placed
+// entries and the SHA-256 of the blob section they describe. A reader of the
+// pack's tail does the range reads: the last packTrailerSize bytes give the
+// table's length n, which it checks against size-packTrailerSize before it
+// reads the n bytes before them.
 //
 // The seal says that a holder of the key wrote the table, not that it is the
 // table of the pack it was read from. parse compares the sum. A reader
-// without the blob section cannot, and learns of another pack's table when a
-// blob it lists does not open under its name.
+// without the blob section cannot. It learns of another pack's table when a
+// blob it lists does not open under its name, which every blob does that
+// this pack does not also hold at the same place.
 func (s *packSpace) openTable(sealed []byte) (entries []packEntry, sum [sha256.Size]byte, err error) {
 	table, err := s.codec.open(s.dataKey, s.tableAAD(), sealed)
 	if err != nil {

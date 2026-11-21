@@ -64,7 +64,7 @@ Offsets and lengths are 32 bits, so a pack and a sealed blob stay below 4 GiB.
 
 A flipped byte anywhere in a pack, a truncated pack and a table behind another pack's blobs fail
 with `ErrCorruptChunk` for a data pack and `ErrCorruptTree` for a tree pack
-(`TestPackTamperedBytesAreRejected`, `TestPackTableDoesNotOpenBehindOtherBlobs`). The size rule is
+(`TestPackTamperedBytesAreRejected`, `TestPackTableBehindOtherBlobsIsRefusedByItsSum`). The size rule is
 pinned by `TestPackWriterClosesPacksAtTheTargetSize`, the upload bound by
 `TestPackWriterBoundsUploadsInFlight`, concurrent writers by `TestPackWriterConcurrentAdds`. The
 unit is `pack.go`.

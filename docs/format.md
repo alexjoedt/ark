@@ -82,8 +82,9 @@ length, the bytes before them are the table.
 
 A reader that holds the whole pack hashes the blob section and refuses a table that carries
 another hash. A reader that holds only the tail can't make that comparison. For such a reader, a
-table moved in from another pack of the repository opens. Each blob that it lists then fails to
-open, because a blob is bound to its own name and not to the table.
+table moved in from another pack of the repository opens. It can't lead the reader to content
+other than the blob a name stands for: a blob is bound to its own name and not to the table, so
+each blob it lists that this pack doesn't also hold at that place fails to open.
 
 **Names.** A pack is named by the hex SHA-256 of all its bytes. Chunk and node names are the hex
 HMAC-SHA256 of their plaintext under the repository's ID key. The name of a pack isn't keyed.
@@ -299,8 +300,8 @@ runs it:
 4. It deletes the old index objects.
 
 A pack whose table doesn't open or carries the hash of other blobs, or whose name isn't the hash
-of its bytes, is named in the result and contributes nothing. For that pack, the new index keeps what the old one listed, except for
-blobs that a pack which opens holds as well.
+of its bytes, is named in the result and contributes nothing. For that pack, the new index keeps
+what the old one listed, except for blobs that a pack which opens holds as well.
 
 A rebuild needs the repository to itself, like prune, and it downloads every pack. The format
 doesn't require that: a table opens from the tail of its pack (see [Packs](#packs)).

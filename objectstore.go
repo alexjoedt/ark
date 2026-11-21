@@ -134,13 +134,18 @@ func sealAAD(format byte, aad string) []byte {
 }
 
 // objectAAD is the associated data an object is sealed with, so an object
-// moved to another name or namespace does not open.
+// moved to another name or namespace does not open. Under a pack namespace it
+// is the AAD of every blob table (packTableName), so no other object is
+// sealed there.
 func objectAAD(h Handle) string { return h.Type.String() + "/" + h.Name }
 
 // putSealed seals data with the data key and writes it under h, replacing
 // what is there. Manifests and locks go through it: their names are chosen,
 // not derived from content.
 func (r *Repository) putSealed(ctx context.Context, h Handle, data []byte) error {
+	if h.Type == DataPackFile || h.Type == TreePackFile {
+		return fmt.Errorf("ark: refusing to seal a %s object: its associated data is that of the blob tables", h.Type)
+	}
 	obj := r.codec.seal((*[32]byte)(&r.key.DataKey), objectAAD(h), data)
 	if err := r.backend.Put(ctx, h, bytes.NewReader(obj)); err != nil {
 		return fmt.Errorf("ark: failed to store %s object %s: %w", h.Type, h.Name, err)

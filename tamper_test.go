@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -141,7 +142,7 @@ func TestTamperedConfigIsRejected(t *testing.T) {
 
 const (
 	victimContent = "the victim's contents"
-	otherContent  = "some other contents"
+	otherContent  = "some other's contents"
 )
 
 type tamperFixture struct {
@@ -154,6 +155,8 @@ type tamperFixture struct {
 	// of its pack's blob section, to the pack. Only the pack table rows fill
 	// it. Every table is sealed under ark.PackTableName.
 	tables map[string]ark.Handle
+	// packs is tables as setup left it, so a cell's rewrites show.
+	packs map[string]ark.Handle
 }
 
 func newTamperFixture(t *testing.T) *tamperFixture {
@@ -615,6 +618,7 @@ func packTableRow(
 		setup: func(t *testing.T, f *tamperFixture) (string, string) {
 			f.tables = make(map[string]ark.Handle)
 			var names [2]string
+			var sizes [2]int
 			victim, other := blobsOf(t, f)
 			for i, blob := range []string{victim, other} {
 				pack, _, _ := f.stored(t, blobs, blob)
@@ -622,7 +626,17 @@ func packTableRow(
 				sum := sha256.Sum256(section)
 				names[i] = hex.EncodeToString(sum[:])
 				f.tables[names[i]] = pack
+				sizes[i] = len(section)
 			}
+			// Equal blob sections leave a table behind the other pack's
+			// blobs nothing but its sum to be refused by. Chunks of equal
+			// length give them; a compressed tree node varies by a byte
+			// with the chunk names it lists, so the tree row may also be
+			// refused by the length.
+			if blobs == ark.BlobFile && sizes[0] != sizes[1] {
+				t.Fatalf("blob sections of %d and %d bytes, want packs of one shape", sizes[0], sizes[1])
+			}
+			f.packs = maps.Clone(f.tables)
 			return names[0], names[1]
 		},
 		accepted: func(t *testing.T, f *tamperFixture, victim string) {
@@ -631,10 +645,19 @@ func packTableRow(
 			}
 			acceptedSnapshot(t, f, victim)
 		},
+		// rejected wants exactly the packs a cell rewrote unreadable: the
+		// victim's, and in the swapped cell the other's, which carries the
+		// victim's table.
 		rejected: func(t *testing.T, f *tamperFixture, victim string) {
-			if res := rebuild(t, f); !slices.Contains(res.UnreadablePacks, f.tables[victim].Name) {
-				t.Errorf("RebuildIndex names %v unreadable, want the pack %s with the mutated table",
-					res.UnreadablePacks, f.tables[victim].Name)
+			res := rebuild(t, f)
+			for name, h := range f.tables {
+				if rewritten := h != f.packs[name]; rewritten != slices.Contains(res.UnreadablePacks, h.Name) {
+					t.Errorf("RebuildIndex names %v unreadable, pack %s rewritten %v",
+						res.UnreadablePacks, h.Name, rewritten)
+				}
+			}
+			if f.tables[victim] == f.packs[victim] {
+				t.Errorf("the cell left the pack %s of the victim's table as it was", f.tables[victim].Name)
 			}
 			missing(t, f, victim)
 		},

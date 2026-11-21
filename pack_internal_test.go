@@ -406,7 +406,7 @@ func splicedPack(t *testing.T, s *packSpace) ([]byte, []packEntry) {
 
 // A reader that holds the whole pack compares the sum the table carries with
 // its blobs. The seal of the table is intact: only the sum refuses it.
-func TestPackTableDoesNotOpenBehindOtherBlobs(t *testing.T) {
+func TestPackTableBehindOtherBlobsIsRefusedByItsSum(t *testing.T) {
 	for _, s := range testPackSpaces(t) {
 		t.Run(s.packs.String(), func(t *testing.T) {
 			spliced, _ := splicedPack(t, s)
@@ -419,9 +419,10 @@ func TestPackTableDoesNotOpenBehindOtherBlobs(t *testing.T) {
 }
 
 // What a reader of the tail gives up: without the blob section it cannot
-// compare the sum, so the table of another pack opens. Every blob it then
-// reads is one the table does not name, and none opens.
-func TestPackTableOfAnotherPackOpensFromATailReadAndNoBlobDoes(t *testing.T) {
+// compare the sum, so the table of another pack opens. The fixture packs hold
+// no blob in common, so every blob it then reads is one the table does not
+// name, and none opens.
+func TestPackTableOfAnotherPackOpensFromATailReadAndNoOtherBlobDoes(t *testing.T) {
 	ctx := context.Background()
 	for _, s := range testPackSpaces(t) {
 		t.Run(s.packs.String(), func(t *testing.T) {
@@ -455,6 +456,9 @@ func tailTable(t *testing.T, s *packSpace, b Backend, h Handle, size int64) []pa
 		t.Fatalf("read the trailer of %s: %v", h.Name, err)
 	}
 	n := int64(binary.LittleEndian.Uint32(trailer))
+	if n > size-packTrailerSize {
+		t.Fatalf("the trailer of %s gives a table of %d bytes, the pack has %d", h.Name, n, size)
+	}
 	sealed, err := b.GetRange(ctx, h, size-packTrailerSize-n, n)
 	if err != nil {
 		t.Fatalf("read the table of %s: %v", h.Name, err)

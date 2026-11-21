@@ -24,7 +24,8 @@ is still written in one pass (`finish` in `pack.go`).
 
 A reader that holds the whole pack hashes the blob section and refuses a table that carries
 another sum (`parse`). A reader that holds only the tail takes the last 4 bytes as the length of
-the sealed table, reads that many bytes before them and opens the table (`openTable`).
+the sealed table, checks that it fits the size of the pack, reads that many bytes before them and
+opens the table (`openTable`, which takes the sealed bytes: the range reads are the reader's).
 
 This supersedes the part of 0010 that puts the hash of the blob section into the associated data
 of the table, and its consequence that opening a table needs the whole pack. The rest of 0010
@@ -50,11 +51,12 @@ grows by 32 bytes.
 A table is no longer rejected by its tag when it sits behind other blobs. Whoever can write to
 the storage can put the sealed table of one pack behind the blobs of another pack of the same
 namespace and repository. A reader of the whole pack refuses it by the sum, as before:
-`TestPackTableDoesNotOpenBehindOtherBlobs`, and the pack table rows of
+`TestPackTableBehindOtherBlobsIsRefusedByItsSum`, and the pack table rows of
 `TestTamperedObjectsAreRejected` for a rebuild. A reader of the tail alone takes the table as
-that of the pack. It cannot be led to other content by it: a blob is sealed under its own name,
-so every blob read at a place such a table lists fails to open
-(`TestPackTableOfAnotherPackOpensFromATailReadAndNoBlobDoes`). What a reader of the tail loses is
+that of the pack. It cannot be led to content other than the blob a name stands for: a blob is
+sealed under its own name, so a blob read at a place such a table lists opens only when this pack
+holds that same blob there, as two packs with a duplicate blob can (0012), and fails otherwise
+(`TestPackTableOfAnotherPackOpensFromATailReadAndNoOtherBlobDoes`). What a reader of the tail loses is
 the early refusal. It learns of the swap when it reads a blob, and an index built from tails
 alone would list blobs that then do not open, which a check reports as it reports any blob that
 does not open.

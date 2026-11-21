@@ -404,3 +404,21 @@ func TestCheckComparesASuspectPackWithTheIndex(t *testing.T) {
 			"and that an index rebuild repairs it", result, packs[0].name, names[0])
 	}
 }
+
+// Every blob table of a pack namespace is sealed under the one name
+// packTableName, so an object sealed whole there would authenticate as one.
+func TestPutSealedRefusesAPackNamespace(t *testing.T) {
+	codec := newObjectCodec()
+	defer codec.Close()
+	b := newStubBackend()
+	r := &Repository{backend: b, codec: codec, key: newMasterKey("repo"), logger: quietLogger}
+	for _, typ := range []HandleType{DataPackFile, TreePackFile} {
+		h := Handle{Type: typ, Name: packTableName}
+		if err := r.putSealed(context.Background(), h, []byte("marker")); err == nil {
+			t.Errorf("putSealed stored a sealed object under %s/%s", typ, packTableName)
+		}
+		if ok, _ := b.Exists(context.Background(), h); ok {
+			t.Errorf("putSealed left an object under %s/%s", typ, packTableName)
+		}
+	}
+}

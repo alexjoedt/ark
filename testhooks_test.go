@@ -29,9 +29,10 @@ func OpenObject(ctx context.Context, r *Repository, typ HandleType, name string)
 }
 
 // PutObject seals data and stores it under h, the way r writes manifests and
-// locks.
+// locks. It also seals under a pack namespace, which putSealed refuses.
 func PutObject(ctx context.Context, r *Repository, h Handle, data []byte) error {
-	return r.putSealed(ctx, h, data)
+	obj := r.codec.seal((*[32]byte)(&r.key.DataKey), objectAAD(h), data)
+	return r.backend.Put(ctx, h, bytes.NewReader(obj))
 }
 
 // UnsealObject opens obj as r would read it back from h.
