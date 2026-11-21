@@ -177,26 +177,28 @@ func rawNode(count uint64, entries ...raw) []byte {
 	return b
 }
 
-func TestTreeNodeDecodeRefuses(t *testing.T) {
-	t.Parallel()
+type nodeRefusal struct {
+	name   string
+	stored []byte
+	want   error
+	text   string
+}
+
+// nodeRefusals is one input per way a stored node is refused.
+func nodeRefusals() []nodeRefusal {
 	const tooWide = 1 << 32
 	overlong := append(bytes.Repeat([]byte{0xff}, 9), 0x02)
-	fifo := func(name string, flags byte) raw { return rawEntry(name, 5, flags) }
+	fifo := func(flags byte) raw { return rawEntry("a", 5, flags) }
 	// Clipped, so that each case appends to a copy of its own.
 	file, head := slices.Clip(rawEntry("a", 1, 0)), slices.Clip(rawHead("a", 5, 0, 0o644, 0, 0))
 	corrupt, unsupported := ErrCorruptTree, ErrUnsupportedFormat
-	cases := []struct {
-		name   string
-		stored []byte
-		want   error
-		text   string
-	}{
+	return []nodeRefusal{
 		{name: "unknown version", stored: []byte{2, 0}, want: unsupported},
 		{name: "version zero", stored: []byte{0, 0}, want: unsupported},
 		{name: "file type zero", stored: rawNode(1, rawEntry("a", 0, 0)), want: unsupported},
 		{name: "unknown file type", stored: rawNode(1, rawEntry("a", 8, 0)), want: unsupported},
-		{name: "unknown flag bit", stored: rawNode(1, fifo("a", 4)), want: unsupported},
-		{name: "unknown high flag bit", stored: rawNode(1, fifo("a", 0x80)), want: unsupported},
+		{name: "unknown flag bit", stored: rawNode(1, fifo(4)), want: unsupported},
+		{name: "unknown high flag bit", stored: rawNode(1, fifo(0x80)), want: unsupported},
 
 		{name: "non-minimal uvarint as count", stored: append([]byte{1, 0x81, 0x00}, rawFifo("a")...), want: corrupt},
 		{name: "non-minimal uvarint as zero", stored: []byte{1, 0x80, 0x00}, want: corrupt},
@@ -206,12 +208,12 @@ func TestTreeNodeDecodeRefuses(t *testing.T) {
 		{name: "entries of one name", stored: rawNode(2, rawFifo("a"), rawFifo("a")), want: corrupt},
 		{
 			name:   "xattrs descending",
-			stored: rawNode(1, fifo("a", 2).uv(2).str("b").str("").str("a").str("")),
+			stored: rawNode(1, fifo(2).uv(2).str("b").str("").str("a").str("")),
 			want:   corrupt,
 		},
 		{
 			name:   "xattrs of one name",
-			stored: rawNode(1, fifo("a", 2).uv(2).str("a").str("").str("a").str("")),
+			stored: rawNode(1, fifo(2).uv(2).str("a").str("").str("a").str("")),
 			want:   corrupt,
 		},
 		{name: "empty name", stored: rawNode(2, rawFifo(""), rawFifo("ab")), want: corrupt},
@@ -237,7 +239,7 @@ func TestTreeNodeDecodeRefuses(t *testing.T) {
 		{name: "device major above 32 bits", stored: rawNode(1, rawEntry("a", 6, 0).uv(tooWide).uv(0)), want: corrupt},
 		{name: "device minor above 32 bits", stored: rawNode(1, rawEntry("a", 7, 0).uv(0).uv(tooWide)), want: corrupt},
 		{name: "zero-length chunk", stored: rawNode(1, file.uv(1).id().uv(0)), want: corrupt},
-		{name: "xattr flag with count zero", stored: rawNode(1, fifo("a", 2).uv(0)), want: corrupt},
+		{name: "xattr flag with count zero", stored: rawNode(1, fifo(2).uv(0)), want: corrupt},
 		{
 			name:   "entry count the input cannot hold",
 			stored: rawNode(2, rawFifo("a")),
@@ -254,11 +256,11 @@ func TestTreeNodeDecodeRefuses(t *testing.T) {
 		{name: "huge chunk count", stored: rawNode(1, file.uv(1<<62)), want: corrupt, text: "do not fit"},
 		{
 			name:   "xattr count the input cannot hold",
-			stored: rawNode(1, fifo("a", 2).uv(2).str("a").str("")),
+			stored: rawNode(1, fifo(2).uv(2).str("a").str("")),
 			want:   corrupt,
 			text:   "do not fit",
 		},
-		{name: "huge xattr count", stored: rawNode(1, fifo("a", 2).uv(1<<62)), want: corrupt, text: "do not fit"},
+		{name: "huge xattr count", stored: rawNode(1, fifo(2).uv(1<<62)), want: corrupt, text: "do not fit"},
 		{name: "name longer than the input", stored: rawNode(1, raw{}.uv(1<<40).add(rawFifo("a")...)), want: corrupt},
 		{
 			name:   "link target longer than the input",
@@ -275,7 +277,11 @@ func TestTreeNodeDecodeRefuses(t *testing.T) {
 			want:   corrupt,
 		},
 	}
-	for _, tc := range cases {
+}
+
+func TestTreeNodeDecodeRefuses(t *testing.T) {
+	t.Parallel()
+	for _, tc := range nodeRefusals() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			node, err := decodeTreeNode(tc.stored)
@@ -654,6 +660,30 @@ func BenchmarkTreeNodeDecode(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
+		}
+	})
+}
+
+// FuzzDecodeTreeNode feeds the decoder arbitrary bytes. It must not panic,
+// must refuse with one of the two named errors, and must accept only the one
+// encoding of a node: what it returns encodes to the same bytes. The seeds are
+// in testdata/fuzz: a node of every type and an input per refusal, which plain
+// go test runs.
+func FuzzDecodeTreeNode(f *testing.F) {
+	f.Fuzz(func(t *testing.T, data []byte) {
+		node, err := decodeTreeNode(data)
+		if err != nil {
+			if !errors.Is(err, ErrCorruptTree) && !errors.Is(err, ErrUnsupportedFormat) {
+				t.Fatalf("decodeTreeNode(%x) = %v, want ErrCorruptTree or ErrUnsupportedFormat", data, err)
+			}
+			return
+		}
+		again, err := encodeTreeNode(node)
+		if err != nil {
+			t.Fatalf("decodeTreeNode(%x) accepted a node encodeTreeNode refuses: %v", data, err)
+		}
+		if !bytes.Equal(again, data) {
+			t.Fatalf("decodeTreeNode(%x) accepted a second encoding of %x", data, again)
 		}
 	})
 }

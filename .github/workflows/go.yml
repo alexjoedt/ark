@@ -95,6 +95,17 @@ jobs:
           ARK_KILL_RUNS: "10"
           ARK_FORGET_RUNS: "10000"
 
+      # Every fuzz target for a fixed 20 s: go test takes one -fuzz target per
+      # run, so the step lists them. The seeds in testdata/fuzz already ran in
+      # Test; a crasher a run finds is committed there.
+      - name: Fuzz
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -eu
+          for target in $(go test -list '^Fuzz' . | grep '^Fuzz'); do
+            go test . -run '^$' -fuzz "^${target}$" -fuzztime 20s
+          done
+
       # The exit codes the CLI promises, driven through the binary.
       - name: Exit code contract
         if: matrix.os == 'ubuntu-latest'
