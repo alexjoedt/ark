@@ -386,6 +386,9 @@ func (r *Repository) Snapshot(ctx context.Context, snapshotID SnapshotID) (*Snap
 // Prune sweeps them, which is why this is not part of the public surface:
 // callers go through Forget.
 func (r *Repository) deleteSnapshot(ctx context.Context, id SnapshotID) error {
+	if err := checkLock(ctx); err != nil {
+		return err
+	}
 	if err := r.backend.Delete(ctx, Handle{Type: SnapshotFile, Name: string(id)}); err != nil {
 		return fmt.Errorf("ark: failed to delete snapshot %s: %w", id, err)
 	}
@@ -482,10 +485,15 @@ func (r *Repository) Forget(
 		}
 	}
 
-	// A failed removal does not stop the others; Forget still fails.
+	// A failed removal does not stop the others, an expired lock does; Forget
+	// still fails.
 	var errs []error
 	for _, s := range result.Remove {
-		if err := r.deleteSnapshot(ctx, s.ID); err != nil {
+		err := r.deleteSnapshot(ctx, s.ID)
+		if errors.Is(err, errLockExpired) {
+			return nil, fmt.Errorf("forget: %w", errors.Join(append(errs, err)...))
+		}
+		if err != nil {
 			errs = append(errs, err)
 			continue
 		}

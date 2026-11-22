@@ -195,6 +195,9 @@ func (r *Repository) saveManifest(ctx context.Context, m *manifest) error {
 	if err := r.backend.Sync(ctx); err != nil {
 		return fmt.Errorf("manifest: failed to sync objects: %w", err)
 	}
+	if err := checkLock(ctx); err != nil {
+		return err
+	}
 	if err := r.putSealed(ctx, Handle{Type: SnapshotFile, Name: string(m.ID)}, data); err != nil {
 		return err
 	}

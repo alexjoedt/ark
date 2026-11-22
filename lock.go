@@ -415,7 +415,26 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 	go l.keepAlive(lockCtx)
 	go l.watch(lockCheckInterval)
 	r.reportLock(LockEvent{Kind: LockAcquired, Exclusive: exclusive, LockID: name})
-	return lockCtx, l, nil
+	return context.WithValue(lockCtx, heldLockKey{}, l), l, nil
+}
+
+type heldLockKey struct{}
+
+// errLockExpired is what a write or delete returns when the lock of its
+// operation reached the timeout.
+var errLockExpired = errors.New("ark: the lock went unrefreshed past its timeout, others may treat it as stale")
+
+// checkLock fails when the lock the operation holds through ctx reached its
+// timeout, and aborts the operation then. Every index or manifest write and
+// every delete calls it first: the watch sees a suspend only on its next
+// tick, and a write before that would land after a prune may have taken
+// over the stale lock. It reads the lock's own clock, never the backend.
+// Pack writes go unchecked: an orphan pack is what the next prune collects.
+func checkLock(ctx context.Context) error {
+	if l, ok := ctx.Value(heldLockKey{}).(*repoLock); ok && l.expire() {
+		return errLockExpired
+	}
+	return nil
 }
 
 // keepAlive rewrites the lock object every lockRefreshInterval. It never

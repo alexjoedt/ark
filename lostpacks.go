@@ -66,6 +66,9 @@ func (r *Repository) dropLostPacks(ctx context.Context) {
 		return
 	}
 	h := r.lostPacksMarker()
+	if checkLock(ctx) != nil {
+		return
+	}
 	if err := r.backend.Delete(ctx, h); err != nil {
 		r.logger.WarnContext(ctx, "failed to delete the lost-pack marker, backups keep loading the data index",
 			"namespace", h.Type.String(), "error", err)
