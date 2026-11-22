@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/alexjoedt/ark"
@@ -235,5 +236,58 @@ func TestLockWithUndecodableJSONIsPassedOver(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "lock=garbled") {
 		t.Errorf("no warning names the garbled lock, logs:\n%s", logs.String())
+	}
+}
+
+// releasedMidRead deletes a lock while its body is read, as a holder that
+// releases on a streaming backend does: the Get opens, the read breaks off.
+type releasedMidRead struct{ ark.Backend }
+
+func (b releasedMidRead) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error) {
+	if h.Type != ark.LockFile || h.Name != "held-by-a-reader" {
+		return b.Backend.Get(ctx, h)
+	}
+	if err := b.Backend.Delete(ctx, h); err != nil {
+		return nil, err
+	}
+	return io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF)), nil
+}
+
+func TestLockReleasedDuringItsReadIsPassedOver(t *testing.T) {
+	ctx := context.Background()
+	mem := arkmem.New()
+	repo := prunable(t, releasedMidRead{mem})
+	h := ark.Handle{Type: ark.LockFile, Name: "held-by-a-reader"}
+	if err := mem.Put(ctx, h, strings.NewReader("a lock body")); err != nil {
+		t.Fatalf("store the lock: %v", err)
+	}
+	if _, err := repo.Prune(ctx); err != nil {
+		t.Errorf("Prune beside a lock released during its read: %v", err)
+	}
+}
+
+// TestForcedUnlockRemovesALockThatDoesNotRead: a lock that always fails to
+// read blocks every operation, so a forced Unlock removes it unread.
+func TestForcedUnlockRemovesALockThatDoesNotRead(t *testing.T) {
+	ctx := context.Background()
+	b := &lockReadFails{Backend: arkmem.New()}
+	repo := prunable(t, b)
+	rd, err := openOn(t, b).OpenReader(ctx)
+	if err != nil {
+		t.Fatalf("OpenReader: %v", err)
+	}
+	defer rd.Close()
+
+	b.armed.Store(true)
+	if _, err := repo.Unlock(ctx); !errors.Is(err, errLockReadDown) {
+		t.Errorf("Unlock without force = %v, want the read error", err)
+	}
+	n, err := repo.Unlock(ctx, ark.WithForce())
+	b.armed.Store(false)
+	if err != nil || n != 1 {
+		t.Fatalf("Unlock WithForce = %d, %v, want 1 lock removed", n, err)
+	}
+	if locks := objectNames(t, b, ark.LockFile); len(locks) != 0 {
+		t.Errorf("locks after the forced Unlock: %v", locks)
 	}
 }

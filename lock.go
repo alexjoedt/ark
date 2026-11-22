@@ -155,13 +155,13 @@ func (r *Repository) putLock(ctx context.Context, name string, l lockObject) err
 // A zero-byte object is another writer's Put in flight, not a lock, and is
 // skipped; so is one whose tag does not verify or whose JSON does not decode,
 // which would otherwise block the repository forever. Those are returned by
-// name for Unlock WithForce, and so is a zero-byte object named older than
+// name for the warnings, and so is a zero-byte object named older than
 // lockStaleAge or not named like a lock: that is a truncated lock (or,
 // briefly, a refresh in flight on a backend whose Put is not atomic).
 //
-// Any other failed read is returned: a lock that could not be read may be
-// one that conflicts, and passing over it would let a prune delete what a
-// running backup needs.
+// Any other failed read is returned, unless the object is gone by then: a
+// lock that could not be read may be one that conflicts, and passing over it
+// would let a prune delete what a running backup needs.
 //
 // A lock under a format byte or with a JSON key this build does not know is
 // not skipped: a later build holds it, and what it guards is unknown here. It
@@ -202,6 +202,11 @@ func (r *Repository) loadLocks(ctx context.Context) (
 			unreadable = append(unreadable, name)
 			continue
 		case err != nil:
+			// A body that breaks off while its holder deletes the object is
+			// a release too, not a lock that may conflict.
+			if ok, xerr := r.backend.Exists(ctx, Handle{Type: LockFile, Name: name}); xerr == nil && !ok {
+				continue
+			}
 			return nil, nil, nil, err
 		}
 		locks[name] = l
@@ -577,27 +582,34 @@ type UnlockOption func(*unlockConfig)
 func WithForce() UnlockOption { return func(c *unlockConfig) { c.force = true } }
 
 // Unlock removes stale locks and returns how many it removed.
-// Pass WithForce to remove every lock, including those that do not open.
+// Pass WithForce to remove every lock by its listed name without reading it,
+// so one that fails to read goes too.
 func (r *Repository) Unlock(ctx context.Context, opts ...UnlockOption) (int, error) {
 	cfg := &unlockConfig{}
 	for _, o := range opts {
 		o(cfg)
 	}
 
-	locks, unreadable, _, err := r.loadLocks(ctx)
-	if err != nil {
-		return 0, err
-	}
-	now := r.now()
-
 	var names []string
-	for name, l := range locks {
-		if cfg.force || l.stale(now) {
-			names = append(names, name)
-		}
-	}
 	if cfg.force {
-		names = append(names, unreadable...)
+		err := r.backend.List(ctx, LockFile, func(info BlobInfo) error {
+			names = append(names, info.Name)
+			return nil
+		})
+		if err != nil {
+			return 0, fmt.Errorf("lock: failed to list locks: %w", err)
+		}
+	} else {
+		locks, _, _, err := r.loadLocks(ctx)
+		if err != nil {
+			return 0, err
+		}
+		now := r.now()
+		for name, l := range locks {
+			if l.stale(now) {
+				names = append(names, name)
+			}
+		}
 	}
 	for i, name := range names {
 		if err := r.backend.Delete(ctx, Handle{Type: LockFile, Name: name}); err != nil {

@@ -775,13 +775,13 @@ warn about one object twice:
 | Object | What a reader does |
 |---|---|
 | zero bytes long | ignores it: another writer's write in flight |
-| gone between listing and reading | ignores it: released since the listing |
+| gone between listing and reading, or gone once a read of it fails | ignores it: released since the listing |
 | a tag that doesn't verify, or JSON that doesn't decode | passes over it and warns |
 | a read that fails, for any other reason | stops with the read's error, also under a lock wait: the lock may be one that conflicts. In step 4, it deletes its own lock first |
 | refused (see [What a reader refuses](#what-a-reader-refuses)) | stops with `ErrUnsupportedFormat`: a later build holds it, and what it guards is unknown here |
 
-`ark unlock --force` removes every lock, the passed-over and refused ones included, and a
-zero-byte object whose name is the stale age old or isn't a lock name. It also removes locks that
+`ark unlock --force` removes every object the listing of `locks/` names without reading it, so the
+passed-over, refused and unreadable ones go too, and every zero-byte object. It also removes locks that
 running operations hold, so no operation of any build may run. `ark unlock` alone removes only
 stale locks.
 

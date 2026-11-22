@@ -96,9 +96,9 @@ names the machine, the process, and how long it has held the lock.
 - **The other process crashed.** You don't have to do anything. ark ignores a lock that hasn't
   been refreshed for 30 minutes. To go on sooner, use `ark unlock --force` as described below.
 
-`ark unlock` removes stale locks right away. `ark unlock --force` removes every lock, also those of
-running processes. Use it only when you're sure that no ark process is running anywhere against
-this repository. Removing the lock of a running backup while you prune can cost you that backup's
+`ark unlock` removes stale locks right away. `ark unlock --force` removes every lock, also one that
+fails to read and those of running processes. Use it only when you're sure that no ark process is
+running anywhere against this repository. Removing the lock of a running backup while you prune can cost you that backup's
 data.
 
 [Locks](concepts.md#locks) explains which commands conflict.
