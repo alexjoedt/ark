@@ -75,10 +75,10 @@ writer, every accepted risk included.
   parameters, salt and the sealed key, with no hostname or username, unlike restic's key files:
   `TestInitWritesOneKeyFile`, `TestEveryFlippedKeyFileByteFailsOpen`.
 - Open refuses a key file asking for more than time 16 or 1 GiB of memory, reads at most 64 KiB of a
-  key file or the config and tries at most 20 key files, so a forged key file cannot make it
+  key file, the config or the features object and tries at most 20 key files, so a forged key file cannot make it
   allocate or spin without bound:
   `TestOpenRejectsUnknownKeyFiles`, `TestOpenTriesAtMostTwentyKeyFiles`,
-  `TestOversizedKeyFileAndConfigAreRefusedWithoutAllocating`.
+  `TestOversizedKeyFileConfigAndFeaturesAreRefusedWithoutAllocating`.
 - The config is plain JSON (version, id, created_at, chunker), authenticated through
   `config_hash`: `TestConfigHoldsOnlyItsPlaintextFields`, `TestTamperedConfigIsRejected`.
 

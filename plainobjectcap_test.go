@@ -25,23 +25,30 @@ func (e *endless) Read(p []byte) (int, error) {
 
 func (e *endless) Close() error { return nil }
 
-// planted serves a 256 MiB object for every Get of its type.
+// planted serves a 256 MiB object for every Get of its type, of the name when
+// it has one.
 type planted struct {
 	ark.Backend
-	typ ark.HandleType
+	typ  ark.HandleType
+	name string
 }
 
 func (b planted) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error) {
-	if h.Type == b.typ {
+	if h.Type == b.typ && (b.name == "" || h.Name == b.name) {
 		return &endless{256 << 20}, nil
 	}
 	return b.Backend.Get(ctx, h)
 }
 
-func TestOversizedKeyFileAndConfigAreRefusedWithoutAllocating(t *testing.T) {
-	for name, typ := range map[string]ark.HandleType{"key file": ark.KeyFile, "config": ark.ConfigFile} {
+func TestOversizedKeyFileConfigAndFeaturesAreRefusedWithoutAllocating(t *testing.T) {
+	for name, p := range map[string]planted{
+		"key file": {typ: ark.KeyFile},
+		"config":   {typ: ark.ConfigFile, name: "config"},
+		"features": {typ: ark.ConfigFile, name: "features"},
+	} {
 		t.Run(name, func(t *testing.T) {
-			b := planted{initRepo(t, ark.NoPassword()), typ}
+			p.Backend = initRepo(t, ark.NoPassword())
+			b := p
 			var before, after runtime.MemStats
 			runtime.GC()
 			runtime.ReadMemStats(&before)
