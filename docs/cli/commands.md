@@ -133,10 +133,16 @@ and `/` anchors at the backed-up directory instead of the file system root.
   on an empty repository when several files hold the same content.
 - Directory and file metadata count in neither `new` nor `stored as`.
 
-Differences from restic: restic counts the bytes of a hardlinked file once per name, and its "Added
-to the repository" includes metadata and pack overhead, so its numbers come out a little higher.
-The chunk sizes differ too (ark: 256 KiB to 4 MiB, restic: 512 KiB to 8 MiB), which shifts the
-deduplication slightly.
+Differences from restic:
+
+- restic's "processed" counts the bytes of a hardlinked file once per name, so on a tree with
+  hardlinks, for example a Cargo `target/` directory, it comes out above `size`.
+- restic's "Added to the repository" and its stored size include the tree blobs, which are a few
+  MiB even for large trees. They don't include pack overhead.
+- The chunkers cut at different places (ark: 256 KiB to 4 MiB, restic: 512 KiB to 8 MiB with a
+  chunker polynomial picked per repository), so the two find different duplicate chunks. restic's
+  "Added" can come out a few percent above or below `new`, and differs between two restic
+  repositories of the same tree.
 
 ## restore
 
