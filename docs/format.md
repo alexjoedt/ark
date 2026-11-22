@@ -170,6 +170,7 @@ such an object and never reports it as damaged.
 | a `kdf` other than `argon2id` or `none` | key file |
 | with `argon2id`, a `time`, `memory`, or `threads` outside the range its row gives, or a `salt` that isn't 16 bytes in lowercase hex | key file |
 | a `chunker` size below 1, a `min` above `avg`, an `avg` above `max`, an `avg` that isn't a power of two, or a `max` above 67108864 (64 MiB) | config |
+| a config or key file above 65536 bytes | config, key file |
 | a name in `required` | features |
 | a name that isn't 32 lowercase hex characters | manifest, once its tag verifies |
 
@@ -187,7 +188,8 @@ such an object and never reports it as damaged.
 `config/config` is plain JSON, not sealed, with no byte before it. Its bytes are written once, by
 `Init`. The SHA-256 of these bytes as stored is the master key's `config_hash`, so a changed byte
 fails `Open` with `ErrCorruptConfig`. A reader hashes the bytes, not a canonical form, so the
-spelling is the writer's choice; ark writes the keys in this order with no whitespace.
+spelling is the writer's choice; ark writes the keys in this order with no whitespace. A reader
+reads at most 65536 bytes of it before anything authenticates it; ark writes well under 1 KiB.
 
 | Key | Type | Optional | Content |
 |---|---|---|---|
@@ -308,7 +310,7 @@ lengths 65536 65536 65536 3392
 ### Key file
 
 A key file is plain JSON, named by 16 random bytes as 32 lowercase hex characters. `Open` tries at
-most 20 of them.
+most 20 of them. A reader reads at most 65536 bytes of one; ark writes well under 1 KiB.
 
 | Key | Type | Optional | Content |
 |---|---|---|---|

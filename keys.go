@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"time"
 
 	"golang.org/x/crypto/argon2"
@@ -286,9 +285,9 @@ func readKeyFile(ctx context.Context, b Backend, name string) (*keyFile, error) 
 		return nil, fmt.Errorf("ark: failed to read key file %s: %w", name, err)
 	}
 	defer rc.Close()
-	data, err := io.ReadAll(rc)
+	data, err := readPlain(rc, "key file "+name)
 	if err != nil {
-		return nil, fmt.Errorf("ark: failed to read key file %s: %w", name, err)
+		return nil, err
 	}
 
 	var kf keyFile

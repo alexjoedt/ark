@@ -234,9 +234,22 @@ func readRepositoryConfig(ctx context.Context, b Backend) ([]byte, error) {
 	}
 	defer rc.Close()
 
-	data, err := io.ReadAll(rc)
+	return readPlain(rc, "the repository config")
+}
+
+// maxPlainObject caps the bytes read of a key file or the config, which are
+// read before anything authenticates them. ark writes under 1 KiB of either.
+const maxPlainObject = 64 << 10
+
+// readPlain reads what, an unauthenticated object, and refuses one above
+// maxPlainObject as ErrUnsupportedFormat without holding more than the cap.
+func readPlain(r io.Reader, what string) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxPlainObject+1))
 	if err != nil {
-		return nil, fmt.Errorf("ark: failed to read the repository config: %w", err)
+		return nil, fmt.Errorf("ark: failed to read %s: %w", what, err)
+	}
+	if len(data) > maxPlainObject {
+		return nil, fmt.Errorf("%w: %s is larger than %d bytes", ErrUnsupportedFormat, what, maxPlainObject)
 	}
 	return data, nil
 }
