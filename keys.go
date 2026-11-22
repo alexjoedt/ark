@@ -352,15 +352,18 @@ func (kf *keyFile) open(codec *objectCodec, name string, pw Password) (*masterKe
 		}
 		return nil, fmt.Errorf("%w: the master key of key file %s does not decode: %w", ErrUnsupportedFormat, name, err)
 	}
-	for field, missing := range map[string]bool{
-		"data_key":      mk.DataKey == secretKey{},
-		"id_key":        mk.IDKey == secretKey{},
-		"chunker_seed":  mk.ChunkerSeed == secretKey{},
-		"repository_id": mk.RepositoryID == "",
+	for _, f := range []struct {
+		name    string
+		missing bool
+	}{
+		{"data_key", mk.DataKey == secretKey{}},
+		{"id_key", mk.IDKey == secretKey{}},
+		{"chunker_seed", mk.ChunkerSeed == secretKey{}},
+		{"repository_id", mk.RepositoryID == ""},
 	} {
-		if missing {
+		if f.missing {
 			return nil, fmt.Errorf("%w: the master key of key file %s has no %s",
-				ErrUnsupportedFormat, name, field)
+				ErrUnsupportedFormat, name, f.name)
 		}
 	}
 	mk.Created = mk.Created.UTC()
