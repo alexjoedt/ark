@@ -332,7 +332,9 @@ ark forget --keep-last 5 --keep-tag pinned
   match. Without a filter, `ark forget --keep-last 1` keeps the newest snapshot of every series.
 - **Confirmation.** On a terminal, `forget` lists the snapshots it will remove and asks once. With
   `--prune`, that question covers the prune too. With `--yes`, it asks nothing and lists each
-  snapshot after removing it.
+  snapshot after removing it. It asks while it holds the exclusive lock, so a running backup or
+  mount fails the run before the question, and a backup started meanwhile fails, or waits for the
+  answer with `--lock-wait`.
 - **No rule.** A policy without a keep rule and without IDs exits 2. `--all` removes every
   matching snapshot on purpose.
 - **Nothing kept.** When the policy keeps no snapshot of one series, `forget` removes nothing, of

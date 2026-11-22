@@ -476,6 +476,11 @@ func (r *Repository) Forget(
 		progress(done)
 		return result, nil
 	}
+	if cfg.confirm != nil {
+		if err := cfg.confirm(result); err != nil {
+			return nil, err
+		}
+	}
 
 	// A failed removal does not stop the others; Forget still fails.
 	var errs []error

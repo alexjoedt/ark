@@ -16,6 +16,8 @@ refuses a policy that keeps nothing of a series runs per forget, so it cannot se
 
 - Every forget that removes snapshots takes the exclusive lock, a removal by ID too.
 - A dry run takes the shared lock: it removes nothing and keeps running beside backups.
+- The CLI decides, asks and removes under one exclusive lock (`WithForgetConfirm`), not from a
+  dry-run preview followed by a removal by ID: two such runs would again decide from one listing.
 - The CLI keeps `--lock-wait` at 0. The docs point a scheduled forget that may overlap a backup to
   it.
 - `forget --prune` keeps two acquisitions in a row: forget releases its lock, prune takes the
@@ -34,4 +36,5 @@ keeps the deciders apart.
 - docs/format.md lists forget under the exclusive lock and forget with `--dry-run` under the
   shared one; a writer of another implementation follows the same table.
 - Tests pin it: `TestEveryOperationTakesItsLockClass`, `TestConcurrentForgetsKeepTheSeries`,
-  `TestForgetWaitsForASharedLock` and `TestForgetDryRunRunsBesideABackup`.
+  `TestForgetWaitsForASharedLock`, `TestForgetDryRunRunsBesideABackup` and
+  `TestForgetConfirmRunsUnderTheExclusiveLock`.

@@ -154,46 +154,58 @@ func runForget(
 		}
 	}
 
-	// preview first, so the prompt can name what goes
-	preview, err := repo.Forget(ctx, policy, filter, ark.WithForgetDryRun())
-	if err != nil {
-		return fmt.Errorf("forget: %w", err)
-	}
 	p := printer(cmd)
-	for _, s := range preview.Future {
-		warnFuture(p, s)
-	}
-	if cmd.Bool("dry-run") || len(preview.Remove) == 0 {
-		return printForget(cmd, preview)
+	if cmd.Bool("dry-run") {
+		res, err := repo.Forget(ctx, policy, filter, ark.WithForgetDryRun())
+		if err != nil {
+			return fmt.Errorf("forget: %w", err)
+		}
+		for _, s := range res.Future {
+			warnFuture(p, s)
+		}
+		return printForget(cmd, res)
 	}
 
-	// only a question shows the list first; --yes and scripts keep the
-	// per-snapshot lines after the removal
+	// The prompt runs under the exclusive lock: what it names is what goes,
+	// and a running backup fails the run before anyone is asked.
 	asks := p.Asks()
-	if asks {
-		printRemoveLines(p, "remove", preview.Remove)
+	var pr *out.Progress
+	var declined error
+	res, err := repo.Forget(ctx, policy, filter, ark.WithForgetConfirm(func(res *ark.ForgetResult) error {
+		for _, s := range res.Future {
+			warnFuture(p, s)
+		}
+		if len(res.Remove) == 0 {
+			return nil
+		}
+		// only a question shows the list first; --yes and scripts keep the
+		// per-snapshot lines after the removal
+		if asks {
+			printRemoveLines(p, "remove", res.Remove)
+		}
+		question := fmt.Sprintf("remove %d snapshots", len(res.Remove))
+		if prune {
+			question += " and prune unreferenced data"
+		}
+		if declined = p.Confirm(question); declined != nil {
+			return declined
+		}
+		pr = startProgress(p, "forget")
+		return nil
+	}))
+	if declined != nil {
+		return declined
 	}
-	question := fmt.Sprintf("remove %d snapshots", len(preview.Remove))
-	if prune {
-		question += " and prune unreferenced data"
-	}
-	if err := p.Confirm(question); err != nil {
-		return err
-	}
-	// Remove what the prompt named, not what a second policy run picks: a
-	// snapshot dated seconds ahead can stop being in the future meanwhile.
-	named := ark.SnapshotFilter{IDs: make([]ark.SnapshotID, 0, len(preview.Remove))}
-	for _, s := range preview.Remove {
-		named.IDs = append(named.IDs, s.ID)
-	}
-	pr := startProgress(p, "forget")
-	res, err := repo.Forget(ctx, ark.ForgetPolicy{}, named)
 	if err != nil {
-		pr.Fail()
+		if pr != nil {
+			pr.Fail()
+		}
 		return fmt.Errorf("forget: %w", err)
 	}
+	if pr == nil {
+		return printForget(cmd, res)
+	}
 	pr.Done()
-	res.Keep, res.KeepReasons = preview.Keep, preview.KeepReasons
 	if asks {
 		p.Linef("removed %d snapshots, kept %d", len(res.Remove), len(res.Keep))
 	} else if err := printForget(cmd, res); err != nil {

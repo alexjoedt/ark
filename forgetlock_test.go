@@ -146,3 +146,36 @@ func TestForgetDryRunRunsBesideABackup(t *testing.T) {
 		t.Errorf("Backup: %v", err)
 	}
 }
+
+// TestForgetConfirmRunsUnderTheExclusiveLock: the confirmation sees what
+// Forget decided while the exclusive lock is held, and a refusal removes
+// nothing.
+func TestForgetConfirmRunsUnderTheExclusiveLock(t *testing.T) {
+	ctx := context.Background()
+	b := arkmem.New()
+	repo := openRepo(t, b)
+	old := mustBackup(t, repo, smallFiles("app", 2))
+	mustBackup(t, repo, smallFiles("app", 3))
+
+	errStop := errors.New("declined")
+	other := openOn(t, b)
+	_, err := repo.Forget(ctx, ark.ForgetPolicy{KeepLast: 1}, ark.SnapshotFilter{},
+		ark.WithForgetConfirm(func(res *ark.ForgetResult) error {
+			if len(res.Remove) != 1 || res.Remove[0].ID != old.ID {
+				t.Errorf("confirm sees Remove %v, want only %s", res.Remove, old.ID)
+			}
+			if rd, err := other.OpenReader(ctx); !errors.Is(err, ark.ErrRepoLocked) {
+				if err == nil {
+					_ = rd.Close()
+				}
+				t.Errorf("OpenReader during the confirmation = %v, want ErrRepoLocked", err)
+			}
+			return errStop
+		}))
+	if !errors.Is(err, errStop) {
+		t.Fatalf("Forget with a refused confirmation = %v, want the refusal", err)
+	}
+	if snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{}); err != nil || len(snaps) != 2 {
+		t.Errorf("Snapshots after the refusal = %d, %v; want both", len(snaps), err)
+	}
+}
