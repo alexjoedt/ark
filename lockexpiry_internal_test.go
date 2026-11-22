@@ -22,6 +22,17 @@ type agingBackend struct {
 	mu    sync.Mutex
 	aged  bool
 	after []string // op and namespace of every Put and Delete once aged
+	syncs int      // Syncs once aged
+}
+
+func (b *agingBackend) Sync(ctx context.Context) error {
+	err := b.Backend.Sync(ctx)
+	b.mu.Lock()
+	if b.aged {
+		b.syncs++
+	}
+	b.mu.Unlock()
+	return err
 }
 
 func (b *agingBackend) seen(op string, t HandleType) {
@@ -123,6 +134,7 @@ func TestBackupPastItsLockTimeoutWritesNoIndexOrManifest(t *testing.T) {
 		"aged after a pack":         on("put", DataPackFile),
 		"aged after the data index": on("put", DataIndexFile),
 		"aged after the tree index": on("put", TreeIndexFile),
+		"aged during the manifest":  on("put", SnapshotFile),
 	} {
 		t.Run(name, func(t *testing.T) {
 			repo, b := agingRepo(t, at)
@@ -236,12 +248,8 @@ func TestPrunePastItsLockTimeoutDeletesNothing(t *testing.T) {
 			t.Fatalf("markLostPacks: %v", err)
 		}
 		b.at = on("exists", LostPackFile)
-		if _, err := repo.Prune(ctx); err != nil {
-			t.Fatalf("Prune: %v", err)
-		}
-		if w := b.wrote(); len(w) > 0 {
-			t.Errorf("wrote after the lock expired: %v", w)
-		}
+		_, err := repo.Prune(ctx)
+		wantExpired(t, err, b)
 		if !repo.lostPacksMarked(ctx) {
 			t.Error("the lost-pack marker is gone")
 		}
@@ -273,5 +281,53 @@ func TestForgetPastItsLockTimeoutRemovesNothing(t *testing.T) {
 		if ok, _ := b.Backend.Exists(ctx, Handle{Type: SnapshotFile, Name: string(id)}); !ok {
 			t.Errorf("snapshot %s removed", id)
 		}
+	}
+}
+
+// The removals a forget made before its lock expired are synced anyway: a
+// prune that takes over the stale lock may sweep their objects.
+func TestForgetSyncsTheRemovalsBeforeItsLockExpired(t *testing.T) {
+	ctx := context.Background()
+	repo, b := agingRepo(t, func(string, HandleType) bool { return false })
+	var ids []SnapshotID
+	for range 2 {
+		snap, err := repo.Backup(ctx, NewStreamSource("f", strings.NewReader("content")))
+		if err != nil {
+			t.Fatalf("Backup: %v", err)
+		}
+		ids = append(ids, snap.ID)
+	}
+	b.at = on("delete", SnapshotFile)
+	_, err := repo.Forget(ctx, ForgetPolicy{}, SnapshotFilter{IDs: ids})
+	wantExpired(t, err, b)
+	if b.syncs == 0 {
+		t.Error("the removal before the lock expired was not synced")
+	}
+}
+
+func TestChangePasswordPastItsLockTimeoutKeepsTheOldKey(t *testing.T) {
+	repo, b := agingRepo(t, on("put", KeyFile))
+	err := repo.ChangePassword(context.Background(), NewPassword("other"))
+	wantExpired(t, err, b)
+	if _, err := Open(context.Background(), b.Backend, NewPassword("ark-test")); err != nil {
+		t.Errorf("the old password no longer opens: %v", err)
+	}
+}
+
+func TestMarkLostPacksPastItsLockTimeoutWritesNoMarker(t *testing.T) {
+	ctx := context.Background()
+	repo, b := agingRepo(t, func(string, HandleType) bool { return false })
+	lockCtx, lock, err := repo.acquire(ctx, false)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer lock.release(lockCtx)
+	b.mu.Lock()
+	b.aged = true
+	b.mu.Unlock()
+	b.clock.advance(lockRefreshTimeout)
+	wantExpired(t, repo.markLostPacks(lockCtx), b)
+	if repo.lostPacksMarked(ctx) {
+		t.Error("the lost-pack marker is stored")
 	}
 }

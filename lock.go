@@ -425,11 +425,12 @@ type heldLockKey struct{}
 var errLockExpired = errors.New("ark: the lock went unrefreshed past its timeout, others may treat it as stale")
 
 // checkLock fails when the lock the operation holds through ctx reached its
-// timeout, and aborts the operation then. Every index or manifest write and
-// every delete calls it first: the watch sees a suspend only on its next
-// tick, and a write before that would land after a prune may have taken
-// over the stale lock. It reads the lock's own clock, never the backend.
-// Pack writes go unchecked: an orphan pack is what the next prune collects.
+// timeout, and aborts the operation then. Every index, manifest, key file or
+// lost-pack marker write and every delete calls it first: the watch sees a
+// suspend only on its next tick, and a write before that would land after a
+// prune may have taken over the stale lock. It reads the lock's own clock,
+// never the backend. Pack writes go unchecked: an orphan pack is what the
+// next prune collects. A request already in flight it cannot stop.
 func checkLock(ctx context.Context) error {
 	if l, ok := ctx.Value(heldLockKey{}).(*repoLock); ok && l.expire() {
 		return errLockExpired

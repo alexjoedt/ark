@@ -745,10 +745,13 @@ Once the age reaches the self-timeout, the holder aborts its operation and never
 again. It keeps checking while a refresh hangs, so a hung write can't keep the operation alive.
 
 A check that runs on a timer sees a suspend only on its next tick, so the holder also takes the
-age of its lock right before each index object or manifest it writes and each object it deletes.
-Past its self-timeout a holder writes no index object or manifest and deletes nothing; it aborts
-instead. This check reads the holder's own clocks, never the lock object. Pack writes go
-unchecked: a pack no index lists is what the next prune deletes.
+age of its lock right before each index object, manifest, key file or lost-pack marker it writes
+and each object it deletes. Past its self-timeout a holder writes none of those and deletes
+nothing; it aborts instead. This check reads the holder's own clocks, never the lock object. Pack
+writes go unchecked: a pack no index lists is what the next prune deletes. The check cannot stop
+a request already in flight, so the rule holds only while each request finishes within the
+margin below. A manifest write is checked again once it returns, and a backup or import whose
+manifest landed past the self-timeout fails.
 
 The self-timeout lies 7m30s below the stale age, so a holder stops writing before any other host
 counts its lock as stale. The clocks of the hosts that share a repository must agree within that

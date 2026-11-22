@@ -201,6 +201,11 @@ func (r *Repository) saveManifest(ctx context.Context, m *manifest) error {
 	if err := r.putSealed(ctx, Handle{Type: SnapshotFile, Name: string(m.ID)}, data); err != nil {
 		return err
 	}
+	// The check before the Put cannot stop a request in flight: a manifest
+	// that landed past the timeout may reference packs a prune removed since.
+	if err := checkLock(ctx); err != nil {
+		return fmt.Errorf("manifest: %s stored as the lock expired, a check shows whether it restores: %w", m.ID, err)
+	}
 	if err := r.backend.Sync(ctx); err != nil {
 		return fmt.Errorf("manifest: failed to sync %s: %w", m.ID, err)
 	}

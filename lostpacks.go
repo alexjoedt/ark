@@ -34,6 +34,9 @@ func (r *Repository) markLostPacks(ctx context.Context) error {
 	if ok, err := r.backend.Exists(ctx, h); err == nil && ok {
 		return nil
 	}
+	if err := checkLock(ctx); err != nil {
+		return err
+	}
 	if err := r.putSealed(ctx, h, nil); err != nil {
 		return err
 	}
@@ -60,17 +63,19 @@ func (r *Repository) lostPacksMarked(ctx context.Context) bool {
 // dropLostPacks removes the marker. The caller, a prune, holds the exclusive
 // lock and has made durable an index that lists every referenced chunk in a
 // stored pack. A marker that stays only costs reads, so a failed delete is
-// logged. Asking first keeps a prune that has nothing to do from writing.
-func (r *Repository) dropLostPacks(ctx context.Context) {
+// logged; only an expired lock fails the prune. Asking first keeps a prune
+// that has nothing to do from writing.
+func (r *Repository) dropLostPacks(ctx context.Context) error {
 	if !r.lostPacksMarked(ctx) {
-		return
+		return nil
 	}
 	h := r.lostPacksMarker()
-	if checkLock(ctx) != nil {
-		return
+	if err := checkLock(ctx); err != nil {
+		return err
 	}
 	if err := r.backend.Delete(ctx, h); err != nil {
 		r.logger.WarnContext(ctx, "failed to delete the lost-pack marker, backups keep loading the data index",
 			"namespace", h.Type.String(), "error", err)
 	}
+	return nil
 }

@@ -127,7 +127,7 @@ func (r *Repository) runGC(
 			ev.ChunksDone++
 			progress(ev)
 		}); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("gc: %w", err)
 		}
 	}
 	if !dryRun {
@@ -140,7 +140,9 @@ func (r *Repository) runGC(
 		// index it leaves. Under the exclusive lock no reader can have found a
 		// loss since the load.
 		if !plans[0].keepsLost() {
-			r.dropLostPacks(ctx)
+			if err := r.dropLostPacks(ctx); err != nil {
+				return nil, fmt.Errorf("gc: %w", err)
+			}
 		}
 	}
 

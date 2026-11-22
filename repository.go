@@ -199,6 +199,9 @@ func (r *Repository) ChangePassword(ctx context.Context, pw Password) error {
 	}
 	defer lock.release(ctx)
 
+	if err := checkLock(ctx); err != nil {
+		return err
+	}
 	name, err := putKeyFile(ctx, r.backend, r.codec, r.key, pw)
 	if err != nil {
 		return err
@@ -207,6 +210,9 @@ func (r *Repository) ChangePassword(ctx context.Context, pw Password) error {
 	// between must leave at least one key file that opens the repository.
 	if err := r.backend.Sync(ctx); err != nil {
 		return fmt.Errorf("ark: failed to sync the new key file %s: %w", name, err)
+	}
+	if err := checkLock(ctx); err != nil {
+		return fmt.Errorf("ark: new key file %s written, old key file %s kept: %w", name, r.keyName, err)
 	}
 	if err := r.backend.Delete(ctx, Handle{Type: KeyFile, Name: r.keyName}); err != nil {
 		return fmt.Errorf(
@@ -491,6 +497,12 @@ func (r *Repository) Forget(
 	for _, s := range result.Remove {
 		err := r.deleteSnapshot(ctx, s.ID)
 		if errors.Is(err, errLockExpired) {
+			// The removals made so far stay removed before a prune that takes
+			// over the stale lock sweeps their objects. Syncing deletes
+			// nothing, and the lock's context is cancelled by now.
+			if syncErr := r.backend.Sync(context.WithoutCancel(ctx)); syncErr != nil {
+				errs = append(errs, fmt.Errorf("failed to sync snapshot removals: %w", syncErr))
+			}
 			return nil, fmt.Errorf("forget: %w", errors.Join(append(errs, err)...))
 		}
 		if err != nil {
