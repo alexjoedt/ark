@@ -357,8 +357,10 @@ func TestExportOfAnImportedSnapshotWritesTheSameTarModes(t *testing.T) {
 		t.Fatalf("Export: %v", err)
 	}
 	want := tarModes(t, original.Bytes())
+	// A symlink's mode is 0777 on Linux and follows the umask on darwin.
+	linkMode := int64(statMode(t, filepath.Join(root, "link")))
 	for name, mode := range map[string]int64{
-		"data/suid": 0o4755, "data/sgid": 0o2775, "data/sticky": 0o1777, "data/sgid/plain.txt": 0o640, "data/link": 0o777,
+		"data/suid": 0o4755, "data/sgid": 0o2775, "data/sticky": 0o1777, "data/sgid/plain.txt": 0o640, "data/link": linkMode,
 	} {
 		if want[name] != mode {
 			t.Errorf("the export holds %s with tar mode %#o, want %#o", name, want[name], mode)
