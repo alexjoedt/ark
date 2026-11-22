@@ -171,6 +171,7 @@ such an object and never reports it as damaged.
 | with `argon2id`, a `time`, `memory`, or `threads` outside the range its row gives, or a `salt` that isn't 16 bytes in lowercase hex | key file |
 | a `chunker` size below 1, a `min` above `avg`, an `avg` above `max`, an `avg` that isn't a power of two, or a `max` above 67108864 (64 MiB) | config |
 | a config or key file above 65536 bytes | config, key file |
+| a master key whose `data_key`, `id_key`, or `chunker_seed` is missing or 64 zeros, or whose `repository_id` is empty | master key, once its tag verifies |
 | a name in `required` | features |
 | a name that isn't 32 lowercase hex characters | manifest, once its tag verifies |
 

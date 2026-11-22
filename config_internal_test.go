@@ -560,3 +560,55 @@ func TestOpenCostsOneGetForTheFeatures(t *testing.T) {
 		}
 	}
 }
+
+// A master key without a key field, or with an all-zero one, would seal and
+// name every object under zero keys: only a wrap key holder can write it, and
+// Open refuses it rather than run on it.
+func TestOpenRefusesAMasterKeyWithoutAKey(t *testing.T) {
+	ctx := context.Background()
+	zero := `"` + strings.Repeat("0", 64) + `"`
+	for _, tc := range []struct{ name, field, value string }{
+		{"data_key missing", "data_key", ""},
+		{"id_key missing", "id_key", ""},
+		{"chunker_seed missing", "chunker_seed", ""},
+		{"repository_id missing", "repository_id", ""},
+		{"repository_id empty", "repository_id", `""`},
+		{"data_key zero", "data_key", zero},
+		{"id_key zero", "id_key", zero},
+		{"chunker_seed zero", "chunker_seed", zero},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newStubBackend()
+			if err := Init(ctx, b, NoPassword()); err != nil {
+				t.Fatalf("Init: %v", err)
+			}
+			repo, err := Open(ctx, b, NoPassword())
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer repo.Close()
+			blob, err := json.Marshal(repo.key)
+			if err != nil {
+				t.Fatalf("marshal master key: %v", err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(blob, &fields); err != nil {
+				t.Fatalf("unmarshal master key: %v", err)
+			}
+			if tc.value == "" {
+				delete(fields, tc.field)
+			} else {
+				fields[tc.field] = json.RawMessage(tc.value)
+			}
+			if blob, err = json.Marshal(fields); err != nil {
+				t.Fatalf("marshal master key: %v", err)
+			}
+			resealMasterKey(t, b, repo, blob)
+
+			_, err = Open(ctx, b, NoPassword())
+			if !errors.Is(err, ErrUnsupportedFormat) || !strings.Contains(err.Error(), tc.field) {
+				t.Errorf("Open = %v, want ErrUnsupportedFormat naming %s", err, tc.field)
+			}
+		})
+	}
+}
