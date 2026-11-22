@@ -33,6 +33,7 @@ func foreignPrune(t *testing.T) (repo *ark.Repository, src string, keep *ark.Sna
 	}
 	keep = backupDir(t, repo, src)
 
+	before := dataPacks(t, b)
 	other, err := ark.Open(ctx, noClose{b}, testPassword)
 	if err != nil {
 		t.Fatalf("second Open: %v", err)
@@ -49,7 +50,29 @@ func foreignPrune(t *testing.T) (repo *ark.Repository, src string, keep *ark.Sna
 		t.Fatalf("Prune removed %d blobs and repacked %d bytes, want both above zero",
 			pruned.BlobsRemoved, pruned.BytesRepacked)
 	}
+	after := dataPacks(t, b)
+	if len(before) == 0 || len(after) == 0 {
+		t.Fatalf("data packs before the prune %v, after %v, want some in both", before, after)
+	}
+	for name := range before {
+		if after[name] {
+			t.Fatalf("data pack %s survived the prune, so keep.bin's chunks were not moved out of a deleted pack", name)
+		}
+	}
 	return repo, src, keep
+}
+
+func dataPacks(t *testing.T, b ark.Backend) map[string]bool {
+	t.Helper()
+	packs := map[string]bool{}
+	err := b.List(context.Background(), ark.DataPackFile, func(info ark.BlobInfo) error {
+		packs[info.Name] = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("List data packs: %v", err)
+	}
+	return packs
 }
 
 func checkAndRestore(t *testing.T, repo *ark.Repository, snap *ark.Snapshot, src string) {
@@ -110,6 +133,7 @@ func TestForeignPruneRefusedWhileAReaderIsOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = rd.Close() })
 	other, err := ark.Open(ctx, noClose{b}, testPassword)
 	if err != nil {
 		t.Fatalf("second Open: %v", err)
