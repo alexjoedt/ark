@@ -203,8 +203,7 @@ func TestInitRejectsAnEmptyPassword(t *testing.T) {
 
 func TestNotPasswordProtectedErrorWarnsAboutPlantedKeyFiles(t *testing.T) {
 	const want = "ark: repository is not password protected: " +
-		"a password protected repository never holds a key file without a password, " +
-		"so open it without one only if it was created without"
+		"open it without a password only if you created it that way or removed its password"
 	if got := ark.ErrNotPasswordProtected.Error(); got != want {
 		t.Errorf("ErrNotPasswordProtected = %q, want %q", got, want)
 	}

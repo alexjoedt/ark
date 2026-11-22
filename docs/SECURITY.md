@@ -202,8 +202,8 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
   are amd64 and arm64 only. A 32-bit build from source keeps the cap and can run out of memory on a
   forged key file instead of failing with an error: `TestOpenRejectsUnknownKeyFiles`.
 - A planted key file without a password opens only if the user switches to `--insecure-no-password`
-  after `ErrNotPasswordProtected`, whose message says a password protected repository never holds
-  one: `TestNotPasswordProtectedErrorWarnsAboutPlantedKeyFiles`.
+  after `ErrNotPasswordProtected`, whose message says to do so only if the user created the
+  repository that way or removed its password: `TestNotPasswordProtectedErrorWarnsAboutPlantedKeyFiles`.
 - Lock names carry the millisecond they were created: `TestLockNamesCarryTheirTime`.
 - `ARK_PASSWORD` and `ARK_NEW_PASSWORD` are visible to every process of the same user;
   `--password-file` and `--new-password-file` are the safer inputs: `TestNoPasswordFlag`.
