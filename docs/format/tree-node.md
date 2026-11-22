@@ -89,7 +89,8 @@ The xattrs, when flag bit 1 is set, are a count (uvarint) followed by that many 
   value, `-9223372036854775808`, as mtime means the source knew no mtime. An entry without a ctime
   leaves flag bit 0 clear.
 - **inode** and **ctime** let a later backup tell an unchanged file from a changed one. A source
-  that knows neither, such as a tar stream, stores neither.
+  that knows neither, such as a tar stream, stores neither. ark's directory backup stores both
+  for a regular file only. Every other entry, a hardlink too, has inode 0 and no ctime.
 - **file**: the content is the chunks in order. A chunk id is the name of a chunk blob in the data
   packs. The length is the chunk's plaintext length, at least 1. The size of the file is the sum
   of its lengths, and the offset of a chunk in the file is the sum of the lengths before it.
@@ -98,10 +99,17 @@ The xattrs, when flag bit 1 is set, are a count (uvarint) followed by that many 
 - **symlink**: the target is the raw bytes of the link, never empty, as the source read them. A
   reader checks a target for nothing else: a sink that writes to a file system judges it itself.
 - **hardlink**: the entry is a second name of another regular file of the same snapshot.
-  The target is that file's path from the snapshot root, its names joined by `/`, never empty.
+  The target is that file's path from the snapshot root, its names joined by `/`, never empty,
+  with no leading `/`: `dir/x`, not `/dir/x`. ark refuses a source's hardlink with a leading `/`
+  and writes no leading `./` and no trailing `/`; its reader drops both when it follows a target.
   The content is stored once, under the target. A target that names no regular file of the
   snapshot is `ErrCorruptTree` when a reader follows it; the node reader itself checks only that
   it isn't empty.
+- **hardlink**, which name: of the names of one file, the first that the walk reaches is the file
+  entry, and every later one is a hardlink to it. ark's directory backup walks depth first, each
+  directory's entries in [order](#order) and each directory before the entries below it, so
+  `a/b/x` comes before `c`. A hardlink entry holds the mode, owner, and mtime that its own name
+  reports.
 - **fifo** holds no content and no fields of its own.
 - **character device** and **block device** carry the major and minor device numbers, each 32
   bits. They hold no content.
@@ -176,7 +184,9 @@ once the input ends inside a field.
   format byte as its associated data, and the tree index lists it. See
   [Packs](../format.md#packs).
 - The `root_tree` of a [manifest](../format.md#manifest) names the node of the snapshot's root.
-  Its entries are the top-level entries of the snapshot.
+  Its entries are the top-level entries of the snapshot. A directory backup's root node lists the
+  entries in the backed-up directory. That directory has no entry, so its own mode, owner and
+  times aren't stored.
 - The tree hash of a directory entry names the node of that directory.
 
 ## Limits

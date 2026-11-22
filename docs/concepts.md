@@ -99,7 +99,7 @@ wait instead.
 
 A running command refreshes its lock every few minutes. A lock left behind by a crashed process
 doesn't block the repository for long: ark ignores a lock that hasn't been refreshed for 30
-minutes, and one from the same machine as soon as its process is gone.
+minutes.
 
 ## Interrupted backups
 

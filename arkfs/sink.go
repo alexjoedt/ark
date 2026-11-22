@@ -72,6 +72,11 @@ func (s *fileSink) Receive(_ context.Context, entry ark.FileInfo, r io.Reader) e
 
 	switch entry.Type {
 	case ark.FileTypeDirectory:
+		// Anything but a directory at target is replaced: a symlink left
+		// there would lead the restore out of root.
+		if fi, err := os.Lstat(target); err == nil && !fi.IsDir() {
+			_ = os.Remove(target)
+		}
 		if err := os.MkdirAll(target, entry.Mode.Perm()|0o700); err != nil {
 			return fmt.Errorf("arkfs: mkdir %s: %w", target, err)
 		}
@@ -99,6 +104,7 @@ func (s *fileSink) Receive(_ context.Context, entry ark.FileInfo, r io.Reader) e
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return fmt.Errorf("arkfs: mkdir parent of %s: %w", target, err)
 		}
+		_ = os.Remove(target) // replace, never write through, a stale entry
 		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, entry.Mode.Perm()|0o600)
 		if err != nil {
 			return fmt.Errorf("arkfs: create %s: %w", target, err)
@@ -112,10 +118,12 @@ func (s *fileSink) Receive(_ context.Context, entry ark.FileInfo, r io.Reader) e
 		if err := f.Close(); err != nil {
 			return fmt.Errorf("arkfs: close %s: %w", target, err)
 		}
-		// Chmod after close so umask doesn't interfere, and after the owner:
-		// chown clears setuid and setgid.
-		_ = os.Chmod(target, setOwner(target, entry.UID, entry.GID, entry.Mode))
+		// Chmod after close so umask doesn't interfere, after the owner:
+		// chown clears setuid and setgid, and after the xattrs: a read-only
+		// mode refuses them.
+		mode := setOwner(target, entry.UID, entry.GID, entry.Mode)
 		writeXattrs(target, entry.Xattrs)
+		_ = os.Chmod(target, mode)
 		_ = os.Chtimes(target, entry.ModTime, entry.ModTime)
 
 	case ark.FileTypeHardlink:
@@ -175,8 +183,9 @@ func copyFile(src, dst string, entry ark.FileInfo) error {
 	if err := out.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", dst, err)
 	}
-	_ = os.Chmod(dst, setOwner(dst, entry.UID, entry.GID, entry.Mode))
+	mode := setOwner(dst, entry.UID, entry.GID, entry.Mode)
 	writeXattrs(dst, entry.Xattrs)
+	_ = os.Chmod(dst, mode)
 	_ = os.Chtimes(dst, entry.ModTime, entry.ModTime)
 	return nil
 }

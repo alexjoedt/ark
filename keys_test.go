@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -313,6 +314,43 @@ func TestOpenRejectsUnknownKeyFiles(t *testing.T) {
 			ark.ErrUnsupportedFormat,
 		) {
 			t.Errorf("Open = %v, want ark.ErrUnsupportedFormat", err)
+		}
+	})
+}
+
+// A salt of 16 bytes passes the length check and is fed to argon2id, so a
+// changed one fails as a wrong password; any other length is refused first.
+func TestOpenTakesOnlyA16ByteSalt(t *testing.T) {
+	pw := ark.NewPassword("secret")
+	cases := map[int]error{15: ark.ErrUnsupportedFormat, 16: ark.ErrWrongPassword, 17: ark.ErrUnsupportedFormat}
+	for n, want := range cases {
+		t.Run(strconv.Itoa(n), func(t *testing.T) {
+			b := initRepo(t, pw)
+			name, body := onlyKeyFile(t, b)
+			var kf map[string]any
+			if err := json.Unmarshal(body, &kf); err != nil {
+				t.Fatal(err)
+			}
+			kf["salt"] = strings.Repeat("ab", n)
+			body, _ = json.Marshal(kf)
+			putObject(t, b, ark.KeyFile, name, body)
+			if _, err := ark.Open(context.Background(), b, pw); !errors.Is(err, want) {
+				t.Errorf("Open with a %d-byte salt = %v, want %v", n, err, want)
+			}
+		})
+	}
+	t.Run("uppercase", func(t *testing.T) {
+		b := initRepo(t, pw)
+		name, body := onlyKeyFile(t, b)
+		var kf map[string]any
+		if err := json.Unmarshal(body, &kf); err != nil {
+			t.Fatal(err)
+		}
+		kf["salt"] = strings.ToUpper(kf["salt"].(string))
+		body, _ = json.Marshal(kf)
+		putObject(t, b, ark.KeyFile, name, body)
+		if _, err := ark.Open(context.Background(), b, pw); !errors.Is(err, ark.ErrUnsupportedFormat) {
+			t.Errorf("Open with an uppercase salt = %v, want ark.ErrUnsupportedFormat", err)
 		}
 	})
 }

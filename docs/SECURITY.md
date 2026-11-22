@@ -224,5 +224,5 @@ public issue. There is no promised response time.
 ## Dependency scanning
 
 The CI step `Vulnerability check` in `.github/workflows/go.yml` runs govulncheck against every
-go.work module (root, arkdocker, cmd/ark, examples) and fails on a finding in reachable code;
-`task vuln` runs the same loop locally. gosec runs as part of golangci-lint.
+go.work module (root, arkdocker, cmd/ark, examples) and fails on a finding in reachable
+code; `task vuln` runs the same loop locally. gosec runs as part of golangci-lint.

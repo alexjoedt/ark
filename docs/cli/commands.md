@@ -47,6 +47,7 @@ Writes the repository config and a key file sealed with the password.
 - Fails if the repository directory, local or over SFTP, exists and isn't empty.
 - The chunk sizes default to 256KiB, 1MiB, and 4MiB. They are stored in the repository and can't
   be changed later.
+- `--chunk-avg` must be a power of two, and `--chunk-max` can be at most 64MiB.
 
 ## backup
 
@@ -151,7 +152,13 @@ ark restore [options] <id> <dest>
 ```
 
 Restores a snapshot into `<dest>`. The directory is created if missing. Existing files are
-overwritten.
+overwritten: an entry already at a restored path is removed and created anew, never written
+through, so a symlink there doesn't lead the restore out of `<dest>`. A directory stays where the
+snapshot holds a directory.
+
+Owners are restored when the restore may set them, usually as root. An entry other than a
+directory whose owner can't be set loses its setuid and setgid bits, as `cp` does, so a restored
+program doesn't run as the user who restored it. A directory keeps them.
 
 A device node needs the privilege to create one, usually root, and a fifo or device node needs a
 filesystem that holds them; vfat, exFAT and SMB shares don't. Otherwise the restore skips each such

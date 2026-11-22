@@ -139,8 +139,8 @@ func marshalTreeNode(dir string, children []fileEntry, hashes map[string]string)
 // sourcePaths holds the path of every entry a backup or an import took from
 // its source, and the entry itself for a symlink, a fifo or a device node. add refuses,
 // before any data of the entry is read and stored, what the tree could not
-// hold at the end: a path a second time and a link without a target. An entry
-// no node gets, the root and a type that is skipped, is not looked at.
+// hold at the end: a path a second time, a link without a target and a
+// hardlink whose target starts with "/". An entry no node gets, the root and a type that is skipped, is not looked at.
 type sourcePaths map[string]*FileInfo
 
 // add records fi and returns the entry to store for it. A hardlink comes back
@@ -157,6 +157,9 @@ func (s sourcePaths) add(fi FileInfo) (FileInfo, error) {
 	}
 	if fi.Type == FileTypeHardlink {
 		fi.LinkDest = normEntryPath(fi.LinkDest)
+		if strings.HasPrefix(fi.LinkDest, "/") {
+			return fi, fmt.Errorf("the source yielded the hardlink %q with the absolute target %q", norm, fi.LinkDest)
+		}
 	}
 	if (fi.Type == FileTypeSymlink || fi.Type == FileTypeHardlink) && fi.LinkDest == "" {
 		return fi, fmt.Errorf("the source yielded the link %q without a target", norm)

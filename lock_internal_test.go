@@ -184,6 +184,9 @@ func TestHeldLockRefreshesItself(t *testing.T) {
 			t.Fatalf("load lock: %v", err)
 		}
 		if current.Time.After(first.Time) {
+			if current.Time = first.Time; current != first {
+				t.Fatalf("refresh changed more than the time: %+v, first %+v", current, first)
+			}
 			return
 		}
 		if time.Now().After(deadline) {
@@ -361,7 +364,10 @@ func TestLockIsStaleAfterThirtyMinutes(t *testing.T) {
 	}
 }
 
-func TestLockOfThisHostIsStaleOnceItsProcessIsGone(t *testing.T) {
+// A lock of this host whose process is gone is still not stale before
+// lockStaleAge: host name and pid do not identify a process across PID
+// namespaces, so the pid may belong to a running holder in another one.
+func TestLockOfThisHostWithADeadPIDIsStaleOnlyByAge(t *testing.T) {
 	ctx := context.Background()
 	repo, _, clock := lockRepo(t)
 
@@ -374,23 +380,24 @@ func TestLockOfThisHostIsStaleOnceItsProcessIsGone(t *testing.T) {
 		t.Fatalf("putLock: %v", err)
 	}
 
+	clock.advance(lockStaleAge - time.Second)
 	locks, err := repo.Locks(ctx)
 	if err != nil {
 		t.Fatalf("Locks: %v", err)
 	}
-	if len(locks) != 1 || !locks[0].Stale {
-		t.Fatalf("Locks reported %+v, want one stale lock", locks)
+	if len(locks) != 1 || locks[0].Stale {
+		t.Fatalf("Locks reported %+v, want one lock that is not stale", locks)
+	}
+	if _, _, err := repo.acquire(ctx, true); !errors.Is(err, ErrRepoLocked) {
+		t.Fatalf("acquire under a young lock with a dead pid: %v, want ErrRepoLocked", err)
 	}
 
-	// Fresh by time, but its process is gone, so it does not block.
-	lock, err := func() (*repoLock, error) {
-		_, l, err := repo.acquire(ctx, true)
-		return l, err
-	}()
-	if err != nil {
-		t.Fatalf("acquire over a lock with a dead pid: %v", err)
+	clock.advance(time.Second)
+	if _, lock, err := repo.acquire(ctx, true); err != nil {
+		t.Errorf("acquire over a lock of the stale age: %v", err)
+	} else {
+		lock.release(ctx)
 	}
-	lock.release(ctx)
 }
 
 func TestZeroByteLockIsIgnored(t *testing.T) {

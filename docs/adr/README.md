@@ -52,3 +52,4 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0035 | [Version 1 drops the legacy of earlier builds](0035-version-1-drops-the-legacy-of-earlier-builds.md) | accepted | 2026-11-21 |
 | 0036 | [Manifest names stay random](0036-manifest-names-stay-random.md) | accepted | 2026-11-21 |
 | 0037 | [The tree node is a binary object with one encoding](0037-binary-tree-node.md) | accepted | 2026-11-21 |
+| 0038 | [Narrow the chunker, salt and stale lock rules before the freeze](0038-narrow-the-chunker-salt-and-stale-lock-rules.md) | accepted | 2026-11-22 |

@@ -113,8 +113,8 @@ func requireEmptyDir(dir string) error {
 	return fmt.Errorf("repository path %s exists and is not empty", dir)
 }
 
-// chunkerConfig parses the three --chunk-* flags. Sizes out of order are a
-// usage error, the library would refuse them as well.
+// chunkerConfig parses the three --chunk-* flags. Sizes the library would
+// refuse are a usage error, caught before any prompt or backend access.
 func chunkerConfig(cmd *cli.Command) (chunker.Config, error) {
 	var cfg chunker.Config
 	for _, f := range []struct {
@@ -130,6 +130,13 @@ func chunkerConfig(cmd *cli.Command) (chunker.Config, error) {
 	if cfg.MinSize > cfg.AvgSize || cfg.AvgSize > cfg.MaxSize {
 		return cfg, exitcode.Usagef("chunk sizes must satisfy min <= avg <= max, got %s, %s, %s",
 			out.Bytes(int64(cfg.MinSize)), out.Bytes(int64(cfg.AvgSize)), out.Bytes(int64(cfg.MaxSize)))
+	}
+	if cfg.AvgSize <= 0 || cfg.AvgSize&(cfg.AvgSize-1) != 0 {
+		return cfg, exitcode.Usagef("--chunk-avg must be a power of two, got %s", out.Bytes(int64(cfg.AvgSize)))
+	}
+	if cfg.MaxSize > ark.MaxChunkerMax {
+		return cfg, exitcode.Usagef("--chunk-max can be at most %s, got %s",
+			out.Bytes(ark.MaxChunkerMax), out.Bytes(int64(cfg.MaxSize)))
 	}
 	return cfg, nil
 }

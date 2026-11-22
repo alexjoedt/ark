@@ -301,6 +301,9 @@ func runKillHarness(
 		if killed && settle > 0 {
 			settleKill(ctx, t, b, settle)
 		}
+		if killed {
+			unlockKilled(ctx, t, b, point)
+		}
 		st.check(ctx, t, b, point)
 		switch {
 		case op == "forget" && killed:
@@ -331,6 +334,21 @@ func runKillHarness(
 		t.Logf("killed %s: %d", w, windows[w])
 	}
 	retire(fmt.Sprintf("seed %d final full pass", seed))
+}
+
+// unlockKilled removes the lock a killed child left behind, as an operator
+// runs ark unlock --force once no ark process is left: a lock is stale only
+// by its age, so it would block the next run for the stale age.
+func unlockKilled(ctx context.Context, t *testing.T, b ark.Backend, point string) {
+	t.Helper()
+	repo, err := ark.Open(ctx, b, testPassword)
+	if err != nil {
+		t.Fatalf("%s: Open to unlock: %v", point, err)
+	}
+	defer func() { _ = repo.Close() }()
+	if _, err := repo.Unlock(ctx, ark.WithForce()); err != nil {
+		t.Fatalf("%s: Unlock: %v", point, err)
+	}
 }
 
 // settleKill returns once two listings of b quiet apart agree. A listing over

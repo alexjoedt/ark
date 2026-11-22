@@ -77,7 +77,7 @@ The password comes from the first source that is set:
 | 4 | the environment | `ARK_PASSWORD` |
 | 5 | a prompt, on a terminal only | every command asks once, `ark init` twice |
 
-- A file or command output loses one trailing newline.
+- A file or command output loses one trailing `\n` or `\r\n`.
 - A command runs with `sh -c` and shares stdin and stderr. A non-zero exit fails the ark command.
 - A file and a command on the same level conflict. Exit 2.
 - Without a source and without a terminal, a command exits 2.

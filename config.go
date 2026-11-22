@@ -94,12 +94,16 @@ type chunkerParams struct {
 	Max int `json:"max"`
 }
 
+// MaxChunkerMax is the largest chunker max a version 1 config may hold, so
+// every reader can allocate a buffer of max bytes.
+const MaxChunkerMax = 64 << 20
+
 // toChunkerConfig converts the stored parameters into a chunker.Config.
 func (p chunkerParams) toChunkerConfig() chunker.Config {
 	return chunker.Config{MinSize: p.Min, AvgSize: p.Avg, MaxSize: p.Max}
 }
 
-// validate rejects parameters the chunker cannot work with.
+// validate rejects parameters a version 1 config may not hold.
 func (p chunkerParams) validate() error {
 	switch {
 	case p.Min <= 0 || p.Avg <= 0 || p.Max <= 0:
@@ -108,6 +112,10 @@ func (p chunkerParams) validate() error {
 		return fmt.Errorf("ark: chunker min %d is larger than avg %d", p.Min, p.Avg)
 	case p.Avg > p.Max:
 		return fmt.Errorf("ark: chunker avg %d is larger than max %d", p.Avg, p.Max)
+	case p.Avg&(p.Avg-1) != 0:
+		return fmt.Errorf("ark: chunker avg %d is not a power of two", p.Avg)
+	case p.Max > MaxChunkerMax:
+		return fmt.Errorf("ark: chunker max %d is larger than %d", p.Max, MaxChunkerMax)
 	}
 	return nil
 }

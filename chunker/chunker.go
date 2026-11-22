@@ -102,8 +102,8 @@ func New(r io.Reader, cfg Config) *Chunker {
 	// The number of low bits to match determines the expected interval.
 	// For avgSize = 4MB, that's 22 bits.
 	avgBits := bits.Len(uint(cfg.AvgSize)) - 1
-	// maskS has fewer bits set (harder to match) → longer runs → larger chunks.
-	// maskL has more bits set (easier to match) → shorter runs → smaller chunks.
+	// maskS has more bits set (harder to match) → longer runs → larger chunks.
+	// maskL has fewer bits set (easier to match) → shorter runs → smaller chunks.
 	// The difference is typically 2 bits.
 	maskS := buildMask(avgBits + 1)
 	maskL := buildMask(avgBits - 1)

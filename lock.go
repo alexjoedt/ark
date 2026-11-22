@@ -11,7 +11,6 @@ import (
 	"os/user"
 	"sort"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -39,7 +38,9 @@ var (
 // the namespace, long enough for a concurrent writer's Put to become visible.
 // It is a variable so the test binary can shorten it; nothing outside the
 // package can.
-var lockSettleDelay = 200 * time.Millisecond
+var lockSettleDelay = defaultLockSettleDelay
+
+const defaultLockSettleDelay = 200 * time.Millisecond
 
 // LockEventKind says what happened to a lock, see LockEvent. Its value is
 // the kind's name.
@@ -121,19 +122,11 @@ func newLockObject(now time.Time, exclusive bool) lockObject {
 	}
 }
 
-// stale reports whether the lock may be ignored and removed. A lock of this
-// host whose process is gone is stale at once; any lock is stale once it is
-// older than lockStaleAge. Another host's fresh lock is never stale, its
-// process cannot be inspected from here.
+// stale reports whether the lock may be ignored and removed: once it is
+// lockStaleAge old, whatever host wrote it. Host name and pid do not identify
+// a process across PID namespaces, so they never make a lock stale.
 func (l lockObject) stale(now time.Time) bool {
-	if now.Sub(l.Time) >= lockStaleAge {
-		return true
-	}
-	host, err := os.Hostname()
-	if err != nil || l.Hostname != host || l.PID <= 0 {
-		return false
-	}
-	return !processAlive(l.PID)
+	return now.Sub(l.Time) >= lockStaleAge
 }
 
 func (l lockObject) info(id string, now time.Time) LockInfo {
@@ -146,18 +139,6 @@ func (l lockObject) info(id string, now time.Time) LockInfo {
 		PID:       l.PID,
 		Stale:     l.stale(now),
 	}
-}
-
-// processAlive reports whether a process with this pid exists. Signal 0 is
-// delivered to no one, it only runs the kernel's permission and existence
-// checks. A permission error means the process exists under another user.
-func processAlive(pid int) bool {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	err = p.Signal(syscall.Signal(0))
-	return err == nil || errors.Is(err, os.ErrPermission)
 }
 
 // putLock seals a lock object and writes it under name.
@@ -286,6 +267,7 @@ type repoLock struct {
 	repo      *Repository
 	name      string
 	exclusive bool
+	obj       lockObject      // as first written; a refresh changes only Time
 	timeout   time.Duration   // lockRefreshTimeout when the lock was taken
 	ctx       context.Context // the operation's
 	cancel    context.CancelFunc
@@ -375,8 +357,8 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 		return nil, nil, err
 	}
 
-	name, started := generateID(now), time.Now()
-	if err := r.putLock(ctx, name, newLockObject(now, exclusive)); err != nil {
+	name, started, obj := generateID(now), time.Now(), newLockObject(now, exclusive)
+	if err := r.putLock(ctx, name, obj); err != nil {
 		// A put that failed may still have stored the object.
 		r.dropLock(ctx, name, exclusive)
 		return nil, nil, err
@@ -411,7 +393,7 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 
 	lockCtx, cancel := context.WithCancel(ctx)
 	l := &repoLock{
-		repo: r, name: name, exclusive: exclusive, timeout: lockRefreshTimeout,
+		repo: r, name: name, exclusive: exclusive, obj: obj, timeout: lockRefreshTimeout,
 		ctx: lockCtx, cancel: cancel, done: make(chan struct{}), expired: make(chan struct{}),
 		stored: stored, started: started,
 	}
@@ -443,8 +425,9 @@ func (l *repoLock) keepAlive(ctx context.Context) {
 			return
 		}
 
-		start, now := time.Now(), l.repo.lockNow()
-		if err := l.repo.putLock(ctx, l.name, newLockObject(now, l.exclusive)); err != nil {
+		start, now, obj := time.Now(), l.repo.lockNow(), l.obj
+		obj.Time = now.UTC()
+		if err := l.repo.putLock(ctx, l.name, obj); err != nil {
 			l.repo.logger.WarnContext(ctx, "lock refresh failed", "lock", l.name, "error", err)
 			continue
 		}

@@ -78,7 +78,6 @@ func (c *objectCodec) Close() {
 // the tag. The payload is the zstd frame of data, or data itself when the
 // frame is not smaller.
 func (c *objectCodec) seal(key *[32]byte, aad string, data []byte) []byte {
-	aead, _ := chacha20poly1305.NewX(key[:]) // fails only on a wrong key size
 	const hdr = 1 + chacha20poly1305.NonceSizeX
 	out := make([]byte, hdr, sealOverhead+len(data)/2)
 	out[0] = formatZstd
@@ -89,13 +88,24 @@ func (c *objectCodec) seal(key *[32]byte, aad string, data []byte) []byte {
 		out[0] = formatRaw
 		out = append(out[:hdr], data...)
 	}
+	return sealPayload(key, aad, out)
+}
+
+// sealPayload seals in place what seal prepared: out holds the format byte,
+// the nonce and the payload, and comes back with the payload encrypted and the
+// tag appended. The format test vectors call it with a fixed nonce.
+func sealPayload(key *[32]byte, aad string, out []byte) []byte {
+	const hdr = 1 + chacha20poly1305.NonceSizeX
+	aead, _ := chacha20poly1305.NewX(key[:]) // fails only on a wrong key size
 	out = slices.Grow(out, chacha20poly1305.Overhead)
 	return aead.Seal(out[:hdr], out[1:hdr], out[hdr:], sealAAD(out[0], aad))
 }
 
 // open reverses seal. A changed byte, the format byte among them, a different
 // key or a different aad return errSealBroken. An object that authenticates
-// under a format byte this build does not know is ErrUnsupportedFormat.
+// under a format byte this build does not know is ErrUnsupportedFormat, and
+// so is a zstd frame that authenticates and does not decode: only a holder of
+// the key wrote it, with a dictionary, a window or a frame this build lacks.
 func (c *objectCodec) open(key *[32]byte, aad string, obj []byte) ([]byte, error) {
 	payload, err := unseal(key, aad, obj)
 	if err != nil {
@@ -104,7 +114,11 @@ func (c *objectCodec) open(key *[32]byte, aad string, obj []byte) ([]byte, error
 	if obj[0] == formatRaw {
 		return payload, nil
 	}
-	return c.dec.DecodeAll(payload, nil)
+	data, err := c.dec.DecodeAll(payload, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%w: zstd frame does not decode: %w", ErrUnsupportedFormat, err)
+	}
+	return data, nil
 }
 
 // unseal authenticates obj and returns the payload it seals, a zstd frame or

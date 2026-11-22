@@ -93,8 +93,8 @@ names the machine, the process, and how long it has held the lock.
 - **The other process is still running.** Wait for it, or let your command wait with
   `--lock-wait 10m`.
 - **An `ark mount` is open.** A mount blocks `ark prune` until you unmount it.
-- **The other process crashed.** You don't have to do anything. ark ignores a lock from the same
-  machine as soon as its process is gone, and any lock that hasn't been refreshed for 30 minutes.
+- **The other process crashed.** You don't have to do anything. ark ignores a lock that hasn't
+  been refreshed for 30 minutes. To go on sooner, use `ark unlock --force` as described below.
 
 `ark unlock` removes stale locks right away. `ark unlock --force` removes every lock, also those of
 running processes. Use it only when you're sure that no ark process is running anywhere against

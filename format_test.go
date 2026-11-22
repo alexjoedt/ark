@@ -353,8 +353,9 @@ func (s entrySource) Walk(_ context.Context, fn ark.WalkFunc) error {
 // reader takes in ahead of what it was asked for.
 const unread = 1 << 16
 
-// refusedEntries are entries no tree node holds: a path a second time and a
-// link without a target, each ahead of a file that must not be read.
+// refusedEntries are entries no tree node holds: a path a second time, a link
+// without a target and a hardlink to an absolute path, each ahead of a file
+// that must not be read.
 var refusedEntries = map[string]struct {
 	entries []ark.FileInfo
 	text    string
@@ -383,6 +384,14 @@ var refusedEntries = map[string]struct {
 			{Path: "z", Size: unread, Mode: 0o644, Type: ark.FileTypeRegular},
 		},
 		text: `link "l" without a target`,
+	},
+	"a hardlink with an absolute target": {
+		entries: []ark.FileInfo{
+			{Path: "dir/a", Size: 1, Mode: 0o644, Type: ark.FileTypeRegular},
+			{Path: "l", Mode: 0o644, Type: ark.FileTypeHardlink, LinkDest: "/dir/a"},
+			{Path: "z", Size: unread, Mode: 0o644, Type: ark.FileTypeRegular},
+		},
+		text: `hardlink "l" with the absolute target "/dir/a"`,
 	},
 }
 
@@ -433,6 +442,7 @@ func TestImportRefusesAnEntryBeforeItReadsIt(t *testing.T) {
 					h.Typeflag = tar.TypeSymlink
 				case ark.FileTypeHardlink:
 					h.Typeflag = tar.TypeLink
+					h.Linkname = "data/" + e.LinkDest
 				case ark.FileTypeRegular, ark.FileTypeFifo, ark.FileTypeCharDevice, ark.FileTypeBlockDevice,
 					ark.FileTypeUnsupported:
 					h.Typeflag = tar.TypeReg

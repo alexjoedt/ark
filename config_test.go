@@ -171,9 +171,11 @@ func TestInitFillsZeroChunkerFields(t *testing.T) {
 func TestInitRejectsInvalidChunkerConfig(t *testing.T) {
 	ctx := context.Background()
 	cases := map[string]chunker.Config{
-		"min above avg": {MinSize: 1 << 22, AvgSize: 1 << 20, MaxSize: 1 << 24},
-		"avg above max": {MinSize: 1 << 18, AvgSize: 1 << 24, MaxSize: 1 << 20},
-		"negative min":  {MinSize: -1, AvgSize: 1 << 20, MaxSize: 1 << 22},
+		"min above avg":          {MinSize: 1 << 22, AvgSize: 1 << 20, MaxSize: 1 << 24},
+		"avg above max":          {MinSize: 1 << 18, AvgSize: 1 << 24, MaxSize: 1 << 20},
+		"negative min":           {MinSize: -1, AvgSize: 1 << 20, MaxSize: 1 << 22},
+		"avg not a power of two": {MinSize: 1 << 18, AvgSize: 3 << 19, MaxSize: 1 << 22},
+		"max above 64 MiB":       {MinSize: 1 << 18, AvgSize: 1 << 20, MaxSize: 64<<20 + 1},
 	}
 	for name, cfg := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -190,6 +192,20 @@ func TestInitRejectsInvalidChunkerConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInitAcceptsAChunkerMaxOf64MiB(t *testing.T) {
+	ctx := context.Background()
+	b := arkmem.New()
+	cfg := chunker.Config{MinSize: 1 << 18, AvgSize: 1 << 20, MaxSize: 64 << 20}
+	if err := ark.Init(ctx, b, ark.NoPassword(), ark.WithChunkerConfig(cfg)); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	repo, err := ark.Open(ctx, b, ark.NoPassword())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_ = repo.Close()
 }
 
 func TestOpenRequiresAConfig(t *testing.T) {
@@ -213,11 +229,13 @@ func TestOpenRequiresAConfig(t *testing.T) {
 func TestOpenRejectsUnknownFormats(t *testing.T) {
 	ctx := context.Background()
 	cases := map[string]string{
-		"future version":     `{"version":4,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3}}`,
-		"missing version":    `{"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3}}`,
-		"compression field":  `{"version":1,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3},"compression":"zstd"}`,
-		"impossible chunker": `{"version":1,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":9,"avg":2,"max":3}}`,
-		"not json":           `this is not a repository`,
+		"future version":         `{"version":4,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3}}`,
+		"missing version":        `{"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3}}`,
+		"compression field":      `{"version":1,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":3},"compression":"zstd"}`,
+		"impossible chunker":     `{"version":1,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":9,"avg":2,"max":3}}`,
+		"avg not a power of two": `{"version":1,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":3,"max":4}}`,
+		"max above 64 MiB":       `{"version":1,"id":"ab","created_at":"2026-09-10T00:00:00Z","chunker":{"min":1,"avg":2,"max":67108865}}`,
+		"not json":               `this is not a repository`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

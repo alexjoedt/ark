@@ -310,8 +310,14 @@ func readKeyFile(ctx context.Context, b Backend, name string) (*keyFile, error) 
 			return nil, fmt.Errorf("%w: key file %s has invalid argon2id parameters time %d memory %d threads %d",
 				ErrUnsupportedFormat, name, kf.Time, kf.Memory, kf.Threads)
 		}
-		if salt, err := hex.DecodeString(kf.Salt); err != nil || len(salt) == 0 {
-			return nil, fmt.Errorf("%w: key file %s has an invalid salt", ErrUnsupportedFormat, name)
+		if salt, err := hex.DecodeString(kf.Salt); err != nil || len(salt) != saltBytes ||
+			hex.EncodeToString(salt) != kf.Salt {
+			return nil, fmt.Errorf(
+				"%w: key file %s has a salt that is not %d bytes of lowercase hex",
+				ErrUnsupportedFormat,
+				name,
+				saltBytes,
+			)
 		}
 	default:
 		return nil, fmt.Errorf("%w: key file %s uses unknown kdf %q", ErrUnsupportedFormat, name, kf.KDF)

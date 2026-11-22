@@ -329,6 +329,39 @@ func TestManifestIsDecodedStrictly(t *testing.T) {
 	}
 }
 
+// TestManifestIDIsTheObjectName: the tag binds the name, not the id key, so
+// a manifest whose id key names another snapshot is listed and forgotten
+// under its name.
+func TestManifestIDIsTheObjectName(t *testing.T) {
+	ctx := context.Background()
+	b := arkmem.New()
+	repo, id := backupFixture(t, b)
+	h := ark.Handle{Type: ark.SnapshotFile, Name: string(id)}
+	m, err := ark.OpenObject(ctx, repo, h.Type, h.Name)
+	if err != nil {
+		t.Fatalf("open the manifest: %v", err)
+	}
+	other := strings.Repeat("ab", 16)
+	edited := bytes.Replace(m, []byte(`"id":"`+string(id)+`"`), []byte(`"id":"`+other+`"`), 1)
+	if bytes.Equal(edited, m) {
+		t.Fatal("the manifest has no id key to edit")
+	}
+	if err := ark.PutObject(ctx, repo, h, edited); err != nil {
+		t.Fatalf("store the manifest: %v", err)
+	}
+
+	snaps, err := repo.Snapshots(ctx, ark.SnapshotFilter{})
+	if err != nil || len(snaps) != 1 || snaps[0].ID != id {
+		t.Fatalf("Snapshots = %v, %v, want the one snapshot %s", snaps, err, id)
+	}
+	if _, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{id}}); err != nil {
+		t.Fatalf("Forget %s: %v", id, err)
+	}
+	if _, err := b.Stat(ctx, h); !errors.Is(err, ark.ErrNotFound) {
+		t.Errorf("manifest after Forget: %v, want ErrNotFound", err)
+	}
+}
+
 // TestLockWithAnUnknownKeyStopsTheOperation: a lock this build cannot read in
 // full may guard something it does not know of, so it is not passed over like
 // a lock that does not open. Unlock WithForce is the way out, as for those.

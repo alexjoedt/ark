@@ -6,6 +6,9 @@ someone who can read the storage is in [Security](SECURITY.md).
 
 For the ideas without the bytes, see [How ark works](concepts.md).
 
+Fixed inputs and outputs for the wrap key, sealing, names, packs, and index objects are on
+[Test vectors](format/vectors.md).
+
 ## Version
 
 The `config` object carries `version`.
@@ -15,6 +18,24 @@ The `config` object carries `version`.
 - Version 1 is the first stable format and is frozen with `v1.1.0`. Later changes are additive or
   come with a version bump.
 - ark doesn't migrate an older format. Create a new repository with `ark init` and back up again.
+
+## Errors
+
+The errors on this page are the sentinels of ark's Go package. Another implementation needs no
+names, only the classes they fall into, because each class asks a reader for something else:
+
+| Class | Errors | What a reader does |
+|---|---|---|
+| unsupported | `ErrUnsupportedFormat` | stops: a later build wrote it. Never skip, repair, or delete it. |
+| damaged | `ErrCorruptConfig`, `ErrCorruptManifest`, `ErrCorruptChunk`, `ErrCorruptTree`, `ErrCorruptIndex` | reports damage to that object |
+| missing | `ErrMissingChunk`, `ErrMissingTree` | reports a blob the index doesn't place in a stored pack; an unindexed pack may still hold it |
+| no password | `ErrPasswordRequired` | asks for a password: the repository has one |
+| wrong password | `ErrWrongPassword` | asks for another password |
+| needs no password | `ErrNotPasswordProtected` | opens without a password: the repository has none |
+| locked | `ErrRepoLocked` | waits and tries again, or gives up: another operation holds a conflicting lock |
+
+A tag that doesn't verify is never unsupported: only a holder of the key can write something a
+later build reads. It is damage, or a wrong password for the master key.
 
 ## Layout
 
@@ -48,6 +69,11 @@ namespace, created when first needed. All other namespaces are flat.
 Sharding is a property of those backends, not of the format. The memory backend and any other
 implementation of `ark.Backend` store the same names.
 
+The same two backends write an object to a temporary file in its directory and rename it into
+place. The temporary file's name starts with `.ark-tmp-`, and a write that was cut off leaves it
+behind. Their listings pass over such names, and so does a reader of their layout. No object of the
+format has a name that starts with `.`.
+
 ## Sealed objects
 
 A sealed object is these bytes, in this order:
@@ -68,6 +94,23 @@ A sealed object is these bytes, in this order:
   codec fails on its tag.
 - A reader opens both format bytes, for every object. It checks the tag first and judges the byte
   after it.
+- An object shorter than 41 bytes, the format byte, nonce and tag, doesn't open.
+
+Every key is the 32 raw bytes that its 64 hex characters in the [master key](#master-key) decode
+to, never the hex text: `data_key` is the XChaCha20-Poly1305 key, `id_key` the HMAC-SHA256 key.
+
+The zstd frame follows RFC 8878:
+
+- A writer writes exactly one frame, with no dictionary. A content checksum is optional; a reader
+  verifies it when the frame carries one. A writer keeps the window at most 8 MiB, the size RFC
+  8878 asks every decoder to support. ark reads windows up to 512 MiB.
+- A frame whose tag verifies and that doesn't decompress, with a dictionary, a larger window, or
+  bytes that aren't a frame, is `ErrUnsupportedFormat`, like an unknown format byte.
+- ark also reads several frames in a row and skippable frames. No writer of version 1 writes
+  them, and another reader may refuse them.
+- The codec is the writer's choice. ark writes zstd at its default level and falls back to raw,
+  but another writer may use any level, or raw for every object. No name depends on the codec:
+  names hash the content, not the sealed bytes.
 
 Index objects, manifests, locks, the lost-pack marker, and `features` are sealed with the data key
 under their own name. The `key` field of a key file is sealed under the wrap key, with the
@@ -86,6 +129,34 @@ when it's empty or zero.
   fractional digits, for example `2026-11-21T18:35:07.123456789Z`.
 - A reader accepts any offset and takes the instant. It keeps no zone.
 
+### Spelling
+
+A writer writes:
+
+- UTF-8 JSON, every key exactly as a table below spells it, in lower case, and each key once
+- no `null`: a key without a value is left out when its row marks it optional, else it holds the
+  zero value of its type
+- every number as a decimal integer, with no fraction and no exponent
+- hex in lower case
+
+A string may escape any character. ark escapes what Go's `encoding/json` escapes by default:
+besides `"`, `\` and control characters, `<`, `>`, `&`, U+2028, and U+2029 as `\u003c`, `\u003e`,
+`\u0026`, `\u2028`, and `\u2029`. It writes invalid UTF-8 in a string as U+FFFD. Whitespace
+between tokens is allowed.
+
+ark reads more than that, because it decodes with Go's `encoding/json`:
+
+- a key in another case, `Version` for `version`. A later version never adds a key that differs
+  from an existing one only in case.
+- a key twice: the last one counts
+- `null`: the field keeps its zero value
+- a string that isn't valid UTF-8: each invalid byte reads as U+FFFD
+- upper case hex in `data_key`, `id_key`, and `chunker_seed` of the master key, and in `key` of a
+  key file. A `salt` in upper case is refused, see [What a reader refuses](#what-a-reader-refuses).
+
+No writer of version 1 writes any of these. Another reader may refuse them with
+`ErrUnsupportedFormat`.
+
 ### What a reader refuses
 
 A reader refuses what a later build may have written with `ErrUnsupportedFormat`. It never skips
@@ -97,13 +168,11 @@ such an object and never reports it as damaged.
 | a key the reader has no field for | every JSON object on this page |
 | a `version` other than 1 | config, key file, manifest |
 | a `kdf` other than `argon2id` or `none` | key file |
-| with `argon2id`, a `time`, `memory`, or `threads` outside the range its row gives, or a `salt` that is empty or isn't hex | key file |
-| a `chunker` size below 1, a `min` above `avg`, or an `avg` above `max` | config |
+| with `argon2id`, a `time`, `memory`, or `threads` outside the range its row gives, or a `salt` that isn't 16 bytes in lowercase hex | key file |
+| a `chunker` size below 1, a `min` above `avg`, an `avg` above `max`, an `avg` that isn't a power of two, or a `max` above 67108864 (64 MiB) | config |
 | a name in `required` | features |
 | a name that isn't 32 lowercase hex characters | manifest, once its tag verifies |
 
-- Keys match without regard to case, as Go's `encoding/json` does. A later version never adds a
-  key that differs from an existing one only in case.
 - An object can also fail to decode: it isn't valid JSON, a value has another type, or data
   follows its JSON value. A config, key file, master key, or features object like that is
   `ErrUnsupportedFormat` too, the sealed ones once their tag verifies. Such a manifest is
@@ -116,8 +185,9 @@ such an object and never reports it as damaged.
 ### Config
 
 `config/config` is plain JSON, not sealed, with no byte before it. Its bytes are written once, by
-`Init`, with the keys in this order and no whitespace. The SHA-256 of these bytes is the master
-key's `config_hash`, so a changed byte fails `Open` with `ErrCorruptConfig`.
+`Init`. The SHA-256 of these bytes as stored is the master key's `config_hash`, so a changed byte
+fails `Open` with `ErrCorruptConfig`. A reader hashes the bytes, not a canonical form, so the
+spelling is the writer's choice; ark writes the keys in this order with no whitespace.
 
 | Key | Type | Optional | Content |
 |---|---|---|---|
@@ -133,9 +203,107 @@ in bytes.
 
 | Key | Type | Optional | Content |
 |---|---|---|---|
-| `min` | number | no | the smallest chunk, except at the end of a file |
-| `avg` | number | no | the target size |
-| `max` | number | no | the largest chunk |
+| `min` | number | no | no chunk but the last of a file is shorter than this |
+| `avg` | number | no | the target size, a power of two |
+| `max` | number | no | the largest chunk, at most 67108864 (64 MiB) |
+
+`ark init` writes `min` 262144 (256 KiB), `avg` 1048576 (1 MiB), and `max` 4194304 (4 MiB),
+unless `--chunk-min`, `--chunk-avg`, or `--chunk-max` is given, see [init](cli/commands.md#init).
+The bound on `max` lets every reader hold a buffer of `max` bytes, as ark's chunker does.
+
+### Chunker algorithm
+
+ark cuts chunks with FastCDC and a gear hash. A writer that cuts the same way, with the same
+sizes and `chunker_seed`, gets the same chunks as ark, and with the same `id_key` the same chunk
+names. A writer that
+cuts differently still writes a valid repository; its chunks just don't deduplicate against
+ark's.
+
+**Gear table.** The seed is the 32 bytes the master key's `chunker_seed` decodes to. The table is
+256 unsigned 64-bit numbers: the first 2048 bytes of the ChaCha20 keystream (RFC 8439, 20 rounds)
+with the seed as key, a zero nonce of 12 bytes, and block counter 0, where `gear[i]` is bytes `8i`
+to `8i+7` read little endian. With a zero nonce, the original ChaCha20 with its 8-byte nonce and
+64-bit counter gives the same keystream.
+
+**Masks.** With `b` the base 2 logarithm of `avg`, rounded down. A config's `avg` is a power of
+two, so `avg = 2^b`; only a test vector below takes another `avg`:
+
+- `maskS = 2^(b+1) - 1`, the low `b+1` bits
+- `maskL = 2^(b-1) - 1`, the low `b-1` bits, and 0 when `avg` is 1
+- `normal = min + (avg - min) / 2`, with integer division
+
+**Cut rule.** Every file is cut on its own, from its first byte. An empty file has no chunks. The
+first chunk of the rest of a file, `data` of `n` bytes, is `cut(data)` bytes long; the cut repeats
+on what follows it until nothing is left. All arithmetic on `fp` is unsigned 64-bit and wraps.
+
+```text
+cut(data):
+  if n <= min: return n
+  end = smaller of n and max
+  fp = 0
+  for i = min; i < end; i++:
+    fp = (fp << 1) + gear[data[i]]
+    mask = maskS if i < normal else maskL
+    if (fp & mask) == 0: return i + 1
+  return end
+```
+
+- The hash starts at 0 at offset `min` of each chunk. The bytes before it don't enter the hash.
+- Up to `normal` the wider `maskS` makes a cut rarer, after it the narrower `maskL` makes one more
+  likely. That keeps chunk sizes close to `avg`.
+- A file's rest of at most `min` bytes is its last chunk. A rest without a cut point up to `max`
+  is cut at `max`, or ends the file when it is shorter.
+
+#### Chunker test vectors
+
+Each vector gives a seed and the sizes, an input, and the chunk lengths in order. An input
+`chacha20 <key> <n>` is the first `n` bytes of the keystream of the gear table rule with `<key>`
+as key. An input `zero <n>` is `n` zero bytes. Seeds and keys are 32 bytes in hex.
+
+```text
+seed    000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+min     4096
+avg     16384
+max     65536
+input   chacha20 202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f 262144
+lengths 6207 5867 27212 17014 7171 39978 9910 10137 15598 21079 5907 11909 13167 14185 18610
+        13740 12098 12355
+```
+
+`avg` 3000 takes the masks of 2048, and `normal` is 2000:
+
+```text
+seed    404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f
+min     1000
+avg     3000
+max     9000
+input   chacha20 0000000000000000000000000000000000000000000000000000000000000000 65536
+lengths 2479 2252 1895 1526 2153 2827 6888 1023 2147 2634 3094 2602 2277 3570 2841 2298 2651
+        3414 3340 2288 3663 1402 3467 2805
+```
+
+Small sizes put many cuts near `min` and `normal`, and this input ends in a chunk of 1 byte:
+
+```text
+seed    6162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80
+min     64
+avg     256
+max     1024
+input   chacha20 8485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3 8192
+lengths 190 663 189 999 211 338 483 253 87 401 254 68 202 173 485 305 94 244 198 218 224 893
+        201 218 167 161 272 1
+```
+
+Input without a cut point is cut at `max`:
+
+```text
+seed    000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+min     4096
+avg     16384
+max     65536
+input   zero 200000
+lengths 65536 65536 65536 3392
+```
 
 ### Key file
 
@@ -148,12 +316,21 @@ most 20 of them.
 | `kdf` | string | no | `argon2id`, or `none` for a repository without a password |
 | `time` | number | yes, absent with `none` | argon2id passes, 1 to 16 |
 | `memory` | number | yes, absent with `none` | argon2id memory in KiB, at least 8 per thread, at most 1 GiB |
-| `threads` | number | yes, absent with `none` | argon2id lanes, at least 1 |
-| `salt` | string, lowercase hex | yes, absent with `none` | 16 random bytes |
+| `threads` | number | yes, absent with `none` | argon2id lanes, 1 to 255 |
+| `salt` | string, lowercase hex | yes, absent with `none` | 16 random bytes; a reader refuses any other length |
 | `key` | string, lowercase hex | no | the sealed [master key](#master-key) |
 
-The wrap key is the 32-byte argon2id key of the password and the salt. With `none` it's 32 zero
-bytes.
+The wrap key is argon2id (RFC 9106) of version `0x13`, with:
+
+- the password as its bytes, unchanged: no Unicode normalisation and no trimming in the format.
+  The CLI drops one trailing `\n` or `\r\n` of a password file or of the output of
+  `--password-command`, see [Password](cli/index.md#password).
+- the salt as the bytes its hex decodes to
+- `time` as the passes, `memory` in KiB, `threads` as the parallelism
+- no secret and no associated data
+- a tag of 32 bytes
+
+With `none` the wrap key is 32 zero bytes. ark writes `time` 3, `memory` 65536, and `threads` 4.
 
 ### Master key
 
@@ -192,6 +369,12 @@ that is empty or isn't the hash of the config bytes fails `Open` with `ErrCorrup
 | `root_tree` | string, 64 lowercase hex | yes | the name of the root directory node; every build writes it, and a snapshot without it has no entries |
 | `stats` | object | no | the counters, see [Statistics](#statistics) |
 
+- A reader takes the snapshot ID from the object's name, which the associated data binds. ark
+  doesn't compare `id` with it and reports the name; a writer writes the same ID in both.
+- ark checks `parent_id` and `root_tree` for nothing when it opens a manifest. A `root_tree` that
+  isn't 64 lowercase hex fails the first read of the snapshot's entries, in ark with an error of
+  none of the classes above. Another reader may report it as a damaged manifest.
+
 ### Statistics
 
 The `stats` object of a manifest. Sizes are in bytes. The deduplication and compression ratios
@@ -199,11 +382,11 @@ follow from the counters and aren't stored.
 
 | Key | Type | Optional | Content |
 |---|---|---|---|
-| `total_files` | number | no | regular files in the snapshot |
-| `total_dirs` | number | no | directories in the snapshot |
+| `total_files` | number | no | regular files in the snapshot, every further name of a hardlinked file included |
+| `total_dirs` | number | no | directories in the snapshot, the root not counted |
 | `skipped` | number | no | entries the source offered and the snapshot leaves out |
 | `files_unchanged` | number | yes | files taken from the parent without being read |
-| `total_size` | number | no | the content size of the regular files |
+| `total_size` | number | no | the content size of the regular files, a file under several names counted once |
 | `stored_size` | number | no | the sealed size of the chunks this snapshot stored first |
 | `new_chunks_raw_size` | number | no | the content size of those chunks |
 | `chunks_total` | number | no | chunk references of all files |
@@ -211,10 +394,24 @@ follow from the counters and aren't stored.
 | `chunks_reused` | number | no | `chunks_total` minus `chunks_new` |
 | `duration` | string | no | the run time in Go's duration syntax, for example `1m2.5s` |
 
+The `duration` is what Go's `time.Duration.String` writes: `0s` for zero; below one second a
+decimal number with the unit `ns`, `µs` (U+00B5), or `ms`, as `1.5ms`; from one second on hours,
+minutes, and seconds with a decimal fraction, leading zero units left out, as `2.5s`, `1m2.5s`,
+or `1h0m0s`. A duration that doesn't parse reads as 0 and fails nothing.
+
 ### Lock
 
-`locks/<name>` is a sealed JSON object. `<name>` is 26 characters: a millisecond timestamp and 80
-random bits, both in lowercase Crockford base32.
+`locks/<name>` is a sealed JSON object. `<name>` is 26 characters of the lowercase Crockford
+base32 alphabet `0123456789abcdefghjkmnpqrstvwxyz`:
+
+- 10 characters: the Unix time in milliseconds when the lock was taken, most significant
+  digit first, padded with `0`
+- 16 characters: 10 random bytes, 5 bits per character, most significant bit first
+
+A writer draws the random bytes from a cryptographic source for every new lock. Names compare
+as byte strings: the earlier name holds the earlier millisecond, and two locks taken in the same
+millisecond order by their random part. A lock keeps its name when it's refreshed, so the name
+says when it was taken and `time` when it was last written.
 
 | Key | Type | Optional | Content |
 |---|---|---|---|
@@ -226,8 +423,8 @@ random bits, both in lowercase Crockford base32.
 | `uid` | number | no | the user ID of the holder |
 | `gid` | number | no | the group ID of the holder |
 
-A lock is stale once its `time` is 30 minutes old, or at once when its `hostname` is this host and
-its process is gone.
+When a lock is stale, and how locks are taken, refreshed, and released, is in
+[Lock protocol](#lock-protocol).
 
 ### Features
 
@@ -259,9 +456,9 @@ A pack has three parts, in this order:
 hex name. No object is stored under `chunks` or `trees`. The associated data only binds a blob to
 its codec, type and name, so the bytes of one blob, read where the index lists another, don't open.
 
-**Table.** The table starts with the SHA-256 of the blob section, 32 bytes. One entry per blob
-follows: its 32-byte name and its sealed length as 4 bytes little endian. Offsets follow from the
-order. The table is sealed with the data key and, behind its format byte, the associated data
+**Table.** The table starts with the SHA-256 of the blob section, unkeyed, 32 bytes. One entry per
+blob follows: its 32-byte name and its sealed length as 4 bytes little endian. Offsets follow from
+the order. The table is sealed with the data key and, behind its format byte, the associated data
 `datapacks/table` or `treepacks/table`, by the pack's namespace. That is the same for every pack
 of a namespace, so the table opens from the tail of a pack alone: the last 4 bytes give its
 length, the bytes before them are the table.
@@ -273,11 +470,12 @@ other than the blob a name stands for: a blob is bound to its own name and not t
 each blob it lists that this pack doesn't also hold at that place fails to open.
 
 **Names.** A pack is named by the hex SHA-256 of all its bytes. Chunk and node names are the hex
-HMAC-SHA256 of their plaintext under the repository's ID key. The name of a pack isn't keyed.
+HMAC-SHA256 under the `id_key` of their plaintext: the content of a chunk, the bytes of a node,
+before compression and sealing. The name of a pack isn't keyed.
 
 **Size.** A pack closes once it holds at least 16 MiB of blobs, so it overshoots by at most one
 blob. A blob of 16 MiB or more gets a pack of its own. The last pack of a run is as short as it
-is.
+is. The size is the writer's choice: a reader takes a pack of any size within the limits below.
 
 **Limits.** Offsets and lengths in the table and the index are 32 bits. The writer refuses a
 sealed blob of 4 GiB or more. The blob section of a stored pack is therefore below 32 MiB, or one
@@ -304,15 +502,34 @@ An index object, a manifest, or a lock is named differently and can't be checked
 
 There is one index per blob type: `dataindex` for chunks and `treeindex` for directory nodes.
 
-An index object consists of:
+The content of an index object, before it is sealed, is these parts in this order:
 
-1. a header with the record count and the pack count
-2. a table of 32-byte pack names
-3. one record per blob: the 32-byte blob name, the number of its pack in the table, the offset in
-   the pack, and the sealed length
+| Bytes | Content |
+|---|---|
+| 4 | the record count `r`, uint32 little endian |
+| 4 | the pack count `p`, uint32 little endian |
+| 32 × `p` | the pack names, the 32 bytes each hex name spells |
+| 44 × `r` | the records |
 
-Every number is 4 bytes little endian. A record is 44 bytes. Records are sorted by blob name. The
-object is sealed like any single object and named by the keyed hash of its content.
+A record is these 44 bytes:
+
+| Bytes | Content |
+|---|---|
+| 32 | the blob name, the 32 bytes its hex spells |
+| 4 | the number of its pack, from 0, in the pack names above, uint32 little endian |
+| 4 | the offset of the sealed blob in the pack, uint32 little endian |
+| 4 | the sealed length of the blob, uint32 little endian |
+
+- A writer lists each pack once, in ascending byte order of the names. It sorts the records by
+  blob name, then pack number, then offset, each in ascending order, and lists none twice. A
+  reader relies on neither order.
+- The content is sealed like any single object, with the data key and the associated data
+  `dataindex/<name>` or `treeindex/<name>`.
+- The name is the hex HMAC-SHA256 under the `id_key` of the content, the bytes in the tables
+  above before compression and sealing, as for a chunk.
+- Content that isn't exactly `8 + 32 × p + 44 × r` bytes long, or a record whose pack number is
+  `p` or more, makes the object one that doesn't open, like a tag that doesn't verify. An object
+  under a format byte the reader doesn't know fails the load with `ErrUnsupportedFormat`.
 
 ### When index objects are written
 
@@ -345,7 +562,8 @@ index.
   as missing, so a backup that reads its content stores it again.
 - A listing that fails fails the load.
 - Otherwise, a lookup returns the pack, offset, and length that the index lists, and reads that
-  range.
+  range. A range that runs past the end of the pack is damage to the blob: `ErrCorruptChunk` for a
+  data pack, `ErrCorruptTree` for a tree pack.
 
 ### Blobs in two packs
 
@@ -363,8 +581,8 @@ trusts its parent and reads no data index.
 A load of the data index stores the marker when it finds a listed pack gone, or a data index
 object that doesn't open.
 
-- The object is `lostpacks/<name>`. The name is the keyed hash of the string `lostpacks`, so it
-  differs between repositories.
+- The object is `lostpacks/<name>`. The name is the hex HMAC-SHA256 under the `id_key` of the 9
+  ASCII bytes `lostpacks`, so it differs between repositories.
 - It's sealed like any single object, over empty content. Only its presence counts. A marker that
   doesn't open counts as present.
 - A marker that is already stored is neither put again nor synchronized. The writer that put it
@@ -416,6 +634,167 @@ points at bytes that a power loss can still undo.
 
 A long run does this in steps as it goes. An interrupted run loses at most the upload since its
 last step. A pack that no index lists is left behind and removed by the next prune.
+
+## Lock protocol
+
+Operations that run at the same time coordinate through the objects in `locks/` (see
+[Lock](#lock)). A writer of another implementation follows this protocol too, or a concurrent
+prune deletes its packs. What a user sees of it, exit code 3 and `--lock-wait`, is in
+[Concepts](concepts.md#locks).
+
+### Timings
+
+Durations are spelled as in [Config](#config).
+
+| Name | Value | Meaning |
+|---|---|---|
+| settle delay | `200ms` | the pause between writing the own lock and listing again |
+| refresh interval | `5m0s` | how often a holder writes its lock again |
+| self-timeout | `22m30s` | how long a holder's lock may go without a write before the holder aborts |
+| self-timeout check | `1s` | how often a holder compares its lock's age with the self-timeout |
+| stale age | `30m0s` | the age of `time` from which any lock is stale |
+| first backoff | `500ms` | the wait after the first rejected attempt, before jitter |
+| longest backoff | `8s` | the bound of the doubled wait, before jitter |
+| release timeout | `1m0s` | how long deleting the own lock may take |
+
+### Which lock an operation takes
+
+| Operation | Lock |
+|---|---|
+| backup, import, docker backup, profile backup | shared |
+| restore, export, docker restore | shared |
+| check, verify | shared |
+| ls, find | shared, one per snapshot walked |
+| forget | shared |
+| mount | shared, until it's unmounted |
+| debug node | shared |
+| prune | exclusive |
+| repair index | exclusive |
+| key passwd | exclusive |
+| info with `--exact` | exclusive |
+
+`init`, `snapshots`, `inspect`, `unlock`, `info` without `--exact`, `docker volumes`,
+`docker host`, `profile list`, `profile show`, and `version` take no lock. `forget --prune` takes
+the shared lock for the forget and then the exclusive one for the prune.
+
+Prune needs the exclusive lock because it deletes every pack that no index lists and every blob
+that no snapshot references. A backup that runs has both: packs it has stored before the index
+objects that list them (see [Order of writes](#order-of-writes)), and blobs, new ones and stored
+ones it deduplicates against, that only its manifest references, and the manifest is written
+last. Beside a prune, the backup would store a manifest that points at deleted blobs. Repair index
+deletes the old index objects, including one a concurrent writer has just stored. Info with
+`--exact` runs a prune dry run, which may store the lost-pack marker. Key passwd replaces the key
+file. Forget only deletes manifests, so it runs beside backups; what it leaves unreferenced is
+deleted by the next prune.
+
+### Conflicts
+
+- A shared lock conflicts with every exclusive lock that isn't stale.
+- An exclusive lock conflicts with every lock that isn't stale.
+- A lock never conflicts with itself, and a stale lock conflicts with nothing. Taking a lock
+  never deletes a stale one; only `ark unlock` does.
+
+### Taking a lock
+
+1. List `locks/` and read every object, as [Reading locks](#reading-locks) says. Stop if one is
+   refused. Back off if one conflicts with the class you want; nothing is written.
+2. Name a new lock from the current time and write it, with `time` the same instant in UTC.
+   A write that fails may still have stored the object: delete the name, then stop.
+3. Wait the settle delay.
+4. List and read again. Delete your lock and stop if one is refused. Delete your lock and back
+   off if another one conflicts.
+5. Delete your lock and stop if the self-timeout has passed since the `time` it carries: others
+   may already count it as stale.
+6. You hold the lock. Refresh it until the operation ends, then release it.
+
+Read what the operation decides from, the index above all, only once you hold the lock. An index
+loaded before, also by an earlier operation of the same process, may list blobs that a prune has
+deleted since, and a backup that deduplicates against them stores a manifest that points at
+nothing.
+
+Nothing breaks a tie. Two claimants that both pass step 1 and see each other in step 4 both back
+off, whatever their classes; no name, time, or host wins. The second listing is what makes the
+protocol safe: of two claimants, the one whose write landed later lists after the other's write,
+so it sees the other's lock and backs off. No two conflicting locks are ever held at once, on a
+backend that keeps what [What a backend must guarantee](#what-a-backend-must-guarantee) asks. Two
+claimants can back off again on the next attempt, and the jitter spreads them apart.
+
+### Backing off
+
+Without a wait, the operation fails with `ErrRepoLocked` and names a conflicting lock. With a
+wait, it tries again until the wait, counted from the first attempt, is used up. After attempt
+`n`, counted from 0, it sleeps `d` plus a random duration below `d`, where `d` is the first
+backoff times `2^n` or the longest backoff, whichever is smaller. It never sleeps past the end of
+the wait. A rejection with no wait left fails with `ErrRepoLocked`.
+
+### Refreshing
+
+Every refresh interval, the holder writes its lock again under the same name, with `time` the
+current instant in UTC and the other keys unchanged. A refresh that fails is tried again at the
+next interval.
+
+Every self-timeout check, the holder takes the age of its lock: the larger of the wall clock
+time since the `time` last written, and the monotonic time since that write began. A write
+counts once it has returned without an error; while a refresh hangs or after it failed, the age
+runs on from the write before. The wall
+clock counts the time a suspended host slept; the monotonic clock counts a write that hangs.
+Once the age reaches the self-timeout, the holder aborts its operation and never writes the lock
+again. It keeps checking while a refresh hangs, so a hung write can't keep the operation alive.
+
+The self-timeout lies 7m30s below the stale age, so a holder stops writing before any other host
+counts its lock as stale. The clocks of the hosts that share a repository must agree within that
+margin.
+
+### Stale locks
+
+A lock is stale when its `time` is the stale age old or older, by the reader's clock. Nothing
+else makes a lock stale, also not on the holder's own host.
+
+`hostname`, `username`, and `pid` name the holder for `ark unlock` and error messages. A reader
+never asks whether that process still runs: a host name and a process ID don't identify a
+process across PID namespaces, so a process of the same ID in another container may be the
+running holder. A lock that a crashed operation left behind blocks conflicting operations until
+it's stale or `ark unlock --force` removes it.
+
+### Releasing
+
+The holder deletes its lock object when the operation ends, also when it failed or was
+cancelled. It stops refreshing first, since a refresh that returns after the delete stores the
+lock again. A refresh in flight is waited for only until the self-timeout; should it return after
+the delete, the holder deletes the lock again. ark gives the delete the release timeout. A lock whose delete fails stays until it's
+stale, and blocks conflicting operations until then.
+
+### Reading locks
+
+Steps 1 and 4 read every object that the listing names. ark warns only in step 1, so it doesn't
+warn about one object twice:
+
+| Object | What a reader does |
+|---|---|
+| zero bytes long | ignores it: another writer's write in flight |
+| gone between listing and reading | ignores it: released since the listing |
+| a tag that doesn't verify, or JSON that doesn't decode | passes over it and warns |
+| refused (see [What a reader refuses](#what-a-reader-refuses)) | stops with `ErrUnsupportedFormat`: a later build holds it, and what it guards is unknown here |
+
+`ark unlock --force` removes every lock, the passed-over and refused ones included, and a
+zero-byte object whose name is the stale age old or isn't a lock name. It also removes locks that
+running operations hold, so no operation of any build may run. `ark unlock` alone removes only
+stale locks.
+
+### What a backend must guarantee
+
+Once a write returns, a listing that starts after it, on any host, names the object: a listing
+reads its own and others' writes. A backend that needs a moment for that is safe as long as the
+settle delay covers it. ark's local, SFTP, and in-memory backends list a finished write at once.
+
+A write to a name that already exists, as a refresh is, replaces the object in one step: a
+listing and a read see the old object or the new one, never a missing, empty, or partial one.
+Otherwise a claimant can list `locks/` while a held lock is missing and take a conflicting one.
+ark's local and in-memory backends replace in one step, and so does its SFTP backend on a server
+that offers the `posix-rename@openssh.com` extension. On a server without it, the SFTP backend
+deletes the old object before it renames the new one into place, so a lock is missing for a round
+trip at every refresh. Don't run a prune, repair index, or key passwd there while another
+operation runs.
 
 ## Prune
 

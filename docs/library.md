@@ -169,8 +169,8 @@ Keys that start with `ark/` belong to ark's own sources. A backup that sets one 
 ### Hostnames and locks
 
 The library does read the machine's hostname for one thing: locks. It stamps the locks it writes
-with the hostname, and it clears a lock of the same hostname at once when that lock's process is
-gone. Any other lock is cleared once it is 30 minutes old.
+with the hostname, so `Locks` and lock errors can name the holder. A lock counts as stale only
+once it is 30 minutes old, also one of the same hostname.
 
 `arkprofile` and the CLI differ from the core here. Both always record a host. Without
 `backup.host`, a profile's `BackupOptions` and `Filter` use the machine's hostname. In a container

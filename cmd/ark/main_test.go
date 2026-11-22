@@ -237,6 +237,8 @@ func TestInitChunkerFlags(t *testing.T) {
 	for _, args := range [][]string{
 		{"--chunk-min", "2MiB"},
 		{"--chunk-avg", "8MiB"},
+		{"--chunk-avg", "3MiB", "--chunk-max", "8MiB"},
+		{"--chunk-max", "128MiB"},
 		{"--chunk-max", "lots"},
 		{filepath.Join(t.TempDir(), "positional")},
 	} {

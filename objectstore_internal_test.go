@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 // testSession returns the write session of a repository on b that holds
@@ -116,6 +118,33 @@ func TestCodecOpensBothFormatBytes(t *testing.T) {
 		if got, err := codec.open(key, "data/x", obj); !errors.Is(err, errSealBroken) {
 			t.Errorf("%s: open under the other format byte returned %d bytes and %v, want errSealBroken",
 				name, len(got), err)
+		}
+	}
+}
+
+// TestCodecRefusesAFrameThatAuthenticatesAndDoesNotDecode: a zstd payload
+// under a valid tag that this build cannot decode, a frame with a dictionary,
+// one with a 1 GiB window or no frame at all, is ErrUnsupportedFormat, never
+// damage that a reader would skip or repair.
+func TestCodecRefusesAFrameThatAuthenticatesAndDoesNotDecode(t *testing.T) {
+	codec := newObjectCodec()
+	defer codec.Close()
+	key := (*[32]byte)(&newMasterKey("repo").DataKey)
+	magic := []byte{0x28, 0xb5, 0x2f, 0xfd}
+	emptyBlock := []byte{0x01, 0x00, 0x00}
+
+	for name, payload := range map[string][]byte{
+		"dictionary":   slices.Concat(magic, []byte{0x21, 0x07, 0x00}, emptyBlock),
+		"1 GiB window": slices.Concat(magic, []byte{0x00, 0xa0}, emptyBlock),
+		"no frame":     []byte("not a zstd frame"),
+	} {
+		aead, _ := chacha20poly1305.NewX(key[:])
+		obj := make([]byte, 1+chacha20poly1305.NonceSizeX)
+		obj[0] = formatZstd
+		rand.Read(obj[1:])
+		obj = aead.Seal(obj, obj[1:], payload, sealAAD(formatZstd, "data/x"))
+		if got, err := codec.open(key, "data/x", obj); !errors.Is(err, ErrUnsupportedFormat) {
+			t.Errorf("%s: open returned %d bytes and %v, want ErrUnsupportedFormat", name, len(got), err)
 		}
 	}
 }

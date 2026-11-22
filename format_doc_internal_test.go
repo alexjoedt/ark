@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -276,4 +277,108 @@ func TestReadersKeepNoZone(t *testing.T) {
 	}
 	defer again.Close()
 	check("master key", again.key.Created)
+}
+
+// formatSection returns the part of docs/format.md under heading, up to the
+// next heading of the same or a higher level outside a fenced code block.
+func formatSection(t *testing.T, heading string) string {
+	t.Helper()
+	data, err := os.ReadFile("docs/format.md")
+	if err != nil {
+		t.Fatalf("read docs/format.md: %v", err)
+	}
+	level := heading[:strings.IndexByte(heading, ' ')+1]
+	_, rest, ok := strings.Cut(string(data), "\n"+heading+"\n")
+	if !ok {
+		t.Fatalf("docs/format.md has no heading %q", heading)
+	}
+	fenced := false
+	for i := 0; i < len(rest); {
+		j := strings.IndexByte(rest[i:], '\n')
+		if j < 0 {
+			break
+		}
+		line := rest[i : i+j]
+		if strings.HasPrefix(line, "```") {
+			fenced = !fenced
+		} else if !fenced && strings.HasPrefix(line, "#") && len(line)-len(strings.TrimLeft(line, "#")) <= len(level)-1 {
+			return rest[:i]
+		}
+		i += j + 1
+	}
+	return rest
+}
+
+var docTimingRow = regexp.MustCompile("^\\| ([a-z -]+) \\| `([^`]+)` \\|")
+
+// TestFormatPagePinsTheLockTimings compares every duration that the Lock
+// protocol section of docs/format.md names with the one lock.go uses.
+func TestFormatPagePinsTheLockTimings(t *testing.T) {
+	want := map[string]time.Duration{
+		"settle delay":       defaultLockSettleDelay,
+		"refresh interval":   lockRefreshInterval,
+		"self-timeout":       lockRefreshTimeout,
+		"self-timeout check": lockCheckInterval,
+		"stale age":          lockStaleAge,
+		"first backoff":      lockBackoffFloor,
+		"longest backoff":    lockBackoffMax,
+		"release timeout":    lockDropTimeout,
+	}
+	section := formatSection(t, "## Lock protocol")
+	got := map[string]string{}
+	for line := range strings.SplitSeq(section, "\n") {
+		if m := docTimingRow.FindStringSubmatch(line); m != nil {
+			got[m[1]] = m[2]
+		}
+	}
+	for name, d := range want {
+		if got[name] != d.String() {
+			t.Errorf("Lock protocol: %s is %q on the page, lock.go uses %s", name, got[name], d)
+		}
+	}
+	for name := range got {
+		if _, ok := want[name]; !ok {
+			t.Errorf("Lock protocol names the timing %q, this test pins no such value", name)
+		}
+	}
+	margin := lockStaleAge - lockRefreshTimeout
+	if phrase := "lies " + margin.String() + " below the stale age"; !strings.Contains(section, phrase) {
+		t.Errorf("Lock protocol does not say the self-timeout %q", phrase)
+	}
+}
+
+// TestFormatPagePinsTheLockName checks the lock name rule of docs/format.md
+// against generateID: the alphabet, both lengths, and that names sort by the
+// millisecond they were taken in.
+func TestFormatPagePinsTheLockName(t *testing.T) {
+	section := formatSection(t, "### Lock")
+	alphabet := regexp.MustCompile("alphabet `([0-9a-z]+)`").FindStringSubmatch(section)
+	ts := regexp.MustCompile(`(?m)^- (\d+) characters: the Unix time in milliseconds`).FindStringSubmatch(section)
+	rnd := regexp.MustCompile(`(?m)^- (\d+) characters: (\d+) random bytes, 5 bits per character`).
+		FindStringSubmatch(section)
+	if alphabet == nil || ts == nil || rnd == nil {
+		t.Fatalf("Lock: name rule not found (alphabet %v, time %v, random %v)", alphabet, ts, rnd)
+	}
+	tsChars, _ := strconv.Atoi(ts[1])
+	rndChars, _ := strconv.Atoi(rnd[1])
+	rndBytes, _ := strconv.Atoi(rnd[2])
+	if rndChars != (rndBytes*8+4)/5 {
+		t.Errorf("Lock: %d random bytes take %d characters, the page says %d", rndBytes, (rndBytes*8+4)/5, rndChars)
+	}
+
+	at := time.UnixMilli(1_700_000_000_031) // the next millisecond carries into the second digit
+	id := generateID(at)
+	if len(id) != tsChars+rndChars {
+		t.Errorf("generateID wrote %q, %d characters, the page says %d", id, len(id), tsChars+rndChars)
+	}
+	if strings.Trim(id, alphabet[1]) != "" {
+		t.Errorf("generateID wrote %q, outside the alphabet %q", id, alphabet[1])
+	}
+	if got, ok := idTime(id); !ok || !got.Equal(at) || len(id) < tsChars ||
+		id[:tsChars] != encodeTimestampBase32(uint64(at.UnixMilli()), tsChars) {
+		t.Errorf("generateID(%v) = %q, its first %d characters do not hold the millisecond", at, id, tsChars)
+	}
+	if next := generateID(at.Add(time.Millisecond)); next <= id {
+		t.Errorf("a lock taken a millisecond later is named %q, not after %q", next, id)
+	}
 }

@@ -62,6 +62,7 @@ export default defineConfig({
         items: [
           { text: 'Repository format', link: '/format' },
           { text: 'Tree node', link: '/format/tree-node' },
+          { text: 'Test vectors', link: '/format/vectors' },
           { text: 'Security', link: '/SECURITY' },
           { text: 'Versioning', link: '/versioning' },
         ],
