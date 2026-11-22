@@ -22,6 +22,7 @@ Conventions on this page:
 | [`mount`](#mount) | serve every snapshot read-only through FUSE |
 | [`inspect`](#inspect) | show one snapshot in detail |
 | [`info`](#info) | show what a repository holds |
+| [`debug node`](#debug-node) | print a stored tree node as JSON |
 | [`forget`](#forget) | remove snapshots by ID or policy |
 | [`prune`](#prune) | delete packs that no snapshot references |
 | [`repair index`](#repair-index) | rebuild the index from the stored packs |
@@ -146,6 +147,11 @@ ark restore [options] <id> <dest>
 Restores a snapshot into `<dest>`. The directory is created if missing. Existing files are
 overwritten.
 
+A device node needs the privilege to create one, usually root, and a fifo or device node needs a
+filesystem that holds them; vfat, exFAT and SMB shares don't. Otherwise the restore skips each such
+entry with a warning on stderr, restores everything else, and exits 0. `--json` lists the skipped
+entries' errors under `skipped`.
+
 | Flag | Meaning |
 |---|---|
 | `--path PREFIX`, `-p` | restore only the entries under PREFIX; repeatable |
@@ -183,6 +189,12 @@ ark ls [--long] <id> [path]
 
 Lists the entries of a snapshot, optionally only those below `path`. It streams, so it works on a
 snapshot of any size. `--long`, `-l` adds mode, uid, gid, size, and mtime.
+
+Names are raw bytes. On a terminal, `ls` and `find` write every byte that isn't valid UTF-8 and
+every byte of a control or format character (such as a bidi override or a zero-width space) or a
+line or paragraph separator as `\xNN`, and every backslash as `\\`. In a pipe they write the bytes
+as stored. With `--json`, `path` stays and `path_raw` holds the base64 of the bytes, only for a
+name that isn't valid UTF-8; `link_dest_raw` does the same for a link target.
 
 ## find
 
@@ -362,6 +374,22 @@ the old index objects.
 - A pack whose own table doesn't open is listed, and the command exits 5. The new index keeps for
   that pack what the old one listed.
 - Takes the exclusive lock, so no backup, restore, or prune can run meanwhile.
+
+## debug node
+
+```
+ark debug node <id> [path]
+```
+
+Prints the stored tree node of a snapshot as JSON: the root directory, or the directory at `path`.
+Every entry shows its name, type, mode (octal), uid, gid, times in nanoseconds since the epoch,
+inode, and the fields of its type: chunks, the tree of a directory, the target of a link, the
+device numbers, xattrs. A name, link target, or xattr name that isn't valid UTF-8 also appears as
+base64 in a `name_raw`, `target_raw`, or xattr `name_raw` field. `path` takes the stored bytes as
+they are, so a directory whose name isn't valid UTF-8 opens too.
+
+- Exits 1 when `path` isn't a directory of the snapshot.
+- The output is for people, and may change in any release.
 
 ## verify
 

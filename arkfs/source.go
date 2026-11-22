@@ -195,11 +195,14 @@ var (
 
 // Walk visits every entry under the source root that no exclude pattern
 // matches; an excluded directory is not read. Regular files, directories,
-// symlinks and hardlinks are yielded; device nodes, fifos and sockets are
-// yielded as ark.FileTypeUnsupported so the core can count them.
+// symlinks, hardlinks, fifos and device nodes are yielded; sockets are
+// yielded as ark.FileTypeUnsupported so the core can count them. A fifo and a
+// device node carry no xattrs.
 //
 // A file with more than one name reaches fn as a regular file under the name
-// the walk sees first and as ark.FileTypeHardlink under every later one.
+// the walk sees first and as ark.FileTypeHardlink under every later one. A
+// fifo or device node with more than one name is yielded as its own node
+// under each name: a restore recreates them unlinked.
 func (s *fileSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 	return s.walk(ctx, func(path string, fi os.FileInfo, entry ark.FileInfo) error {
 		var err error
@@ -214,7 +217,8 @@ func (s *fileSource) Walk(ctx context.Context, fn ark.WalkFunc) error {
 				return err
 			}
 			return fn(entry, nil)
-		case ark.FileTypeHardlink, ark.FileTypeUnsupported:
+		case ark.FileTypeHardlink, ark.FileTypeFifo, ark.FileTypeCharDevice, ark.FileTypeBlockDevice,
+			ark.FileTypeUnsupported:
 			return fn(entry, nil)
 		case ark.FileTypeRegular:
 		}
@@ -314,8 +318,18 @@ func (s *fileSource) walk(ctx context.Context, fn func(path string, fi os.FileIn
 			entry.Type, entry.Size = ark.FileTypeDirectory, 0
 			return fn(path, fi, entry)
 		case !fi.Mode().IsRegular():
-			// Devices, fifos and sockets: the core counts them and drops them.
-			entry.Type, entry.Size = ark.FileTypeUnsupported, 0
+			entry.Size = 0
+			// Sockets: the core counts them and drops them.
+			entry.Type = ark.FileTypeUnsupported
+			if t := fi.Mode().Type(); t == os.ModeNamedPipe {
+				entry.Type = ark.FileTypeFifo
+			} else if t&os.ModeDevice != 0 {
+				entry.Type = ark.FileTypeBlockDevice
+				if t&os.ModeCharDevice != 0 {
+					entry.Type = ark.FileTypeCharDevice
+				}
+				entry.DevMajor, entry.DevMinor = deviceNumbers(fi)
+			}
 			return fn(path, fi, entry)
 		}
 

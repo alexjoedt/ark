@@ -19,7 +19,7 @@ const (
 	// stored inside data packs, so a repository holds no object of this type.
 	BlobFile
 	// TreeFile is the namespace a tree node is sealed under, named by the
-	// hash of its canonical JSON. Tree nodes are stored inside tree packs.
+	// keyed hash of its stored bytes. Tree nodes are stored inside tree packs.
 	TreeFile
 	// SnapshotFile is a snapshot manifest, named by the snapshot id.
 	SnapshotFile

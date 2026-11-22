@@ -4,11 +4,12 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"maps"
+	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -105,6 +106,14 @@ func TestHardlinkIsStoredOnceAndRestoredAsALink(t *testing.T) {
 	if link.LinkDest != "a.txt" {
 		t.Errorf("z-link.txt points at %q, want %q", link.LinkDest, "a.txt")
 	}
+	if link.Size != int64(len(content)) || entries["a.txt"].Size != link.Size {
+		t.Errorf(
+			"sizes are %d for the link and %d for the file, want %d",
+			link.Size,
+			entries["a.txt"].Size,
+			len(content),
+		)
+	}
 	if entries["a.txt"].Type != ark.FileTypeRegular {
 		t.Errorf("a.txt has type %q, want %q", entries["a.txt"].Type, ark.FileTypeRegular)
 	}
@@ -150,31 +159,12 @@ func TestXattrsSurviveTheRoundTrip(t *testing.T) {
 		t.Errorf("snapshot entry carries user.ark = %q, want %q", got, "value")
 	}
 
-	// The tree entry, not FileInfo, owns the wire format: base64 values.
-	var found bool
-	for _, name := range blobNames(t, repo, ark.TreeFile) {
-		var node struct {
-			Entries []struct {
-				Name   string            `json:"name"`
-				Xattrs map[string]string `json:"xattrs"`
-			} `json:"entries"`
-		}
-		if err := json.Unmarshal(openObject(t, repo, ark.TreeFile, name), &node); err != nil {
-			t.Fatalf("parse tree %s: %v", name, err)
-		}
-		for _, e := range node.Entries {
-			if e.Name == "file.txt" {
-				found = true
-				// base64 of "value".
-				if e.Xattrs["user.ark"] != "dmFsdWU=" {
-					t.Errorf("tree entry stores user.ark as %q, want base64 %q",
-						e.Xattrs["user.ark"], "dmFsdWU=")
-				}
-			}
-		}
-	}
-	if !found {
-		t.Fatal("no tree entry for file.txt")
+	// The node holds name and value as they are, each behind its length.
+	stored := []byte("\x08user.ark\x05value")
+	if !slices.ContainsFunc(blobNames(t, repo, ark.TreeFile), func(name string) bool {
+		return bytes.Contains(openObject(t, repo, ark.TreeFile, name), stored)
+	}) {
+		t.Errorf("no tree node holds %q", stored)
 	}
 
 	var buf [64]byte
@@ -187,7 +177,9 @@ func TestXattrsSurviveTheRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSpecialFilesAreSkippedAndCounted(t *testing.T) {
+// A socket is the one file type the format does not model: the backup drops
+// and counts it. A fifo beside it is stored and restored.
+func TestSocketsAreSkippedAndCounted(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "keep.txt"), []byte("keep"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -195,6 +187,11 @@ func TestSpecialFilesAreSkippedAndCounted(t *testing.T) {
 	if err := unix.Mkfifo(filepath.Join(root, "pipe"), 0o644); err != nil {
 		t.Skipf("fifos unsupported here: %v", err)
 	}
+	l, err := net.Listen("unix", filepath.Join(root, "sock"))
+	if err != nil {
+		t.Skipf("unix sockets unsupported here: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
 
 	repo, snap, dst := roundTrip(t, root)
 
@@ -204,11 +201,18 @@ func TestSpecialFilesAreSkippedAndCounted(t *testing.T) {
 	if snap.Stats.FileCount != 1 {
 		t.Errorf("stats count %d files, want 1, the fifo is not one", snap.Stats.FileCount)
 	}
-	if _, ok := entriesOf(t, repo, snap.ID)["pipe"]; ok {
-		t.Error("the fifo made it into the snapshot tree")
+	entries := entriesOf(t, repo, snap.ID)
+	if _, ok := entries["sock"]; ok {
+		t.Error("the socket made it into the snapshot tree")
 	}
-	if _, err := os.Lstat(filepath.Join(dst, "pipe")); !os.IsNotExist(err) {
-		t.Errorf("restore recreated the fifo: %v", err)
+	if e := entries["pipe"]; e.Type != ark.FileTypeFifo {
+		t.Errorf("the fifo is in the snapshot as %q, want %q", e.Type, ark.FileTypeFifo)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "sock")); !os.IsNotExist(err) {
+		t.Errorf("restore recreated the socket: %v", err)
+	}
+	if fi, err := os.Lstat(filepath.Join(dst, "pipe")); err != nil || fi.Mode().Type() != os.ModeNamedPipe {
+		t.Errorf("restore did not recreate the fifo: %v", err)
 	}
 }
 
@@ -372,5 +376,27 @@ func TestExportOfAnImportedSnapshotWritesTheSameTarModes(t *testing.T) {
 	}
 	if got := tarModes(t, again.Bytes()); !maps.Equal(got, want) {
 		t.Errorf("the imported snapshot exports with modes %v, want %v", got, want)
+	}
+}
+
+// TestHardlinkTargetIsStoredAsAPathFromTheRoot: the node holds a hardlink's
+// target as names joined by "/", whatever spelling the source gave.
+func TestHardlinkTargetIsStoredAsAPathFromTheRoot(t *testing.T) {
+	repo := openRepo(t, arkmem.New())
+	var opened int
+	snap, err := repo.Backup(context.Background(), entrySource{opened: &opened, entries: []ark.FileInfo{
+		{Path: "dir", Mode: 0o755, Type: ark.FileTypeDirectory},
+		{Path: "dir/file", Size: 2, Mode: 0o644, Type: ark.FileTypeRegular},
+		{Path: "dot", Mode: 0o644, Type: ark.FileTypeHardlink, LinkDest: "./dir/file"},
+		{Path: "slash", Mode: 0o644, Type: ark.FileTypeHardlink, LinkDest: "dir/file/"},
+	}})
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	entries := entriesOf(t, repo, snap.ID)
+	for _, name := range []string{"dot", "slash"} {
+		if got := entries[name]; got.LinkDest != "dir/file" || got.Size != 2 {
+			t.Errorf("%s: target %q, size %d, want %q, 2", name, got.LinkDest, got.Size, "dir/file")
+		}
 	}
 }

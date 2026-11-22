@@ -105,14 +105,19 @@ func (r *Repository) runBackup(
 	scan = startScan(ctx, src, opts, &progressMu, logger)
 	defer scan.stop()
 
+	taken := sourcePaths{}
 	err = src.Walk(ctx, func(entry FileInfo, open func() (io.ReadCloser, error)) error {
+		entry, err := taken.add(entry)
+		if err != nil {
+			return err
+		}
 		fe := fileEntry{FileInfo: entry}
 
 		switch entry.Type {
 		case FileTypeDirectory:
 			stats.DirCount++
 
-		case FileTypeSymlink:
+		case FileTypeSymlink, FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice:
 			// no extra stats
 
 		case FileTypeHardlink:
@@ -168,8 +173,8 @@ func (r *Repository) runBackup(
 			}
 
 		case FileTypeUnsupported:
-			// Devices, fifos, sockets: the v1 format does not model them.
-			// Drop the entry and count it.
+			// Sockets and the like: the format does not model them. Drop
+			// the entry and count it.
 			stats.Skipped++
 			return nil
 
@@ -348,7 +353,8 @@ func (r *Repository) parentFiles(
 	// and do not stay in the store for the length of the run.
 	walk := *session.trees
 	walk.packs = newPackCache()
-	err = walkTree(ctx, &walk, m.RootTree, func(e fileEntry) error {
+	load := func(hash string) (*treeNode, error) { return loadTreeNode(ctx, &walk, hash) }
+	err = walkTree(load, m.RootTree, func(e fileEntry) error {
 		if e.Type == FileTypeRegular && e.ModTime.Before(racy) {
 			files[e.Path] = e
 		}

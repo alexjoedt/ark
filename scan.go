@@ -50,7 +50,8 @@ func startScan(ctx context.Context, src Source, opts backupOptions, mu *sync.Mut
 				bytes += entry.Size
 			case FileTypeHardlink:
 				files++
-			case FileTypeDirectory, FileTypeSymlink, FileTypeUnsupported:
+			case FileTypeDirectory, FileTypeSymlink, FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice,
+				FileTypeUnsupported:
 				// no files: a backup counts none of them in FileCount
 			}
 			if time.Since(last) >= scanTick {

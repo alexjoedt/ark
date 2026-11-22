@@ -76,11 +76,23 @@
 // and is read on every backup. Set ModTime, and ChangeTime and Inode where the
 // medium has them, as soon as unchanged files should be skipped.
 //
+// A fifo is yielded as FileTypeFifo, a device node as FileTypeCharDevice or
+// FileTypeBlockDevice with DevMajor and DevMinor set; all three come with open
+// nil and are stored with mode, owner and mtime. Anything else the medium has
+// and the format does not, such as a socket, is yielded as
+// FileTypeUnsupported, which the core counts in SnapshotStats.Skipped and
+// drops.
+//
 // A Sink sees Open once with the snapshot's SourceMeta, where it rejects a
 // type it cannot restore with ErrIncompatibleSourceType; then Receive once per
 // entry in walk order, parents before children, a hardlink after its target,
 // r nil for everything but a regular file, which Receive reads to the end;
 // then Close exactly once, also after a failed Receive or a cancelled restore.
+// A fifo and a device node arrive with their type, DevMajor and DevMinor for
+// a device, and r nil. A sink that cannot create one, such as a device node
+// without the privilege to make it or a fifo on a filesystem without fifos,
+// returns an error wrapping ErrEntrySkipped:
+// the restore goes on and lists the error in RestoreResult.Skipped.
 //
 // Prove both with the conformance suites in package arktest, which a foreign
 // Source and Sink are expected to pass:

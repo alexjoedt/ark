@@ -2,10 +2,11 @@ package ark
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -15,35 +16,41 @@ import (
 )
 
 // treeNode is a directory node in the snapshot Merkle tree. It lives in the
-// trees namespace, named by the HMAC of its canonical JSON: entries sorted
-// by name, marshalled without indentation.
+// trees namespace, named by the HMAC of its stored bytes, which treenode.go
+// defines.
 type treeNode struct {
-	Entries []treeEntry `json:"entries"`
+	Entries []treeEntry
 }
 
 // treeEntry is one child inside a treeNode.
 type treeEntry struct {
-	Name string   `json:"name"`
-	Type FileType `json:"type"`
+	Name string
+	Type FileType
 	// Mode is mode_t & 07777: the permission bits with setuid 04000, setgid
 	// 02000 and sticky 01000. The file type is in Type, never here.
-	Mode     uint32     `json:"mode"`
-	UID      int        `json:"uid"`
-	GID      int        `json:"gid"`
-	ModTime  time.Time  `json:"mtime"`
-	Size     int64      `json:"size,omitempty"`
-	LinkDest string     `json:"link_dest,omitempty"`
-	TreeHash string     `json:"tree_hash,omitempty"`
-	Chunks   []chunkRef `json:"chunks,omitempty"`
+	Mode    uint32
+	UID     int
+	GID     int
+	ModTime time.Time
+	// Size is the sum of the chunk lengths and is not stored; a hardlink's is
+	// its target's, which Walk and Restore fill in.
+	Size     int64
+	LinkDest string
+	TreeHash string
+	Chunks   []chunkRef
 
-	// Xattrs maps an extended attribute name to its value. encoding/json
-	// writes the values base64 encoded, which is the v1 wire format.
-	Xattrs map[string][]byte `json:"xattrs,omitempty"`
+	// Xattrs maps an extended attribute name to its value.
+	Xattrs map[string][]byte
 
 	// ChangeTime and Inode are what a later backup compares to skip the
-	// file; snapshots from older builds and tar sources carry neither.
-	ChangeTime time.Time `json:"ctime,omitzero"`
-	Inode      uint64    `json:"inode,omitempty"`
+	// file; tar sources carry neither.
+	ChangeTime time.Time
+	Inode      uint64
+
+	// DevMajor and DevMinor are the device numbers of a character or block
+	// device.
+	DevMajor uint32
+	DevMinor uint32
 }
 
 // storedModeMask is every bit a stored mode may carry.
@@ -97,14 +104,17 @@ func (e treeEntry) fileInfo(path string) FileInfo {
 
 		ChangeTime: e.ChangeTime,
 		Inode:      e.Inode,
+		DevMajor:   e.DevMajor,
+		DevMinor:   e.DevMinor,
 	}
 }
 
-// marshalTreeNode is the canonical JSON of the node holding children, the
+// marshalTreeNode is the stored form of the node of dir holding children, the
 // bytes buildTree stores and the input of the node's name. Sorting here rather
 // than at every call site keeps the canonical form an invariant of the write
-// path.
-func marshalTreeNode(children []fileEntry, hashes map[string]string) ([]byte, error) {
+// path. Two children of one name are an error: a node holds a name once, and
+// leaving one of them out would drop an entry the source yielded.
+func marshalTreeNode(dir string, children []fileEntry, hashes map[string]string) ([]byte, error) {
 	node := treeNode{Entries: make([]treeEntry, 0, len(children))}
 	for _, child := range children {
 		te, err := newTreeEntry(child, hashes)
@@ -114,17 +124,70 @@ func marshalTreeNode(children []fileEntry, hashes map[string]string) ([]byte, er
 		node.Entries = append(node.Entries, te)
 	}
 	slices.SortFunc(node.Entries, func(a, b treeEntry) int { return strings.Compare(a.Name, b.Name) })
-	data, err := json.Marshal(node)
+	for i := 1; i < len(node.Entries); i++ {
+		if name := node.Entries[i].Name; name == node.Entries[i-1].Name {
+			return nil, fmt.Errorf("tree: the source yielded %q more than once", path.Join(dir, name))
+		}
+	}
+	data, err := encodeTreeNode(&node)
 	if err != nil {
-		return nil, fmt.Errorf("tree: failed to marshal node: %w", err)
+		return nil, fmt.Errorf("tree: directory %q: %w", dir, err)
 	}
 	return data, nil
 }
 
-// storedType reports whether t is a file type a tree node of this format
-// holds.
+// sourcePaths holds the path of every entry a backup or an import took from
+// its source, and the entry itself for a symlink, a fifo or a device node. add refuses,
+// before any data of the entry is read and stored, what the tree could not
+// hold at the end: a path a second time and a link without a target. An entry
+// no node gets, the root and a type that is skipped, is not looked at.
+type sourcePaths map[string]*FileInfo
+
+// add records fi and returns the entry to store for it. A hardlink comes back
+// with its target as a path from the root, without a leading "./" or a
+// trailing "/"; one to a symlink, a fifo or a device node comes back as a copy
+// of that entry under its own path: a hardlink in the tree names a regular file.
+func (s sourcePaths) add(fi FileInfo) (FileInfo, error) {
+	norm := normEntryPath(fi.Path)
+	if norm == "" || !storedType(fi.Type) {
+		return fi, nil
+	}
+	if _, ok := s[norm]; ok {
+		return fi, fmt.Errorf("the source yielded %q more than once", norm)
+	}
+	if fi.Type == FileTypeHardlink {
+		fi.LinkDest = normEntryPath(fi.LinkDest)
+	}
+	if (fi.Type == FileTypeSymlink || fi.Type == FileTypeHardlink) && fi.LinkDest == "" {
+		return fi, fmt.Errorf("the source yielded the link %q without a target", norm)
+	}
+	if fi.Type == FileTypeHardlink {
+		if target := s[fi.LinkDest]; target != nil {
+			path := fi.Path
+			fi = *target
+			fi.Path = path
+		}
+	}
+	var special *FileInfo
+	switch fi.Type {
+	case FileTypeSymlink, FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice:
+		special = &fi
+	case FileTypeRegular, FileTypeDirectory, FileTypeHardlink, FileTypeUnsupported:
+	}
+	s[norm] = special
+	return fi, nil
+}
+
+// storedType reports whether a tree stores an entry of type t; a backup drops
+// the others.
 func storedType(t FileType) bool {
-	return t == FileTypeRegular || t == FileTypeDirectory || t == FileTypeSymlink || t == FileTypeHardlink
+	switch t {
+	case FileTypeRegular, FileTypeDirectory, FileTypeSymlink, FileTypeHardlink,
+		FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice:
+		return true
+	case FileTypeUnsupported:
+	}
+	return false
 }
 
 func loadTreeNode(ctx context.Context, trees *objectStore, hash string) (*treeNode, error) {
@@ -132,24 +195,31 @@ func loadTreeNode(ctx context.Context, trees *objectStore, hash string) (*treeNo
 	if err != nil {
 		return nil, fmt.Errorf("tree: failed to load node %s: %w", hash, err)
 	}
-	var node treeNode
-	if err := json.Unmarshal(data, &node); err != nil {
-		return nil, fmt.Errorf("tree: failed to unmarshal node %s: %w", hash, err)
+	node, err := decodeTreeNode(data)
+	if err != nil {
+		return nil, fmt.Errorf("tree: node %s: %w", hash, err)
 	}
-	for _, e := range node.Entries {
-		if e.Mode&^storedModeMask != 0 {
-			return nil, fmt.Errorf("%w: node %s: mode %#o of %q has a bit outside 07777",
-				ErrCorruptTree, hash, e.Mode, e.Name)
-		}
-		// Every reader of a tree loads its nodes here, so none of them meets
-		// a type it would have to skip: a restore that leaves the entry out
-		// and a prune that counts it as holding nothing are both wrong.
-		if !storedType(e.Type) {
-			return nil, fmt.Errorf("%w: node %s: %q has the file type %q, which this build does not know",
-				ErrUnsupportedFormat, hash, e.Name, e.Type)
-		}
+	return node, nil
+}
+
+// linkTarget is the regular file a hardlink at link names. A tree that holds
+// no entry there, or one that is not a regular file, is corrupt; a node on the
+// way that does not load keeps its own error.
+func linkTarget(load func(hash string) (*treeNode, error), root, link string) (treeEntry, error) {
+	target, err := lookupTreeEntry(load, root, link)
+	switch {
+	case errors.Is(err, errNoTreeEntry):
+		err = fmt.Errorf("%w: %w", ErrCorruptTree, err)
+	case err == nil && target.Type != FileTypeRegular:
+		err = fmt.Errorf("%w: target is not a regular file", ErrCorruptTree)
 	}
-	return &node, nil
+	return target, err
+}
+
+// linkSize is the size of the file a hardlink at link names.
+func linkSize(load func(hash string) (*treeNode, error), root, link string) (int64, error) {
+	target, err := linkTarget(load, root, link)
+	return target.Size, err
 }
 
 // buildTree organises the flat fileEntry list into a Merkle directory tree,
@@ -248,7 +318,7 @@ func storeTreeLevel(
 	w := newChunkWriter(ctx, trees, workers)
 	stored := make(map[string]string, len(dirs))
 	for _, dir := range dirs {
-		data, err := marshalTreeNode(dirChildren[dir], hashes)
+		data, err := marshalTreeNode(dir, dirChildren[dir], hashes)
 		if err == nil {
 			name := trees.name(data)
 			stored[dir] = name
@@ -272,19 +342,27 @@ func storeTreeLevel(
 func newTreeEntry(child fileEntry, hashes map[string]string) (treeEntry, error) {
 	norm := normEntryPath(child.Path)
 	te := treeEntry{
-		Name:     filepath.Base(norm),
-		Type:     child.Type,
-		Mode:     UnixMode(child.Mode),
-		UID:      child.UID,
-		GID:      child.GID,
-		ModTime:  child.ModTime,
-		Size:     child.Size,
-		LinkDest: child.LinkDest,
-		Chunks:   child.Chunks,
-		Xattrs:   child.Xattrs,
+		Name:    filepath.Base(norm),
+		Type:    child.Type,
+		Mode:    UnixMode(child.Mode),
+		UID:     child.UID,
+		GID:     child.GID,
+		ModTime: child.ModTime,
+		Xattrs:  child.Xattrs,
 
 		ChangeTime: child.ChangeTime,
 		Inode:      child.Inode,
+	}
+	// What the type has no place for is left out, as a directory's size is.
+	switch child.Type {
+	case FileTypeRegular:
+		te.Chunks = child.Chunks
+		te.Size = refsSize(child.Chunks)
+	case FileTypeSymlink, FileTypeHardlink:
+		te.LinkDest = child.LinkDest
+	case FileTypeCharDevice, FileTypeBlockDevice:
+		te.DevMajor, te.DevMinor = child.DevMajor, child.DevMinor
+	case FileTypeDirectory, FileTypeFifo, FileTypeUnsupported:
 	}
 	if child.Type == FileTypeDirectory {
 		hash, ok := hashes[norm]
@@ -292,7 +370,6 @@ func newTreeEntry(child fileEntry, hashes map[string]string) (treeEntry, error) 
 			return treeEntry{}, fmt.Errorf("tree: directory %s has no stored node", norm)
 		}
 		te.TreeHash = hash
-		te.Chunks = nil
 	}
 	return te, nil
 }
@@ -346,18 +423,17 @@ func (f pathFilter) descend(dir string) bool {
 }
 
 // walkTree visits every fileEntry in the Merkle tree rooted at rootHash.
-func walkTree(ctx context.Context, trees *objectStore, rootHash string, fn func(fileEntry) error) error {
-	return walkTreeWithPrefix(ctx, trees, rootHash, "", pathFilter{}, fn)
+func walkTree(load func(hash string) (*treeNode, error), rootHash string, fn func(fileEntry) error) error {
+	return walkTreeWithPrefix(load, rootHash, "", pathFilter{}, fn)
 }
 
 func walkTreeWithPrefix(
-	ctx context.Context,
-	trees *objectStore,
+	load func(hash string) (*treeNode, error),
 	hash, prefix string,
 	filter pathFilter,
 	fn func(fileEntry) error,
 ) error {
-	node, err := loadTreeNode(ctx, trees, hash)
+	node, err := load(hash)
 	if err != nil {
 		return err
 	}
@@ -366,7 +442,7 @@ func walkTreeWithPrefix(
 		if prefix != "" {
 			fullPath = prefix + "/" + e.Name
 		}
-		if err := visitTreeEntry(ctx, trees, e, fullPath, filter, fn); err != nil {
+		if err := visitTreeEntry(load, e, fullPath, filter, fn); err != nil {
 			return err
 		}
 	}
@@ -376,8 +452,7 @@ func walkTreeWithPrefix(
 // visitTreeEntry hands one tree entry to fn, or skips it when the filter does
 // not want it, and descends into a directory's own node.
 func visitTreeEntry(
-	ctx context.Context,
-	trees *objectStore,
+	load func(hash string) (*treeNode, error),
 	e treeEntry,
 	fullPath string,
 	filter pathFilter,
@@ -398,9 +473,9 @@ func visitTreeEntry(
 		if e.TreeHash == "" {
 			return nil
 		}
-		return walkTreeWithPrefix(ctx, trees, e.TreeHash, fullPath, filter, fn)
+		return walkTreeWithPrefix(load, e.TreeHash, fullPath, filter, fn)
 
-	case FileTypeSymlink, FileTypeHardlink:
+	case FileTypeSymlink, FileTypeHardlink, FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice:
 		if !filter.keep(fullPath) {
 			return nil
 		}
@@ -413,14 +488,18 @@ func visitTreeEntry(
 		return fn(fileEntry{FileInfo: info, Chunks: e.Chunks})
 
 	case FileTypeUnsupported:
-		// Never stored, and loadTreeNode refuses a node that holds one.
+		// Never stored: no type byte stands for it.
 	}
 	return nil
 }
 
+// errNoTreeEntry marks a lookup that found no entry, as opposed to one whose
+// node failed to load, whatever that error wraps.
+var errNoTreeEntry = fmt.Errorf("%w", os.ErrNotExist)
+
 // lookupTreeEntry returns the entry at path, a slash path relative to the
 // tree rooted at rootHash, loading each node with load. A missing entry wraps
-// [os.ErrNotExist].
+// [os.ErrNotExist] and errNoTreeEntry; a node that does not load wraps neither.
 func lookupTreeEntry(load func(hash string) (*treeNode, error), rootHash, path string) (treeEntry, error) {
 	hash := rootHash
 	parts := strings.Split(normEntryPath(path), "/")
@@ -444,7 +523,7 @@ func lookupTreeEntry(load func(hash string) (*treeNode, error), rootHash, path s
 		}
 		hash = e.TreeHash
 	}
-	return treeEntry{}, fmt.Errorf("tree: no entry at %s: %w", path, os.ErrNotExist)
+	return treeEntry{}, fmt.Errorf("tree: no entry at %s: %w", path, errNoTreeEntry)
 }
 
 func normEntryPath(path string) string {

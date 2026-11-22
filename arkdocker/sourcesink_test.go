@@ -1,9 +1,11 @@
 package arkdocker
 
 import (
+	"archive/tar"
 	"context"
+	"errors"
 	"fmt"
-	"io"
+	"math"
 	"testing"
 	"time"
 
@@ -57,31 +59,68 @@ func TestSourceSinkConformance(t *testing.T) {
 	)
 }
 
-// A fifo in the volume comes back as unsupported, so the core counts it
-// instead of the source dropping it silently.
-func TestSourceYieldsSpecialFilesAsUnsupported(t *testing.T) {
+// TestSourceYieldsWhatTheTreeCannotHoldAsUnsupported: a tar type the tree has
+// no type for and a device number beyond 32 bits become unsupported entries,
+// which the core counts as skipped, instead of failing the walk or passing as
+// something else.
+func TestSourceYieldsWhatTheTreeCannotHoldAsUnsupported(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		hdr          tar.Header
+		want         ark.FileType
+		major, minor uint32
+	}{
+		{"unknown type", tar.Header{Typeflag: 'Z'}, ark.FileTypeUnsupported, 0, 0},
+		{"contiguous file", tar.Header{Typeflag: tar.TypeCont}, ark.FileTypeUnsupported, 0, 0},
+		{"minor beyond 32 bits", tar.Header{Typeflag: tar.TypeChar, Devminor: 1 << 32}, ark.FileTypeUnsupported, 0, 0},
+		{"negative major", tar.Header{Typeflag: tar.TypeBlock, Devmajor: -1}, ark.FileTypeUnsupported, 0, 0},
+		{"fifo", tar.Header{Typeflag: tar.TypeFifo}, ark.FileTypeFifo, 0, 0},
+		{"char device", tar.Header{Typeflag: tar.TypeChar, Devmajor: 1, Devminor: 3}, ark.FileTypeCharDevice, 1, 3},
+		{"block device", tar.Header{Typeflag: tar.TypeBlock, Devmajor: 7, Devminor: math.MaxUint32},
+			ark.FileTypeBlockDevice, 7, math.MaxUint32},
+	} {
+		got := tarEntry(&tc.hdr, "entry")
+		if got.Type != tc.want || got.DevMajor != tc.major || got.DevMinor != tc.minor {
+			t.Errorf("%s: got %s %d,%d, want %s %d,%d", tc.name,
+				got.Type, got.DevMajor, got.DevMinor, tc.want, tc.major, tc.minor)
+		}
+	}
+}
+
+// TestSinkSkipsSpecialFilesTheDaemonDoesNotCreate: a fifo or a device node the
+// probe found the daemon does not create in the volume is reported as
+// skipped, not written into a stream whose extraction would drop it silently
+// or fail as a whole.
+func TestSinkSkipsSpecialFilesTheDaemonDoesNotCreate(t *testing.T) {
+	sink := &dockerVolumeSink{volume: "v", special: map[ark.FileType]bool{}}
+	for _, typ := range []ark.FileType{ark.FileTypeFifo, ark.FileTypeCharDevice, ark.FileTypeBlockDevice} {
+		err := sink.Receive(context.Background(), ark.FileInfo{Path: "node", Type: typ}, nil)
+		if !errors.Is(err, ark.ErrEntrySkipped) {
+			t.Errorf("Receive of a %s returned %v, want ark.ErrEntrySkipped", typ, err)
+		}
+	}
+}
+
+// TestSpecialFilesProbeLeavesTheVolumeEmpty: the probe reports what the
+// daemon creates in the volume and removes its entries again.
+func TestSpecialFilesProbeLeavesTheVolumeEmpty(t *testing.T) {
 	c := testClient(t)
 	v := testVolume(t, c)
 	ctx := context.Background()
-
-	fixture := []string{"sh", "-c", "mkfifo /data/pipe && echo x > /data/file"}
-	if err := runInVolume(ctx, c, v, fixture); err != nil {
-		t.Fatalf("fixture: %v", err)
+	if err := c.ensureHelperImage(ctx); err != nil {
+		t.Fatalf("helper image: %v", err)
 	}
 
-	got := map[string]ark.FileType{}
-	err := NewVolumeSource(c, v).Walk(ctx, func(info ark.FileInfo, _ func() (io.ReadCloser, error)) error {
-		got[info.Path] = info.Type
-		return nil
-	})
+	takes, err := c.specialFiles(ctx, v)
 	if err != nil {
-		t.Fatalf("Walk: %v", err)
+		t.Fatalf("specialFiles: %v", err)
 	}
-	if got["pipe"] != ark.FileTypeUnsupported {
-		t.Errorf("pipe came back as %q, want %q", got["pipe"], ark.FileTypeUnsupported)
+	t.Logf("the daemon creates in a volume: %v", takes)
+	if len(takes) == 0 {
+		t.Error("the probe reported on no type")
 	}
-	if got["file"] != ark.FileTypeRegular {
-		t.Errorf("file came back as %q, want %q", got["file"], ark.FileTypeRegular)
+	if out := runListing(t, c, v, "ls -A /data"); out != "" {
+		t.Errorf("the probe left entries behind:\n%s", out)
 	}
 }
 

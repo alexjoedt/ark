@@ -11,11 +11,13 @@ import (
 	"io/fs"
 	"log/slog"
 	"maps"
+	"math"
 	"os"
 	"os/signal"
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,6 +32,7 @@ import (
 	gofs "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/urfave/cli/v3"
+	"golang.org/x/sys/unix"
 )
 
 // mountCacheTimeout is how long the kernel may cache entries and attributes:
@@ -91,10 +94,15 @@ func mountCommand() *cli.Command {
 			p := printer(cmd)
 			p.Notef("the mount holds a shared lock: prune is blocked until %s is unmounted", dir)
 			timeout := mountCacheTimeout
+			opts := []string{"ro"}
+			if runtime.GOOS == "linux" {
+				// A device node of a snapshot must never open the host's device.
+				opts = append(opts, "nodev")
+			}
 			srv, err := gofs.Mount(dir, root, &gofs.Options{
 				FsName:          "ark",
 				Name:            "ark",
-				Options:         []string{"ro"},
+				Options:         opts,
 				EntryTimeout:    &timeout,
 				AttrTimeout:     &timeout,
 				NegativeTimeout: &timeout,
@@ -688,6 +696,9 @@ func fillAttr(a *fuse.Attr, info fs.FileInfo, ino uint64) {
 	if fi, ok := info.Sys().(ark.FileInfo); ok {
 		a.Uid = uint32(max(fi.UID, 0))
 		a.Gid = uint32(max(fi.GID, 0))
+		if info.Mode()&fs.ModeDevice != 0 {
+			a.Rdev = rdev(fi.DevMajor, fi.DevMinor)
+		}
 		if !fi.ChangeTime.IsZero() {
 			a.SetTimes(nil, nil, &fi.ChangeTime)
 		}
@@ -695,6 +706,17 @@ func fillAttr(a *fuse.Attr, info fs.FileInfo, ino uint64) {
 }
 
 // fileMode converts an io/fs mode to the stat mode FUSE expects.
+// rdev is the 32-bit device number FUSE carries, 0 for numbers it cannot
+// hold (on Linux a major above 4095 or a minor above 20 bits) rather than
+// another device's.
+func rdev(major, minor uint32) uint32 {
+	dev := unix.Mkdev(major, minor)
+	if dev > math.MaxUint32 || unix.Major(dev) != major || unix.Minor(dev) != minor {
+		return 0
+	}
+	return uint32(dev)
+}
+
 func fileMode(m fs.FileMode) uint32 {
 	mode := ark.UnixMode(m)
 	switch {
@@ -702,6 +724,12 @@ func fileMode(m fs.FileMode) uint32 {
 		mode |= syscall.S_IFDIR
 	case m&fs.ModeSymlink != 0:
 		mode |= syscall.S_IFLNK
+	case m&fs.ModeNamedPipe != 0:
+		mode |= syscall.S_IFIFO
+	case m&fs.ModeCharDevice != 0:
+		mode |= syscall.S_IFCHR
+	case m&fs.ModeDevice != 0:
+		mode |= syscall.S_IFBLK
 	default:
 		mode |= syscall.S_IFREG
 	}

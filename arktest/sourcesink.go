@@ -27,6 +27,8 @@ type Entry struct {
 	Content  string
 	LinkDest string
 	Xattrs   map[string][]byte
+	DevMajor uint32
+	DevMinor uint32
 }
 
 // bogusSourceType is a type no implementation can restore. The suite uses it
@@ -78,6 +80,7 @@ func RunSourceSinkTests(
 	t.Run("Symlink", func(t *testing.T) { testSymlink(t, newSource, write) })
 	t.Run("SpecialModes", func(t *testing.T) { testSpecialModes(t, newSource, write) })
 	t.Run("Xattrs", func(t *testing.T) { testXattrs(t, newSource, write) })
+	t.Run("SpecialFiles", func(t *testing.T) { testSpecialFiles(t, newSource, newSink, typ) })
 	t.Run("WalkWithoutOpen", func(t *testing.T) { testWalkWithoutOpen(t, newSource, write) })
 	t.Run("ConcurrentOpen", func(t *testing.T) { testConcurrentOpen(t, newSource, write) })
 	t.Run("Rewalk", func(t *testing.T) { testRewalk(t, newSource, write) })
@@ -93,6 +96,24 @@ type writeFunc func(t *testing.T, entries []Entry) string
 // owned by the user running the suite, so a sink needs no privilege to set it.
 func write(t *testing.T, newSink func(t *testing.T) (ark.Sink, string), meta ark.SourceMeta, entries []Entry) string {
 	t.Helper()
+	location, skipped := writeSkipping(t, newSink, meta, entries)
+	for path, err := range skipped {
+		t.Fatalf("Sink.Receive(%s): %v", path, err)
+	}
+	return location
+}
+
+// writeSkipping is write, except that an entry the sink refuses with an error
+// wrapping ark.ErrEntrySkipped is returned with that error instead of failing
+// the test.
+func writeSkipping(
+	t *testing.T,
+	newSink func(t *testing.T) (ark.Sink, string),
+	meta ark.SourceMeta,
+	entries []Entry,
+) (string, map[string]error) {
+	t.Helper()
+	skipped := make(map[string]error)
 	ctx := context.Background()
 
 	sink, location := newSink(t)
@@ -111,12 +132,16 @@ func write(t *testing.T, newSink func(t *testing.T) (ark.Sink, string), meta ark
 			Xattrs:   e.Xattrs,
 			UID:      max(os.Getuid(), 0),
 			GID:      max(os.Getgid(), 0),
+			DevMajor: e.DevMajor,
+			DevMinor: e.DevMinor,
 		}
 		var r io.Reader
 		if e.Type == ark.FileTypeRegular {
 			r = io.LimitReader(bytes.NewReader([]byte(e.Content)), info.Size)
 		}
-		if err := sink.Receive(ctx, info, r); err != nil {
+		if err := sink.Receive(ctx, info, r); errors.Is(err, ark.ErrEntrySkipped) && r == nil {
+			skipped[e.Path] = err
+		} else if err != nil {
 			t.Fatalf("Sink.Receive(%s): %v", e.Path, err)
 		}
 	}
@@ -124,7 +149,7 @@ func write(t *testing.T, newSink func(t *testing.T) (ark.Sink, string), meta ark
 	if err := sink.Close(); err != nil {
 		t.Fatalf("Sink.Close: %v", err)
 	}
-	return location
+	return location, skipped
 }
 
 // read walks a source and returns what it yielded, keyed by path.
@@ -140,6 +165,8 @@ func read(t *testing.T, newSource func(t *testing.T, location string) ark.Source
 			Mode:     info.Mode & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky),
 			LinkDest: info.LinkDest,
 			Xattrs:   info.Xattrs,
+			DevMajor: info.DevMajor,
+			DevMinor: info.DevMinor,
 		}
 		content, err := readEntry(t, info, open)
 		if err != nil {
@@ -374,6 +401,44 @@ func testXattrs(
 	}
 	if string(e.Xattrs["user.ark"]) != "value" {
 		t.Errorf("user.ark came back as %q, want %q", e.Xattrs["user.ark"], "value")
+	}
+}
+
+// testSpecialFiles checks a fifo, a character device and a block device: each
+// comes back with its type, mode and device numbers, or the sink refused it
+// with ark.ErrEntrySkipped and the source does not yield it. A sink without
+// the privilege to make a device node refuses the devices that way.
+func testSpecialFiles(
+	t *testing.T,
+	newSource func(t *testing.T, location string) ark.Source,
+	newSink func(t *testing.T) (ark.Sink, string),
+	typ ark.SourceType,
+) {
+	entries := []Entry{
+		{Path: "pipe", Type: ark.FileTypeFifo, Mode: 0o640},
+		{Path: "null", Type: ark.FileTypeCharDevice, Mode: 0o666, DevMajor: 1, DevMinor: 3},
+		{Path: "loop", Type: ark.FileTypeBlockDevice, Mode: 0o660, DevMajor: 7, DevMinor: 5},
+	}
+	location, skipped := writeSkipping(t, newSink, ark.SourceMeta{Name: "arktest", Type: typ}, entries)
+	got := read(t, newSource, location)
+
+	for _, want := range entries {
+		e, ok := got[want.Path]
+		if err := skipped[want.Path]; err != nil {
+			t.Logf("the sink skipped %s: %v", want.Path, err)
+			if ok {
+				t.Errorf("%s came back although the sink skipped it", want.Path)
+			}
+			continue
+		}
+		if !ok {
+			t.Errorf("%s did not come back and the sink did not skip it, got %v", want.Path, paths(got))
+			continue
+		}
+		if e.Type != want.Type || e.Mode != want.Mode || e.DevMajor != want.DevMajor || e.DevMinor != want.DevMinor {
+			t.Errorf("%s came back as %s %v %d,%d, want %s %v %d,%d", want.Path,
+				e.Type, e.Mode, e.DevMajor, e.DevMinor, want.Type, want.Mode, want.DevMajor, want.DevMinor)
+		}
 	}
 }
 

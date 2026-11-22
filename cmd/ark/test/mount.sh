@@ -73,6 +73,7 @@ chmod 600 "$src/dir/private"
 head -c 33554432 /dev/urandom > "$src/dir/big.bin"
 ln -s ../a.txt "$src/dir/link"
 ln "$src/a.txt" "$src/dir/hardlink"
+mkfifo "$src/dir/pipe"
 : > "$src/dir/sub/empty"
 chmod 750 "$src/dir/sub"
 touch -d '2026-01-02 03:04:05.123456789' "$src/a.txt" "$src/dir/sub"
@@ -111,7 +112,7 @@ for id in $(cd "$mnt/ids" && ls); do
 		continue
 	fi
 	snap="$mnt/ids/$id"
-	diff -r "$snap" "$out" || bad "snapshot $id: mounted tree differs from the restore"
+	diff -r -x pipe "$snap" "$out" || bad "snapshot $id: mounted tree differs from the restore"
 	meta "$snap" > "$tmp/meta-mount"
 	meta "$out" > "$tmp/meta-restore"
 	diff "$tmp/meta-mount" "$tmp/meta-restore" || bad "snapshot $id: stat differs between mount and restore"

@@ -3,9 +3,16 @@
 package arkfs
 
 import (
+	"errors"
+	"fmt"
+	"math"
 	"os"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
+
+	"github.com/alexjoedt/ark"
 )
 
 func fileOwner(fi os.FileInfo) (uid, gid int) {
@@ -48,6 +55,54 @@ func fileID(fi os.FileInfo) (inodeKey, uint64, bool) {
 	//nolint:unconvert // field widths differ per platform
 	dev, ino, nlink := uint64(stat.Dev), uint64(stat.Ino), uint64(stat.Nlink)
 	return inodeKey{dev: dev, ino: ino}, nlink, true
+}
+
+// deviceNumbers returns the major and minor number of the device node fi.
+func deviceNumbers(fi os.FileInfo) (major, minor uint32) {
+	stat, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, 0
+	}
+	dev := uint64(stat.Rdev) //nolint:unconvert // int32 on darwin, its low bits are the number
+	return unix.Major(dev), unix.Minor(dev)
+}
+
+// makeNode creates the fifo or device node of entry at path. A device without
+// the privilege to make one, or a node the target filesystem cannot hold, is
+// ark.ErrEntrySkipped.
+func makeNode(path string, entry ark.FileInfo) error {
+	perm := uint32(entry.Mode.Perm())
+	var err error
+	if entry.Type == ark.FileTypeFifo {
+		err = unix.Mkfifo(path, perm)
+	} else {
+		kind := uint32(unix.S_IFBLK)
+		if entry.Type == ark.FileTypeCharDevice {
+			kind = unix.S_IFCHR
+		}
+		dev := unix.Mkdev(entry.DevMajor, entry.DevMinor)
+		// mknod takes a 32-bit number: a larger one would make another device.
+		if dev > math.MaxUint32 || unix.Major(dev) != entry.DevMajor || unix.Minor(dev) != entry.DevMinor {
+			return fmt.Errorf("arkfs: create the %s %s: device number %d, %d does not fit this system (%w)",
+				entry.Type, path, entry.DevMajor, entry.DevMinor, ark.ErrEntrySkipped)
+		}
+		err = unix.Mknod(path, kind|perm, int(dev))
+	}
+	switch {
+	case err == nil:
+		return nil
+	case refusedNode(err):
+		return fmt.Errorf("arkfs: create the %s %s: %w (%w)", entry.Type, path, err, ark.ErrEntrySkipped)
+	default:
+		return fmt.Errorf("arkfs: create the %s %s: %w", entry.Type, path, err)
+	}
+}
+
+// refusedNode reports whether a mkfifo or mknod error means the node cannot
+// exist here: no privilege for a device, or a filesystem such as vfat, exFAT
+// or an SMB share that holds no such nodes.
+func refusedNode(err error) bool {
+	return errors.Is(err, unix.EPERM) || errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.ENOTSUP)
 }
 
 // changeID returns the ctime and inode number of fi, which a backup compares

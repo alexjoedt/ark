@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	"github.com/alexjoedt/ark/arkfs"
 	"github.com/alexjoedt/ark/arkuri"
 	"github.com/alexjoedt/ark/chunker"
+	"golang.org/x/sys/unix"
 )
 
 // The kill harness runs backup, forget and prune against an arklocal
@@ -156,6 +158,7 @@ func runKillHarness(
 	for i := range killTreeFiles {
 		writeKillFile(t, bytesSrc, src, i, rng.IntN(killFileSize(i)))
 	}
+	writeOddEntries(t, src)
 	st := &killState{
 		want:     map[string]map[string]string{},
 		restored: map[ark.SnapshotID]bool{},
@@ -832,6 +835,20 @@ func writeTestFile(t *testing.T, path string, data []byte) {
 	}
 }
 
+// writeOddEntries adds what the tree node was made binary for: a fifo and,
+// where the filesystem takes it, a name that is not valid UTF-8 (APFS
+// refuses one, so only Linux must take it).
+func writeOddEntries(t *testing.T, dir string) {
+	t.Helper()
+	if err := unix.Mkfifo(filepath.Join(dir, "pipe"), 0o644); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+	err := os.WriteFile(filepath.Join(dir, "odd\xff.bin"), []byte("odd"), 0o644)
+	if err != nil && runtime.GOOS == "linux" {
+		t.Fatalf("write a name that is not valid UTF-8: %v", err)
+	}
+}
+
 // mutateKillTree changes four files: a hot one, written anew, or any one,
 // edited. Either may delete the file instead, and a deleted file is created
 // again. An edit replaces one 4 KiB window, so most chunks dedupe against the
@@ -868,7 +885,7 @@ func mutateKillTree(t *testing.T, rng *rand.Rand, bytesSrc *rand.ChaCha8, root s
 }
 
 // readTree maps every path under root to its type and, for a file, the
-// SHA-256 of its content.
+// SHA-256 of its content. A fifo is never opened.
 func readTree(t *testing.T, root string) map[string]string {
 	t.Helper()
 	tree := map[string]string{}
@@ -879,6 +896,10 @@ func readTree(t *testing.T, root string) map[string]string {
 		rel, _ := filepath.Rel(root, path)
 		if d.IsDir() {
 			tree[rel] = "dir"
+			return nil
+		}
+		if d.Type()&fs.ModeNamedPipe != 0 {
+			tree[rel] = "fifo"
 			return nil
 		}
 		data, err := os.ReadFile(path)

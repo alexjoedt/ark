@@ -35,11 +35,11 @@ type manifest struct {
 
 // fileEntry is the internal representation of a file inside a snapshot.
 // FileInfo is embedded so that CAS lookups can pass fe.FileInfo directly
-// to sinks without a field-by-field copy. The JSON layout is identical to
-// the previous flat struct because Go flattens embedded fields.
+// to sinks without a field-by-field copy. It is never stored: a tree node
+// holds a treeEntry.
 type fileEntry struct {
 	FileInfo
-	Chunks []chunkRef `json:"chunks,omitempty"`
+	Chunks []chunkRef
 }
 
 // manifestStats is what a manifest stores of SnapshotStats: the counters and
@@ -177,9 +177,9 @@ func (s *SnapshotStats) UnmarshalJSON(data []byte) error {
 
 // chunkRef references a content-addressable chunk in the CAS.
 type chunkRef struct {
-	ID     string `json:"id"`
-	Length int64  `json:"length"`
-	Offset int64  `json:"offset"`
+	ID     string
+	Length int64
+	Offset int64 // derived at load, never stored
 }
 
 // saveManifest seals m and writes it under SnapshotFile between two
@@ -299,8 +299,12 @@ func walkSnapshot(
 		return nil
 	}
 
+	cache := newNodeCache(treeNodeCacheEntries)
+	load := func(hash string) (*treeNode, error) {
+		return cache.load(hash, func() (*treeNode, error) { return loadTreeNode(ctx, trees, hash) })
+	}
 	var links []fileEntry
-	err := walkTreeWithPrefix(ctx, trees, m.RootTree, "", filter, func(e fileEntry) error {
+	err := walkTreeWithPrefix(load, m.RootTree, "", filter, func(e fileEntry) error {
 		if e.Type == FileTypeHardlink {
 			links = append(links, e)
 			return nil
@@ -315,8 +319,7 @@ func walkSnapshot(
 		// A path filter can keep a link and drop its target. The link then
 		// arrives as a regular file with the target's content.
 		if !filter.keep(e.LinkDest) {
-			load := func(hash string) (*treeNode, error) { return loadTreeNode(ctx, trees, hash) }
-			target, err := lookupTreeEntry(load, m.RootTree, e.LinkDest)
+			target, err := linkTarget(load, m.RootTree, e.LinkDest)
 			if err != nil {
 				return fmt.Errorf("manifest: hardlink %s: %w", e.Path, err)
 			}
@@ -324,6 +327,8 @@ func walkSnapshot(
 			e.LinkDest = ""
 			e.Size = target.Size
 			e.Chunks = target.Chunks
+		} else if e.Size, err = linkSize(load, m.RootTree, e.LinkDest); err != nil {
+			return fmt.Errorf("manifest: hardlink %s: %w", e.Path, err)
 		}
 		if err := fn(e); err != nil {
 			return err

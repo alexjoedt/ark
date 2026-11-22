@@ -2,6 +2,7 @@ package arkdocker
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -33,9 +34,9 @@ func testRepo(t *testing.T, b ark.Backend) *ark.Repository {
 	return repo
 }
 
-func testEngine(t *testing.T, opts ...Option) *Engine {
+func testEngine(t *testing.T) *Engine {
 	t.Helper()
-	return testEngineOn(t, arkmem.New(), opts...)
+	return testEngineOn(t, arkmem.New())
 }
 
 // testEngineOn returns an engine over a fresh repository in b.
@@ -80,10 +81,27 @@ const listing = "cd /data && find . -mindepth 1 | sort | while read -r p; do ech
 
 func volumeListing(t *testing.T, c *Client, volume string) string {
 	t.Helper()
+	return runListing(t, c, volume, listing)
+}
+
+// rawVolumeListing is volumeListing with names that are not valid UTF-8:
+// container logs replace such bytes, so the listing travels as hex.
+func rawVolumeListing(t *testing.T, c *Client, volume string) string {
+	t.Helper()
+	raw := runListing(t, c, volume, "{ "+listing+"; } | od -An -tx1 -v | tr -d ' \\n'")
+	out, err := hex.DecodeString(raw)
+	if err != nil {
+		t.Fatalf("decode listing: %v, output %q", err, raw)
+	}
+	return string(out)
+}
+
+func runListing(t *testing.T, c *Client, volume, script string) string {
+	t.Helper()
 	ctx := context.Background()
 	out, err := c.runContainer(
 		ctx,
-		c.helperConfig("sh", "-c", listing),
+		c.helperConfig("sh", "-c", script),
 		&container.HostConfig{
 			Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: volume, Target: "/data", ReadOnly: true}},
 		},
@@ -237,6 +255,89 @@ func volumeRoundTrip(t *testing.T, c *Client, e *Engine) {
 	}
 	if got := volumeListing(t, c, vol); got != want {
 		t.Errorf("second restore differs\n--- want\n%s--- got\n%s", want, got)
+	}
+}
+
+// TestVolumeKeepsRawNames backs up a volume whose names differ only in bytes
+// that are not valid UTF-8 and restores it into a removed volume.
+func TestVolumeKeepsRawNames(t *testing.T) {
+	c := testClient(t)
+	e := testEngine(t)
+	ctx := context.Background()
+	vol := testVolume(t, c)
+
+	raw := `cd /data && printf e9 > "$(printf 'caf\351.txt')" && printf e8 > "$(printf 'caf\350.txt')" && ` +
+		`ln -s "$(printf 'caf\351\377')" link`
+	if err := runInVolume(ctx, c, vol, []string{"sh", "-c", raw}); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	want := rawVolumeListing(t, c, vol)
+	for _, name := range []string{"./caf\xe9.txt regular file", "./caf\xe8.txt regular file", "./link -> caf\xe9\xff"} {
+		if !strings.Contains(want, name) {
+			t.Fatalf("fixture lacks %q:\n%q", name, want)
+		}
+	}
+
+	snap, err := e.BackupVolume(ctx, vol)
+	if err != nil {
+		t.Fatalf("BackupVolume: %v", err)
+	}
+	if _, err := c.cli.VolumeRemove(ctx, vol, dockerclient.VolumeRemoveOptions{Force: true}); err != nil {
+		t.Fatalf("remove volume: %v", err)
+	}
+	if _, err := e.RestoreVolume(ctx, snap.ID, vol); err != nil {
+		t.Fatalf("RestoreVolume: %v", err)
+	}
+	if got := rawVolumeListing(t, c, vol); got != want {
+		t.Errorf("restored volume differs\n--- want\n%q\n--- got\n%q", want, got)
+	}
+}
+
+// TestVolumeKeepsSpecialFiles backs up a volume holding a fifo and both
+// device kinds and restores it into a removed volume with type, mode, owner
+// and device numbers.
+func TestVolumeKeepsSpecialFiles(t *testing.T) {
+	c := testClient(t)
+	e := testEngine(t)
+	ctx := context.Background()
+	vol := testVolume(t, c)
+
+	if err := runInVolume(ctx, c, vol, []string{"sh", "-c", "mknod /data/probe c 1 3 && rm /data/probe"}); err != nil {
+		t.Skipf("no privilege to create device nodes in a container: %v", err)
+	}
+	fixture := "cd /data && mkfifo -m 640 pipe && mknod -m 666 null c 1 3 && mknod -m 660 loop b 7 5 && " +
+		"chown 1000:1000 pipe null loop && echo x > file"
+	if err := runInVolume(ctx, c, vol, []string{"sh", "-c", fixture}); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	const specials = "cd /data && stat -c '%n %F %a %u:%g %t,%T' pipe null loop file"
+	want := runListing(t, c, vol, specials)
+	for _, line := range []string{"pipe fifo 640 1000:1000", "null character special file 666 1000:1000 1,3",
+		"loop block special file 660 1000:1000 7,5"} {
+		if !strings.Contains(want, line) {
+			t.Fatalf("fixture lacks %q:\n%s", line, want)
+		}
+	}
+
+	snap, err := e.BackupVolume(ctx, vol)
+	if err != nil {
+		t.Fatalf("BackupVolume: %v", err)
+	}
+	if snap.Stats.Skipped != 0 {
+		t.Errorf("the backup skipped %d entries, want 0", snap.Stats.Skipped)
+	}
+	if _, err := c.cli.VolumeRemove(ctx, vol, dockerclient.VolumeRemoveOptions{Force: true}); err != nil {
+		t.Fatalf("remove volume: %v", err)
+	}
+	result, err := e.RestoreVolume(ctx, snap.ID, vol)
+	if err != nil {
+		t.Fatalf("RestoreVolume: %v", err)
+	}
+	if len(result.Skipped) != 0 {
+		t.Errorf("the restore skipped %v", result.Skipped)
+	}
+	if got := runListing(t, c, vol, specials); got != want {
+		t.Errorf("restored volume differs\n--- want\n%s--- got\n%s", want, got)
 	}
 }
 

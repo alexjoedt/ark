@@ -101,6 +101,7 @@ no matches
 {
   "bytes_restored": 10,
   "files_restored": 2,
+  "skipped": [],
   "snapshot_id": "<id1>"
 }
 --- stderr

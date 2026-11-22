@@ -34,6 +34,8 @@ lostpacks/   at most one sealed marker, see below
 - `config`, `features`, the key files, the manifests, the locks, and the marker are single
   objects, one per file.
 - Chunks and directory nodes are never stored alone. They live in packs, and the index finds them.
+- A directory node is binary, not JSON. Its layout is on a page of its own:
+  [Tree node](format/tree-node.md).
 - A snapshot ID is 128 random bits as 32 lowercase hex characters. It says nothing about the
   snapshot's series or time.
 

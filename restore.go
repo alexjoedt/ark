@@ -2,6 +2,7 @@ package ark
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -11,6 +12,7 @@ import (
 type restoreStats struct {
 	FilesRestored int
 	BytesRestored int64
+	Skipped       []error
 	ChunksFetched int
 	Duration      time.Duration
 }
@@ -98,6 +100,7 @@ func (r *Repository) runRestore(
 	logger.InfoContext(ctx, "restore completed",
 		"files", stats.FilesRestored,
 		"bytes", stats.BytesRestored,
+		"skipped", len(stats.Skipped),
 		"duration", stats.Duration,
 	)
 	return &stats, nil
@@ -198,22 +201,34 @@ func receive(
 ) error {
 	fe := entry.fe
 	var rd io.Reader
+	files := 0
 	switch fe.Type {
 	case FileTypeRegular:
 		// The sink sees a plain reader and never learns about the CAS.
 		rd = entry.stream
-		stats.FilesRestored++
-		stats.BytesRestored += fe.Size
+		files = 1
 
 	case FileTypeHardlink:
 		// No bytes move, but a file appears on disk.
-		stats.FilesRestored++
+		files = 1
 
-	case FileTypeDirectory, FileTypeSymlink, FileTypeUnsupported:
+	case FileTypeDirectory, FileTypeSymlink, FileTypeFifo, FileTypeCharDevice, FileTypeBlockDevice,
+		FileTypeUnsupported:
 		// Metadata only.
 	}
 
-	if err := sink.Receive(ctx, fe.FileInfo, rd); err != nil {
+	err := sink.Receive(ctx, fe.FileInfo, rd)
+	switch {
+	case err == nil:
+		stats.FilesRestored += files
+		if rd != nil {
+			stats.BytesRestored += fe.Size
+		}
+	case rd == nil && errors.Is(err, ErrEntrySkipped):
+		// An entry without content the sink cannot create, a device node
+		// without the privilege, costs that entry and not the restore.
+		stats.Skipped = append(stats.Skipped, fmt.Errorf("restore: skipped %s: %w", fe.Path, err))
+	default:
 		return fmt.Errorf("restore: sink error for %s: %w", fe.Path, err)
 	}
 

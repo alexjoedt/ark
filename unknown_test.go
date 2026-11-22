@@ -86,18 +86,21 @@ func readers(repo *ark.Repository, id ark.SnapshotID) map[string]func(context.Co
 // entry holding nothing would delete what it references.
 func TestUnknownFileTypeFailsEveryReader(t *testing.T) {
 	ctx := context.Background()
-	b := arkmem.New()
-	repo, id := backupFixture(t, b)
-	if err := ark.RetypeEntry(ctx, repo, id, "zeta.txt", "door"); err != nil {
-		t.Fatalf("RetypeEntry: %v", err)
-	}
-	packs := objectNames(t, b, ark.DataPackFile)
+	// 8 is a type no build writes yet.
+	for typ, want := range map[byte]string{8: "file type 8"} {
+		b := arkmem.New()
+		repo, id := backupFixture(t, b)
+		if err := ark.RetypeEntry(ctx, repo, id, "zeta.txt", typ); err != nil {
+			t.Fatalf("RetypeEntry: %v", err)
+		}
+		packs := objectNames(t, b, ark.DataPackFile)
 
-	for name, read := range readers(repo, id) {
-		wantUnsupported(t, name, read(ctx), `file type "door"`)
-	}
-	if got := objectNames(t, b, ark.DataPackFile); len(got) != len(packs) {
-		t.Errorf("the prune left %d data packs of %d", len(got), len(packs))
+		for name, read := range readers(repo, id) {
+			wantUnsupported(t, name, read(ctx), want)
+		}
+		if got := objectNames(t, b, ark.DataPackFile); len(got) != len(packs) {
+			t.Errorf("the prune left %d data packs of %d", len(got), len(packs))
+		}
 	}
 }
 

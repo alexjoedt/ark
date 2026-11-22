@@ -51,3 +51,4 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0034 | [What a build does not know it refuses, per object](0034-unknown-input-is-refused-not-skipped.md) | accepted | 2026-11-21 |
 | 0035 | [Version 1 drops the legacy of earlier builds](0035-version-1-drops-the-legacy-of-earlier-builds.md) | accepted | 2026-11-21 |
 | 0036 | [Manifest names stay random](0036-manifest-names-stay-random.md) | accepted | 2026-11-21 |
+| 0037 | [The tree node is a binary object with one encoding](0037-binary-tree-node.md) | accepted | 2026-11-21 |

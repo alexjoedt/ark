@@ -24,6 +24,18 @@ const envSFTPTestURI = "ARK_SFTP_TEST_URI"
 // init, backup, an incremental backup after changes, restore of both
 // snapshots, forget, prune, check, and a restore after prune.
 func TestE2ELifecycle(t *testing.T) {
+	bin := buildArk(t)
+	t.Run("local", func(t *testing.T) {
+		lifecycle(t, bin, filepath.Join(t.TempDir(), "repo"))
+	})
+	t.Run("sftp", func(t *testing.T) {
+		lifecycle(t, bin, sftpTestRepo(t, "e2e-"))
+	})
+}
+
+// buildArk builds the binary into a temp dir; it skips the test with -short.
+func buildArk(t *testing.T) string {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("builds the binary, skipped with -short")
 	}
@@ -33,13 +45,7 @@ func TestE2ELifecycle(t *testing.T) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build ark: %v\n%s", err, out)
 	}
-
-	t.Run("local", func(t *testing.T) {
-		lifecycle(t, bin, filepath.Join(t.TempDir(), "repo"))
-	})
-	t.Run("sftp", func(t *testing.T) {
-		lifecycle(t, bin, sftpTestRepo(t, "e2e-"))
-	})
+	return bin
 }
 
 // sftpTestRepo is the URI of a new directory on the sftp test server, its name

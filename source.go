@@ -51,9 +51,19 @@ const (
 	// stored once, under the first name.
 	FileTypeHardlink FileType = "hardlink"
 
-	// FileTypeUnsupported marks an entry the v1 format does not model:
-	// device nodes, fifos, sockets. The core drops it and counts it in
-	// SnapshotStats.Skipped.
+	// FileTypeFifo is a named pipe. It holds no content.
+	FileTypeFifo FileType = "fifo"
+
+	// FileTypeCharDevice is a character device node. DevMajor and DevMinor
+	// carry its device numbers; it holds no content.
+	FileTypeCharDevice FileType = "chardev"
+
+	// FileTypeBlockDevice is a block device node. DevMajor and DevMinor
+	// carry its device numbers; it holds no content.
+	FileTypeBlockDevice FileType = "blockdev"
+
+	// FileTypeUnsupported marks an entry the format does not model, such as
+	// a socket. The core drops it and counts it in SnapshotStats.Skipped.
 	FileTypeUnsupported FileType = "unsupported"
 )
 
@@ -62,6 +72,10 @@ const (
 // The JSON tags are a convenience for callers that log or print entries. They
 // are not the repository wire format; the tree entry type owns that.
 type FileInfo struct {
+	// Path is slash-separated and relative to the root of the source. It
+	// carries the raw bytes of each name, which need not be valid UTF-8; so
+	// do LinkDest and the Xattrs keys. Encoding FileInfo as JSON replaces
+	// such bytes with U+FFFD.
 	Path string `json:"path"`
 	Size int64  `json:"size"`
 	// Mode is the permission bits plus [os.ModeSetuid], [os.ModeSetgid] and
@@ -84,6 +98,11 @@ type FileInfo struct {
 	// are compared.
 	ChangeTime time.Time `json:"ctime,omitzero"`
 	Inode      uint64    `json:"inode,omitempty"`
+
+	// DevMajor and DevMinor are the device numbers of a FileTypeCharDevice
+	// or FileTypeBlockDevice entry and zero for every other type.
+	DevMajor uint32 `json:"dev_major,omitempty"`
+	DevMinor uint32 `json:"dev_minor,omitempty"`
 }
 
 // WalkFunc is called for each entry produced by a Source.
@@ -156,6 +175,10 @@ type RewalkSource interface {
 //   - validate source type in Open and return ErrIncompatibleSourceType on mismatch
 //   - handle r = nil for everything but regular files
 //   - fully consume r for regular files before returning
+//   - return an error wrapping [ErrEntrySkipped] only for an entry without
+//     content it cannot create, such as a device node without the privilege
+//     to make one; the restore goes on and reports the entry in
+//     RestoreResult.Skipped
 //   - call Close exactly once after the last Receive
 type Sink interface {
 	Open(ctx context.Context, meta SourceMeta) error
