@@ -16,9 +16,9 @@ import (
 )
 
 // The stored repository of format version 1 (scripts/v1fixture). A build that
-// fails these tests can no longer read what version 1 wrote, or writes other
-// bytes for the same input; the fixture is never written again to make them
-// pass.
+// fails these tests can no longer read what version 1 wrote, or names other
+// chunks or tree nodes for the same input; the fixture is never written again
+// to make them pass. Pack, index and snapshot bytes are not compared.
 
 // copyFixture copies the stored repository into memory, only the namespaces
 // in types when any are given, so no test writes into testdata.

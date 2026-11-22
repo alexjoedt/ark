@@ -2,7 +2,7 @@
 // testdata/repo-v1 from the synthetic source in internal/v1fixture: Init with
 // the fixture's password and chunker, then a backup of each snapshot, then a
 // check. The repository is written once and committed; the tests that read it
-// and write it again pin the bytes version 1 stores. After the format freeze
+// and write it again pin the chunk and tree-node names version 1 stores. After the format freeze
 // it is never written again: a build that can no longer read it, or that
 // writes other names for the same input, breaks every repository out there.
 //
@@ -38,29 +38,44 @@ func run(ctx context.Context, args []string) error {
 		}
 		return err
 	}
-	if _, err := os.Lstat(*out); !errors.Is(err, os.ErrNotExist) {
+	switch _, err := os.Lstat(*out); {
+	case err == nil:
 		return fmt.Errorf("%s exists: the fixture is written once, remove it only before the format freeze", *out)
+	case !errors.Is(err, os.ErrNotExist):
+		return fmt.Errorf("stat %s: %w", *out, err)
 	}
+	if err := write(ctx, *out); err != nil {
+		if rmErr := os.RemoveAll(*out); rmErr != nil {
+			return errors.Join(err, fmt.Errorf("remove partial %s: %w", *out, rmErr))
+		}
+		return err
+	}
+	return nil
+}
 
-	b, err := arklocal.New(*out)
+func write(ctx context.Context, out string) (err error) {
+	b, err := arklocal.New(out)
 	if err != nil {
-		return err
+		return fmt.Errorf("open backend %s: %w", out, err)
 	}
-	defer b.Close()
 	pw := ark.NewPassword(v1fixture.Password)
-	if err := ark.Init(ctx, b, pw, ark.WithChunkerConfig(v1fixture.Chunker)); err != nil {
-		return err
+	if err := ark.Init(ctx, b, pw, ark.WithChunkerConfig(v1fixture.Chunker())); err != nil {
+		return errors.Join(fmt.Errorf("init repository: %w", err), b.Close())
 	}
 	repo, err := ark.Open(ctx, b, pw)
 	if err != nil {
-		return err
+		return errors.Join(fmt.Errorf("open repository: %w", err), b.Close())
 	}
-	defer repo.Close()
+	defer func() {
+		if cerr := repo.Close(); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("close repository: %w", cerr))
+		}
+	}()
 
-	for _, s := range v1fixture.Snapshots() {
+	for i, s := range v1fixture.Snapshots() {
 		snap, err := repo.Backup(ctx, s.Source(), s.Options()...)
 		if err != nil {
-			return err
+			return fmt.Errorf("backup snapshot %d: %w", i, err)
 		}
 		fmt.Fprintf(
 			os.Stdout,
@@ -72,7 +87,7 @@ func run(ctx context.Context, args []string) error {
 	}
 	res, err := repo.Check(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("check repository: %w", err)
 	}
 	if len(res.Errors)+len(res.Warnings) > 0 || res.SnapshotsChecked != len(v1fixture.Snapshots()) {
 		return fmt.Errorf("check of the new repository: %+v", res)

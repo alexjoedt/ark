@@ -31,7 +31,9 @@ const Password = "ark fixture, format version 1" //nolint:gosec // the fixture's
 const Host = "fixture-host"
 
 // Chunker gives the fixture small chunks, so a multi-chunk file stays small.
-var Chunker = chunker.Config{MinSize: 4 << 10, AvgSize: 8 << 10, MaxSize: 16 << 10}
+func Chunker() chunker.Config {
+	return chunker.Config{MinSize: 4 << 10, AvgSize: 8 << 10, MaxSize: 16 << 10}
+}
 
 // Labels are the labels both snapshots carry.
 func Labels() map[string]string {
