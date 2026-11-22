@@ -232,7 +232,7 @@ ark mount <dir>
 Serves every snapshot read-only through FUSE at `<dir>` until Ctrl-C. The tree has `ids/<id>/`,
 `tags/<tag>/<time>/`, and `sources/<type>/<host>/<source>/<time>/` with a `latest` link per series.
 
-The mount holds a shared lock, so `ark prune` and `ark forget --prune` exit 3 until it's unmounted.
+The mount holds a shared lock, so `ark prune` and `ark forget` exit 3 until it's unmounted.
 Linux needs FUSE 3, macOS needs macFUSE. See [Mount](../mount.md).
 
 ## inspect
@@ -345,6 +345,10 @@ ark forget --keep-last 5 --keep-tag pinned
   machine that runs `forget`. Set `TZ` to count in another zone.
 - **Reasons.** `--json` lists, for every kept snapshot, the reasons it was kept, such as
   `daily snapshot` or `within 30d`.
+- **Locking.** `forget` takes the exclusive lock, so it exits 3 while a backup or another forget
+  runs. Give a scheduled `forget` that may overlap a backup `--lock-wait`. `--dry-run` takes the
+  shared lock and runs beside backups. See
+  [Concurrent runs](../retention.md#concurrent-runs).
 
 ### With a profile
 

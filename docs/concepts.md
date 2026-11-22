@@ -90,11 +90,11 @@ repository itself. There are two kinds:
 
 | Lock | Taken by | Runs alongside |
 |---|---|---|
-| shared | `backup`, `restore`, `forget`, `check`, `verify`, `ls`, `find`, `export`, `import`, `mount` | other shared locks |
-| exclusive | `prune`, `repair index`, `key passwd`, `info --exact` | nothing |
+| shared | `backup`, `restore`, `forget --dry-run`, `check`, `verify`, `ls`, `find`, `export`, `import`, `mount` | other shared locks |
+| exclusive | `forget`, `prune`, `repair index`, `key passwd`, `info --exact` | nothing |
 
-So several backups can run at once, also from different machines, but a prune waits for all of
-them or fails. A command that can't get its lock exits with code 3. `--lock-wait DURATION` makes it
+So several backups can run at once, also from different machines, but a forget or a prune waits
+for all of them or fails. A command that can't get its lock exits with code 3. `--lock-wait DURATION` makes it
 wait instead.
 
 A running command refreshes its lock every few minutes. A lock left behind by a crashed process

@@ -32,6 +32,8 @@ func forgetCommand() *cli.Command {
    A period rule with count left at the end of a series keeps its oldest snapshot too.
    --keep-within-hourly to --keep-within-yearly are the period rules bounded by a
    DURATION instead of a count: the newest of every period younger than it.
+   Takes the exclusive lock, so it exits 3 beside a running backup; a scheduled run
+   that may overlap one wants --lock-wait. --dry-run takes the shared lock.
    Chunks stay until prune.`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "keep-last", Usage: "keep the `N` newest, unlimited for all"},

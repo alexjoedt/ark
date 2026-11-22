@@ -32,6 +32,7 @@ func TestInfoReportsSnapshotsAndStoredSizes(t *testing.T) {
 	kept := mustBackup(t, repo, treeOf("kept", dirOf{"a", a[:99]}))
 	again := mustBackup(t, repo, smallFiles("again", 10))
 	mustForget(t, repo, gone)
+	exclusive = 0 // the forget's; only Info's own count below
 
 	want := map[ark.HandleType]int64{}
 	for _, typ := range []ark.HandleType{

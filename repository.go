@@ -419,6 +419,12 @@ func (r *Repository) deleteSnapshot(ctx context.Context, id SnapshotID) error {
 // ErrNoSnapshotKept. A snapshot kept for its future date does not count
 // there, and the error names those of the series.
 //
+// A Forget that removes, named ids included, takes the exclusive lock, so it
+// decides from snapshots no other Forget is removing: two runs with
+// different policies never empty a series between them, and a Forget fails
+// with ErrRepoLocked beside a running backup unless WithLockWait lets it
+// wait. A dry run takes the shared lock and runs beside backups.
+//
 // Removing named ids without a policy reads only those manifests, and one
 // that fails with ErrCorruptManifest is still removed, reported with its ID
 // alone. So is one stored under a name that is not a snapshot ID of this
@@ -443,7 +449,7 @@ func (r *Repository) Forget(
 	progress := r.observer(OperationForget, nil)
 	progress(ProgressEvent{Phase: PhaseLoad})
 
-	ctx, lock, err := r.acquire(ctx, false)
+	ctx, lock, err := r.acquire(ctx, !cfg.dryRun)
 	if err != nil {
 		return nil, err
 	}

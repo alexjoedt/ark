@@ -280,6 +280,12 @@ The time of the run is taken from the repository's clock, the one its locks use,
 
 restic handles this differently. It counts such a snapshot in its rules, so the two tools keep different snapshots of a series that holds one.
 
+## Concurrent runs
+
+`ark forget` takes the repository's exclusive lock, also when it removes snapshots by ID. Two forgets never decide from the same listing, so two runs with different policies can't remove between them what each one keeps. The later run decides from what the earlier one left, and a policy that keeps nothing of a series is refused there as in any run. A forget that can't get the lock exits 3 and removes nothing.
+
+The lock also keeps a forget out while a backup runs. A scheduled `forget` that may overlap a backup or another forget needs `--lock-wait`, for example `--lock-wait 30m`; without it, the run fails at once. `--dry-run` removes nothing and takes the shared lock, so it runs beside backups.
+
 ## Details: calendar steps
 
 The years, months, and days of a duration are stepped back on the calendar of the local time zone. Hours are elapsed time. Most of the time you won't notice the difference. These are the cases where you do:

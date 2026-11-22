@@ -665,9 +665,10 @@ Durations are spelled as in [Config](#config).
 | restore, export, docker restore | shared |
 | check, verify | shared |
 | ls, find | shared, one per snapshot walked |
-| forget | shared |
+| forget with `--dry-run` | shared |
 | mount | shared, until it's unmounted |
 | debug node | shared |
+| forget | exclusive |
 | prune | exclusive |
 | repair index | exclusive |
 | key passwd | exclusive |
@@ -675,7 +676,7 @@ Durations are spelled as in [Config](#config).
 
 `init`, `snapshots`, `inspect`, `unlock`, `info` without `--exact`, `docker volumes`,
 `docker host`, `profile list`, `profile show`, and `version` take no lock. `forget --prune` takes
-the shared lock for the forget and then the exclusive one for the prune.
+the exclusive lock for the forget, releases it, and takes it again for the prune.
 
 Prune needs the exclusive lock because it deletes every pack that no index lists and every blob
 that no snapshot references. A backup that runs has both: packs it has stored before the index
@@ -684,8 +685,10 @@ ones it deduplicates against, that only its manifest references, and the manifes
 last. Beside a prune, the backup would store a manifest that points at deleted blobs. Repair index
 deletes the old index objects, including one a concurrent writer has just stored. Info with
 `--exact` runs a prune dry run, which may store the lost-pack marker. Key passwd replaces the key
-file. Forget only deletes manifests, so it runs beside backups; what it leaves unreferenced is
-deleted by the next prune.
+file. Forget needs it because it decides from the manifests it lists: two forgets with different
+policies that list the same manifests can each remove what the other keeps, and leave a series
+empty between them. A forget that only reports, `--dry-run`, deletes nothing and takes the shared
+lock. What a forget leaves unreferenced is deleted by the next prune.
 
 ### Conflicts
 
