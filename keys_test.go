@@ -201,6 +201,19 @@ func TestInitRejectsAnEmptyPassword(t *testing.T) {
 	}
 }
 
+func TestNotPasswordProtectedErrorWarnsAboutPlantedKeyFiles(t *testing.T) {
+	const want = "ark: repository is not password protected: " +
+		"a password protected repository never holds a key file without a password, " +
+		"so open it without one only if it was created without"
+	if got := ark.ErrNotPasswordProtected.Error(); got != want {
+		t.Errorf("ErrNotPasswordProtected = %q, want %q", got, want)
+	}
+	b := initRepo(t, ark.NoPassword())
+	if _, err := ark.Open(context.Background(), b, ark.NewPassword("secret")); err == nil || err.Error() != want {
+		t.Errorf("Open with a password on an unprotected repository = %v, want %q", err, want)
+	}
+}
+
 func TestWrongPasswordReadsOnlyConfigAndKeys(t *testing.T) {
 	b := &readBackend{Backend: initRepo(t, ark.NewPassword("secret"))}
 	if _, err := ark.Open(context.Background(), b, ark.NewPassword("wrong")); !errors.Is(err, ark.ErrWrongPassword) {

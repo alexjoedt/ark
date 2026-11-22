@@ -111,8 +111,12 @@ var (
 	ErrPasswordRequired = errors.New("ark: repository is password protected")
 
 	// ErrNotPasswordProtected is returned by Open when a password is given
-	// for a repository created with NoPassword.
-	ErrNotPasswordProtected = errors.New("ark: repository is not password protected")
+	// for a repository created with NoPassword. A repository created with a
+	// password never holds a key file without one, so a key file of this kind
+	// planted in it is not a reason to open it without a password.
+	ErrNotPasswordProtected = errors.New("ark: repository is not password protected: " +
+		"a password protected repository never holds a key file without a password, " +
+		"so open it without one only if it was created without")
 )
 
 // missingError is the error of a blob that is not stored. A read of one
