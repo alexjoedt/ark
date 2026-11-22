@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"time"
 
 	"golang.org/x/crypto/argon2"
@@ -286,9 +285,9 @@ func readKeyFile(ctx context.Context, b Backend, name string) (*keyFile, error) 
 		return nil, fmt.Errorf("ark: failed to read key file %s: %w", name, err)
 	}
 	defer rc.Close()
-	data, err := io.ReadAll(rc)
+	data, err := readPlain(rc, "key file "+name)
 	if err != nil {
-		return nil, fmt.Errorf("ark: failed to read key file %s: %w", name, err)
+		return nil, err
 	}
 
 	var kf keyFile
@@ -352,6 +351,20 @@ func (kf *keyFile) open(codec *objectCodec, name string, pw Password) (*masterKe
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: the master key of key file %s does not decode: %w", ErrUnsupportedFormat, name, err)
+	}
+	for _, f := range []struct {
+		name    string
+		missing bool
+	}{
+		{"data_key", mk.DataKey == secretKey{}},
+		{"id_key", mk.IDKey == secretKey{}},
+		{"chunker_seed", mk.ChunkerSeed == secretKey{}},
+		{"repository_id", mk.RepositoryID == ""},
+	} {
+		if f.missing {
+			return nil, fmt.Errorf("%w: the master key of key file %s has no %s",
+				ErrUnsupportedFormat, name, f.name)
+		}
 	}
 	mk.Created = mk.Created.UTC()
 	return &mk, nil

@@ -30,6 +30,9 @@ if _, err := repo.Prune(ctx); err != nil {
   matches.
 - `Forget` removes the snapshots. Their chunks stay until `Prune` runs.
 - `ark.WithForgetDryRun()` computes the result and removes nothing.
+- `ark.WithForgetConfirm(fn)` calls `fn` with the result under the exclusive lock, before anything
+  is removed. An error from `fn` stops `Forget`, which removes nothing. Use it to ask a person, so
+  what they confirm is what goes.
 
 To remove snapshots by ID, leave the policy empty and name them in the filter:
 

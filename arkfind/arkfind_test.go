@@ -279,8 +279,12 @@ func TestFindReturnsCancellationUnwrapped(t *testing.T) {
 	}
 }
 
+// TestFindSkipsSnapshotForgottenDuringSearch: Find locks one snapshot walk
+// at a time, so a forget elsewhere can remove a listed snapshot between two
+// walks. The manifest is deleted as that forget would, since a Forget in the
+// callback cannot take the exclusive lock beside the walk's.
 func TestFindSkipsSnapshotForgottenDuringSearch(t *testing.T) {
-	repo, _ := newRepo(t)
+	repo, b := newRepo(t)
 	ctx := context.Background()
 	src := treeSource{name: "src", entries: []entry{{path: "a.txt", content: "a"}}}
 	s1 := backup(t, repo, src)
@@ -293,8 +297,7 @@ func TestFindSkipsSnapshotForgottenDuringSearch(t *testing.T) {
 		if m.Snapshot.ID != s3.ID {
 			return nil
 		}
-		_, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{s2.ID}})
-		return err
+		return b.Delete(ctx, ark.Handle{Type: ark.SnapshotFile, Name: string(s2.ID)})
 	})
 	if err != nil {
 		t.Fatal(err)

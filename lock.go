@@ -153,11 +153,15 @@ func (r *Repository) putLock(ctx context.Context, name string, l lockObject) err
 // loadLocks reads every lock object in the repository, newest first.
 //
 // A zero-byte object is another writer's Put in flight, not a lock, and is
-// skipped; so is one that does not open or parse, which would otherwise block
-// the repository forever. Those are returned by name for Unlock WithForce,
-// and so is a zero-byte object named older than lockStaleAge or not named
-// like a lock: that is a truncated lock (or, briefly, a refresh in flight on
-// a backend whose Put is not atomic).
+// skipped; so is one whose tag does not verify or whose JSON does not decode,
+// which would otherwise block the repository forever. Those are returned by
+// name for the warnings, and so is a zero-byte object named older than
+// lockStaleAge or not named like a lock: that is a truncated lock (or,
+// briefly, a refresh in flight on a backend whose Put is not atomic).
+//
+// Any other failed read is returned, unless the object is gone by then: a
+// lock that could not be read may be one that conflicts, and passing over it
+// would let a prune delete what a running backup needs.
 //
 // A lock under a format byte or with a JSON key this build does not know is
 // not skipped: a later build holds it, and what it guards is unknown here. It
@@ -194,14 +198,25 @@ func (r *Repository) loadLocks(ctx context.Context) (
 				err,
 			)
 			fallthrough
-		case err != nil:
+		case errors.Is(err, ErrUnsupportedFormat), errors.Is(err, errSealBroken), errors.Is(err, errLockUndecodable):
 			unreadable = append(unreadable, name)
 			continue
+		case err != nil:
+			// A body that breaks off while its holder deletes the object is
+			// a release too, not a lock that may conflict.
+			if ok, xerr := r.backend.Exists(ctx, Handle{Type: LockFile, Name: name}); xerr == nil && !ok {
+				continue
+			}
+			return nil, nil, nil, err
 		}
 		locks[name] = l
 	}
 	return locks, unreadable, refused, nil
 }
+
+// errLockUndecodable marks a lock object that opens and whose JSON does not
+// decode, which loadLocks passes over like one whose tag does not verify.
+var errLockUndecodable = errors.New("lock JSON does not decode")
 
 func (r *Repository) loadLock(ctx context.Context, name string) (lockObject, error) {
 	data, err := r.getSealed(ctx, Handle{Type: LockFile, Name: name})
@@ -213,7 +228,7 @@ func (r *Repository) loadLock(ctx context.Context, name string) (lockObject, err
 		if errors.Is(err, ErrUnsupportedFormat) {
 			return lockObject{}, err
 		}
-		return lockObject{}, fmt.Errorf("lock: failed to parse %s: %w", name, err)
+		return lockObject{}, fmt.Errorf("lock: failed to parse %s: %w: %w", name, errLockUndecodable, err)
 	}
 	l.Time = l.Time.UTC()
 	return l, nil
@@ -400,7 +415,27 @@ func (r *Repository) tryAcquire(ctx context.Context, exclusive bool) (context.Co
 	go l.keepAlive(lockCtx)
 	go l.watch(lockCheckInterval)
 	r.reportLock(LockEvent{Kind: LockAcquired, Exclusive: exclusive, LockID: name})
-	return lockCtx, l, nil
+	return context.WithValue(lockCtx, heldLockKey{}, l), l, nil
+}
+
+type heldLockKey struct{}
+
+// errLockExpired is what a write or delete returns when the lock of its
+// operation reached the timeout.
+var errLockExpired = errors.New("ark: the lock went unrefreshed past its timeout, others may treat it as stale")
+
+// checkLock fails when the lock the operation holds through ctx reached its
+// timeout, and aborts the operation then. Every index, manifest, key file or
+// lost-pack marker write and every delete calls it first: the watch sees a
+// suspend only on its next tick, and a write before that would land after a
+// prune may have taken over the stale lock. It reads the lock's own clock,
+// never the backend. Pack writes go unchecked: an orphan pack is what the
+// next prune collects. A request already in flight it cannot stop.
+func checkLock(ctx context.Context) error {
+	if l, ok := ctx.Value(heldLockKey{}).(*repoLock); ok && l.expire() {
+		return errLockExpired
+	}
+	return nil
 }
 
 // keepAlive rewrites the lock object every lockRefreshInterval. It never
@@ -567,27 +602,34 @@ type UnlockOption func(*unlockConfig)
 func WithForce() UnlockOption { return func(c *unlockConfig) { c.force = true } }
 
 // Unlock removes stale locks and returns how many it removed.
-// Pass WithForce to remove every lock, including those that do not open.
+// Pass WithForce to remove every lock by its listed name without reading it,
+// so one that fails to read goes too.
 func (r *Repository) Unlock(ctx context.Context, opts ...UnlockOption) (int, error) {
 	cfg := &unlockConfig{}
 	for _, o := range opts {
 		o(cfg)
 	}
 
-	locks, unreadable, _, err := r.loadLocks(ctx)
-	if err != nil {
-		return 0, err
-	}
-	now := r.now()
-
 	var names []string
-	for name, l := range locks {
-		if cfg.force || l.stale(now) {
-			names = append(names, name)
-		}
-	}
 	if cfg.force {
-		names = append(names, unreadable...)
+		err := r.backend.List(ctx, LockFile, func(info BlobInfo) error {
+			names = append(names, info.Name)
+			return nil
+		})
+		if err != nil {
+			return 0, fmt.Errorf("lock: failed to list locks: %w", err)
+		}
+	} else {
+		locks, _, _, err := r.loadLocks(ctx)
+		if err != nil {
+			return 0, err
+		}
+		now := r.now()
+		for name, l := range locks {
+			if l.stale(now) {
+				names = append(names, name)
+			}
+		}
 	}
 	for i, name := range names {
 		if err := r.backend.Delete(ctx, Handle{Type: LockFile, Name: name}); err != nil {

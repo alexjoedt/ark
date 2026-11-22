@@ -74,9 +74,11 @@ writer, every accepted risk included.
   16-byte random salt: time 3, memory 64 MiB, 4 threads. Its plaintext is version, kdf, the three
   parameters, salt and the sealed key, with no hostname or username, unlike restic's key files:
   `TestInitWritesOneKeyFile`, `TestEveryFlippedKeyFileByteFailsOpen`.
-- Open refuses a key file asking for more than time 16 or 1 GiB of memory and tries at most 20 key
-  files, so a forged key file cannot make it allocate or spin without bound:
-  `TestOpenRejectsUnknownKeyFiles`, `TestOpenTriesAtMostTwentyKeyFiles`.
+- Open refuses a key file asking for more than time 16 or 1 GiB of memory, reads at most 64 KiB of a
+  key file, the config or the features object and tries at most 20 key files, so a forged key file cannot make it
+  allocate or spin without bound:
+  `TestOpenRejectsUnknownKeyFiles`, `TestOpenTriesAtMostTwentyKeyFiles`,
+  `TestOversizedKeyFileConfigAndFeaturesAreRefusedWithoutAllocating`.
 - The config is plain JSON (version, id, created_at, chunker), authenticated through
   `config_hash`: `TestConfigHoldsOnlyItsPlaintextFields`, `TestTamperedConfigIsRejected`.
 
@@ -196,6 +198,12 @@ state. A rollback never restores bytes a snapshot did not hold, but it is not de
   `TestPackWriterClosesPacksAtTheTargetSize`.
 - The argon2id parameters and the config are plaintext: `TestInitWritesOneKeyFile`,
   `TestConfigHoldsOnlyItsPlaintextFields`.
+- A key file may ask for up to 1 GiB of argon2id memory, which Open allocates at once. Release builds
+  are amd64 and arm64 only. A 32-bit build from source keeps the cap and can run out of memory on a
+  forged key file instead of failing with an error: `TestOpenRejectsUnknownKeyFiles`.
+- A planted key file without a password opens only if the user switches to `--insecure-no-password`
+  after `ErrNotPasswordProtected`, whose message says to do so only if the user created the
+  repository that way or removed its password: `TestNotPasswordProtectedErrorWarnsAboutPlantedKeyFiles`.
 - Lock names carry the millisecond they were created: `TestLockNamesCarryTheirTime`.
 - `ARK_PASSWORD` and `ARK_NEW_PASSWORD` are visible to every process of the same user;
   `--password-file` and `--new-password-file` are the safer inputs: `TestNoPasswordFlag`.

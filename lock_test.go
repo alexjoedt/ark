@@ -115,7 +115,11 @@ func TestEveryOperationTakesItsLockClass(t *testing.T) {
 			_, err := importRepo.Import(ctx, bytes.NewReader(archive.Bytes()))
 			return err
 		}},
-		{"forget", false, b, func() error {
+		{"forget dry run", false, b, func() error {
+			_, err := repo.Forget(ctx, ark.ForgetPolicy{KeepLast: 1}, ark.SnapshotFilter{}, ark.WithForgetDryRun())
+			return err
+		}},
+		{"forget", true, b, func() error {
 			_, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{snap.ID}})
 			return err
 		}},

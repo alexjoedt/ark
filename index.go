@@ -556,6 +556,9 @@ func (x *packIndex) write(ctx context.Context, packs []indexedPack) ([]string, e
 		data := t.encode()
 		h := Handle{Type: x.space.index, Name: keyedName(x.space.idKey, data)}
 		obj := x.space.codec.seal(x.space.dataKey, objectAAD(h), data)
+		if err := checkLock(ctx); err != nil {
+			return names, err
+		}
 		if err := x.backend.Put(ctx, h, bytes.NewReader(obj)); err != nil {
 			return names, fmt.Errorf("ark: failed to store %s object %s: %w", h.Type, h.Name, err)
 		}

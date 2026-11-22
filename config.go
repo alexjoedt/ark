@@ -42,15 +42,25 @@ type repositoryFeatures struct {
 // not decode was written by a holder of the data key, so a later build, and
 // is ErrUnsupportedFormat like the config.
 func checkFeatures(ctx context.Context, b Backend, codec *objectCodec, key *masterKey) error {
-	data, err := readSealed(ctx, b, codec, (*[32]byte)(&key.DataKey), Handle{Type: ConfigFile, Name: featuresName})
+	h := Handle{Type: ConfigFile, Name: featuresName}
+	rc, err := b.Get(ctx, h)
 	if errors.Is(err, ErrNotFound) {
 		return nil
 	}
+	if err != nil {
+		return fmt.Errorf("ark: failed to read %s object %s: %w", h.Type, h.Name, err)
+	}
+	defer rc.Close()
+	obj, err := readPlain(rc, "the features object")
+	if err != nil {
+		return err
+	}
+	data, err := codec.open((*[32]byte)(&key.DataKey), objectAAD(h), obj)
 	if errors.Is(err, errSealBroken) {
 		return fmt.Errorf("%w: features: %w", ErrCorruptConfig, err)
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("ark: failed to open %s object %s: %w", h.Type, h.Name, err)
 	}
 	var f repositoryFeatures
 	if err := decodeStrict("features", data, &f); err != nil {
@@ -234,9 +244,23 @@ func readRepositoryConfig(ctx context.Context, b Backend) ([]byte, error) {
 	}
 	defer rc.Close()
 
-	data, err := io.ReadAll(rc)
+	return readPlain(rc, "the repository config")
+}
+
+// maxPlainObject caps the bytes read of a key file, the config or the features
+// object, which are
+// read before anything authenticates them. ark writes under 1 KiB of either.
+const maxPlainObject = 64 << 10
+
+// readPlain reads what, an unauthenticated object, and refuses one above
+// maxPlainObject as ErrUnsupportedFormat without holding more than the cap.
+func readPlain(r io.Reader, what string) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxPlainObject+1))
 	if err != nil {
-		return nil, fmt.Errorf("ark: failed to read the repository config: %w", err)
+		return nil, fmt.Errorf("ark: failed to read %s: %w", what, err)
+	}
+	if len(data) > maxPlainObject {
+		return nil, fmt.Errorf("%w: %s is larger than %d bytes", ErrUnsupportedFormat, what, maxPlainObject)
 	}
 	return data, nil
 }

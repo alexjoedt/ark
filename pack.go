@@ -208,6 +208,10 @@ func (s *packSpace) readBlob(ctx context.Context, b Backend, pack string, e pack
 	if err != nil {
 		return nil, fmt.Errorf("ark: failed to read %s object %s: %w", s.packs, pack, err)
 	}
+	if int64(len(obj)) != int64(e.length) {
+		return nil, fmt.Errorf("ark: failed to read %s object %s: backend returned %d bytes of the %d asked for: %w",
+			s.packs, pack, len(obj), e.length, io.ErrUnexpectedEOF)
+	}
 	return s.openBlob(pack, e, obj)
 }
 

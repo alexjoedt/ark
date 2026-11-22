@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	ark "github.com/alexjoedt/ark"
+	"github.com/alexjoedt/ark/arklocal"
 )
 
 func forgetListRepo(t *testing.T, n int) (repo string, ids []string) {
@@ -91,7 +95,7 @@ func TestForgetByIDWithoutATerminal(t *testing.T) {
 func TestForgetNothingToRemoveDoesNotPrompt(t *testing.T) {
 	repo, _ := forgetListRepo(t, 1)
 	code, out := runCapture(t, "-r", repo, "forget", "--keep-last", "1", "--prune")
-	if code != 0 || !strings.Contains(out, "remove 0 snapshots, kept 1") {
+	if code != 0 || !strings.Contains(out, "removed 0 snapshots, kept 1") {
 		t.Fatalf("exit %d: %q", code, out)
 	}
 }
@@ -106,5 +110,30 @@ func TestForgetJSONUnchanged(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &res); err != nil || code != 0 ||
 		len(res.Remove) != 1 || len(res.Keep) != 1 || res.DryRun {
 		t.Fatalf("exit %d, err %v: %q", code, err, out)
+	}
+}
+
+// TestForgetBesideAReaderFailsBeforeTheQuestion: the question runs under the
+// exclusive lock, so a running reader fails the run before anyone is asked.
+func TestForgetBesideAReaderFailsBeforeTheQuestion(t *testing.T) {
+	repo, ids := forgetListRepo(t, 2)
+	b, err := arklocal.New(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := ark.Open(context.Background(), b, ark.NoPassword())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	rd, err := r.OpenReader(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rd.Close()
+
+	code, out, logs := runCaptureAll(t, "-r", repo, "forget", ids[0])
+	if code != 3 || strings.Contains(logs, "confirmation needed") || out != "" {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, logs)
 	}
 }

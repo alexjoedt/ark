@@ -199,6 +199,9 @@ func (r *Repository) ChangePassword(ctx context.Context, pw Password) error {
 	}
 	defer lock.release(ctx)
 
+	if err := checkLock(ctx); err != nil {
+		return err
+	}
 	name, err := putKeyFile(ctx, r.backend, r.codec, r.key, pw)
 	if err != nil {
 		return err
@@ -207,6 +210,9 @@ func (r *Repository) ChangePassword(ctx context.Context, pw Password) error {
 	// between must leave at least one key file that opens the repository.
 	if err := r.backend.Sync(ctx); err != nil {
 		return fmt.Errorf("ark: failed to sync the new key file %s: %w", name, err)
+	}
+	if err := checkLock(ctx); err != nil {
+		return fmt.Errorf("ark: new key file %s written, old key file %s kept: %w", name, r.keyName, err)
 	}
 	if err := r.backend.Delete(ctx, Handle{Type: KeyFile, Name: r.keyName}); err != nil {
 		return fmt.Errorf(
@@ -386,6 +392,9 @@ func (r *Repository) Snapshot(ctx context.Context, snapshotID SnapshotID) (*Snap
 // Prune sweeps them, which is why this is not part of the public surface:
 // callers go through Forget.
 func (r *Repository) deleteSnapshot(ctx context.Context, id SnapshotID) error {
+	if err := checkLock(ctx); err != nil {
+		return err
+	}
 	if err := r.backend.Delete(ctx, Handle{Type: SnapshotFile, Name: string(id)}); err != nil {
 		return fmt.Errorf("ark: failed to delete snapshot %s: %w", id, err)
 	}
@@ -419,6 +428,12 @@ func (r *Repository) deleteSnapshot(ctx context.Context, id SnapshotID) error {
 // ErrNoSnapshotKept. A snapshot kept for its future date does not count
 // there, and the error names those of the series.
 //
+// A Forget that removes, named ids included, takes the exclusive lock, so it
+// decides from snapshots no other Forget is removing: two runs with
+// different policies never empty a series between them, and a Forget fails
+// with ErrRepoLocked beside a running backup unless WithLockWait lets it
+// wait. A dry run takes the shared lock and runs beside backups.
+//
 // Removing named ids without a policy reads only those manifests, and one
 // that fails with ErrCorruptManifest is still removed, reported with its ID
 // alone. So is one stored under a name that is not a snapshot ID of this
@@ -443,7 +458,7 @@ func (r *Repository) Forget(
 	progress := r.observer(OperationForget, nil)
 	progress(ProgressEvent{Phase: PhaseLoad})
 
-	ctx, lock, err := r.acquire(ctx, false)
+	ctx, lock, err := r.acquire(ctx, !cfg.dryRun)
 	if err != nil {
 		return nil, err
 	}
@@ -470,11 +485,27 @@ func (r *Repository) Forget(
 		progress(done)
 		return result, nil
 	}
+	if cfg.confirm != nil {
+		if err := cfg.confirm(result); err != nil {
+			return nil, err
+		}
+	}
 
-	// A failed removal does not stop the others; Forget still fails.
+	// A failed removal does not stop the others, an expired lock does; Forget
+	// still fails.
 	var errs []error
 	for _, s := range result.Remove {
-		if err := r.deleteSnapshot(ctx, s.ID); err != nil {
+		err := r.deleteSnapshot(ctx, s.ID)
+		if errors.Is(err, errLockExpired) {
+			// The removals made so far stay removed before a prune that takes
+			// over the stale lock sweeps their objects. Syncing deletes
+			// nothing, and the lock's context is cancelled by now.
+			if syncErr := r.backend.Sync(context.WithoutCancel(ctx)); syncErr != nil {
+				errs = append(errs, fmt.Errorf("failed to sync snapshot removals: %w", syncErr))
+			}
+			return nil, fmt.Errorf("forget: %w", errors.Join(append(errs, err)...))
+		}
+		if err != nil {
 			errs = append(errs, err)
 			continue
 		}

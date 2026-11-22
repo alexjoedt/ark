@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"slices"
 	"strings"
@@ -449,5 +450,41 @@ func TestPutSealedRefusesAPackNamespace(t *testing.T) {
 		if ok, _ := b.Exists(context.Background(), h); ok {
 			t.Errorf("putSealed left an object under %s/%s", typ, packTableName)
 		}
+	}
+}
+
+type shortGets struct{ Backend }
+
+func (b shortGets) GetRange(ctx context.Context, h Handle, offset, length int64) ([]byte, error) {
+	got, err := b.Backend.GetRange(ctx, h, offset, length)
+	if err == nil && len(got) > 0 {
+		return got[:len(got)-1], nil
+	}
+	return got, err
+}
+
+// TestShortSingleBlobReadIsAReadErrorNotCorrupt: a backend that returns too
+// few bytes without an error failed to read; the blob is not damaged.
+func TestShortSingleBlobReadIsAReadErrorNotCorrupt(t *testing.T) {
+	ctx := context.Background()
+	codec := newObjectCodec()
+	defer codec.Close()
+	key := newMasterKey("repo")
+	b := newStubBackend()
+
+	session := testSession(b, codec, key)
+	data := []byte("some chunk")
+	name := session.chunks.name(data)
+	if _, err := session.chunks.putNamed(ctx, name, data); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.finish(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	chunks, _ := (&Repository{backend: shortGets{b}, codec: codec, key: key, logger: quietLogger}).stores()
+	_, err := chunks.Get(ctx, name)
+	if !errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, ErrCorruptChunk) {
+		t.Errorf("Get = %v, want an error wrapping io.ErrUnexpectedEOF and not ErrCorruptChunk", err)
 	}
 }

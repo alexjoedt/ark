@@ -76,7 +76,7 @@ unmount by hand.
 ## Mount and prune
 
 A mount holds a shared [lock](concepts.md#locks) for as long as it runs. Backups and restores work
-as usual, but `ark prune` and `ark forget --prune` exit 3 until you unmount. With `--lock-wait`,
+as usual, but `ark prune` and `ark forget` exit 3 until you unmount. With `--lock-wait`,
 they wait that long first.
 
 ## Platforms

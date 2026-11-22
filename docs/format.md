@@ -170,6 +170,8 @@ such an object and never reports it as damaged.
 | a `kdf` other than `argon2id` or `none` | key file |
 | with `argon2id`, a `time`, `memory`, or `threads` outside the range its row gives, or a `salt` that isn't 16 bytes in lowercase hex | key file |
 | a `chunker` size below 1, a `min` above `avg`, an `avg` above `max`, an `avg` that isn't a power of two, or a `max` above 67108864 (64 MiB) | config |
+| a config or key file above 65536 bytes | config, key file |
+| a master key whose `data_key`, `id_key`, or `chunker_seed` is missing or 64 zeros, or whose `repository_id` is empty | master key, once its tag verifies |
 | a name in `required` | features |
 | a name that isn't 32 lowercase hex characters | manifest, once its tag verifies |
 
@@ -187,7 +189,8 @@ such an object and never reports it as damaged.
 `config/config` is plain JSON, not sealed, with no byte before it. Its bytes are written once, by
 `Init`. The SHA-256 of these bytes as stored is the master key's `config_hash`, so a changed byte
 fails `Open` with `ErrCorruptConfig`. A reader hashes the bytes, not a canonical form, so the
-spelling is the writer's choice; ark writes the keys in this order with no whitespace.
+spelling is the writer's choice; ark writes the keys in this order with no whitespace. A reader
+reads at most 65536 bytes of it before anything authenticates it; ark writes well under 1 KiB.
 
 | Key | Type | Optional | Content |
 |---|---|---|---|
@@ -308,7 +311,7 @@ lengths 65536 65536 65536 3392
 ### Key file
 
 A key file is plain JSON, named by 16 random bytes as 32 lowercase hex characters. `Open` tries at
-most 20 of them.
+most 20 of them. A reader reads at most 65536 bytes of one; ark writes well under 1 KiB.
 
 | Key | Type | Optional | Content |
 |---|---|---|---|
@@ -665,9 +668,10 @@ Durations are spelled as in [Config](#config).
 | restore, export, docker restore | shared |
 | check, verify | shared |
 | ls, find | shared, one per snapshot walked |
-| forget | shared |
+| forget with `--dry-run` | shared |
 | mount | shared, until it's unmounted |
 | debug node | shared |
+| forget | exclusive |
 | prune | exclusive |
 | repair index | exclusive |
 | key passwd | exclusive |
@@ -675,7 +679,7 @@ Durations are spelled as in [Config](#config).
 
 `init`, `snapshots`, `inspect`, `unlock`, `info` without `--exact`, `docker volumes`,
 `docker host`, `profile list`, `profile show`, and `version` take no lock. `forget --prune` takes
-the shared lock for the forget and then the exclusive one for the prune.
+the exclusive lock for the forget, releases it, and takes it again for the prune.
 
 Prune needs the exclusive lock because it deletes every pack that no index lists and every blob
 that no snapshot references. A backup that runs has both: packs it has stored before the index
@@ -684,8 +688,10 @@ ones it deduplicates against, that only its manifest references, and the manifes
 last. Beside a prune, the backup would store a manifest that points at deleted blobs. Repair index
 deletes the old index objects, including one a concurrent writer has just stored. Info with
 `--exact` runs a prune dry run, which may store the lost-pack marker. Key passwd replaces the key
-file. Forget only deletes manifests, so it runs beside backups; what it leaves unreferenced is
-deleted by the next prune.
+file. Forget needs it because it decides from the manifests it lists: two forgets with different
+policies that list the same manifests can each remove what the other keeps, and leave a series
+empty between them. A forget that only reports, `--dry-run`, deletes nothing and takes the shared
+lock. What a forget leaves unreferenced is deleted by the next prune.
 
 ### Conflicts
 
@@ -741,6 +747,15 @@ clock counts the time a suspended host slept; the monotonic clock counts a write
 Once the age reaches the self-timeout, the holder aborts its operation and never writes the lock
 again. It keeps checking while a refresh hangs, so a hung write can't keep the operation alive.
 
+A check that runs on a timer sees a suspend only on its next tick, so the holder also takes the
+age of its lock right before each index object, manifest, key file or lost-pack marker it writes
+and each object it deletes. Past its self-timeout a holder writes none of those and deletes
+nothing; it aborts instead. This check reads the holder's own clocks, never the lock object. Pack
+writes go unchecked: a pack no index lists is what the next prune deletes. The check cannot stop
+a request already in flight, so the rule holds only while each request finishes within the
+margin below. A manifest write is checked again once it returns, and a backup or import whose
+manifest landed past the self-timeout fails.
+
 The self-timeout lies 7m30s below the stale age, so a holder stops writing before any other host
 counts its lock as stale. The clocks of the hosts that share a repository must agree within that
 margin.
@@ -772,12 +787,13 @@ warn about one object twice:
 | Object | What a reader does |
 |---|---|
 | zero bytes long | ignores it: another writer's write in flight |
-| gone between listing and reading | ignores it: released since the listing |
+| gone between listing and reading, or gone once a read of it fails | ignores it: released since the listing |
 | a tag that doesn't verify, or JSON that doesn't decode | passes over it and warns |
+| a read that fails, for any other reason | stops with the read's error, also under a lock wait: the lock may be one that conflicts. In step 4, it deletes its own lock first |
 | refused (see [What a reader refuses](#what-a-reader-refuses)) | stops with `ErrUnsupportedFormat`: a later build holds it, and what it guards is unknown here |
 
-`ark unlock --force` removes every lock, the passed-over and refused ones included, and a
-zero-byte object whose name is the stale age old or isn't a lock name. It also removes locks that
+`ark unlock --force` removes every object the listing of `locks/` names without reading it, so the
+passed-over, refused and unreadable ones go too, and every zero-byte object. It also removes locks that
 running operations hold, so no operation of any build may run. `ark unlock` alone removes only
 stale locks.
 

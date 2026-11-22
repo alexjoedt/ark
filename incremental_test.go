@@ -289,8 +289,8 @@ func TestBackupRereadsRacyAndForeignParentFiles(t *testing.T) {
 }
 
 // A forget and prune of the parent while the child still reuses its chunks:
-// forget only removes the manifest, and prune needs the exclusive lock the
-// running backup's shared lock blocks.
+// both need the exclusive lock the running backup's shared lock blocks, and
+// once the backup is stored they leave the child whole.
 func TestForgetAndPruneOfParentDuringChildBackup(t *testing.T) {
 	ctx := context.Background()
 	repo := openRepo(t, arkmem.New())
@@ -309,12 +309,12 @@ func TestForgetAndPruneOfParentDuringChildBackup(t *testing.T) {
 	wg.Go(func() { child, cerr = repo.Backup(ctx, src) })
 	<-src.walking
 
-	if _, err := repo.Forget(
-		ctx,
-		ark.ForgetPolicy{},
-		ark.SnapshotFilter{IDs: []ark.SnapshotID{parent.ID}},
-	); err != nil {
-		t.Fatalf("Forget of the parent: %v", err)
+	forgetParent := func() error {
+		_, err := repo.Forget(ctx, ark.ForgetPolicy{}, ark.SnapshotFilter{IDs: []ark.SnapshotID{parent.ID}})
+		return err
+	}
+	if err := forgetParent(); !errors.Is(err, ark.ErrRepoLocked) {
+		t.Fatalf("Forget of the parent during the backup: %v, want ErrRepoLocked", err)
 	}
 	if _, err := repo.Prune(ctx); !errors.Is(err, ark.ErrRepoLocked) {
 		t.Fatalf("Prune during the backup: %v, want ErrRepoLocked", err)
@@ -328,6 +328,9 @@ func TestForgetAndPruneOfParentDuringChildBackup(t *testing.T) {
 		t.Errorf("FilesUnchanged = %d, want %d", child.Stats.FilesUnchanged, len(src.files))
 	}
 
+	if err := forgetParent(); err != nil {
+		t.Fatalf("Forget of the parent after the backup: %v", err)
+	}
 	if _, err := repo.Prune(ctx); err != nil {
 		t.Fatalf("Prune after the backup: %v", err)
 	}

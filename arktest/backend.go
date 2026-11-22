@@ -360,6 +360,11 @@ func testGetRange(t *testing.T, newBackend func(*testing.T) ark.Backend) {
 				t.Errorf("%v %s: GetRange(%d, %d): %v", typ, r.name, r.offset, r.length, err)
 				continue
 			}
+			if int64(len(got)) != r.length {
+				t.Errorf("%v %s: GetRange(%d, %d) returned %d bytes with a nil error, want exactly %d",
+					typ, r.name, r.offset, r.length, len(got), r.length)
+				continue
+			}
 			if want := payload[r.offset : r.offset+r.length]; !bytes.Equal(got, want) {
 				t.Errorf("%v %s: GetRange(%d, %d) = %d bytes %q, want %d bytes %q",
 					typ, r.name, r.offset, r.length, len(got), truncate(got), len(want), truncate(want))

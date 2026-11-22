@@ -127,7 +127,7 @@ func (r *Repository) runGC(
 			ev.ChunksDone++
 			progress(ev)
 		}); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("gc: %w", err)
 		}
 	}
 	if !dryRun {
@@ -140,7 +140,9 @@ func (r *Repository) runGC(
 		// index it leaves. Under the exclusive lock no reader can have found a
 		// loss since the load.
 		if !plans[0].keepsLost() {
-			r.dropLostPacks(ctx)
+			if err := r.dropLostPacks(ctx); err != nil {
+				return nil, fmt.Errorf("gc: %w", err)
+			}
 		}
 	}
 
@@ -502,6 +504,9 @@ func (r *Repository) replaceIndexes(ctx context.Context, sets []indexSet) error 
 				continue
 			}
 			h := Handle{Type: set.space.index, Name: name}
+			if err := checkLock(ctx); err != nil {
+				return err
+			}
 			if err := r.backend.Delete(ctx, h); err != nil {
 				return fmt.Errorf("failed to delete %s object %s: %w", h.Type, name, err)
 			}
@@ -622,6 +627,9 @@ func (p *prunePlan) sweep(
 			}
 		}
 		if remove && !dryRun {
+			if err := checkLock(ctx); err != nil {
+				return err
+			}
 			if err := r.backend.Delete(ctx, Handle{Type: space.packs, Name: info.Name}); err != nil {
 				r.logger.WarnContext(ctx, "gc: failed to delete an unreferenced pack",
 					"namespace", space.packs.String(), "name", info.Name, "error", err)
@@ -639,6 +647,9 @@ func (p *prunePlan) sweep(
 		return nil
 	}
 	for _, name := range p.table.unreadable {
+		if err := checkLock(ctx); err != nil {
+			return err
+		}
 		if err := r.backend.Delete(ctx, Handle{Type: space.index, Name: name}); err != nil {
 			r.logger.WarnContext(ctx, "gc: failed to delete an index object that does not open",
 				"namespace", space.index.String(), "name", name, "error", err)

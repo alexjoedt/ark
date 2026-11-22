@@ -193,8 +193,9 @@ err := arkfind.Find(ctx, repo, ark.SnapshotFilter{Host: "laptop"}, []string{"*.p
 - Patterns follow the exclude rules. Without a `/`, a pattern matches a base name at any depth. A
   leading `/` anchors it at the snapshot root. A matched directory yields everything below it.
 - No file content is read.
-- The callback runs while the repository's shared lock is held. It must not call `Prune`,
-  `RebuildIndex`, `ChangePassword`, or any other operation that takes the exclusive lock.
+- The callback runs while the repository's shared lock is held. It must not call `Forget`
+  (unless as a dry run), `Prune`, `RebuildIndex`, `ChangePassword`, or any other operation that
+  takes the exclusive lock.
 
 ## Repository size
 

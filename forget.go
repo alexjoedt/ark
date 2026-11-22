@@ -430,8 +430,9 @@ type ForgetResult struct {
 
 // forgetConfig holds configuration for a Forget call.
 type forgetConfig struct {
-	dryRun bool
-	loc    *time.Location
+	dryRun  bool
+	loc     *time.Location
+	confirm func(*ForgetResult) error
 }
 
 // ForgetOption configures a Forget call.
@@ -439,6 +440,15 @@ type ForgetOption func(*forgetConfig)
 
 // WithForgetDryRun makes Forget report what would be removed without deleting anything.
 func WithForgetDryRun() ForgetOption { return func(c *forgetConfig) { c.dryRun = true } }
+
+// WithForgetConfirm makes Forget call fn with what it decided, under the
+// lock and before it removes anything. An error from fn stops Forget, which
+// removes nothing and returns that error. A dry run does not call fn. A
+// caller that asks a person lets them pick while the exclusive lock is held,
+// so what they confirm is what goes, and a backup waits meanwhile.
+func WithForgetConfirm(fn func(*ForgetResult) error) ForgetOption {
+	return func(c *forgetConfig) { c.confirm = fn }
+}
 
 // WithForgetLocation sets the time zone the period rules (KeepHourly to
 // KeepYearly and KeepWithinHourly to KeepWithinYearly) count in: a snapshot

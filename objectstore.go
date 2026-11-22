@@ -472,6 +472,10 @@ func (s *objectStore) sealedMany(
 			}
 			err = cmp.Or(statErr, err)
 		}
+		if err == nil && uint64(len(whole)) != stop-start {
+			err = fmt.Errorf("backend returned %d bytes of the %d asked for: %w",
+				len(whole), stop-start, io.ErrUnexpectedEOF)
+		}
 		if err != nil {
 			// A pack that does not answer fails every blob still wanted from
 			// it: one request says so, not one per range.

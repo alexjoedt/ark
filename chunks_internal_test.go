@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"io"
 	"slices"
 	"sync"
@@ -230,5 +231,33 @@ func TestStreamClosedOutOfOrderKeepsTheTurnChain(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("reading the remaining streams in order deadlocked")
+	}
+}
+
+// TestStreamRefusesAChunkOfAnotherLengthThanItsRef: a tree that gives a chunk
+// another length than the chunk holds fails the file with ErrCorruptTree,
+// whichever way the length is off, and a file of right lengths reads through.
+func TestStreamRefusesAChunkOfAnotherLengthThanItsRef(t *testing.T) {
+	store, refs, content := storedChunks(t, newStubBackend(), 100, 100)
+	f := newFetcher(context.Background(), store, nil, 4, 64<<20)
+	defer f.close()
+
+	for name, length := range map[string]int64{"longer": 101, "shorter": 99, "empty": 0} {
+		t.Run(name, func(t *testing.T) {
+			bad := refs[1]
+			bad.Length = length
+			s := f.reader([]chunkRef{refs[0], bad})
+			defer s.Close()
+			got, err := io.ReadAll(s)
+			if !errors.Is(err, ErrCorruptTree) {
+				t.Errorf("read %d bytes, %v, want ErrCorruptTree", len(got), err)
+			}
+		})
+	}
+
+	s := f.reader(refs)
+	defer s.Close()
+	if got, err := io.ReadAll(s); err != nil || !bytes.Equal(got, slices.Concat(content[0], content[1])) {
+		t.Errorf("read %d bytes, %v, want the %d stored", len(got), err, 200)
 	}
 }
