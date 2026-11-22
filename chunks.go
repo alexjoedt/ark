@@ -348,6 +348,13 @@ func (s *chunkStream) Read(p []byte) (int, error) {
 			s.err = fmt.Errorf("ark: failed to fetch chunk: %w", err)
 			return 0, s.err
 		}
+		// held is the length the file's tree gives the chunk. A file's size is
+		// the sum of those, so checking each chunk checks the total as well.
+		if int64(len(w.fl.data)) != w.held {
+			s.err = fmt.Errorf("%w: chunk %s holds %d bytes, its file's tree says %d",
+				ErrCorruptTree, w.fl.id, len(w.fl.data), w.held)
+			return 0, s.err
+		}
 		s.fetcher.count()
 		s.current = w.fl.data
 	}
