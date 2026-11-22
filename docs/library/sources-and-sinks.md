@@ -269,7 +269,8 @@ Entries arrive in walk order: parents before children, and a hardlink after its 
 An entry skipped with `ark.ErrEntrySkipped` doesn't fail the restore: `RestoreResult.Skipped`
 lists one error per such entry, and every other entry is restored. `arkfs` skips a device node this
 way when the restore runs without the privilege to create one, and a fifo or device node when the
-target filesystem can't hold it.
+target filesystem can't hold it. The volume sink of `arkdocker` skips each fifo or device node the
+daemon doesn't create in the volume the same way.
 
 ## Test your source and sink
 

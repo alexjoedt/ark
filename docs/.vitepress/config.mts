@@ -61,6 +61,7 @@ export default defineConfig({
         text: 'Reference',
         items: [
           { text: 'Repository format', link: '/format' },
+          { text: 'Tree node', link: '/format/tree-node' },
           { text: 'Security', link: '/SECURITY' },
           { text: 'Versioning', link: '/versioning' },
         ],
