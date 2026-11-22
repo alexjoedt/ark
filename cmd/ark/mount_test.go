@@ -513,7 +513,8 @@ func TestMountListsSpecialFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 		rdev := uint64(st.Rdev) //nolint:unconvert // uint32 on 32-bit targets
-		if st.Mode&syscall.S_IFMT != c.typ || unix.Major(rdev) != c.major || unix.Minor(rdev) != c.minor {
+		mode := uint32(st.Mode) //nolint:unconvert // uint16 on darwin
+		if mode&syscall.S_IFMT != c.typ || unix.Major(rdev) != c.major || unix.Minor(rdev) != c.minor {
 			t.Errorf("%s: mode %o rdev %d:%d, want type %o and %d:%d",
 				c.name, st.Mode, unix.Major(rdev), unix.Minor(rdev), c.typ, c.major, c.minor)
 		}
