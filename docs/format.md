@@ -774,6 +774,7 @@ warn about one object twice:
 | zero bytes long | ignores it: another writer's write in flight |
 | gone between listing and reading | ignores it: released since the listing |
 | a tag that doesn't verify, or JSON that doesn't decode | passes over it and warns |
+| a read that fails, for any other reason | stops with the read's error, also under a lock wait: the lock may be one that conflicts. In step 4, it deletes its own lock first |
 | refused (see [What a reader refuses](#what-a-reader-refuses)) | stops with `ErrUnsupportedFormat`: a later build holds it, and what it guards is unknown here |
 
 `ark unlock --force` removes every lock, the passed-over and refused ones included, and a

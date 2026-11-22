@@ -153,11 +153,15 @@ func (r *Repository) putLock(ctx context.Context, name string, l lockObject) err
 // loadLocks reads every lock object in the repository, newest first.
 //
 // A zero-byte object is another writer's Put in flight, not a lock, and is
-// skipped; so is one that does not open or parse, which would otherwise block
-// the repository forever. Those are returned by name for Unlock WithForce,
-// and so is a zero-byte object named older than lockStaleAge or not named
-// like a lock: that is a truncated lock (or, briefly, a refresh in flight on
-// a backend whose Put is not atomic).
+// skipped; so is one whose tag does not verify or whose JSON does not decode,
+// which would otherwise block the repository forever. Those are returned by
+// name for Unlock WithForce, and so is a zero-byte object named older than
+// lockStaleAge or not named like a lock: that is a truncated lock (or,
+// briefly, a refresh in flight on a backend whose Put is not atomic).
+//
+// Any other failed read is returned: a lock that could not be read may be
+// one that conflicts, and passing over it would let a prune delete what a
+// running backup needs.
 //
 // A lock under a format byte or with a JSON key this build does not know is
 // not skipped: a later build holds it, and what it guards is unknown here. It
@@ -194,14 +198,20 @@ func (r *Repository) loadLocks(ctx context.Context) (
 				err,
 			)
 			fallthrough
-		case err != nil:
+		case errors.Is(err, ErrUnsupportedFormat), errors.Is(err, errSealBroken), errors.Is(err, errLockUndecodable):
 			unreadable = append(unreadable, name)
 			continue
+		case err != nil:
+			return nil, nil, nil, err
 		}
 		locks[name] = l
 	}
 	return locks, unreadable, refused, nil
 }
+
+// errLockUndecodable marks a lock object that opens and whose JSON does not
+// decode, which loadLocks passes over like one whose tag does not verify.
+var errLockUndecodable = errors.New("lock JSON does not decode")
 
 func (r *Repository) loadLock(ctx context.Context, name string) (lockObject, error) {
 	data, err := r.getSealed(ctx, Handle{Type: LockFile, Name: name})
@@ -213,7 +223,7 @@ func (r *Repository) loadLock(ctx context.Context, name string) (lockObject, err
 		if errors.Is(err, ErrUnsupportedFormat) {
 			return lockObject{}, err
 		}
-		return lockObject{}, fmt.Errorf("lock: failed to parse %s: %w", name, err)
+		return lockObject{}, fmt.Errorf("lock: failed to parse %s: %w: %w", name, errLockUndecodable, err)
 	}
 	l.Time = l.Time.UTC()
 	return l, nil
