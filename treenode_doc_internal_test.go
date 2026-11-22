@@ -2,11 +2,14 @@ package ark
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,10 +17,17 @@ import (
 
 const treeNodePage = "docs/format/tree-node.md"
 
-// pageDump returns the bytes of the first fenced block after the heading
+// dumpLine is one line of the page's dump: the bytes of one field and the
+// comment that says what they mean.
+type dumpLine struct {
+	b       []byte
+	comment string
+}
+
+// pageDump returns the lines of the first fenced block after the heading
 // "## Worked example": each line is hex bytes separated by single spaces,
 // then two spaces and a comment.
-func pageDump(t *testing.T, page string) []byte {
+func pageDump(t *testing.T, page string) []dumpLine {
 	t.Helper()
 	_, after, ok := strings.Cut(page, "\n## Worked example\n")
 	if !ok {
@@ -31,22 +41,73 @@ func pageDump(t *testing.T, page string) []byte {
 	if !ok {
 		t.Fatalf("%s: the text block of Worked example does not end", treeNodePage)
 	}
-	var stored []byte
+	var lines []dumpLine
 	for line := range strings.Lines(block) {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		field, _, _ := strings.Cut(line, "  ")
+		field, comment, _ := strings.Cut(line, "  ")
+		var l dumpLine
 		for h := range strings.FieldsSeq(field) {
 			b, err := hex.DecodeString(h)
 			if err != nil || len(b) != 1 {
 				t.Fatalf("%s: %q in the line %q is not one byte in hex", treeNodePage, h, line)
 			}
-			stored = append(stored, b[0])
+			l.b = append(l.b, b[0])
+		}
+		l.comment = strings.TrimSpace(comment)
+		lines = append(lines, l)
+	}
+	return lines
+}
+
+var (
+	dumpBytesRe = regexp.MustCompile(`^(?:name|target|value): (\d+) bytes, "(.*)"$`)
+	dumpTimeRe  = regexp.MustCompile(`^[cm]time (-?\d+) ns$`)
+	dumpModeRe  = regexp.MustCompile(`^mode (0[0-7]+)$`)
+	dumpUintRe  = regexp.MustCompile(`^(?:version|type|uid|gid|inode|major|minor|length) (\d+)\b`)
+	dumpCountRe = regexp.MustCompile(`^(\d+) (?:entries|chunks|xattrs?)$`)
+	dumpHashRe  = regexp.MustCompile(`^(?:tree hash|id), bytes \d+ to \d+$`)
+	dumpFlags   = map[string]byte{"flags: none": 0, "flags: bit 0, ctime": 1, "flags: bit 1, xattrs": 2}
+)
+
+// dumpCommentBytes is the encoding of the value a comment of the dump states,
+// and false for a comment that states no value of its own.
+func dumpCommentBytes(t *testing.T, comment string) ([]byte, bool) {
+	t.Helper()
+	parse := func(s string, base int) uint64 {
+		n, err := strconv.ParseUint(s, base, 64)
+		if err != nil {
+			t.Fatalf("the comment %q: %v", comment, err)
+		}
+		return n
+	}
+	if m := dumpBytesRe.FindStringSubmatch(comment); m != nil {
+		return append(binary.AppendUvarint(nil, parse(m[1], 10)), m[2]...), true
+	}
+	if m := dumpTimeRe.FindStringSubmatch(comment); m != nil {
+		ns, err := strconv.ParseInt(m[1], 10, 64)
+		if err != nil {
+			t.Fatalf("the comment %q: %v", comment, err)
+		}
+		return binary.LittleEndian.AppendUint64(nil, uint64(ns)), true
+	}
+	if m := dumpModeRe.FindStringSubmatch(comment); m != nil {
+		return binary.LittleEndian.AppendUint16(nil, uint16(parse(m[1], 8))), true
+	}
+	for _, re := range []*regexp.Regexp{dumpUintRe, dumpCountRe} {
+		if m := re.FindStringSubmatch(comment); m != nil {
+			return binary.AppendUvarint(nil, parse(m[1], 10)), true
 		}
 	}
-	return stored
+	if f, ok := dumpFlags[comment]; ok {
+		return []byte{f}, true
+	}
+	if !dumpHashRe.MatchString(comment) {
+		t.Errorf("the dump comment %q is of no known form", comment)
+	}
+	return nil, false
 }
 
 // pageExampleNode is the node the comments of the page's dump describe.
@@ -81,7 +142,13 @@ func TestTreeNodePageExampleRoundTrips(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := string(b)
-	stored := pageDump(t, page)
+	var stored []byte
+	for _, l := range pageDump(t, page) {
+		stored = append(stored, l.b...)
+		if want, ok := dumpCommentBytes(t, l.comment); ok && !bytes.Equal(l.b, want) {
+			t.Errorf("the dump line %x says %q, which is %x", l.b, l.comment, want)
+		}
+	}
 
 	node, err := decodeTreeNode(stored)
 	if err != nil {
@@ -197,9 +264,16 @@ func TestTreeNodePageStatesEveryRefusal(t *testing.T) {
 			t.Errorf("refusal %q: the row %q gives %s, want %s", tc.name, row, got, want)
 		}
 	}
-	for name := range nodeRefusalRows {
+	stated := map[string]bool{}
+	for name, row := range nodeRefusalRows {
+		stated[row] = true
 		if !cases[name] {
 			t.Errorf("nodeRefusalRows names %q, which nodeRefusals has no case for", name)
+		}
+	}
+	for row, err := range rows {
+		if (err == "`ErrCorruptTree`" || err == "`ErrUnsupportedFormat`") && !stated[row] {
+			t.Errorf("%s states the refusal %q, which no case of nodeRefusals tests", treeNodePage, row)
 		}
 	}
 }

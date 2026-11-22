@@ -378,3 +378,25 @@ func TestExportOfAnImportedSnapshotWritesTheSameTarModes(t *testing.T) {
 		t.Errorf("the imported snapshot exports with modes %v, want %v", got, want)
 	}
 }
+
+// TestHardlinkTargetIsStoredAsAPathFromTheRoot: the node holds a hardlink's
+// target as names joined by "/", whatever spelling the source gave.
+func TestHardlinkTargetIsStoredAsAPathFromTheRoot(t *testing.T) {
+	repo := openRepo(t, arkmem.New())
+	var opened int
+	snap, err := repo.Backup(context.Background(), entrySource{opened: &opened, entries: []ark.FileInfo{
+		{Path: "dir", Mode: 0o755, Type: ark.FileTypeDirectory},
+		{Path: "dir/file", Size: 2, Mode: 0o644, Type: ark.FileTypeRegular},
+		{Path: "dot", Mode: 0o644, Type: ark.FileTypeHardlink, LinkDest: "./dir/file"},
+		{Path: "slash", Mode: 0o644, Type: ark.FileTypeHardlink, LinkDest: "dir/file/"},
+	}})
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	entries := entriesOf(t, repo, snap.ID)
+	for _, name := range []string{"dot", "slash"} {
+		if got := entries[name]; got.LinkDest != "dir/file" || got.Size != 2 {
+			t.Errorf("%s: target %q, size %d, want %q, 2", name, got.LinkDest, got.Size, "dir/file")
+		}
+	}
+}

@@ -1,8 +1,8 @@
 # Tree node
 
-A tree node lists the entries of one directory of a snapshot. It is the one binary object of
-format version 1; every other object is described in [Repository format](../format.md). This page
-is the whole contract of the node: a reader and a writer can be built from it alone.
+A tree node lists the entries of one directory of a snapshot. Every other object, packs among
+them, is described in [Repository format](../format.md). This page is the whole contract of the
+node: a reader and a writer can be built from it alone.
 
 ## Encoding
 
@@ -11,7 +11,7 @@ is the whole contract of the node: a reader and a writer can be built from it al
   group in its low 7 bits and sets its high bit when another byte follows. It is the encoding of
   `binary.AppendUvarint` in Go and of unsigned LEB128.
 - A uvarint is always in its shortest form: a uvarint of more than one byte never ends in the
-  byte `0x00`. It fits 64 bits: it has at most 10 bytes, and a tenth byte is `0x00` or `0x01`.
+  byte `0x00`. It fits 64 bits: it has at most 10 bytes, and a tenth byte is `0x01`.
 - Bytes means a uvarint length followed by that many bytes, with no terminator.
 - Ids and hashes are 32 raw bytes. Elsewhere in the format they are written as 64 lowercase hex
   characters.
@@ -127,7 +127,8 @@ xattr, and sets no other bit. It writes every uvarint in its shortest form and t
 xattrs in order.
 
 A reader takes the node apart front to back and returns the error of the first rule the input
-breaks. It checks the order of an entry against the one before it once the entry is read.
+breaks. It checks the order of an entry against the one before it once the entry is read, and
+the order of an xattr once its value is read.
 
 A later build wrote what this reader doesn't know. That is `ark.ErrUnsupportedFormat`:
 

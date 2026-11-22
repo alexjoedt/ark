@@ -143,9 +143,10 @@ func marshalTreeNode(dir string, children []fileEntry, hashes map[string]string)
 // no node gets, the root and a type that is skipped, is not looked at.
 type sourcePaths map[string]*FileInfo
 
-// add records fi and returns the entry to store for it. A hardlink to a
-// symlink, a fifo or a device node comes back as a copy of that entry under
-// its own path: a hardlink in the tree names a regular file.
+// add records fi and returns the entry to store for it. A hardlink comes back
+// with its target as a path from the root, without a leading "./" or a
+// trailing "/"; one to a symlink, a fifo or a device node comes back as a copy
+// of that entry under its own path: a hardlink in the tree names a regular file.
 func (s sourcePaths) add(fi FileInfo) (FileInfo, error) {
 	norm := normEntryPath(fi.Path)
 	if norm == "" || !storedType(fi.Type) {
@@ -154,11 +155,14 @@ func (s sourcePaths) add(fi FileInfo) (FileInfo, error) {
 	if _, ok := s[norm]; ok {
 		return fi, fmt.Errorf("the source yielded %q more than once", norm)
 	}
+	if fi.Type == FileTypeHardlink {
+		fi.LinkDest = normEntryPath(fi.LinkDest)
+	}
 	if (fi.Type == FileTypeSymlink || fi.Type == FileTypeHardlink) && fi.LinkDest == "" {
 		return fi, fmt.Errorf("the source yielded the link %q without a target", norm)
 	}
 	if fi.Type == FileTypeHardlink {
-		if target := s[normEntryPath(fi.LinkDest)]; target != nil {
+		if target := s[fi.LinkDest]; target != nil {
 			path := fi.Path
 			fi = *target
 			fi.Path = path

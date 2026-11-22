@@ -84,7 +84,7 @@ func newDebugEntry(te treeEntry) debugEntry {
 	d := debugEntry{
 		Name: te.Name, NameRaw: rawIfInvalid(te.Name), Type: string(te.Type),
 		Mode: "0" + strconv.FormatUint(uint64(te.Mode), 8), UID: te.UID, GID: te.GID,
-		MtimeNs: te.ModTime.UnixNano(), Mtime: te.ModTime.UTC().Format(time.RFC3339Nano), Inode: te.Inode,
+		MtimeNs: unixNano(te.ModTime), Mtime: te.ModTime.UTC().Format(time.RFC3339Nano), Inode: te.Inode,
 		Tree: te.TreeHash, Target: te.LinkDest, TargetRaw: rawIfInvalid(te.LinkDest),
 	}
 	if !te.ChangeTime.IsZero() {
