@@ -484,8 +484,12 @@ func (b *Backend) Delete(ctx context.Context, h ark.Handle) error {
 	return nil
 }
 
-// List walks the namespace of t and calls fn for every object it holds.
-// An absent namespace is empty, not an error.
+// List reads the namespace of t and calls fn for every object it holds: the
+// files of a flat namespace, or the files in each shard dir of a pack
+// namespace. Symlinks to a namespace, a shard or an object are followed.
+// Entries outside that layout are skipped. An absent namespace is empty while
+// the repository root is no dangling link; a dir or an entry that cannot be read fails
+// the listing, so it is never partial.
 func (b *Backend) List(ctx context.Context, t ark.HandleType, fn func(ark.BlobInfo) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -496,30 +500,95 @@ func (b *Backend) List(ctx context.Context, t ark.HandleType, fn func(ark.BlobIn
 		return err
 	}
 
-	if _, err := b.client.Stat(dir); os.IsNotExist(err) {
+	entries, err := b.client.ReadDir(dir)
+	if os.IsNotExist(err) && !b.dangling(dir) && !b.dangling(b.basePath) {
+		// The namespace was never written, and so is the root until the
+		// first Put: only a link to a disk that is not mounted is not that.
 		return nil
 	}
+	if err == nil {
+		err = b.listDir(ctx, dir, entries, t == ark.DataPackFile || t == ark.TreePackFile, "", fn)
+	}
+	if err != nil {
+		return fmt.Errorf("arksftp: list %s: %w", t, err)
+	}
+	return nil
+}
 
-	walker := b.client.Walk(dir)
-	for walker.Step() {
+// listDir calls fn for every object among the entries of dir. With sharded,
+// dir is a pack namespace: its two-character dirs are shards, listed in turn,
+// and only a name shorter than a shard is an object there (see remotePath). An
+// object in a shard starts with the shard's name.
+func (b *Backend) listDir(ctx context.Context, dir string, entries []os.FileInfo, sharded bool, shard string,
+	fn func(ark.BlobInfo) error,
+) error {
+	for _, e := range entries {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := walker.Err(); err != nil {
-			return fmt.Errorf("arksftp: walk %s: %w", dir, err)
-		}
-		st := walker.Stat()
+		name := e.Name()
 		// Temporary objects and files another tool leaves, such as a
 		// .DS_Store, are no objects: a caller could not read or delete them.
-		if st.IsDir() || ark.CheckName(st.Name()) != nil {
+		if ark.CheckName(name) != nil {
+			skip(dir, name)
 			continue
 		}
-		if err := fn(ark.BlobInfo{Name: st.Name(), Size: st.Size()}); err != nil {
+		info, err := b.follow(path.Join(dir, name), e)
+		switch {
+		case err != nil:
 			return err
+		case info == nil && sharded && len(name) == 2:
+			// A shard that vanished mid-listing leaves it partial: a caller
+			// would take the objects it held as not stored.
+			return fmt.Errorf("%s vanished while listing: %w", path.Join(dir, name), os.ErrNotExist)
+		case info == nil:
+			// deleted since the dir was read
+		case info.IsDir() && sharded && len(name) == 2:
+			sub := path.Join(dir, name)
+			objects, err := b.client.ReadDir(sub)
+			if err != nil {
+				return fmt.Errorf("read %s: %w", sub, err)
+			}
+			if err := b.listDir(ctx, sub, objects, false, name, fn); err != nil {
+				return err
+			}
+		case info.Mode().IsRegular() && strings.HasPrefix(name, shard) && (!sharded || len(name) < 2):
+			if err := fn(ark.BlobInfo{Name: name, Size: info.Size()}); err != nil {
+				return err
+			}
+		default:
+			skip(dir, name)
 		}
 	}
-
 	return nil
+}
+
+// follow returns the file info of e at p, through a symlink, or nil when the
+// entry is gone. A link whose target is gone fails: it may lead to a disk that
+// is not mounted, whose objects are stored all the same.
+func (b *Backend) follow(p string, e os.FileInfo) (os.FileInfo, error) {
+	if e.Mode()&os.ModeSymlink == 0 {
+		return e, nil
+	}
+	info, err := b.client.Stat(p)
+	if os.IsNotExist(err) && !b.dangling(p) {
+		return nil, nil //nolint:nilnil // a nil info is the entry that is gone
+	}
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", p, err)
+	}
+	return info, nil
+}
+
+// dangling reports whether p is a link whose target is gone.
+func (b *Backend) dangling(p string) bool {
+	fi, err := b.client.Lstat(p)
+	return err == nil && fi.Mode()&os.ModeSymlink != 0
+}
+
+// skip logs an entry List passes over because it is outside the layout.
+func skip(dir, name string) {
+	slog.Debug("arksftp: skipping an entry outside the repository layout", "dir", dir, "name", name)
 }
 
 // Empty reports whether the repository directory is missing or holds no

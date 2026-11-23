@@ -3,6 +3,7 @@ package arksftp
 import (
 	"fmt"
 	"io"
+	"path"
 	"sync/atomic"
 
 	"github.com/pkg/sftp"
@@ -61,4 +62,16 @@ func (c countingReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
 	c.n.Add(int64(n))
 	return n, err
+}
+
+// MoveBehindLink renames the entry rel under b's root to a dot-name beside it
+// (a name a listing skips) and leaves a relative symlink to it at rel, as a repository spread over two
+// disks has.
+func (b *Backend) MoveBehindLink(rel string) error {
+	p := path.Join(b.basePath, rel)
+	moved := ".real-" + path.Base(p)
+	if err := b.client.Rename(p, path.Join(path.Dir(p), moved)); err != nil {
+		return err
+	}
+	return b.client.Symlink(moved, p)
 }
