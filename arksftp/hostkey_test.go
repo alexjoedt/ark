@@ -2,13 +2,17 @@ package arksftp
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/pem"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -281,4 +285,70 @@ func TestHandshakeVerifiesTheServerHostKey(t *testing.T) {
 			t.Errorf("error does not point at the fix:\n%v", err)
 		}
 	})
+}
+
+func TestHandshakeAcceptsAnEd25519OnlyKnownHost(t *testing.T) {
+	isolate(t)
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ec, err := ssh.NewSignerFromKey(ecKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ed := newSigner(t)
+	cfg := acceptAnyKey()
+	cfg.AddHostKey(ec)
+	addr := serveSSH(t, ed, cfg)
+
+	file := writeKnownHosts(t, addr, ed.PublicKey())
+	if err := dial(t, addr, file); err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+}
+
+func TestHostKeyAlgorithms(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaPub, err := ssh.NewPublicKey(&rsaKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ed := newSigner(t).PublicKey()
+	file := filepath.Join(t.TempDir(), "known_hosts")
+	lines := knownhosts.Line([]string{"[rsa.example]:22"}, rsaPub) + "\n" +
+		knownhosts.Line([]string{"rsa.example", "both.example"}, ed) + "\n" +
+		knownhosts.Line([]string{"both.example"}, rsaPub) + "\n"
+	if err := os.WriteFile(file, []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	verify, err := hostKeys(Config{KnownHostsFile: file})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for host, want := range map[string][]string{
+		"rsa.example":  {"rsa-sha2-512", "rsa-sha2-256", "ssh-rsa", "ssh-ed25519"},
+		"both.example": {"ssh-ed25519", "rsa-sha2-512", "rsa-sha2-256", "ssh-rsa"},
+		"none.example": nil,
+	} {
+		got := hostKeyAlgorithms(verify, Config{Host: host, Port: 22})
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: algorithms %v, want %v", host, got, want)
+		}
+	}
+}
+
+func TestHostKeysExpandsHomeInTheFile(t *testing.T) {
+	isolate(t)
+	home := os.Getenv("HOME")
+	if err := os.WriteFile(filepath.Join(home, "kh"), []byte(knownhosts.Line([]string{"example.com"}, newSigner(t).PublicKey())+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hostKeys(Config{Host: "example.com", KnownHostsFile: "~/kh"}); err != nil {
+		t.Fatalf("hostKeys with ~/kh: %v", err)
+	}
 }
