@@ -93,10 +93,13 @@ type Backend struct {
 	// Put needs to flush a temp file before renaming it into place and
 	// Put and Delete need to flush the directories they change.
 	fsync bool
-	// noDirSync is set once the server refused to open a directory for
-	// fsync; directory syncs are then skipped for the rest of the backend's
-	// life.
+	// noDirSync is set when the server refused to open a directory of the
+	// repository before it opened any; directory syncs are then skipped for
+	// the rest of the backend's life.
 	noDirSync atomic.Bool
+	// dirOpened is set once a directory opened for fsync: the server
+	// supports that, and a later refusal is a failure.
+	dirOpened atomic.Bool
 	// durable holds directories whose entries up to the root this process
 	// has fsynced, so Put pays the parent syncs once per directory.
 	durable sync.Map
@@ -250,10 +253,12 @@ func (b *Backend) mkdirDurable(dir string) error {
 
 // syncDir fsyncs dir on the server so a rename, create or remove inside it
 // survives a server power loss. It is a no-op without fsync@openssh.com. A
-// server that refuses to open a directory (or an ancestor the user may not
-// read) with a status does not support directory syncs: that warns once and
-// turns them off for this backend. A directory that is gone has nothing to
-// flush. A failed fsync on a directory that opened is an error.
+// server that refuses to open a directory of the repository with a status,
+// before it opened any, does not support directory syncs: that warns once and
+// turns them off for this backend. Once a directory has opened, such a
+// refusal is an error. An ancestor of the repository the user may not read is
+// skipped by itself. A directory that is gone has nothing to flush. A failed
+// fsync on a directory that opened is an error.
 func (b *Backend) syncDir(dir string) error {
 	if !b.fsync || b.noDirSync.Load() {
 		return nil
@@ -264,7 +269,11 @@ func (b *Backend) syncDir(dir string) error {
 		switch {
 		case errors.Is(err, os.ErrNotExist):
 			return nil
-		case errors.As(err, &status) || errors.Is(err, os.ErrPermission):
+		case !errors.As(err, &status) && !errors.Is(err, os.ErrPermission):
+			// not a refusal by the server: the transport failed
+		case !b.inRepo(dir):
+			return nil
+		case !b.dirOpened.Load():
 			if b.noDirSync.CompareAndSwap(false, true) {
 				slog.Warn("arksftp: the server refuses to open a directory for fsync, "+
 					"directory syncs are off and renames are not durable on a power loss",
@@ -274,12 +283,19 @@ func (b *Backend) syncDir(dir string) error {
 		}
 		return fmt.Errorf("arksftp: sync dir %s: %w", dir, err)
 	}
+	b.dirOpened.Store(true)
 	err = syncFile(d)
 	_ = d.Close()
 	if err != nil {
 		return fmt.Errorf("arksftp: sync dir %s: %w", dir, err)
 	}
 	return nil
+}
+
+// inRepo reports whether dir is the repository root or lies below it.
+func (b *Backend) inRepo(dir string) bool {
+	base := path.Clean(b.basePath)
+	return dir == base || base == "." || strings.HasPrefix(dir, strings.TrimSuffix(base, "/")+"/")
 }
 
 // createTemp opens a fresh temporary file in dir and returns it with its path.

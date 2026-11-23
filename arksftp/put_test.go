@@ -236,13 +236,42 @@ func TestSyncDirReportsAFailedFsyncAndTurnsOffAnUnsupportedOpen(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root opens any directory")
 	}
-	locked := filepath.Join(dir, "locked")
-	if err := os.Mkdir(locked, 0o000); err != nil {
-		t.Fatal(err)
+	lock := func(dir string) string {
+		t.Helper()
+		locked := filepath.Join(dir, "locked")
+		if err := os.Mkdir(locked, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+		return locked
 	}
-	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
 	opens := 0
 	syncFile = func(*sftp.File) error { opens++; return nil }
+
+	// The server opened a directory above, so it supports that: a refusal
+	// inside the repository is a failure, one above it skips that directory.
+	if err := b.syncDir(lock(dir)); err == nil {
+		t.Error("a refused open in the repository was swallowed after a directory had opened")
+	}
+	if err := b.syncDir(lock(t.TempDir())); err != nil {
+		t.Errorf("syncDir on an ancestor the server refuses: %v", err)
+	}
+	if b.noDirSync.Load() || logs.Len() != 0 {
+		t.Errorf("noDirSync %v, want directory syncs on and no warning:\n%s", b.noDirSync.Load(), logs.String())
+	}
+	if err := b.syncDir(dir); err != nil || opens != 1 {
+		t.Errorf("syncDir after the refusals = %v with %d fsyncs, want nil and 1", err, opens)
+	}
+
+	// A server that refuses the first directory of the repository does not
+	// support directory syncs.
+	b = pipeBackend(t)
+	b.fsync = true
+	locked := lock(b.basePath)
+	opens = 0
+	if err := b.syncDir(lock(t.TempDir())); err != nil || b.noDirSync.Load() {
+		t.Fatalf("an ancestor refused first = %v, noDirSync %v, want nil and syncs on", err, b.noDirSync.Load())
+	}
 	for range 2 {
 		if err := b.syncDir(locked); err != nil {
 			t.Fatalf("syncDir on a directory the server refuses: %v", err)
@@ -254,7 +283,7 @@ func TestSyncDirReportsAFailedFsyncAndTurnsOffAnUnsupportedOpen(t *testing.T) {
 	if n := strings.Count(logs.String(), "level=WARN"); n != 1 {
 		t.Errorf("%d warnings, want 1:\n%s", n, logs.String())
 	}
-	if err := b.syncDir(dir); err != nil || opens != 0 {
+	if err := b.syncDir(b.basePath); err != nil || opens != 0 {
 		t.Errorf("syncDir after the switch-off = %v with %d fsyncs, want nil and none", err, opens)
 	}
 }
