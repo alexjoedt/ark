@@ -2,6 +2,7 @@ package ark_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -125,7 +126,8 @@ func TestPruneRemovesTempFiles(t *testing.T) {
 				filepath.Join(shards[0], ".ark-tmp-2"),
 			}
 			aside := filepath.Join(dir, "keys", ".ark-old-k1")
-			for _, p := range append(slices.Clone(temps), aside) {
+			lockAside := filepath.Join(dir, "locks", ".ark-old-l1")
+			for _, p := range append(slices.Clone(temps), aside, lockAside) {
 				writeTestFile(t, p, []byte("junk"))
 			}
 
@@ -156,6 +158,40 @@ func TestPruneRemovesTempFiles(t *testing.T) {
 			if !slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.HasSuffix(w, want) }) {
 				t.Errorf("Check warnings %q, want one ending in %q", res.Warnings, want)
 			}
+			if slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "locks/") }) {
+				t.Errorf("Check warnings %q name a lock refresh's aside file", res.Warnings)
+			}
 		})
+	}
+}
+
+// unlistable fails ListAside like a server that refuses to list a dir.
+type unlistable struct{ ark.Backend }
+
+func (unlistable) RemoveTemp(context.Context) error { return nil }
+
+func (unlistable) ListAside(context.Context, func(string) error) error {
+	return errors.New("permission denied")
+}
+
+// TestCheckWarnsWhenAsideFilesDoNotList pins that aside files, which only
+// produce warnings, never stop the check of the snapshots.
+func TestCheckWarnsWhenAsideFilesDoNotList(t *testing.T) {
+	local, err := arklocal.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("arklocal.New: %v", err)
+	}
+	repo := openRepo(t, unlistable{local})
+	src := t.TempDir()
+	writeTestFile(t, filepath.Join(src, "a.txt"), []byte("kept"))
+	backupDir(t, repo, src)
+	res, err := repo.Check(context.Background())
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if res.SnapshotsChecked != 1 || !slices.ContainsFunc(res.Warnings, func(w string) bool {
+		return strings.Contains(w, "permission denied")
+	}) {
+		t.Errorf("Check = %d snapshots, warnings %q, want 1 and the listing error", res.SnapshotsChecked, res.Warnings)
 	}
 }

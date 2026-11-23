@@ -725,7 +725,12 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 			fmt.Sprintf("lock %s does not open and is ignored, Unlock with WithForce removes it", name))
 	}
 	if l, ok := r.backend.(Leftovers); ok {
+		locks := LockFile.String() + "/"
 		err := l.ListAside(ctx, func(p string) error {
+			// Another process's lock refresh moves its lock aside for a moment.
+			if strings.HasPrefix(p, locks) {
+				return nil
+			}
 			orig := path.Join(path.Dir(p), strings.TrimPrefix(path.Base(p), ".ark-old-"))
 			result.Warnings = append(result.Warnings, fmt.Sprintf(
 				"aside file %s holds an earlier copy of %s; if %s is missing, restore it in the repository: mv %s %s",
@@ -733,7 +738,7 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 			return nil
 		})
 		if err != nil {
-			return nil, fmt.Errorf("check: list aside files: %w", err)
+			result.Warnings = append(result.Warnings, fmt.Sprintf("aside files not fully listed: %v", err))
 		}
 	}
 	// One pair of stores for the check: the indexes load once and a tree pack

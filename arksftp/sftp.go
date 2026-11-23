@@ -693,7 +693,8 @@ const renameAttempts = 16
 // only that failure renames p aside to its aside name (see [ark.Leftovers]),
 // renames tmp into place and then removes the aside file. When the second
 // rename fails, the aside file is renamed back. Nothing is removed before its
-// replacement is in place, and every nil return means our bytes landed at p.
+// replacement is in place, except p when a stale aside file may not be
+// removed, and every nil return means our bytes landed at p.
 //
 // ponytail: without the extension a reader sees p missing between the two
 // renames, and a crash or a dropped link there leaves the old object only in
@@ -728,7 +729,16 @@ func (b *Backend) rename(tmp, p string) error {
 				return serr
 			}
 			if rerr := b.client.Remove(aside); rerr != nil && !os.IsNotExist(rerr) {
-				return rerr
+				if !isStatus(rerr) {
+					return rerr
+				}
+				// Another user's leftover we may not remove: replace p the
+				// unsafe way rather than fail every Put of it.
+				slog.Warn("arksftp: cannot remove an aside file, removing the object before replacing it",
+					"path", aside, "err", rerr)
+				if rerr := b.client.Remove(p); rerr != nil && !os.IsNotExist(rerr) {
+					return rerr
+				}
 			}
 			err = b.client.Rename(tmp, p)
 			continue
@@ -738,14 +748,21 @@ func (b *Backend) rename(tmp, p string) error {
 		err = b.client.Rename(tmp, p)
 		if err == nil {
 			// A copy left behind here is reported by Check and harmless.
-			_ = b.client.Remove(aside)
+			if rerr := b.client.Remove(aside); rerr != nil {
+				slog.Warn("arksftp: cannot remove an aside file", "path", aside, "err", rerr)
+			}
 			return nil
 		}
-		// Another Put of p may have landed in between; then the old object
-		// is replaced and the next round removes the stale aside file.
-		if berr := b.client.Rename(aside, p); berr != nil && !isFailure(err) {
+		berr := b.client.Rename(aside, p)
+		if berr == nil {
+			// p was free, so the failure was not a taken target.
+			return err
+		}
+		if !isFailure(berr) {
 			return errors.Join(err, fmt.Errorf("rename %s back: %w", aside, berr))
 		}
+		// Another Put of p landed in between; the old object is replaced
+		// and the next round removes the stale aside file.
 	}
 	return err
 }
@@ -755,6 +772,13 @@ func (b *Backend) rename(tmp, p string) error {
 func isFailure(err error) bool {
 	var status *sftp.StatusError
 	return errors.As(err, &status) && status.FxCode() == sftp.ErrSSHFxFailure
+}
+
+// isStatus reports whether err is a status the server answered with, such as
+// a refused permission, rather than a lost connection.
+func isStatus(err error) bool {
+	var status *sftp.StatusError
+	return errors.As(err, &status) || os.IsPermission(err)
 }
 
 // Get returns a ReadCloser for the object stored under h.
