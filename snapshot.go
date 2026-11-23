@@ -309,7 +309,9 @@ type CheckResult struct {
 	Errors []string
 	// Warnings are findings that leave every snapshot intact: a pack no index
 	// lists or an index object that does not open, both of which Prune
-	// removes, or a lock that does not open, which Unlock WithForce removes.
+	// removes, a lock that does not open, which Unlock WithForce removes, or
+	// an aside file a backend lists (see [Leftovers]), with the mv that
+	// restores it.
 	// A pack with a blob that did not open and that could not be read again
 	// to compare its table with the index is one as well, beside the errors
 	// about the blob.

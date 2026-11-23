@@ -71,9 +71,12 @@ implementation of `ark.Backend` store the same names.
 
 The same two backends write an object to a temporary file in its directory and rename it into
 place. The temporary file's name starts with `.ark-tmp-`, and a write that was cut off leaves it
-behind. No object of the format has a name that starts with `.`, and no name is empty or holds `/`
-or `\`. A backend refuses such a name, so none can reach outside its namespace or shard
-(`ark.CheckName`).
+behind until the next prune removes it, except in `locks`. Where the server can't rename over an
+object, the backend first renames the old object aside to a name that starts with `.ark-old-`, and
+a write that fails can leave that file behind too. Nothing removes an aside file: it may hold the
+only copy of the object, which belongs at the same path without the prefix. No object of the format
+has a name that starts with `.`, and no name is empty or holds `/` or `\`. A backend refuses such a
+name, so none can reach outside its namespace or shard (`ark.CheckName`).
 
 The listings of both backends skip every name that starts with `.`, and so does a reader of their
 layout. They also skip every entry outside the layout: a directory in a flat namespace, a file next
@@ -816,8 +819,8 @@ listing and a read see the old object or the new one, never a missing, empty, or
 Otherwise a claimant can list `locks/` while a held lock is missing and take a conflicting one.
 ark's local and in-memory backends replace in one step, and so does its SFTP backend on a server
 that offers the `posix-rename@openssh.com` extension. On a server without it, the SFTP backend
-deletes the old object before it renames the new one into place, so a lock is missing for a round
-trip at every refresh. Don't run a prune, repair index, or key passwd there while another
+renames the old object aside before it renames the new one into place, so a lock is missing for a
+round trip at every refresh. Don't run a prune, repair index, or key passwd there while another
 operation runs.
 
 ## Prune

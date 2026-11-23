@@ -2,12 +2,16 @@ package ark_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arkfs"
+	"github.com/alexjoedt/ark/arklocal"
 	"github.com/alexjoedt/ark/arkmem"
 )
 
@@ -17,6 +21,10 @@ import (
 func TestPruneSweepsBothNamespaces(t *testing.T) {
 	ctx := context.Background()
 	b := arkmem.New()
+	// arkmem leaves no files behind, so Prune has nothing to remove first.
+	if _, ok := ark.Backend(b).(ark.Leftovers); ok {
+		t.Fatal("arkmem implements ark.Leftovers")
+	}
 
 	root := t.TempDir()
 	write := func(content string) {
@@ -83,5 +91,107 @@ func TestPruneSweepsBothNamespaces(t *testing.T) {
 	}
 	if string(got) != "second revision" {
 		t.Errorf("restored %q, want %q", got, "second revision")
+	}
+}
+
+// TestPruneRemovesTempFiles plants the temporary files killed Puts leave and
+// an aside file. A dry run keeps them all, a prune removes the temporary ones
+// and keeps the aside file, also through an instrumented backend.
+func TestPruneRemovesTempFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		wrap func(ark.Backend) ark.Backend
+	}{
+		{"arklocal", func(b ark.Backend) ark.Backend { return b }},
+		{"instrumented", func(b ark.Backend) ark.Backend { return ark.Instrument(b) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			local, err := arklocal.New(dir)
+			if err != nil {
+				t.Fatalf("arklocal.New: %v", err)
+			}
+			repo := openRepo(t, tc.wrap(local))
+			src := t.TempDir()
+			writeTestFile(t, filepath.Join(src, "a.txt"), []byte("kept"))
+			backupDir(t, repo, src)
+
+			shards, err := filepath.Glob(filepath.Join(dir, "datapacks", "??"))
+			if err != nil || len(shards) == 0 {
+				t.Fatalf("no data pack shard: %v", err)
+			}
+			temps := []string{
+				filepath.Join(dir, "snapshots", ".ark-tmp-1"),
+				filepath.Join(shards[0], ".ark-tmp-2"),
+			}
+			aside := filepath.Join(dir, "keys", ".ark-old-k1")
+			lockAside := filepath.Join(dir, "locks", ".ark-old-l1")
+			for _, p := range append(slices.Clone(temps), aside, lockAside) {
+				writeTestFile(t, p, []byte("junk"))
+			}
+
+			if _, err := repo.Prune(ctx, ark.WithPruneDryRun()); err != nil {
+				t.Fatalf("Prune dry run: %v", err)
+			}
+			for _, p := range temps {
+				if _, err := os.Stat(p); err != nil {
+					t.Errorf("%s after a dry run: %v, want kept", p, err)
+				}
+			}
+			if _, err := repo.Prune(ctx); err != nil {
+				t.Fatalf("Prune: %v", err)
+			}
+			for _, p := range temps {
+				if _, err := os.Stat(p); !os.IsNotExist(err) {
+					t.Errorf("%s after prune: %v, want gone", p, err)
+				}
+			}
+			if _, err := os.Stat(aside); err != nil {
+				t.Errorf("aside file after prune: %v, want kept", err)
+			}
+			res, err := repo.Check(ctx)
+			if err != nil {
+				t.Fatalf("Check: %v", err)
+			}
+			want := "mv keys/.ark-old-k1 keys/k1"
+			if !slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.HasSuffix(w, want) }) {
+				t.Errorf("Check warnings %q, want one ending in %q", res.Warnings, want)
+			}
+			if slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "locks/") }) {
+				t.Errorf("Check warnings %q name a lock refresh's aside file", res.Warnings)
+			}
+		})
+	}
+}
+
+// unlistable fails ListAside like a server that refuses to list a dir.
+type unlistable struct{ ark.Backend }
+
+func (unlistable) RemoveTemp(context.Context) error { return nil }
+
+func (unlistable) ListAside(context.Context, func(string) error) error {
+	return errors.New("permission denied")
+}
+
+// TestCheckWarnsWhenAsideFilesDoNotList pins that aside files, which only
+// produce warnings, never stop the check of the snapshots.
+func TestCheckWarnsWhenAsideFilesDoNotList(t *testing.T) {
+	local, err := arklocal.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("arklocal.New: %v", err)
+	}
+	repo := openRepo(t, unlistable{local})
+	src := t.TempDir()
+	writeTestFile(t, filepath.Join(src, "a.txt"), []byte("kept"))
+	backupDir(t, repo, src)
+	res, err := repo.Check(context.Background())
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if res.SnapshotsChecked != 1 || !slices.ContainsFunc(res.Warnings, func(w string) bool {
+		return strings.Contains(w, "permission denied")
+	}) {
+		t.Errorf("Check = %d snapshots, warnings %q, want 1 and the listing error", res.SnapshotsChecked, res.Warnings)
 	}
 }

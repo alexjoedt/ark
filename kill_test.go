@@ -320,6 +320,9 @@ func runKillHarness(
 			repacked = repacked || bytes.IndexByte(rerun.events, 'P') >= 0
 			st.check(ctx, t, b, point+", after prune rerun")
 		}
+		if op == "prune" {
+			noTempLeft(t, repoDir, point)
+		}
 		if repacked {
 			repacks++
 		}
@@ -334,6 +337,25 @@ func runKillHarness(
 		t.Logf("killed %s: %d", w, windows[w])
 	}
 	retire(fmt.Sprintf("seed %d final full pass", seed))
+}
+
+// noTempLeft fails t if a temporary file of a Put is left in the local
+// repository at dir after a finished prune, which removes the ones killed
+// children left. A remote repository is not walked.
+func noTempLeft(t *testing.T, dir, point string) {
+	t.Helper()
+	if strings.Contains(dir, "://") {
+		return
+	}
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && strings.HasPrefix(d.Name(), ".ark-tmp-") {
+			t.Errorf("%s: %s left after prune", point, p)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatalf("%s: walk %s: %v", point, dir, err)
+	}
 }
 
 // unlockKilled removes the lock a killed child left behind, as an operator
@@ -451,7 +473,12 @@ func TestKillHarnessChild(t *testing.T) {
 	}
 	// fd 3 is the pipe runKillChild reads: the ready byte, then the writes.
 	ready := os.NewFile(3, "ready")
-	repo, err := ark.Open(ctx, killProbe{b, ready}, testPassword)
+	left, ok := b.(ark.Leftovers)
+	if !ok {
+		_ = b.Close()
+		t.Fatalf("%T does not implement ark.Leftovers", b)
+	}
+	repo, err := ark.Open(ctx, killProbe{b, left, ready}, testPassword)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -525,9 +552,12 @@ var killWrites = []struct {
 	{'X', "index delete"}, {'D', "pack delete"}, {'F', "manifest delete"},
 }
 
-// killProbe reports the pack, index and manifest writes of a child to w.
+// killProbe reports the pack, index and manifest writes of a child to w. It
+// embeds [ark.Leftovers] too: behind the Backend alone the prune of a child
+// would leave the temporary files of killed Puts where they are.
 type killProbe struct {
 	ark.Backend
+	ark.Leftovers
 	w io.Writer
 }
 

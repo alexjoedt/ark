@@ -167,3 +167,28 @@ type Backend interface {
 	// Close releases any resources held by the backend.
 	Close() error
 }
+
+// Leftovers is an optional interface for a backend whose writes can leave
+// files behind that are no objects: the temporary file of a Put cut off before
+// its rename, whose name starts with ".ark-tmp-", and the aside file a Put
+// renames the object it replaces to when the server cannot rename over it,
+// whose name starts with ".ark-old-". List yields neither. arklocal and
+// arksftp implement it; a backend without it never leaves such files.
+type Leftovers interface {
+	// RemoveTemp deletes every temporary file in every namespace and shard
+	// dir, and never an aside file, which may hold the only copy of an
+	// object. Prune calls it while it holds the exclusive lock, so no Put
+	// of an object other than a lock is in flight; a dry run does not. It
+	// skips the locks namespace, where other processes write their locks
+	// and the caller refreshes its own. A file it may not remove is logged
+	// and kept, so one user's leftover in a shared repository does not fail
+	// every prune.
+	RemoveTemp(ctx context.Context) error
+
+	// ListAside calls fn with the path of every aside file, relative to the
+	// repository root and slash-separated, such as "keys/.ark-old-<name>".
+	// The object it held belongs at the same path without the prefix. Check
+	// calls it to report each one; nothing removes or restores them. If fn
+	// returns an error, ListAside stops and returns it.
+	ListAside(ctx context.Context, fn func(path string) error) error
+}

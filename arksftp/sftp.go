@@ -138,6 +138,9 @@ type Backend struct {
 	// posixRename records whether the server announced
 	// posix-rename@openssh.com. See [Backend.rename].
 	posixRename bool
+	// asideMu lets one Put at a time replace an object without posix-rename.
+	// See [Backend.rename].
+	asideMu sync.Mutex
 	// fsync records whether the server announced fsync@openssh.com, which
 	// Put needs to flush a temp file before renaming it into place and
 	// Put and Delete need to flush the directories they change.
@@ -445,7 +448,7 @@ func (b *Backend) commit(ctx context.Context, f *sftp.File, tmp, p string) error
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := b.rename(tmp, p); err != nil {
+	if err := b.rename(ctx, tmp, p); err != nil {
 		return fmt.Errorf("arksftp: rename %s: %w", p, err)
 	}
 	return nil
@@ -680,39 +683,129 @@ func tempName(dir string) (string, error) {
 	return path.Join(dir, tmpPrefix+hex.EncodeToString(name[:])), nil
 }
 
-// renameAttempts bounds the remove-and-rename retries of [Backend.rename]. A
-// retry is only needed when another Put of the same name landed in between,
-// and each such Put lands once, so this is the number of concurrent writers of
-// one name the plain-rename path tolerates.
+// renameAttempts bounds the rounds of [Backend.rename] without posix-rename. A
+// further round is only needed when another Put of the same name landed in
+// between. Each such Put of this Backend lands once and costs two rounds, the
+// one it lands in and the one that removes the aside file it made stale, so
+// the plain-rename path tolerates renameAttempts/2 concurrent writers of one
+// name.
 const renameAttempts = 16
 
 // rename moves tmp onto p. It prefers posix-rename@openssh.com, which replaces
 // an existing target atomically as the Backend contract requires. A server
 // that does not announce the extension gets a plain SFTP v3 rename, which
-// fails with SSH_FX_FAILURE when the target exists. The rename is tried first,
-// so storing a new object never removes anything; only that failure removes p
-// and tries again, and every nil return means our bytes landed at p.
+// fails with SSH_FX_FAILURE when the target exists. The rename is tried first;
+// only that failure renames p aside to its aside name (see [ark.Leftovers]),
+// renames tmp into place and then removes the aside file. When the second
+// rename fails, the aside file is renamed back. Nothing is removed before its
+// replacement is in place, except p when a stale aside file may not be
+// removed, and every nil return means our bytes landed at p.
 //
-// ponytail: replacing an existing object without the extension removes it
-// first, so a reader sees it missing for one round trip, and a crash or a
-// dropped link in that round trip loses it. SFTP v3 has no atomic replace;
-// a server with posix-rename closes the window.
-func (b *Backend) rename(tmp, p string) error {
+// Every Put of p uses the same aside name, and a rename back that succeeds
+// or finds no aside file looks the same whether the target was free or
+// another Put moved p aside in between. The replacements of one Backend
+// therefore run one at a time; only the first rename runs beside them. A Put
+// whose ctx ends while it waits its turn, or between two rounds, moves
+// nothing more: it has returned, and its object must not appear after that.
+//
+// ponytail: without the extension a reader sees p missing between the two
+// renames, and a crash or a dropped link there leaves the old object only in
+// the aside file, which Check reports. SFTP v3 has no atomic replace; a
+// server with posix-rename closes the window. The lock is per Backend: three
+// clients replacing p at the same moment can still fail a Put, with a whole
+// object left at p. SFTP v3 cannot tell them apart; posix-rename can. The lock
+// is also one for all names: a replacement that waits on a slow server holds
+// up every other one, the refresh of a repository lock included, until its
+// context ends. A lock per path lifts that when replacements stop being rare.
+func (b *Backend) rename(ctx context.Context, tmp, p string) error {
 	if b.posixRename {
 		return b.client.PosixRename(tmp, p)
 	}
+	aside := path.Join(path.Dir(p), asidePrefix+path.Base(p))
 	err := b.client.Rename(tmp, p)
+	if isFailure(err) {
+		b.asideMu.Lock()
+		defer b.asideMu.Unlock()
+	}
 	for range renameAttempts {
-		var status *sftp.StatusError
-		if err == nil || !errors.As(err, &status) || status.FxCode() != sftp.ErrSSHFxFailure {
+		if !isFailure(err) {
 			return err
 		}
-		if rerr := b.client.Remove(p); rerr != nil && !os.IsNotExist(rerr) {
-			return rerr
+		// Nothing of this Put is in flight here: tmp is still tmp, and an
+		// aside file left by a round before is stale beside the object that
+		// another Put landed.
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
+		err = b.client.Rename(p, aside)
+		switch {
+		case err == nil:
+		case os.IsNotExist(err):
+			// p went away in between: rename onto the free name.
+			err = b.client.Rename(tmp, p)
+			continue
+		case isFailure(err):
+			// The aside name is taken. An aside file beside an object in
+			// place is a copy the Put that left it replaced; it is the only
+			// copy only while its object is missing, and some servers
+			// report a missing p with this status as well.
+			if _, serr := b.client.Lstat(p); os.IsNotExist(serr) {
+				err = b.client.Rename(tmp, p)
+				continue
+			} else if serr != nil {
+				return serr
+			}
+			if rerr := b.client.Remove(aside); rerr != nil && !os.IsNotExist(rerr) {
+				if !isStatus(rerr) {
+					return rerr
+				}
+				// Another user's leftover we may not remove: replace p the
+				// unsafe way rather than fail every Put of it.
+				slog.WarnContext(ctx, "arksftp: cannot remove an aside file, removing the object before replacing it",
+					"path", aside, "err", rerr)
+				if rerr := b.client.Remove(p); rerr != nil && !os.IsNotExist(rerr) {
+					return rerr
+				}
+			}
+			err = b.client.Rename(tmp, p)
+			continue
+		default:
+			return err
 		}
 		err = b.client.Rename(tmp, p)
+		if err == nil {
+			// A copy left behind here is reported by Check and harmless.
+			if rerr := b.client.Remove(aside); rerr != nil {
+				slog.WarnContext(ctx, "arksftp: cannot remove an aside file", "path", aside, "err", rerr)
+			}
+			return nil
+		}
+		berr := b.client.Rename(aside, p)
+		if berr == nil {
+			// p was free, so the failure was not a taken target.
+			return err
+		}
+		if !isFailure(berr) {
+			return errors.Join(err, fmt.Errorf("rename %s back: %w", aside, berr))
+		}
+		// Another Put of p landed in between; the old object is replaced
+		// and the next round removes the stale aside file.
 	}
 	return err
+}
+
+// isFailure reports whether err is the SSH_FX_FAILURE status a plain SFTP v3
+// rename returns when its target exists.
+func isFailure(err error) bool {
+	var status *sftp.StatusError
+	return errors.As(err, &status) && status.FxCode() == sftp.ErrSSHFxFailure
+}
+
+// isStatus reports whether err is a status the server answered with, such as
+// a refused permission, rather than a lost connection.
+func isStatus(err error) bool {
+	var status *sftp.StatusError
+	return errors.As(err, &status) || os.IsPermission(err)
 }
 
 // Get returns a ReadCloser for the object stored under h.
@@ -1113,4 +1206,109 @@ func (b *Backend) remotePath(h ark.Handle) (string, error) {
 		return path.Join(dir, h.Name[:2], h.Name), nil
 	}
 	return path.Join(dir, h.Name), nil
+}
+
+// asidePrefix marks an object a Put renamed aside to replace it (see
+// ark.Leftovers).
+const asidePrefix = ".ark-old-"
+
+var _ ark.Leftovers = (*Backend)(nil)
+
+// RemoveTemp deletes every temporary file a Put left in a namespace or a
+// shard dir, except in the locks namespace (see [ark.Leftovers]), and every
+// temporary directory mkdirRepo left in the root or a namespace dir. An entry
+// the server refuses to remove, such as another user's in a shared repository
+// or a directory that is not empty, is logged and kept.
+func (b *Backend) RemoveTemp(ctx context.Context) error {
+	locks := ark.LockFile.String() + "/"
+	return b.leftovers(ctx, tmpPrefix, func(rel string, dir bool) error {
+		if strings.HasPrefix(rel, locks) {
+			return nil
+		}
+		p := path.Join(b.basePath, rel)
+		remove := b.client.Remove
+		if dir {
+			remove = b.client.RemoveDirectory
+		}
+		err := b.do(ctx, func() error { return remove(p) })
+		var status *sftp.StatusError
+		switch {
+		case err == nil || os.IsNotExist(err):
+		case errors.As(err, &status) || errors.Is(err, os.ErrPermission):
+			slog.WarnContext(ctx, "arksftp: cannot remove a temporary entry", "path", rel, "err", err)
+		default:
+			return fmt.Errorf("remove %s: %w", p, err)
+		}
+		return nil
+	})
+}
+
+// ListAside calls fn with the path, relative to the root, of every aside file
+// in a namespace or a shard dir.
+func (b *Backend) ListAside(ctx context.Context, fn func(path string) error) error {
+	return b.leftovers(ctx, asidePrefix, func(rel string, dir bool) error {
+		if dir {
+			return nil
+		}
+		return fn(rel)
+	})
+}
+
+// leftovers calls fn with the relative path of every entry whose name starts
+// with prefix in the root, a namespace dir or a shard dir, and whether it is
+// a directory.
+func (b *Backend) leftovers(ctx context.Context, prefix string, fn func(rel string, dir bool) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := b.leftoversIn(ctx, "", prefix, false, fn); err != nil {
+		return fmt.Errorf("arksftp: root: %w", err)
+	}
+	for t := ark.ConfigFile; t.String() != ark.UnknownNamespace; t++ {
+		sharded := t == ark.DataPackFile || t == ark.TreePackFile
+		if err := b.leftoversIn(ctx, t.String(), prefix, sharded, fn); err != nil {
+			return fmt.Errorf("arksftp: %s: %w", t, err)
+		}
+	}
+	return nil
+}
+
+func (b *Backend) leftoversIn(
+	ctx context.Context, rel, prefix string, sharded bool, fn func(string, bool) error,
+) error {
+	dir := path.Join(b.basePath, rel)
+	entries, err := b.readDir(ctx, dir)
+	if os.IsNotExist(err) {
+		if gone, aerr := b.absent(ctx, dir); aerr != nil {
+			return aerr
+		} else if gone {
+			return nil
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("read %s: %w", dir, err)
+	}
+	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		name := e.Name()
+		switch {
+		case strings.HasPrefix(name, prefix):
+			if err := fn(path.Join(rel, name), e.IsDir()); err != nil {
+				return err
+			}
+		case sharded && len(name) == 2:
+			info, err := b.follow(ctx, path.Join(dir, name), e)
+			if err != nil {
+				return err
+			}
+			if info != nil && info.IsDir() {
+				if err := b.leftoversIn(ctx, rel+"/"+name, prefix, false, fn); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }

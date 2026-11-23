@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -421,6 +422,19 @@ func TestVerifyAndCheckExit5(t *testing.T) {
 	}
 	if cr.SnapshotsChecked != 1 || len(cr.Errors) == 0 {
 		t.Fatalf("got %+v", cr)
+	}
+}
+
+// TestCheckPrintsTheMvThatRestoresAnAsideFile plants what a failed Put over
+// an object leaves without posix-rename and pins the restoring mv.
+func TestCheckPrintsTheMvThatRestoresAnAsideFile(t *testing.T) {
+	repo := initRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "keys", ".ark-old-k1"), []byte("junk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, logs := runCaptureAll(t, "-r", repo, "check")
+	if code != 0 || !strings.Contains(logs, "mv keys/.ark-old-k1 keys/k1") {
+		t.Fatalf("check: exit %d, stdout %q, stderr %q", code, out, logs)
 	}
 }
 
@@ -1403,8 +1417,23 @@ func TestInitRefusesNonEmptyDir(t *testing.T) {
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("dir changed: %v %v", entries, err)
 	}
-	if code, _ := runCapture(t, "-r", filepath.Join(dir, "new"), "init"); code != 0 {
+	deep := filepath.Join(dir, "new", "deeper")
+	if code, _ := runCapture(t, "-r", deep, "init"); code != 0 {
 		t.Fatalf("init into a missing dir: exit %d", code)
+	}
+	if fi, err := os.Stat(deep); err != nil || !fi.IsDir() {
+		t.Fatalf("init did not create %s: %v", deep, err)
+	}
+}
+
+func TestSnapshotsOnAMissingRepoCreatesNothing(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "mnt", "ark")
+	if code, out := runCapture(t, "-r", missing, "snapshots"); code == 0 {
+		t.Fatalf("snapshots on a missing repo: exit 0, %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "mnt")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("snapshots created the repository path: %v", err)
 	}
 }
 
@@ -1521,4 +1550,27 @@ func TestLsJSONKeepsSpecialBits(t *testing.T) {
 		}
 	}
 	t.Fatalf("passwd not listed: %q", out)
+}
+
+// TestCreateRepoDirFlushesEveryDirectoryItAddsTo pins that init leaves a new
+// repository directory durable: every directory that gained an entry is synced.
+func TestCreateRepoDirFlushesEveryDirectoryItAddsTo(t *testing.T) {
+	orig := syncDir
+	t.Cleanup(func() { syncDir = orig })
+	var synced []string
+	syncDir = func(p string) error { synced = append(synced, p); return orig(p) }
+
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "a", "repo")
+	if err := createRepoDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{filepath.Join(parent, "a"), parent}; !slices.Equal(synced, want) {
+		t.Fatalf("synced %v, want %v", synced, want)
+	}
+
+	synced = nil
+	if err := createRepoDir(dir); err != nil || len(synced) != 0 {
+		t.Fatalf("createRepoDir on an existing dir = %v with %v synced, want nothing to sync", err, synced)
+	}
 }

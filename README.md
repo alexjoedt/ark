@@ -57,6 +57,9 @@ ark forget --keep-daily 7 --keep-weekly 4 --prune
 Library:
 
 ```go
+if err := os.MkdirAll("/srv/ark", 0o700); err != nil {
+	return err
+}
 b, err := arklocal.New("/srv/ark")
 if err != nil {
 	return err

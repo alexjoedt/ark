@@ -54,6 +54,9 @@ func run(ctx context.Context, args []string) error {
 }
 
 func write(ctx context.Context, out string) (err error) {
+	if err := os.MkdirAll(out, 0o700); err != nil {
+		return fmt.Errorf("create %s: %w", out, err)
+	}
 	b, err := arklocal.New(out)
 	if err != nil {
 		return fmt.Errorf("open backend %s: %w", out, err)

@@ -9,6 +9,10 @@ storage that ark doesn't cover, such as S3 or the API of a NAS.
 Create a backend and hand it to `ark.Init` and `ark.Open`:
 
 ```go
+// arklocal.New opens an existing directory; create a new one first
+if err := os.MkdirAll("/srv/ark", 0o700); err != nil {
+	return err
+}
 b, err := arklocal.New("/srv/ark")
 
 b, err := arksftp.New(arksftp.Config{Host: "nas", User: "backup", Path: "/srv/ark"})
@@ -18,7 +22,7 @@ b := arkmem.New()
 
 | Package | Stores objects in | Notes |
 |---|---|---|
-| `arklocal` | a local directory | writes through a temporary file and a rename, so no reader sees a partial object |
+| `arklocal` | an existing local directory | writes through a temporary file and a rename, so no reader sees a partial object |
 | `arksftp` | a directory over SFTP | checks the host key against `known_hosts` by default |
 | `arkmem` | memory | for tests; its objects are gone on `Close` |
 
@@ -78,7 +82,7 @@ mode `2770`, new directories still get `0700`, so other members of the group can
 Every `arksftp` call returns when its context ends, also when the server no longer answers. The
 request it waited on stays behind until the server answers it or the connection closes, so a
 cancelled `Delete` may still remove its object and a cancelled `Put` may leave a temporary
-`.ark-tmp-` object, which no listing shows.
+`.ark-tmp-` object, which no listing shows and the next prune removes.
 
 The backend pings the server every 15 seconds. It closes the connection after three intervals in
 a row with a ping unanswered and nothing else arriving from the server. A ping that fails because
@@ -194,6 +198,34 @@ Three more points:
 
 `Put` doesn't have to make the object durable. `Sync` does that. A store that makes every write
 durable on its own returns nil from `Sync` without doing anything.
+
+### Leftover files
+
+A backend that writes each object to a temporary file and renames it into place can leave that
+file behind when a write is cut off. Implement the optional `ark.Leftovers` interface to have ark
+clean up after it:
+
+```go
+type Leftovers interface {
+	RemoveTemp(ctx context.Context) error
+	ListAside(ctx context.Context, fn func(path string) error) error
+}
+```
+
+- `RemoveTemp` deletes every temporary file, whose name starts with `.ark-tmp-`, in every
+  namespace and shard directory except `locks`. `Prune` calls it while it holds the exclusive
+  lock, so no `Put` is in flight outside `locks`, where other processes still write their locks;
+  a dry run doesn't call it. Log and keep a file you may not remove, so another user's leftover in
+  a shared repository doesn't fail every prune.
+- `ListAside` calls `fn` with the path of every aside file, relative to the repository root, such
+  as `keys/.ark-old-<name>`. A `Put` that can't rename over an object renames the old one aside
+  first, so a failed write can leave it behind holding the only copy of the object. `Check`
+  reports each one; nothing removes or restores them.
+
+`arklocal` and `arksftp` implement it, and `arksftp` also removes the empty `.ark-tmp-`
+directories a cut-off directory creation leaves. `ark.Instrument` passes both calls through, and
+does nothing for a backend without them. A backend
+that writes in one step, such as an object store, leaves nothing behind and doesn't implement it.
 
 ### Test it
 

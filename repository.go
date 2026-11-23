@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path"
 	"runtime"
 	"slices"
 	"sort"
@@ -578,8 +579,9 @@ func WithPruneDryRun() PruneOption { return func(c *pruneConfig) { c.dryRun = tr
 //
 // It deletes nothing when a snapshot references an object no index lists:
 // the error names RebuildIndex, which restores the index from the packs.
-// Pass WithPruneDryRun to report what would be removed without deleting
-// anything. A dry run whose load of the data index finds a lost pack still
+// A backend that implements [Leftovers] first removes the temporary files of
+// cut-off writes. Pass WithPruneDryRun to report what would be removed without
+// deleting anything. A dry run whose load of the data index finds a lost pack still
 // stores the lost-pack marker, the one object it may write.
 func (r *Repository) Prune(ctx context.Context, opts ...PruneOption) (*PruneResult, error) {
 	cfg := &pruneConfig{}
@@ -595,6 +597,11 @@ func (r *Repository) Prune(ctx context.Context, opts ...PruneOption) (*PruneResu
 	}
 	defer lock.release(ctx)
 
+	if l, ok := r.backend.(Leftovers); ok && !cfg.dryRun {
+		if err := l.RemoveTemp(ctx); err != nil {
+			return nil, fmt.Errorf("gc: remove temporary files: %w", err)
+		}
+	}
 	manifests, err := r.readManifests(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("gc: failed to list manifests: %w", err)
@@ -716,6 +723,23 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 	for _, name := range unreadable {
 		result.Warnings = append(result.Warnings,
 			fmt.Sprintf("lock %s does not open and is ignored, Unlock with WithForce removes it", name))
+	}
+	if l, ok := r.backend.(Leftovers); ok {
+		locks := LockFile.String() + "/"
+		err := l.ListAside(ctx, func(p string) error {
+			// Another process's lock refresh moves its lock aside for a moment.
+			if strings.HasPrefix(p, locks) {
+				return nil
+			}
+			orig := path.Join(path.Dir(p), strings.TrimPrefix(path.Base(p), ".ark-old-"))
+			result.Warnings = append(result.Warnings, fmt.Sprintf(
+				"aside file %s holds an earlier copy of %s; if %s is missing, restore it in the repository: mv %s %s",
+				p, orig, orig, p, orig))
+			return nil
+		})
+		if err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("aside files not fully listed: %v", err))
+		}
 	}
 	// One pair of stores for the check: the indexes load once and a tree pack
 	// several snapshots share is fetched once.

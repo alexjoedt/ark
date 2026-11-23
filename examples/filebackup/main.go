@@ -25,6 +25,9 @@ func main() {
 	repoPath, dir, dest := os.Args[1], os.Args[2], os.Args[3]
 	ctx := context.Background()
 
+	if err := os.MkdirAll(repoPath, 0o700); err != nil {
+		log.Fatal(err)
+	}
 	b, err := arklocal.New(repoPath)
 	if err != nil {
 		log.Fatal(err)

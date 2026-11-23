@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/internal/rangeread"
@@ -35,31 +36,23 @@ type Backend struct {
 	written  written  // what Put and Delete touched since the last Sync, with trackWrites
 }
 
-// New creates or opens a local backend rooted at dir.
-// The directory (and its parents) is created if it does not already exist.
+// New opens the local backend rooted at dir. A missing dir is an error
+// wrapping [fs.ErrNotExist]: the caller creates a new repository directory
+// (os.MkdirAll), so a path on an unmounted volume never fills the root disk.
+// A dir that is no directory is an error too.
 func New(dir string) (*Backend, error) {
-	// existing is the deepest ancestor of dir that is there before MkdirAll.
-	existing := dir
-	for trackWrites && existing != filepath.Dir(existing) {
-		if _, err := os.Lstat(existing); err == nil {
-			break
-		}
-		existing = filepath.Dir(existing)
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("arklocal: create backend directory %s: %w", dir, err)
-	}
 	root, err := os.Open(dir)
 	if err != nil {
 		return nil, fmt.Errorf("arklocal: open backend directory %s: %w", dir, err)
 	}
-	b := &Backend{basePath: dir, root: root}
-	if existing != dir {
-		// MkdirAll created dir, and maybe parents: the first Sync makes
-		// their entries durable too, or a power loss drops the repository.
-		b.written.record(existing, "", filepath.Dir(dir))
+	if fi, err := root.Stat(); err != nil || !fi.IsDir() {
+		_ = root.Close()
+		if err == nil {
+			err = syscall.ENOTDIR
+		}
+		return nil, fmt.Errorf("arklocal: open backend directory %s: %w", dir, err)
 	}
-	return b, nil
+	return &Backend{basePath: dir, root: root}, nil
 }
 
 // BasePath returns the root directory of the local backend.
@@ -377,3 +370,83 @@ func (b *Backend) Stat(ctx context.Context, h ark.Handle) (ark.BlobInfo, error) 
 
 // Close releases the root directory. The backend cannot Sync afterwards.
 func (b *Backend) Close() error { return b.root.Close() }
+
+// asidePrefix marks an object a Put renamed aside to replace it (see
+// ark.Leftovers). This backend renames over an object, so only a repository
+// copied from elsewhere holds one.
+const asidePrefix = ".ark-old-"
+
+var _ ark.Leftovers = (*Backend)(nil)
+
+// RemoveTemp deletes every temporary file a Put left in a namespace or a
+// shard dir, except in the locks namespace (see [ark.Leftovers]). A file it
+// may not remove, such as another user's in a shared repository, is logged
+// and kept.
+func (b *Backend) RemoveTemp(ctx context.Context) error {
+	locks := ark.LockFile.String() + "/"
+	return b.leftovers(ctx, tmpPrefix, func(rel string) error {
+		if strings.HasPrefix(rel, locks) {
+			return nil
+		}
+		err := os.Remove(filepath.Join(b.basePath, filepath.FromSlash(rel)))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			slog.WarnContext(ctx, "arklocal: cannot remove a temporary file", "path", rel, "err", err)
+		}
+		return nil
+	})
+}
+
+// ListAside calls fn with the slash-separated path, relative to the root, of
+// every aside file in a namespace or a shard dir.
+func (b *Backend) ListAside(ctx context.Context, fn func(path string) error) error {
+	return b.leftovers(ctx, asidePrefix, fn)
+}
+
+// leftovers calls fn with the relative path of every file whose name starts
+// with prefix in a namespace dir or a shard dir, where Put writes.
+func (b *Backend) leftovers(ctx context.Context, prefix string, fn func(rel string) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for t := ark.ConfigFile; t.String() != ark.UnknownNamespace; t++ {
+		sharded := t == ark.DataPackFile || t == ark.TreePackFile
+		if err := b.leftoversIn(ctx, t.String(), prefix, sharded, fn); err != nil {
+			return fmt.Errorf("arklocal: %s: %w", t, err)
+		}
+	}
+	return nil
+}
+
+func (b *Backend) leftoversIn(ctx context.Context, rel, prefix string, sharded bool, fn func(string) error) error {
+	dir := filepath.Join(b.basePath, filepath.FromSlash(rel))
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) && !dangling(dir) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		name := e.Name()
+		switch {
+		case strings.HasPrefix(name, prefix) && !e.IsDir():
+			if err := fn(rel + "/" + name); err != nil {
+				return err
+			}
+		case sharded && len(name) == 2:
+			info, err := follow(dir, e)
+			if err != nil {
+				return err
+			}
+			if info != nil && info.IsDir() {
+				if err := b.leftoversIn(ctx, rel+"/"+name, prefix, false, fn); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}

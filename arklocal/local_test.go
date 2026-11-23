@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -287,5 +288,25 @@ func TestListSkipsNamesCheckNameRefuses(t *testing.T) {
 	}
 	if _, err := b.Get(ctx, ark.Handle{Type: ark.LockFile, Name: ".DS_Store"}); !errors.Is(err, ark.ErrInvalidName) {
 		t.Errorf("Get .DS_Store = %v, want ark.ErrInvalidName", err)
+	}
+}
+
+func TestNewRefusesAMissingDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "gone", "repo")
+	if _, err := New(dir); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("New on a missing dir = %v, want fs.ErrNotExist", err)
+	}
+	if _, err := os.Stat(filepath.Dir(dir)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("New created %s: %v", filepath.Dir(dir), err)
+	}
+}
+
+func TestNewRefusesAFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "ark.tar")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := New(file); !errors.Is(err, syscall.ENOTDIR) {
+		t.Fatalf("New on a regular file = %v, %v, want ENOTDIR", b, err)
 	}
 }

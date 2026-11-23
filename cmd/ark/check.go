@@ -17,7 +17,9 @@ func checkCommand() *cli.Command {
 
    Verifies every snapshot and reports missing or corrupt objects. Exit 5 on problems.
    A pack no index lists, which an unfinished backup leaves, and an index object that
-   does not open are reported as warnings; prune removes both.`,
+   does not open are reported as warnings; prune removes both. So is an aside file a
+   failed write over an object can leave on an SFTP server without posix-rename, with
+   the mv that restores the object if it is missing.`,
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			repo, err := openRepo(ctx, cmd)
 			if err != nil {

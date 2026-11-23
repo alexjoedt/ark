@@ -1,6 +1,10 @@
 package arksftp
 
 import (
+	"bytes"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -120,5 +124,130 @@ func TestLoadSSHConfigSurvivesMissingFiles(t *testing.T) {
 	}
 	if got := sc.Get("anything", "HostName"); got != "" {
 		t.Errorf("Get returned %q from a config that does not exist", got)
+	}
+}
+
+func TestMatchBlocksAreSkippedAndTheRestApplies(t *testing.T) {
+	sc := fixture(t, `
+Host before
+  User one
+
+Match host a user b
+  User matched
+  Port 9
+
+match all
+  User matched2
+
+Host after
+  User two
+  IdentityFile "Match me"
+  # Match comment
+  Port 2200
+`)
+	if got := sc.Get("before", "User"); got != "one" {
+		t.Errorf("before User = %q, want one", got)
+	}
+	if got := sc.Get("after", "User"); got != "two" {
+		t.Errorf("after User = %q, want two", got)
+	}
+	if got := sc.Get("after", "Port"); got != "2200" {
+		t.Errorf("after Port = %q, want 2200 (a Match in a comment is no block)", got)
+	}
+	if got := sc.Get("after", "IdentityFile"); got != "Match me" {
+		t.Errorf("after IdentityFile = %q, want a value that contains Match kept", got)
+	}
+}
+
+func TestStripMatchBlocksReportsRemoval(t *testing.T) {
+	if _, stripped := stripMatchBlocks("Host a\n  User x\n"); stripped {
+		t.Error("stripped = true for a file without Match")
+	}
+	text := "Host a\n  User x\nMatch all\n  User y\nHost b\n  User z\n"
+	got, stripped := stripMatchBlocks(text)
+	if !stripped || strings.Contains(got, "User y") || !strings.Contains(got, "User z") {
+		t.Errorf("got %q, stripped %v", got, stripped)
+	}
+}
+
+// userSSHConfig points loadSSHConfig at a user ssh_config of its own, with
+// files given by their path under ~/.ssh, and returns that directory.
+func userSSHConfig(t *testing.T, files map[string]string) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	orig := sshConfigFiles
+	t.Cleanup(func() { sshConfigFiles = orig })
+	sshConfigFiles = sshConfigFiles[:1]
+
+	dir := filepath.Join(home, ".ssh")
+	for name, text := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestMatchBlocksInIncludedFilesAreSkippedAndTheRestApplies(t *testing.T) {
+	dir := userSSHConfig(t, map[string]string{
+		"config": `Include config.d/*
+Port 2022
+
+Host nested
+  Include nested.conf
+  IdentityFile ~/.ssh/n
+`,
+		"config.d/work": `Host work
+  User worker
+
+Match exec "true"
+  User matched
+
+Host after
+  User later`,
+		"nested.conf": `User inner
+
+Host other
+  User leaked
+`,
+	})
+	var logs bytes.Buffer
+	orig := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(orig) })
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+
+	sc := loadSSHConfig()
+	loadSSHConfig()
+
+	for _, tc := range []struct{ alias, key, want string }{
+		{"work", "User", "worker"},
+		{"after", "User", "later"},
+		{"work", "Port", "2022"}, // a line after the Include is no part of the included stanzas
+		{"nested", "User", "inner"},
+		{"nested", "IdentityFile", "~/.ssh/n"},
+		{"work", "IdentityFile", ""},
+		{"other", "User", ""}, // a stanza included inside a Host block is dropped
+	} {
+		if got := sc.Get(tc.alias, tc.key); got != tc.want {
+			t.Errorf("%s %s = %q, want %q", tc.alias, tc.key, got, tc.want)
+		}
+	}
+	warning := "ignoring Match blocks in ssh_config\" path=" + filepath.Join(dir, "config.d", "work")
+	if n := strings.Count(logs.String(), warning); n != 1 {
+		t.Errorf("%d Match warnings for the included file after two loads, want 1:\n%s", n, &logs)
+	}
+}
+
+func TestOversizedSSHConfigIsSkipped(t *testing.T) {
+	userSSHConfig(t, map[string]string{
+		"config": "Host big\n  User u\n" + strings.Repeat("# padding\n", maxSSHConfigSize/10),
+	})
+	if got := loadSSHConfig().Get("big", "User"); got != "" {
+		t.Errorf("User = %q from a file over the size limit, want it skipped", got)
 	}
 }
