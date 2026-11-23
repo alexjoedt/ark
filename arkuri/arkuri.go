@@ -80,6 +80,13 @@ func LocalPath(s string) (string, bool) {
 	return dir, err == nil
 }
 
+// Check returns the error Open gives for a location it cannot parse, such as
+// the scp form host:path, without opening anything.
+func Check(s string) error {
+	_, _, err := parse(s)
+	return err
+}
+
 // parse splits s into a scheme and, for URI forms, the parsed URL. A string
 // that does not start with a known scheme is a local path and comes back with
 // a nil URL.

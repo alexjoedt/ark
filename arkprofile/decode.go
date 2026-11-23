@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alexjoedt/ark/arkuri"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -122,6 +123,11 @@ func decodeStruct(n *yaml.Node, v reflect.Value, path, dir string) error {
 					return fieldErrorf(val.Line, p, "want %s", describe(f.v.Type()))
 				}
 				return fieldErrorf(val.Line, p, "%s", strings.TrimPrefix(err.Error(), "yaml: "))
+			}
+			if f.location && f.v.String() != "" && !strings.Contains(f.v.String(), "://") {
+				if err := arkuri.Check(f.v.String()); err != nil {
+					return fieldErrorf(val.Line, p, "%v", err)
+				}
 			}
 			if f.path || f.location && !strings.Contains(f.v.String(), "://") {
 				if err := resolvePaths(f.v, dir); err != nil {
