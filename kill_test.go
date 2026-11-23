@@ -473,7 +473,11 @@ func TestKillHarnessChild(t *testing.T) {
 	}
 	// fd 3 is the pipe runKillChild reads: the ready byte, then the writes.
 	ready := os.NewFile(3, "ready")
-	repo, err := ark.Open(ctx, killProbe{b, ready}, testPassword)
+	left, ok := b.(ark.Leftovers)
+	if !ok {
+		t.Fatalf("%T does not implement ark.Leftovers", b)
+	}
+	repo, err := ark.Open(ctx, killProbe{b, left, ready}, testPassword)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -547,9 +551,12 @@ var killWrites = []struct {
 	{'X', "index delete"}, {'D', "pack delete"}, {'F', "manifest delete"},
 }
 
-// killProbe reports the pack, index and manifest writes of a child to w.
+// killProbe reports the pack, index and manifest writes of a child to w. It
+// embeds [ark.Leftovers] too: behind the Backend alone the prune of a child
+// would leave the temporary files of killed Puts where they are.
 type killProbe struct {
 	ark.Backend
+	ark.Leftovers
 	w io.Writer
 }
 
