@@ -21,7 +21,7 @@ type InstrumentedBackend struct {
 }
 
 // BackendStats is a snapshot of the counters of an [InstrumentedBackend], one
-// entry per Backend method. Close is not counted.
+// entry per Backend method. Close and the [Leftovers] methods are not counted.
 type BackendStats struct {
 	Put, Get, GetRange, Exists, Delete, List, Stat, Sync MethodStats
 }
@@ -138,6 +138,26 @@ func (ib *InstrumentedBackend) Stat(ctx context.Context, h Handle) (BlobInfo, er
 // Close closes the wrapped backend.
 func (ib *InstrumentedBackend) Close() error {
 	return ib.b.Close()
+}
+
+var _ Leftovers = (*InstrumentedBackend)(nil)
+
+// RemoveTemp forwards to the wrapped backend if it implements [Leftovers] and
+// does nothing otherwise. It is not counted.
+func (ib *InstrumentedBackend) RemoveTemp(ctx context.Context) error {
+	if l, ok := ib.b.(Leftovers); ok {
+		return l.RemoveTemp(ctx)
+	}
+	return nil
+}
+
+// ListAside forwards to the wrapped backend if it implements [Leftovers] and
+// lists nothing otherwise. It is not counted.
+func (ib *InstrumentedBackend) ListAside(ctx context.Context, fn func(path string) error) error {
+	if l, ok := ib.b.(Leftovers); ok {
+		return l.ListAside(ctx, fn)
+	}
+	return nil
 }
 
 type methodCounters struct {

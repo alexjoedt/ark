@@ -78,7 +78,7 @@ mode `2770`, new directories still get `0700`, so other members of the group can
 Every `arksftp` call returns when its context ends, also when the server no longer answers. The
 request it waited on stays behind until the server answers it or the connection closes, so a
 cancelled `Delete` may still remove its object and a cancelled `Put` may leave a temporary
-`.ark-tmp-` object, which no listing shows.
+`.ark-tmp-` object, which no listing shows and the next prune removes.
 
 The backend pings the server every 15 seconds. It closes the connection after three intervals in
 a row with a ping unanswered and nothing else arriving from the server. A ping that fails because
@@ -194,6 +194,30 @@ Three more points:
 
 `Put` doesn't have to make the object durable. `Sync` does that. A store that makes every write
 durable on its own returns nil from `Sync` without doing anything.
+
+### Leftover files
+
+A backend that writes each object to a temporary file and renames it into place can leave that
+file behind when a write is cut off. Implement the optional `ark.Leftovers` interface to have ark
+clean up after it:
+
+```go
+type Leftovers interface {
+	RemoveTemp(ctx context.Context) error
+	ListAside(ctx context.Context, fn func(path string) error) error
+}
+```
+
+- `RemoveTemp` deletes every temporary file, whose name starts with `.ark-tmp-`, in every
+  namespace and shard directory. `Prune` calls it while it holds the exclusive lock, so no `Put`
+  is in flight; a dry run doesn't call it.
+- `ListAside` calls `fn` with the path of every aside file, relative to the repository root, such
+  as `keys/.ark-old-<name>`. A `Put` that can't rename over an object renames the old one aside
+  first, so a failed write can leave it behind holding the only copy of the object. `Check`
+  reports each one; nothing removes or restores them.
+
+`arklocal` and `arksftp` implement it, and `ark.Instrument` passes both calls through. A backend
+that writes in one step, such as an object store, leaves nothing behind and doesn't implement it.
 
 ### Test it
 

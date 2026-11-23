@@ -1114,3 +1114,78 @@ func (b *Backend) remotePath(h ark.Handle) (string, error) {
 	}
 	return path.Join(dir, h.Name), nil
 }
+
+// asidePrefix marks an object a Put renamed aside to replace it (see
+// ark.Leftovers).
+const asidePrefix = ".ark-old-"
+
+var _ ark.Leftovers = (*Backend)(nil)
+
+// RemoveTemp deletes every temporary file a Put left in a namespace or a
+// shard dir.
+func (b *Backend) RemoveTemp(ctx context.Context) error {
+	return b.leftovers(ctx, tmpPrefix, func(rel string) error {
+		p := path.Join(b.basePath, rel)
+		return b.do(ctx, func() error {
+			if err := b.client.Remove(p); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("remove %s: %w", p, err)
+			}
+			return nil
+		})
+	})
+}
+
+// ListAside calls fn with the path, relative to the root, of every aside file
+// in a namespace or a shard dir.
+func (b *Backend) ListAside(ctx context.Context, fn func(path string) error) error {
+	return b.leftovers(ctx, asidePrefix, fn)
+}
+
+// leftovers calls fn with the relative path of every file whose name starts
+// with prefix in a namespace dir or a shard dir, where Put writes.
+func (b *Backend) leftovers(ctx context.Context, prefix string, fn func(rel string) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for t := ark.ConfigFile; t.String() != ark.UnknownNamespace; t++ {
+		sharded := t == ark.DataPackFile || t == ark.TreePackFile
+		if err := b.leftoversIn(ctx, t.String(), prefix, sharded, fn); err != nil {
+			return fmt.Errorf("arksftp: %s: %w", t, err)
+		}
+	}
+	return nil
+}
+
+func (b *Backend) leftoversIn(ctx context.Context, rel, prefix string, sharded bool, fn func(string) error) error {
+	dir := path.Join(b.basePath, rel)
+	entries, err := b.readDir(ctx, dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read %s: %w", dir, err)
+	}
+	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		name := e.Name()
+		switch {
+		case strings.HasPrefix(name, prefix) && !e.IsDir():
+			if err := fn(rel + "/" + name); err != nil {
+				return err
+			}
+		case sharded && len(name) == 2:
+			info, err := b.follow(ctx, path.Join(dir, name), e)
+			if err != nil {
+				return err
+			}
+			if info != nil && info.IsDir() {
+				if err := b.leftoversIn(ctx, rel+"/"+name, prefix, false, fn); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
