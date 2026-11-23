@@ -386,12 +386,18 @@ const asidePrefix = ".ark-old-"
 var _ ark.Leftovers = (*Backend)(nil)
 
 // RemoveTemp deletes every temporary file a Put left in a namespace or a
-// shard dir.
+// shard dir, except in the locks namespace (see [ark.Leftovers]). A file it
+// may not remove, such as another user's in a shared repository, is logged
+// and kept.
 func (b *Backend) RemoveTemp(ctx context.Context) error {
+	locks := ark.LockFile.String() + "/"
 	return b.leftovers(ctx, tmpPrefix, func(rel string) error {
+		if strings.HasPrefix(rel, locks) {
+			return nil
+		}
 		err := os.Remove(filepath.Join(b.basePath, filepath.FromSlash(rel)))
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
+			slog.WarnContext(ctx, "arklocal: cannot remove a temporary file", "path", rel, "err", err)
 		}
 		return nil
 	})
@@ -421,7 +427,7 @@ func (b *Backend) leftovers(ctx context.Context, prefix string, fn func(rel stri
 func (b *Backend) leftoversIn(ctx context.Context, rel, prefix string, sharded bool, fn func(string) error) error {
 	dir := filepath.Join(b.basePath, filepath.FromSlash(rel))
 	entries, err := os.ReadDir(dir)
-	if errors.Is(err, fs.ErrNotExist) {
+	if errors.Is(err, fs.ErrNotExist) && !dangling(dir) {
 		return nil
 	}
 	if err != nil {

@@ -10,9 +10,10 @@ import (
 	"github.com/alexjoedt/ark"
 )
 
-// TestRemoveTempKeepsAsideFiles plants what killed Puts and failed renames
-// leave in namespaces and shards, a shard behind a link included. RemoveTemp
-// deletes only the temporary files, ListAside names only the aside files.
+// TestRemoveTempKeepsAsideFiles plants what killed Puts, cut-off mkdirs and
+// failed renames leave in the root, namespaces and shards, a shard behind a
+// link included. RemoveTemp deletes the temporary files and dirs but keeps
+// one in locks, ListAside names only the aside files.
 func TestRemoveTempKeepsAsideFiles(t *testing.T) {
 	ctx := context.Background()
 	b := pipeBackend(t)
@@ -21,8 +22,10 @@ func TestRemoveTempKeepsAsideFiles(t *testing.T) {
 		ark.Handle{Type: ark.DataPackFile, Name: "aa01"},
 		ark.Handle{Type: ark.LockFile, Name: "l1"},
 	)
-	if err := os.MkdirAll(filepath.Join(root, "treepacks", "bb", ".ark-tmp-dir"), 0o700); err != nil {
-		t.Fatal(err)
+	for _, d := range []string{".ark-tmp-root", "datapacks/.ark-tmp-ns", "treepacks/bb/.ark-tmp-dir"} {
+		if err := os.MkdirAll(filepath.Join(root, filepath.FromSlash(d)), 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	other := t.TempDir()
 	if err := os.Symlink(other, filepath.Join(root, "datapacks", "cc")); err != nil {
@@ -30,7 +33,6 @@ func TestRemoveTempKeepsAsideFiles(t *testing.T) {
 	}
 	temps := []string{
 		"config/.ark-tmp-1",
-		"locks/.ark-tmp-2",
 		"datapacks/.ark-tmp-3",
 		"datapacks/aa/.ark-tmp-4",
 		"datapacks/cc/.ark-tmp-5",
@@ -41,7 +43,8 @@ func TestRemoveTempKeepsAsideFiles(t *testing.T) {
 		"datapacks/cc/.ark-old-cc01",
 		"keys/.ark-old-k1",
 	}
-	for _, f := range append(slices.Clone(temps), asides...) {
+	lockTemp := "locks/.ark-tmp-2"
+	for _, f := range append(slices.Clone(temps), append(asides, lockTemp)...) {
 		p := filepath.Join(root, filepath.FromSlash(f))
 		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 			t.Fatal(err)
@@ -59,8 +62,13 @@ func TestRemoveTempKeepsAsideFiles(t *testing.T) {
 			t.Errorf("%s after RemoveTemp: %v, want gone", f, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(root, "treepacks", "bb", ".ark-tmp-dir")); err != nil {
-		t.Errorf("a dir with the temp prefix: %v, want kept", err)
+	for _, d := range []string{".ark-tmp-root", "datapacks/.ark-tmp-ns", "treepacks/bb/.ark-tmp-dir"} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(d))); !os.IsNotExist(err) {
+			t.Errorf("temporary dir %s after RemoveTemp: %v, want gone", d, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(lockTemp))); err != nil {
+		t.Errorf("%s after RemoveTemp: %v, want kept, a lock write may be in flight", lockTemp, err)
 	}
 	var got []string
 	if err := b.ListAside(ctx, func(p string) error {
@@ -124,5 +132,49 @@ func TestPruneRemovesTempFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(aside); err != nil {
 		t.Errorf("aside file after prune: %v, want kept", err)
+	}
+}
+
+// TestRemoveTempKeepsWhatItMayNotRemove runs RemoveTemp over a temporary file
+// in a dir it may not write: the file stays and RemoveTemp succeeds, so a
+// prune does not fail on another user's leftover.
+func TestRemoveTempKeepsWhatItMayNotRemove(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes any file")
+	}
+	b := pipeBackend(t)
+	shard := filepath.Join(b.basePath, "datapacks", "aa")
+	tmp := filepath.Join(shard, ".ark-tmp-1")
+	if err := os.MkdirAll(shard, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmp, []byte("junk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(shard, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(shard, 0o700) })
+	if err := b.RemoveTemp(context.Background()); err != nil {
+		t.Fatalf("RemoveTemp: %v, want nil", err)
+	}
+	if _, err := os.Stat(tmp); err != nil {
+		t.Errorf("temporary file after RemoveTemp: %v, want kept", err)
+	}
+}
+
+// TestRemoveTempFailsOnADanglingNamespace runs RemoveTemp with a namespace
+// behind a link whose target is gone, as List does: the disk it leads to may
+// not be mounted.
+func TestRemoveTempFailsOnADanglingNamespace(t *testing.T) {
+	b := pipeBackend(t)
+	if err := os.MkdirAll(b.basePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "gone"), filepath.Join(b.basePath, "snapshots")); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.RemoveTemp(context.Background()); err == nil {
+		t.Error("RemoveTemp: want error")
 	}
 }

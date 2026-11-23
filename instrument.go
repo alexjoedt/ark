@@ -13,7 +13,9 @@ var _ Backend = (*InstrumentedBackend)(nil)
 // InstrumentedBackend wraps a Backend and counts calls, errors, durations and
 // bytes per method. It adds no dependency: an embedder reads Stats and feeds
 // the numbers to its own metrics system. Create it with [Instrument] and pass
-// it to [Init] or [Open] like any Backend.
+// it to [Init] or [Open] like any Backend. It implements [Leftovers] whatever
+// it wraps, as no-ops for a backend that does not, so a type assertion on it
+// does not tell whether the wrapped backend leaves files behind.
 type InstrumentedBackend struct {
 	b Backend
 

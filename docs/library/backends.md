@@ -209,14 +209,18 @@ type Leftovers interface {
 ```
 
 - `RemoveTemp` deletes every temporary file, whose name starts with `.ark-tmp-`, in every
-  namespace and shard directory. `Prune` calls it while it holds the exclusive lock, so no `Put`
-  is in flight; a dry run doesn't call it.
+  namespace and shard directory except `locks`. `Prune` calls it while it holds the exclusive
+  lock, so no `Put` is in flight outside `locks`, where other processes still write their locks;
+  a dry run doesn't call it. Log and keep a file you may not remove, so another user's leftover in
+  a shared repository doesn't fail every prune.
 - `ListAside` calls `fn` with the path of every aside file, relative to the repository root, such
   as `keys/.ark-old-<name>`. A `Put` that can't rename over an object renames the old one aside
   first, so a failed write can leave it behind holding the only copy of the object. `Check`
   reports each one; nothing removes or restores them.
 
-`arklocal` and `arksftp` implement it, and `ark.Instrument` passes both calls through. A backend
+`arklocal` and `arksftp` implement it, and `arksftp` also removes the empty `.ark-tmp-`
+directories a cut-off directory creation leaves. `ark.Instrument` passes both calls through, and
+does nothing for a backend without them. A backend
 that writes in one step, such as an object store, leaves nothing behind and doesn't implement it.
 
 ### Test it

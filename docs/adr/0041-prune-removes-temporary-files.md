@@ -22,11 +22,15 @@ files that are not objects.
 - `ark.Leftovers` in backend.go is an optional interface with `RemoveTemp(ctx)` and
   `ListAside(ctx, fn)`. A backend that leaves no files behind does not implement it.
 - `Prune` calls `RemoveTemp` once it holds the exclusive lock, before it lists the manifests. No
-  `Put` runs under that lock, so every temporary file is a leftover, whatever its age. A dry run
-  does not call it.
-- `RemoveTemp` deletes every `.ark-tmp-` file in every namespace and shard directory and never
-  touches a `.ark-old-` file. `ListAside` yields each `.ark-old-` file as a slash-separated path
-  relative to the repository root; `Check` reports them and nothing removes or restores them.
+  `Put` outside `locks` runs under that lock, so every temporary file there is a leftover,
+  whatever its age. A dry run does not call it.
+- `RemoveTemp` deletes every `.ark-tmp-` file in every namespace and shard directory except
+  `locks`, where another process may be writing its lock and the pruning process refreshes its own.
+  It never touches a `.ark-old-` file. A file it may not remove, such as another user's in a shared
+  repository, is logged and kept. arksftp also removes the empty `.ark-tmp-` directories its
+  private `mkdir` leaves in the root and the namespace directories. `ListAside` yields each
+  `.ark-old-` file as a slash-separated path relative to the repository root; `Check` reports them
+  and nothing removes or restores them.
 - arklocal and arksftp implement it with one walk over the namespaces of the known handle types
   and the shards of the pack namespaces, links followed. `ark.Instrument` forwards both calls.
 
@@ -41,8 +45,10 @@ Rejected options:
 
 ## Consequences
 
-- A prune leaves no `.ark-tmp-` file, whatever killed the writes before it; a failed removal fails
-  the prune before it deletes anything.
+- A prune leaves no `.ark-tmp-` file outside `locks` that it may remove, whatever killed the
+  writes before it. A lock write cut off by a kill leaves a small file in `locks` for good, and a
+  temporary directory from creating the repository root stays in the root's parent, outside the
+  repository. A failed listing fails the prune before it deletes anything.
 - An aside file survives every prune until someone moves it back or removes it.
 - An out-of-tree backend with temporary files opts in by implementing two methods.
 - Tests pin it: `TestPruneRemovesTempFiles` in the root package and in arksftp, and

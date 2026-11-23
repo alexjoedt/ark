@@ -178,7 +178,11 @@ type Leftovers interface {
 	// RemoveTemp deletes every temporary file in every namespace and shard
 	// dir, and never an aside file, which may hold the only copy of an
 	// object. Prune calls it while it holds the exclusive lock, so no Put
-	// is in flight; a dry run does not.
+	// of an object other than a lock is in flight; a dry run does not. It
+	// skips the locks namespace, where other processes write their locks
+	// and the caller refreshes its own. A file it may not remove is logged
+	// and kept, so one user's leftover in a shared repository does not fail
+	// every prune.
 	RemoveTemp(ctx context.Context) error
 
 	// ListAside calls fn with the path of every aside file, relative to the

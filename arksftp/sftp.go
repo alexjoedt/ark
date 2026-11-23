@@ -1122,30 +1122,54 @@ const asidePrefix = ".ark-old-"
 var _ ark.Leftovers = (*Backend)(nil)
 
 // RemoveTemp deletes every temporary file a Put left in a namespace or a
-// shard dir.
+// shard dir, except in the locks namespace (see [ark.Leftovers]), and every
+// temporary directory mkdirRepo left in the root or a namespace dir. An entry
+// the server refuses to remove, such as another user's in a shared repository
+// or a directory that is not empty, is logged and kept.
 func (b *Backend) RemoveTemp(ctx context.Context) error {
-	return b.leftovers(ctx, tmpPrefix, func(rel string) error {
-		p := path.Join(b.basePath, rel)
-		return b.do(ctx, func() error {
-			if err := b.client.Remove(p); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("remove %s: %w", p, err)
-			}
+	locks := ark.LockFile.String() + "/"
+	return b.leftovers(ctx, tmpPrefix, func(rel string, dir bool) error {
+		if strings.HasPrefix(rel, locks) {
 			return nil
-		})
+		}
+		p := path.Join(b.basePath, rel)
+		remove := b.client.Remove
+		if dir {
+			remove = b.client.RemoveDirectory
+		}
+		err := b.do(ctx, func() error { return remove(p) })
+		var status *sftp.StatusError
+		switch {
+		case err == nil || os.IsNotExist(err):
+		case errors.As(err, &status) || errors.Is(err, os.ErrPermission):
+			slog.WarnContext(ctx, "arksftp: cannot remove a temporary entry", "path", rel, "err", err)
+		default:
+			return fmt.Errorf("remove %s: %w", p, err)
+		}
+		return nil
 	})
 }
 
 // ListAside calls fn with the path, relative to the root, of every aside file
 // in a namespace or a shard dir.
 func (b *Backend) ListAside(ctx context.Context, fn func(path string) error) error {
-	return b.leftovers(ctx, asidePrefix, fn)
+	return b.leftovers(ctx, asidePrefix, func(rel string, dir bool) error {
+		if dir {
+			return nil
+		}
+		return fn(rel)
+	})
 }
 
-// leftovers calls fn with the relative path of every file whose name starts
-// with prefix in a namespace dir or a shard dir, where Put writes.
-func (b *Backend) leftovers(ctx context.Context, prefix string, fn func(rel string) error) error {
+// leftovers calls fn with the relative path of every entry whose name starts
+// with prefix in the root, a namespace dir or a shard dir, and whether it is
+// a directory.
+func (b *Backend) leftovers(ctx context.Context, prefix string, fn func(rel string, dir bool) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if err := b.leftoversIn(ctx, "", prefix, false, fn); err != nil {
+		return fmt.Errorf("arksftp: root: %w", err)
 	}
 	for t := ark.ConfigFile; t.String() != ark.UnknownNamespace; t++ {
 		sharded := t == ark.DataPackFile || t == ark.TreePackFile
@@ -1156,11 +1180,17 @@ func (b *Backend) leftovers(ctx context.Context, prefix string, fn func(rel stri
 	return nil
 }
 
-func (b *Backend) leftoversIn(ctx context.Context, rel, prefix string, sharded bool, fn func(string) error) error {
+func (b *Backend) leftoversIn(
+	ctx context.Context, rel, prefix string, sharded bool, fn func(string, bool) error,
+) error {
 	dir := path.Join(b.basePath, rel)
 	entries, err := b.readDir(ctx, dir)
 	if os.IsNotExist(err) {
-		return nil
+		if gone, aerr := b.absent(ctx, dir); aerr != nil {
+			return aerr
+		} else if gone {
+			return nil
+		}
 	}
 	if err != nil {
 		return fmt.Errorf("read %s: %w", dir, err)
@@ -1171,8 +1201,8 @@ func (b *Backend) leftoversIn(ctx context.Context, rel, prefix string, sharded b
 		}
 		name := e.Name()
 		switch {
-		case strings.HasPrefix(name, prefix) && !e.IsDir():
-			if err := fn(rel + "/" + name); err != nil {
+		case strings.HasPrefix(name, prefix):
+			if err := fn(path.Join(rel, name), e.IsDir()); err != nil {
 				return err
 			}
 		case sharded && len(name) == 2:
