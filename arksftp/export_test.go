@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/pkg/sftp"
+	"golang.org/x/crypto/ssh"
 )
 
 // DisablePosixRename sends b down the plain-rename path that a server without
@@ -16,14 +17,11 @@ func (b *Backend) DisablePosixRename() { b.posixRename = false }
 // RemoveRoot deletes b's repository directory and everything in it.
 func (b *Backend) RemoveRoot() error { return b.client.RemoveAll(b.basePath) }
 
-// AwaitRead is the wait of GetRange on its read.
-var AwaitRead = awaitRead
-
 // CountReceived swaps b's sftp client for one on a new session of the same
 // SSH connection and returns the count of sftp bytes the server sends on it.
 // Call it before anything else uses b: the swap is not synchronized.
 func (b *Backend) CountReceived() (_ *atomic.Int64, err error) {
-	s, err := b.conn.NewSession()
+	s, err := b.conn.(*ssh.Client).NewSession()
 	if err != nil {
 		return nil, fmt.Errorf("new session: %w", err)
 	}

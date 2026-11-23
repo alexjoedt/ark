@@ -6,6 +6,10 @@
 // default) caps how many requests are in flight, so the caller sizes the load
 // on that one connection.
 //
+// Every call returns when its context ends, also on a link that stopped
+// answering, and a keepalive closes a connection the server no longer answers
+// on. See [Backend].
+//
 // Secrets never live in Config or in a URI. The password comes from
 // ARK_SFTP_PASSWORD and a key passphrase from ARK_SFTP_KEY_PASSPHRASE; see
 // [EnvPassword] and [EnvKeyPassphrase].
@@ -78,15 +82,50 @@ const (
 	// defaultPort is the SSH port used when neither Config nor ssh_config
 	// names one.
 	defaultPort = 22
+	// keepaliveInterval is how often the backend pings the server.
+	keepaliveInterval = 15 * time.Second
+	// keepaliveMisses is how many intervals a ping may stay unanswered before
+	// the connection counts as lost.
+	keepaliveMisses = 3
+	// closeWait bounds how long Close waits for the server to end the session.
+	closeWait = 2 * time.Second
+	// pieceSize is how much of an object one request of a Put or of a Get
+	// reader moves: 64 packets of 32 KiB, what the sftp client keeps in flight.
+	pieceSize = 2 << 20
 )
+
+// errLost is what every call returns once the keepalive has closed the
+// connection.
+var errLost = errors.New("arksftp: connection lost: the server stopped answering")
 
 // Backend implements ark.Backend backed by an SFTP server.
 // All methods are safe for concurrent use via the underlying SSH/SFTP
 // multiplexing.
+//
+// A call returns its context's error as soon as the context ends. The sftp
+// client cannot abort a request in flight, so the one request the call was
+// waiting on stays behind until the server answers it or the connection
+// closes: a Delete may still remove its object, and a Put may leave a
+// temporary object, which no listing shows. A Put that returned the context's
+// error stores nothing later, unless the context ended while it renamed the
+// object into place.
+//
+// The backend pings the server every 15 s. A ping that is still unanswered
+// three intervals later closes the connection: the calls in flight and every
+// later call fail with an error that names the lost connection. The backend
+// never reconnects.
 type Backend struct {
-	client   *sftp.Client
-	conn     *ssh.Client
+	client *sftp.Client
+	// conn is the transport under client, an *ssh.Client outside tests.
+	conn     io.Closer
 	basePath string
+	// lost is closed when the keepalive gave the connection up.
+	lost chan struct{}
+	// closed is closed by Close and ends the keepalive.
+	closed    chan struct{}
+	closeOnce sync.Once
+	// pinging is set while a keepalive ping waits for its answer.
+	pinging atomic.Bool
 	// posixRename records whether the server announced
 	// posix-rename@openssh.com. See [Backend.rename].
 	posixRename bool
@@ -108,7 +147,10 @@ type Backend struct {
 
 // New connects to the SFTP server described by cfg and returns a ready Backend.
 // The caller closes it with [Backend.Close].
-func New(cfg Config) (*Backend, error) {
+func New(cfg Config) (*Backend, error) { return connect(cfg, keepaliveInterval) }
+
+// connect is New with the keepalive interval of its choice.
+func connect(cfg Config, interval time.Duration) (*Backend, error) {
 	cfg = resolve(cfg, loadSSHConfig())
 
 	sshCfg, chain, err := buildSSHConfig(cfg)
@@ -133,12 +175,23 @@ func New(cfg Config) (*Backend, error) {
 		return nil, fmt.Errorf("arksftp: open sftp subsystem: %w", err)
 	}
 
-	return newBackend(client, conn, cfg), nil
+	b := newBackend(client, conn, cfg)
+	go func() {
+		tick := time.NewTicker(interval)
+		defer tick.Stop()
+		b.keepalive(func() error {
+			// A server that does not know the request refuses it, which is
+			// an answer all the same.
+			_, _, err := conn.SendRequest("keepalive@openssh.com", true, nil)
+			return err
+		}, tick.C)
+	}()
+	return b, nil
 }
 
 // newBackend wraps a connected client, recording the extensions the server
 // announced and warning once when it has no fsync.
-func newBackend(client *sftp.Client, conn *ssh.Client, cfg Config) *Backend {
+func newBackend(client *sftp.Client, conn io.Closer, cfg Config) *Backend {
 	_, posixRename := client.HasExtension("posix-rename@openssh.com")
 	_, fsync := client.HasExtension("fsync@openssh.com")
 	if !fsync {
@@ -152,12 +205,93 @@ func newBackend(client *sftp.Client, conn *ssh.Client, cfg Config) *Backend {
 		basePath:    cfg.Path,
 		posixRename: posixRename,
 		fsync:       fsync,
+		lost:        make(chan struct{}),
+		closed:      make(chan struct{}),
 	}
 }
 
-// Close closes the SFTP client and the underlying SSH connection.
+// keepalive pings the server at every tick, one ping at a time, and gives the
+// connection up when a ping is still unanswered keepaliveMisses ticks later:
+// it marks the backend lost and closes the transport, which ends every request
+// in flight. An answer of any kind counts; ping returns an error only when the
+// connection is gone. It returns when the backend closes.
+func (b *Backend) keepalive(ping func() error, tick <-chan time.Time) {
+	missed := 0
+	for {
+		select {
+		case <-b.closed:
+			return
+		case <-tick:
+		}
+		if b.pinging.CompareAndSwap(false, true) {
+			missed = 0
+			go func() {
+				if ping() == nil {
+					b.pinging.Store(false)
+				}
+			}()
+			continue
+		}
+		if missed++; missed == keepaliveMisses {
+			close(b.lost)
+			_ = b.conn.Close()
+			return
+		}
+	}
+}
+
+// await runs call and returns its result, or ctx's error as soon as ctx ends,
+// or errLost once the keepalive gave the connection up. The sftp client cannot
+// abort a request in flight, so a call left behind that way ends on its own or
+// with the connection, and whatever it opened stays open until then. call may
+// outlive the wait, so it must not touch what the caller of the backend owns,
+// such as the buffer of a Read or the source of a Put.
+func await[T any](ctx context.Context, b *Backend, call func() (T, error)) (T, error) {
+	var zero T
+	// Checked first: on a connection given up call fails at once, and the
+	// select below might return that failure in place of errLost.
+	select {
+	case <-b.lost:
+		return zero, errLost
+	default:
+	}
+	type result struct {
+		v   T
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		v, err := call()
+		done <- result{v, err}
+	}()
+	select {
+	case r := <-done:
+		return r.v, r.err
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	case <-b.lost:
+		return zero, errLost
+	}
+}
+
+// do is await for a call that returns only an error.
+func (b *Backend) do(ctx context.Context, call func() error) error {
+	_, err := await(ctx, b, func() (struct{}, error) { return struct{}{}, call() })
+	return err
+}
+
+// Close closes the SFTP client and the underlying SSH connection. The client
+// waits for the server to end the session; on a link that stopped answering
+// that wait ends after closeWait, when the connection closes under it.
 func (b *Backend) Close() error {
-	clientErr := b.client.Close()
+	b.closeOnce.Do(func() {
+		if b.closed != nil {
+			close(b.closed)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), closeWait)
+	defer cancel()
+	clientErr := b.do(ctx, b.client.Close)
 	connErr := b.conn.Close()
 	if clientErr != nil {
 		return fmt.Errorf("arksftp: close client: %w", clientErr)
@@ -170,7 +304,8 @@ func (b *Backend) Close() error {
 
 // Put writes r to a temporary name in the target directory and renames it into
 // place with posix-rename, so a reader never sees a partial object.
-// It is idempotent: an existing object is replaced.
+// It is idempotent: an existing object is replaced. r is read on the calling
+// goroutine only, and not after Put returned.
 func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -182,25 +317,42 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 	}
 
 	dir := path.Dir(p)
-	if err := b.mkdirDurable(dir); err != nil {
-		return err
+	type temp struct {
+		f    *sftp.File
+		path string
 	}
-
-	f, tmp, err := b.createTemp(dir)
+	t, err := await(ctx, b, func() (temp, error) {
+		if err := b.mkdirDurable(dir); err != nil {
+			return temp{}, err
+		}
+		f, tmp, err := b.createTemp(dir)
+		return temp{f, tmp}, err
+	})
 	if err != nil {
 		return err
 	}
-	renamed := false
-	defer func() {
-		_ = f.Close()
-		if !renamed {
-			_ = b.client.Remove(tmp)
-		}
-	}()
 
-	if _, err := io.Copy(f, r); err != nil {
-		return fmt.Errorf("arksftp: write %s: %w", tmp, err)
-	}
+	_, copyErr := io.Copy(&upload{ctx: ctx, b: b, f: t.f}, r)
+	// One call for the rest, so the removal of the temp file after a failure
+	// can never overtake the rename of a commit left behind.
+	return b.do(ctx, func() error {
+		err := copyErr
+		if err != nil {
+			err = fmt.Errorf("arksftp: write %s: %w", t.path, err)
+		} else {
+			err = b.commit(ctx, t.f, t.path, p)
+		}
+		if err != nil {
+			_ = t.f.Close()
+			_ = b.client.Remove(t.path)
+			return err
+		}
+		return b.syncDir(dir)
+	})
+}
+
+// commit flushes and closes the temp file f at tmp and renames it onto p.
+func (b *Backend) commit(ctx context.Context, f *sftp.File, tmp, p string) error {
 	// Without fsync@openssh.com there is no way to flush the file or the
 	// directories; the object then only survives a process crash, not a power
 	// loss on the server.
@@ -212,12 +364,49 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("arksftp: close %s: %w", tmp, err)
 	}
+	// Put has returned when ctx is over and told its caller that the object
+	// is not stored: it must not appear after that.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := b.rename(tmp, p); err != nil {
 		return fmt.Errorf("arksftp: rename %s: %w", p, err)
 	}
-	renamed = true
+	return nil
+}
 
-	return b.syncDir(dir)
+// upload writes to the temp file of a Put, a piece at a time from a buffer of
+// its own: a write that await left behind may still be sending when Put has
+// returned and its caller owns the bytes of p again.
+//
+// ponytail: a source without WriteTo arrives in the 32 KiB reads of [io.Copy],
+// one round trip each. Every source ark passes writes itself; a ReadFrom that
+// fills whole pieces is the upgrade when another kind shows up.
+type upload struct {
+	ctx context.Context
+	b   *Backend
+	f   *sftp.File
+	buf []byte
+}
+
+func (u *upload) Write(p []byte) (int, error) {
+	written := 0
+	for written < len(p) {
+		// No write was left behind so far, or this one had not been reached:
+		// buf is free.
+		n := min(len(p)-written, pieceSize)
+		if cap(u.buf) < n {
+			u.buf = make([]byte, n)
+		}
+		buf := u.buf[:n]
+		copy(buf, p[written:])
+		n, err := await(u.ctx, u.b, func() (int, error) { return u.f.Write(buf) })
+		written += n
+		if err != nil {
+			return written, err
+		}
+	}
+	return written, nil
 }
 
 // mkdirDurable creates dir and, with fsync@openssh.com, fsyncs the parent of
@@ -357,21 +546,49 @@ func (b *Backend) rename(tmp, p string) error {
 }
 
 // Get returns a ReadCloser for the object stored under h.
-// Callers must close the returned reader.
+// Callers must close the returned reader. Its Read and Close end with ctx like
+// every call.
 func (b *Backend) Get(ctx context.Context, h ark.Handle) (io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	f, err := b.open(h)
+	f, err := await(ctx, b, func() (*sftp.File, error) { return b.open(h) })
 	if err != nil {
 		return nil, err
 	}
-	return f, nil
+	return &reader{ctx: ctx, b: b, f: f}, nil
 }
 
+// reader reads the object of a Get, a piece at a time into a buffer of its
+// own: a read that await left behind may still be filling it when Read has
+// returned and its caller owns p again.
+type reader struct {
+	ctx context.Context
+	b   *Backend
+	f   *sftp.File
+	buf []byte
+}
+
+func (r *reader) Read(p []byte) (int, error) {
+	// After a read was left behind ctx is over: buf is never used again.
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n := min(len(p), pieceSize)
+	if cap(r.buf) < n {
+		r.buf = make([]byte, n)
+	}
+	buf := r.buf[:n]
+	n, err := await(r.ctx, r.b, func() (int, error) { return r.f.Read(buf) })
+	return copy(p, buf[:n]), err
+}
+
+// Close closes the handle on the server. With ctx over it does not wait for
+// the server's answer.
+func (r *reader) Close() error { return r.b.do(r.ctx, r.f.Close) }
+
 // GetRange reads length bytes of the object stored under h at offset with
-// ReadAt on one handle, so the bytes before offset never cross the wire. It
-// returns as soon as ctx ends, see [awaitRead].
+// ReadAt on one handle, so the bytes before offset never cross the wire.
 func (b *Backend) GetRange(ctx context.Context, h ark.Handle, offset, length int64) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -382,7 +599,7 @@ func (b *Backend) GetRange(ctx context.Context, h ark.Handle, offset, length int
 	if offset < 0 || length < 0 {
 		return nil, fmt.Errorf("arksftp: invalid range %d+%d of %s", offset, length, h.Name)
 	}
-	return awaitRead(ctx, func() ([]byte, error) {
+	return await(ctx, b, func() ([]byte, error) {
 		f, err := b.open(h)
 		if err != nil {
 			return nil, err
@@ -394,27 +611,6 @@ func (b *Backend) GetRange(ctx context.Context, h ark.Handle, offset, length int
 		}
 		return buf, nil
 	})
-}
-
-// awaitRead runs read and returns its result, or ctx's error as soon as ctx
-// ends. The sftp client cannot abort a request in flight, so a read left
-// behind that way ends on its own or with the connection.
-func awaitRead(ctx context.Context, read func() ([]byte, error)) ([]byte, error) {
-	type result struct {
-		buf []byte
-		err error
-	}
-	done := make(chan result, 1)
-	go func() {
-		buf, err := read()
-		done <- result{buf, err}
-	}()
-	select {
-	case r := <-done:
-		return r.buf, r.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
 }
 
 // open opens the object stored under h for reading.
@@ -444,7 +640,7 @@ func (b *Backend) Exists(ctx context.Context, h ark.Handle) (bool, error) {
 		return false, err
 	}
 
-	if _, err := b.client.Stat(p); err != nil {
+	if _, err := b.stat(ctx, p); err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
@@ -472,16 +668,18 @@ func (b *Backend) Delete(ctx context.Context, h ark.Handle) error {
 		return err
 	}
 
-	if err := b.client.Remove(p); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("arksftp: remove %s: %w", h.Name, err)
-	}
-	// Sync even when the object was already gone: an earlier Delete may have
-	// died between its remove and its sync. Forget relies on a removed
-	// snapshot staying removed before prune deletes its chunks.
-	if err := b.syncDir(path.Dir(p)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
+	return b.do(ctx, func() error {
+		if err := b.client.Remove(p); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("arksftp: remove %s: %w", h.Name, err)
+		}
+		// Sync even when the object was already gone: an earlier Delete may
+		// have died between its remove and its sync. Forget relies on a
+		// removed snapshot staying removed before prune deletes its chunks.
+		if err := b.syncDir(path.Dir(p)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	})
 }
 
 // List reads the namespace of t and calls fn for every object it holds: the
@@ -501,13 +699,13 @@ func (b *Backend) List(ctx context.Context, t ark.HandleType, fn func(ark.BlobIn
 		return err
 	}
 
-	entries, err := b.client.ReadDir(dir)
+	entries, err := b.readDir(ctx, dir)
 	switch {
 	case err == nil:
 		err = b.listDir(ctx, dir, entries, t == ark.DataPackFile || t == ark.TreePackFile, "", fn)
 	case os.IsNotExist(err):
 		// The namespace was never written, nor the root before the first Put.
-		if gone, aerr := b.absent(dir); aerr != nil {
+		if gone, aerr := b.absent(ctx, dir); aerr != nil {
 			err = aerr
 		} else if gone {
 			return nil
@@ -537,7 +735,7 @@ func (b *Backend) listDir(ctx context.Context, dir string, entries []os.FileInfo
 			skip(dir, name)
 			continue
 		}
-		info, err := b.follow(path.Join(dir, name), e)
+		info, err := b.follow(ctx, path.Join(dir, name), e)
 		switch {
 		case err != nil:
 			return err
@@ -549,7 +747,7 @@ func (b *Backend) listDir(ctx context.Context, dir string, entries []os.FileInfo
 			// deleted since the dir was read
 		case info.IsDir() && sharded && len(name) == 2:
 			sub := path.Join(dir, name)
-			objects, err := b.client.ReadDir(sub)
+			objects, err := b.readDir(ctx, sub)
 			if err != nil {
 				return fmt.Errorf("read %s: %w", sub, err)
 			}
@@ -570,13 +768,13 @@ func (b *Backend) listDir(ctx context.Context, dir string, entries []os.FileInfo
 // follow returns the file info of e at p, through a symlink, or nil when the
 // entry is gone. A link whose target is gone fails: it may lead to a disk that
 // is not mounted, whose objects are stored all the same.
-func (b *Backend) follow(p string, e os.FileInfo) (os.FileInfo, error) {
+func (b *Backend) follow(ctx context.Context, p string, e os.FileInfo) (os.FileInfo, error) {
 	if e.Mode()&os.ModeSymlink == 0 {
 		return e, nil
 	}
-	info, err := b.client.Stat(p)
+	info, err := b.stat(ctx, p)
 	if os.IsNotExist(err) {
-		gone, err := b.absent(p)
+		gone, err := b.absent(ctx, p)
 		if err != nil || gone {
 			return nil, err
 		}
@@ -591,14 +789,14 @@ func (b *Backend) follow(p string, e os.FileInfo) (os.FileInfo, error) {
 // there: the deepest part of it that is there, p or an ancestor, is no link
 // whose target is gone. Such a link may lead to a disk that is not mounted,
 // whose objects are stored all the same. Any other error is returned.
-func (b *Backend) absent(p string) (bool, error) {
+func (b *Backend) absent(ctx context.Context, p string) (bool, error) {
 	for {
-		fi, err := b.client.Lstat(p)
+		fi, err := await(ctx, b, func() (os.FileInfo, error) { return b.client.Lstat(p) })
 		switch {
 		case err == nil && fi.Mode()&os.ModeSymlink == 0:
 			return true, nil
 		case err == nil:
-			if _, err := b.client.Stat(p); os.IsNotExist(err) {
+			if _, err := b.stat(ctx, p); os.IsNotExist(err) {
 				return false, nil
 			} else if err != nil {
 				return false, fmt.Errorf("stat %s: %w", p, err)
@@ -613,6 +811,16 @@ func (b *Backend) absent(p string) (bool, error) {
 	}
 }
 
+// readDir is the client's ReadDir behind await.
+func (b *Backend) readDir(ctx context.Context, dir string) ([]os.FileInfo, error) {
+	return await(ctx, b, func() ([]os.FileInfo, error) { return b.client.ReadDir(dir) })
+}
+
+// stat is the client's Stat behind await.
+func (b *Backend) stat(ctx context.Context, p string) (os.FileInfo, error) {
+	return await(ctx, b, func() (os.FileInfo, error) { return b.client.Stat(p) })
+}
+
 // skip logs an entry List passes over because it is outside the layout.
 func skip(dir, name string) {
 	slog.Debug("arksftp: skipping an entry outside the repository layout", "dir", dir, "name", name)
@@ -625,9 +833,9 @@ func (b *Backend) Empty(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	entries, err := b.client.ReadDir(b.basePath)
+	entries, err := b.readDir(ctx, b.basePath)
 	if os.IsNotExist(err) {
-		if gone, aerr := b.absent(b.basePath); aerr != nil {
+		if gone, aerr := b.absent(ctx, b.basePath); aerr != nil {
 			err = aerr
 		} else if gone {
 			return true, nil
@@ -650,7 +858,7 @@ func (b *Backend) Stat(ctx context.Context, h ark.Handle) (ark.BlobInfo, error) 
 		return ark.BlobInfo{}, err
 	}
 
-	fi, err := b.client.Stat(p)
+	fi, err := b.stat(ctx, p)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return ark.BlobInfo{}, fmt.Errorf("%w: %s", ark.ErrNotFound, h.Name)
