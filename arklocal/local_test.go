@@ -200,18 +200,12 @@ func TestListFailsWhenAShardVanishesMidWalk(t *testing.T) {
 	}
 }
 
-func TestRejectsUnknownTypeAndEscapingNames(t *testing.T) {
+func TestRejectsUnknownType(t *testing.T) {
 	ctx := context.Background()
 	b := newBackend(t)
 
 	if err := b.Put(ctx, ark.Handle{Type: ark.HandleType(200), Name: "x"}, strings.NewReader("x")); err == nil {
 		t.Error("Put with an unknown handle type: want error, got nil")
-	}
-	for _, name := range []string{"", ".", "..", "../escape", "sub/dir", tmpPrefix + "x"} {
-		h := ark.Handle{Type: ark.SnapshotFile, Name: name}
-		if err := b.Put(ctx, h, strings.NewReader("x")); err == nil {
-			t.Errorf("Put with name %q: want error, got nil", name)
-		}
 	}
 }
 
@@ -254,5 +248,44 @@ func TestPutAndDeleteNeverSync(t *testing.T) {
 	syncFS = func(*os.File) error { return syscall.EIO }
 	if err := b.Sync(ctx); !errors.Is(err, syscall.EIO) {
 		t.Errorf("Sync with a failing flush = %v, want EIO", err)
+	}
+}
+
+// TestListSkipsNamesCheckNameRefuses plants files another tool leaves in a
+// namespace and in a pack shard. List must not yield them: Get and Delete
+// refuse their names, so a caller could neither read nor remove them.
+func TestListSkipsNamesCheckNameRefuses(t *testing.T) {
+	ctx := context.Background()
+	b := newBackend(t)
+	lock := ark.Handle{Type: ark.LockFile, Name: "l1"}
+	pack := ark.Handle{Type: ark.DataPackFile, Name: "aa01"}
+	for _, h := range []ark.Handle{lock, pack} {
+		if err := b.Put(ctx, h, strings.NewReader("x")); err != nil {
+			t.Fatalf("Put %s: %v", h.Name, err)
+		}
+	}
+	for _, p := range []string{
+		filepath.Join(b.BasePath(), "locks", ".DS_Store"),
+		filepath.Join(b.BasePath(), "datapacks", ".DS_Store"),
+		filepath.Join(b.BasePath(), "datapacks", "aa", "._aa01"),
+	} {
+		if err := os.WriteFile(p, []byte("junk"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, h := range []ark.Handle{lock, pack} {
+		var names []string
+		if err := b.List(ctx, h.Type, func(i ark.BlobInfo) error {
+			names = append(names, i.Name)
+			return nil
+		}); err != nil {
+			t.Fatalf("List %v: %v", h.Type, err)
+		}
+		if len(names) != 1 || names[0] != h.Name {
+			t.Errorf("List %v = %v, want [%s]", h.Type, names, h.Name)
+		}
+	}
+	if _, err := b.Get(ctx, ark.Handle{Type: ark.LockFile, Name: ".DS_Store"}); !errors.Is(err, ark.ErrInvalidName) {
+		t.Errorf("Get .DS_Store = %v, want ark.ErrInvalidName", err)
 	}
 }

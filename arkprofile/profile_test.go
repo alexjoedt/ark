@@ -588,3 +588,13 @@ func TestDecodeRefusesAConflictsTagOfNoKey(t *testing.T) {
 		t.Fatalf("Decode = %v, want the stray conflicts tag named", err)
 	}
 }
+
+func TestDecodeRefusesAnScpFormRepo(t *testing.T) {
+	for _, repo := range []string{"nas:/srv/ark", "user@nas:srv/ark"} {
+		var p arkprofile.Profile
+		err := arkprofile.Decode(strings.NewReader("repo: "+repo+"\n"), &p, t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "scp form") || !strings.HasPrefix(err.Error(), "line 1: repo: ") {
+			t.Errorf("repo %q: %v, want an scp form error", repo, err)
+		}
+	}
+}

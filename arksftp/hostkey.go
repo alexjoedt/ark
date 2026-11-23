@@ -1,12 +1,16 @@
 package arksftp
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -23,7 +27,7 @@ func hostKeys(cfg Config) (ssh.HostKeyCallback, error) {
 		return ssh.InsecureIgnoreHostKey(), nil //nolint:gosec // explicit opt-in
 	}
 
-	file := cfg.KnownHostsFile
+	file := expandHome(cfg.KnownHostsFile)
 	if file == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -50,6 +54,80 @@ func hostKeys(cfg Config) (ssh.HostKeyCallback, error) {
 	}, nil
 }
 
+// hostKeyAlgorithms lists the host key algorithms the known_hosts lines of
+// cfg's host name, in file order, for ssh.ClientConfig.HostKeyAlgorithms.
+// Without it x/crypto offers ECDSA and RSA before Ed25519, and a server that
+// signs with the first one it is offered fails against a file that holds only
+// its ed25519 key. When an @cert-authority line covers the host too, the
+// certificate algorithms come first, as in the default order, so a server
+// that presents a certificate is still checked against the authority. nil
+// means no plain line matches (or verification is off), and the default order
+// applies.
+func hostKeyAlgorithms(verify ssh.HostKeyCallback, cfg Config) []string {
+	port := cfg.Port
+	if port == 0 {
+		port = defaultPort
+	}
+	// A key no file holds makes the callback report every line of the host.
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil
+	}
+	probe, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		return nil
+	}
+	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(port))
+	var keyErr *knownhosts.KeyError
+	if !errors.As(verify(addr, &net.TCPAddr{}, probe), &keyErr) {
+		return nil
+	}
+
+	var algs []string
+	seen := map[string]bool{}
+	authority := false
+	for _, k := range keyErr.Want {
+		if isCertAuthority(k) {
+			authority = true
+			continue
+		}
+		next := []string{k.Key.Type()}
+		if k.Key.Type() == ssh.KeyAlgoRSA {
+			next = []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA}
+		}
+		for _, a := range next {
+			if !seen[a] {
+				seen[a] = true
+				algs = append(algs, a)
+			}
+		}
+	}
+	if authority && len(algs) > 0 {
+		algs = append([]string{
+			ssh.CertAlgoED25519v01,
+			ssh.CertAlgoECDSA256v01, ssh.CertAlgoECDSA384v01, ssh.CertAlgoECDSA521v01,
+			ssh.CertAlgoRSASHA512v01, ssh.CertAlgoRSASHA256v01,
+		}, algs...)
+	}
+	return algs
+}
+
+// isCertAuthority reports whether k is the key of an @cert-authority line.
+// The callback lists those among the lines of a host without marking them,
+// so the marker is read from the file.
+func isCertAuthority(k knownhosts.KnownKey) bool {
+	data, err := os.ReadFile(k.Filename)
+	if err != nil {
+		return false
+	}
+	lines := bytes.Split(data, []byte("\n"))
+	if k.Line < 1 || k.Line > len(lines) {
+		return false
+	}
+	marker, _, _, _, _, _ := ssh.ParseKnownHosts(lines[k.Line-1])
+	return marker == "cert-authority"
+}
+
 // unknownHostError reports a host that has no entry in the known_hosts file,
 // with the command that adds one.
 func unknownHostError(hostname, file string, key ssh.PublicKey) error {
@@ -67,14 +145,23 @@ func unknownHostError(hostname, file string, key ssh.PublicKey) error {
 // to resolve it by hand.
 func mismatchError(hostname string, keyErr *knownhosts.KeyError, key ssh.PublicKey) error {
 	known := keyErr.Want[0]
-	return fmt.Errorf("arksftp: host key mismatch for %s\n"+
+	return mismatch{keyErr, fmt.Errorf("arksftp: host key mismatch for %s\n"+
 		"  offered %s %s\n"+
 		"  known   %s %s (%s:%d)\n"+
 		"  remove the stale line only if you know the host key changed",
 		hostname,
 		key.Type(), ssh.FingerprintSHA256(key),
-		known.Key.Type(), ssh.FingerprintSHA256(known.Key), known.Filename, known.Line)
+		known.Key.Type(), ssh.FingerprintSHA256(known.Key), known.Filename, known.Line)}
 }
+
+// mismatch is a mismatch error that still unwraps to the knownhosts.KeyError,
+// which hostKeyAlgorithms reads the matching lines from.
+type mismatch struct {
+	keyErr *knownhosts.KeyError
+	error
+}
+
+func (m mismatch) Unwrap() error { return m.keyErr }
 
 // splitHostPort splits the "host:port" form ssh hands the callback. A bare
 // host, or the bracketed [host]:port form of a non-default port, both come

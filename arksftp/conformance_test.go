@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -82,4 +83,39 @@ func subdir(t *testing.T, base string) string {
 	name := strings.NewReplacer("/", "-", " ", "_").Replace(t.Name())
 	u.Path = path.Join(u.Path, name+"-"+strconv.FormatUint(seq.Add(1), 10))
 	return u.String()
+}
+
+// TestListFollowsSymlinksOnAServer puts the namespace, a shard and a pack of a
+// repository behind symlinks on a real server, where a listing that does not
+// follow them finds no packs.
+func TestListFollowsSymlinksOnAServer(t *testing.T) {
+	root := testRoot(t)
+	b := openTestBackend(t, root).(*arksftp.Backend)
+	hs := []ark.Handle{
+		{Type: ark.DataPackFile, Name: "aa01"},
+		{Type: ark.DataPackFile, Name: "bb01"},
+		{Type: ark.DataPackFile, Name: "cc01"},
+	}
+	for _, h := range hs {
+		if err := b.Put(t.Context(), h, strings.NewReader(h.Name)); err != nil {
+			t.Fatalf("Put %s: %v", h.Name, err)
+		}
+	}
+	for _, rel := range []string{"datapacks/bb/bb01", "datapacks/aa", "datapacks"} {
+		if err := b.MoveBehindLink(rel); err != nil {
+			t.Fatalf("link %s: %v", rel, err)
+		}
+	}
+	var got []string
+	err := b.List(t.Context(), ark.DataPackFile, func(i ark.BlobInfo) error {
+		got = append(got, i.Name)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	slices.Sort(got)
+	if want := []string{"aa01", "bb01", "cc01"}; !slices.Equal(got, want) {
+		t.Errorf("List = %v, want %v", got, want)
+	}
 }

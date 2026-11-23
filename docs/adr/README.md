@@ -54,3 +54,4 @@ or `partly superseded by NNNN` when the new ADR replaces only a part of it and n
 | 0037 | [The tree node is a binary object with one encoding](0037-binary-tree-node.md) | accepted | 2026-11-21 |
 | 0038 | [Narrow the chunker, salt and stale lock rules before the freeze](0038-narrow-the-chunker-salt-and-stale-lock-rules.md) | accepted | 2026-11-22 |
 | 0039 | [Forget takes the exclusive lock](0039-forget-takes-the-exclusive-lock.md) | accepted | 2026-11-22 |
+| 0040 | [One object name check for every backend](0040-one-object-name-check-for-every-backend.md) | accepted | 2026-11-23 |

@@ -124,6 +124,19 @@ second run uploads only what the first one didn't save.
 The interrupted run can leave packs behind that no snapshot uses. `ark check` reports them as a
 warning, and the next `ark prune` removes them.
 
+### `connection lost: the server stopped answering`
+
+Nothing arrived from the SFTP server for about a minute, so ark closed the connection instead of
+waiting for it. A slow link doesn't cause this as long as the server still answers. ark doesn't
+reconnect within a command. Check the network and the server, then run the command again. A backup
+this ends counts as interrupted.
+
+### `connection lost: the connection closed`
+
+The connection to the SFTP server ended while a command ran, for example because the server
+restarted. The rest of the message is the error of the connection. ark doesn't reconnect within a
+command. Run the command again. A backup this ends counts as interrupted.
+
 ### A backup reads every file again
 
 A backup skips unchanged files only when it has a parent, the newest snapshot of the same

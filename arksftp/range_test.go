@@ -2,11 +2,8 @@ package arksftp_test
 
 import (
 	"bytes"
-	"context"
-	"errors"
 	"io"
 	"testing"
-	"time"
 
 	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arksftp"
@@ -58,33 +55,5 @@ func TestGetRangeReadsOnlyTheRange(t *testing.T) {
 	}
 	if wholeBytes < size {
 		t.Errorf("control Get of %d bytes received %d bytes, the counter misses traffic", size, wholeBytes)
-	}
-}
-
-// TestGetRangeWaitEndsWithTheContext pins that a cancelled context ends the
-// wait on a read that the sftp client cannot abort.
-func TestGetRangeWaitEndsWithTheContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	reading, release := make(chan struct{}), make(chan struct{})
-	defer close(release)
-	returned := make(chan error, 1)
-	go func() {
-		_, err := arksftp.AwaitRead(ctx, func() ([]byte, error) {
-			close(reading)
-			<-release
-			return nil, nil
-		})
-		returned <- err
-	}()
-
-	<-reading
-	cancel()
-	select {
-	case err := <-returned:
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("wait on a blocked read = %v, want context.Canceled", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Error("the wait on a blocked read outlived its context")
 	}
 }

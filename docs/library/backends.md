@@ -49,6 +49,43 @@ b, err := arkuri.Open(ctx, "sftp://backup@nas/srv/ark") // or "/srv/ark", "local
 `ARK_SFTP_KEY_PASSPHRASE` unlocks an encrypted key file. Secrets never go into `arksftp.Config` or
 a URI.
 
+## SFTP durability
+
+`arksftp` needs the `fsync@openssh.com` extension to flush files and directories on the server.
+OpenSSH has it. A server without it has no durability barrier: `Sync` returns nil, and a power loss
+on the server can drop objects that `Put` returned. `arksftp.New` logs a warning once when the
+extension is missing.
+
+## SFTP directory modes
+
+`arksftp` creates every directory of the repository with mode `0700`, so other users on the server
+cannot list or read the key files. Files keep the mode the server's umask gives them. A repository
+created by an earlier version has directories under the server's default mode, usually `0755`.
+Restrict it once on the server:
+
+```sh
+chmod -R go-rwx /srv/ark
+```
+
+A server that refuses to set the mode makes `arksftp` log a warning once and keep the default.
+
+The mode is owner-only, also for a repository shared through a group: under a base directory with
+mode `2770`, new directories still get `0700`, so other members of the group cannot open them. The
+`chmod` line above drops group access too.
+
+## SFTP on a link that stops answering
+
+Every `arksftp` call returns when its context ends, also when the server no longer answers. The
+request it waited on stays behind until the server answers it or the connection closes, so a
+cancelled `Delete` may still remove its object and a cancelled `Put` may leave a temporary
+`.ark-tmp-` object, which no listing shows.
+
+The backend pings the server every 15 seconds. It closes the connection after three intervals in
+a row with a ping unanswered and nothing else arriving from the server. A ping that fails because
+the connection is gone closes it at once. Every call fails from then on with an error that says
+the connection is lost and why. `Close` then returns no error. `arksftp` does not reconnect: call
+`arksftp.New` again.
+
 ## Write your own backend
 
 Anything that can store, read, list, and delete named blobs can hold a repository. Implement
@@ -74,11 +111,15 @@ under the key `<namespace>/<name>`, the layout an object store uses:
 ```go
 // key maps a handle to its key. The namespace comes from Type.String() and not
 // from a switch on the constants, so a handle type that a later version of ark
-// adds needs no change here.
+// adds needs no change here. ark.CheckName refuses a name that is no object
+// name, such as one with a "/" that would reach into another key.
 func key(h ark.Handle) (string, error) {
 	ns := h.Type.String()
-	if ns == ark.UnknownNamespace || h.Name == "" {
-		return "", fmt.Errorf("kv: invalid handle %s/%q", ns, h.Name)
+	if ns == ark.UnknownNamespace {
+		return "", fmt.Errorf("kv: unknown handle type %d", h.Type)
+	}
+	if err := ark.CheckName(h.Name); err != nil {
+		return "", fmt.Errorf("kv: %s: %w", ns, err)
 	}
 	return ns + "/" + h.Name, nil
 }
@@ -132,12 +173,14 @@ The core relies on these rules. The documentation of
 | Method | Rule |
 |---|---|
 | all | safe for concurrent use |
+| all with a handle | refuse a name that `ark.CheckName` refuses (empty, starting with `.`, or holding `/` or `\`) with an error that wraps `ark.ErrInvalidName` |
+| all with a context | return an error that wraps `ctx.Err()` when called with a done context |
 | `Put` | atomic: a reader never sees a partial object; an existing object is replaced; `r` isn't read after `Put` returns |
 | `Get`, `Stat` | a missing object returns an error that wraps `ark.ErrNotFound` |
 | `GetRange` | returns exactly `length` bytes without reading the bytes before `offset`; a range past the end wraps `io.ErrUnexpectedEOF`; a missing object wraps `ark.ErrNotFound`; a negative offset or length is an error |
 | `Delete` | removing a missing object isn't an error |
 | `Sync` | when it returns, a power loss can't undo any `Put` or `Delete` that returned before the call |
-| `List` | calls `fn` once per object of the type; stops and returns the error when `fn` returns one |
+| `List` | calls `fn` once per object of the type and never with a name `ark.CheckName` refuses, such as a temporary file or a `.DS_Store`; stops and returns the error when `fn` returns one |
 
 Three more points:
 

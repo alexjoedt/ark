@@ -225,7 +225,7 @@ func TestDelete(t *testing.T) {
 	}
 }
 
-func TestRejectsUnknownTypeAndEmptyName(t *testing.T) {
+func TestRejectsUnknownType(t *testing.T) {
 	ctx := context.Background()
 	b := New()
 
@@ -235,35 +235,6 @@ func TestRejectsUnknownTypeAndEmptyName(t *testing.T) {
 	}
 	if err := b.List(ctx, ark.HandleType(200), func(ark.BlobInfo) error { return nil }); err == nil {
 		t.Error("List with an unknown handle type = nil, want an error")
-	}
-	if err := b.Put(ctx, ark.Handle{Type: ark.ConfigFile}, strings.NewReader("x")); err == nil {
-		t.Error("Put with an empty name = nil, want an error")
-	}
-}
-
-func TestCancelledContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	b := New()
-	h := ark.Handle{Type: ark.ConfigFile, Name: "config"}
-
-	if err := b.Put(ctx, h, strings.NewReader("x")); !errors.Is(err, context.Canceled) {
-		t.Errorf("Put = %v, want context.Canceled", err)
-	}
-	if _, err := b.Get(ctx, h); !errors.Is(err, context.Canceled) {
-		t.Errorf("Get = %v, want context.Canceled", err)
-	}
-	if _, err := b.Exists(ctx, h); !errors.Is(err, context.Canceled) {
-		t.Errorf("Exists = %v, want context.Canceled", err)
-	}
-	if err := b.Delete(ctx, h); !errors.Is(err, context.Canceled) {
-		t.Errorf("Delete = %v, want context.Canceled", err)
-	}
-	if _, err := b.Stat(ctx, h); !errors.Is(err, context.Canceled) {
-		t.Errorf("Stat = %v, want context.Canceled", err)
-	}
-	if err := b.List(ctx, ark.ConfigFile, func(ark.BlobInfo) error { return nil }); !errors.Is(err, context.Canceled) {
-		t.Errorf("List = %v, want context.Canceled", err)
 	}
 }
 

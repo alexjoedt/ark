@@ -35,11 +35,15 @@ func newKVBackend() *kvBackend {
 
 // key maps a handle to its key. The namespace comes from Type.String() and not
 // from a switch on the constants, so a handle type that a later version of ark
-// adds needs no change here.
+// adds needs no change here. ark.CheckName refuses a name that is no object
+// name, such as one with a "/" that would reach into another key.
 func key(h ark.Handle) (string, error) {
 	ns := h.Type.String()
-	if ns == ark.UnknownNamespace || h.Name == "" {
-		return "", fmt.Errorf("kv: invalid handle %s/%q", ns, h.Name)
+	if ns == ark.UnknownNamespace {
+		return "", fmt.Errorf("kv: unknown handle type %d", h.Type)
+	}
+	if err := ark.CheckName(h.Name); err != nil {
+		return "", fmt.Errorf("kv: %s: %w", ns, err)
 	}
 	return ns + "/" + h.Name, nil
 }

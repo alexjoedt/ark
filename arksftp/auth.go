@@ -235,9 +235,10 @@ func buildSSHConfig(cfg Config) (*ssh.ClientConfig, *authChain, error) {
 	}
 
 	return &ssh.ClientConfig{
-		User:            cfg.User,
-		Auth:            chain.methods,
-		HostKeyCallback: hostKeyCallback,
-		Timeout:         timeout,
+		User:              cfg.User,
+		Auth:              chain.methods,
+		HostKeyCallback:   hostKeyCallback,
+		HostKeyAlgorithms: hostKeyAlgorithms(hostKeyCallback, cfg),
+		Timeout:           timeout,
 	}, chain, nil
 }

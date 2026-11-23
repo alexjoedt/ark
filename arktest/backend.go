@@ -15,6 +15,7 @@ package arktest
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/alexjoedt/ark"
 )
@@ -45,17 +47,13 @@ var conformanceTypes = []ark.HandleType{
 	ark.LostPackFile,
 }
 
-// chunkNameLen is the length of a hash name the suite generates: a content
-// hash in hex, long enough for a backend that shards on the first characters.
-const chunkNameLen = 64
-
 // objectName returns a distinct name for type typ and suffix. Chunk and pack
-// names look like a content hash, 64 hex characters, so a backend that shards
-// on the first few is exercised; the rest are opaque.
+// names are the SHA-256 of the suffix in hex, as a content hash is, so they
+// spread over the shards of a backend that shards on the first characters;
+// the rest are opaque.
 func objectName(typ ark.HandleType, suffix string) string {
 	if typ == ark.BlobFile || typ == ark.DataPackFile || typ == ark.TreePackFile {
-		h := fmt.Sprintf("%x", suffix)
-		return strings.Repeat("f", chunkNameLen-len(h)) + h
+		return fmt.Sprintf("%x", sha256.Sum256([]byte(suffix)))
 	}
 	return typ.String() + "-" + suffix
 }
@@ -91,6 +89,8 @@ func RunBackendTests(t *testing.T, factory func(t *testing.T) ark.Backend) {
 	t.Run("ConcurrentPuts", func(t *testing.T) { testConcurrentPuts(t, newBackend) })
 	t.Run("ConcurrentMixed", func(t *testing.T) { testConcurrentMixed(t, newBackend) })
 	t.Run("Sync", func(t *testing.T) { testSync(t, newBackend) })
+	t.Run("RefusesInvalidNames", func(t *testing.T) { testRefusesInvalidNames(t, newBackend) })
+	t.Run("CancelledContext", func(t *testing.T) { testCancelledContext(t, newBackend) })
 	t.Run("Close", func(t *testing.T) { testClose(t, factory) })
 }
 
@@ -605,5 +605,108 @@ func testClose(t *testing.T, factory func(t *testing.T) ark.Backend) {
 	put(t, b, ark.Handle{Type: ark.ConfigFile, Name: objectName(ark.ConfigFile, "closing")}, []byte("x"))
 	if err := b.Close(); err != nil {
 		t.Errorf("Close = %v, want nil", err)
+	}
+}
+
+// invalidNames are names [ark.CheckName] refuses: each could leave its
+// namespace or shard, or collide with a backend's temporary files.
+var invalidNames = []string{"", "..x", ".", "..", ".ark-tmp-x", "a/b", `a\b`}
+
+// testRefusesInvalidNames checks that every method taking a handle refuses a
+// name that is no object name, in every namespace, with [ark.ErrInvalidName].
+func testRefusesInvalidNames(t *testing.T, newBackend func(*testing.T) ark.Backend) {
+	ctx := context.Background()
+	b := newBackend(t)
+
+	for _, typ := range conformanceTypes {
+		for _, name := range invalidNames {
+			h := ark.Handle{Type: typ, Name: name}
+			check := func(method string, err error) {
+				if !errors.Is(err, ark.ErrInvalidName) {
+					t.Errorf("%s %v %q = %v, want ark.ErrInvalidName", method, typ, name, err)
+				}
+			}
+			check("Put", b.Put(ctx, h, strings.NewReader("x")))
+			rc, err := b.Get(ctx, h)
+			if err == nil {
+				_ = rc.Close()
+			}
+			check("Get", err)
+			_, err = b.GetRange(ctx, h, 0, 1)
+			check("GetRange", err)
+			_, err = b.Exists(ctx, h)
+			check("Exists", err)
+			check("Delete", b.Delete(ctx, h))
+			_, err = b.Stat(ctx, h)
+			check("Stat", err)
+		}
+	}
+}
+
+// cancelWait bounds how long a call on a cancelled context may take. A call
+// that needs it is waiting on I/O it should have abandoned.
+const cancelWait = 5 * time.Second
+
+// testCancelledContext checks that every method returns an error wrapping
+// [context.Canceled] when called with a cancelled context, on a stored object
+// and on a missing one, that a Delete so refused leaves the object in place and
+// that a Put so refused stores nothing.
+func testCancelledContext(t *testing.T, newBackend func(*testing.T) ark.Backend) {
+	b := newBackend(t)
+	stored := ark.Handle{Type: ark.DataPackFile, Name: objectName(ark.DataPackFile, "cancel")}
+	missing := ark.Handle{Type: ark.DataPackFile, Name: objectName(ark.DataPackFile, "cancel-missing")}
+	put(t, b, stored, []byte("payload"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	type call struct {
+		name string
+		call func() error
+	}
+	calls := []call{
+		{"List", func() error {
+			return b.List(ctx, ark.DataPackFile, func(ark.BlobInfo) error { return nil })
+		}},
+		{"Sync", func() error { return b.Sync(ctx) }},
+	}
+	for _, h := range []ark.Handle{stored, missing} {
+		what := "a stored object"
+		if h == missing {
+			what = "a missing object"
+		}
+		calls = append(calls,
+			call{"Put on " + what, func() error { return b.Put(ctx, h, strings.NewReader("other")) }},
+			call{"Get on " + what, func() error {
+				rc, err := b.Get(ctx, h)
+				if err == nil {
+					_ = rc.Close()
+				}
+				return err
+			}},
+			call{"GetRange on " + what, func() error { _, err := b.GetRange(ctx, h, 0, 1); return err }},
+			call{"Exists on " + what, func() error { _, err := b.Exists(ctx, h); return err }},
+			call{"Delete on " + what, func() error { return b.Delete(ctx, h) }},
+			call{"Stat on " + what, func() error { _, err := b.Stat(ctx, h); return err }},
+		)
+	}
+	for _, c := range calls {
+		done := make(chan error, 1)
+		go func() { done <- c.call() }()
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("%s on a cancelled context = %v, want context.Canceled", c.name, err)
+			}
+		case <-time.After(cancelWait):
+			// The call still runs against b: later calls would race it.
+			t.Fatalf("%s on a cancelled context has not returned after %v", c.name, cancelWait)
+		}
+	}
+
+	if got := get(t, b, stored); string(got) != "payload" {
+		t.Errorf("after the cancelled calls Get = %q, want %q", got, "payload")
+	}
+	if ok, err := b.Exists(context.Background(), missing); err != nil || ok {
+		t.Errorf("after a cancelled Put Exists = %v, %v, want false, nil", ok, err)
 	}
 }
