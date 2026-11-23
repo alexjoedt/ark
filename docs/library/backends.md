@@ -49,6 +49,13 @@ b, err := arkuri.Open(ctx, "sftp://backup@nas/srv/ark") // or "/srv/ark", "local
 `ARK_SFTP_KEY_PASSPHRASE` unlocks an encrypted key file. Secrets never go into `arksftp.Config` or
 a URI.
 
+## SFTP durability
+
+`arksftp` needs the `fsync@openssh.com` extension to flush files and directories on the server.
+OpenSSH has it. A server without it has no durability barrier: `Sync` returns nil, and a power loss
+on the server can drop objects that `Put` returned. `arksftp.New` logs a warning once when the
+extension is missing.
+
 ## Write your own backend
 
 Anything that can store, read, list, and delete named blobs can hold a repository. Implement

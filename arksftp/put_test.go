@@ -1,12 +1,16 @@
 package arksftp
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -206,5 +210,70 @@ func TestPutRemovesTheTempFileOnlyOnFailure(t *testing.T) {
 				t.Errorf("removed %v, want exactly the temp file", got)
 			}
 		})
+	}
+}
+
+func TestSyncDirReportsAFailedFsyncAndTurnsOffAnUnsupportedOpen(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	b := pipeBackend(t)
+	b.fsync = true
+	dir := b.basePath
+
+	orig := syncFile
+	t.Cleanup(func() { syncFile = orig })
+	syncFile = func(*sftp.File) error { return &sftp.StatusError{Code: 4} }
+	if err := b.syncDir(dir); err == nil {
+		t.Fatal("a failed fsync on an opened directory was swallowed")
+	}
+	if b.noDirSync.Load() {
+		t.Fatal("a failed fsync turned directory syncs off")
+	}
+
+	if os.Geteuid() == 0 {
+		t.Skip("root opens any directory")
+	}
+	locked := filepath.Join(dir, "locked")
+	if err := os.Mkdir(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+	opens := 0
+	syncFile = func(*sftp.File) error { opens++; return nil }
+	for range 2 {
+		if err := b.syncDir(locked); err != nil {
+			t.Fatalf("syncDir on a directory the server refuses: %v", err)
+		}
+	}
+	if !b.noDirSync.Load() || opens != 0 {
+		t.Errorf("noDirSync %v, fsyncs %d, want off and none", b.noDirSync.Load(), opens)
+	}
+	if n := strings.Count(logs.String(), "level=WARN"); n != 1 {
+		t.Errorf("%d warnings, want 1:\n%s", n, logs.String())
+	}
+	if err := b.syncDir(dir); err != nil || opens != 0 {
+		t.Errorf("syncDir after the switch-off = %v with %d fsyncs, want nil and none", err, opens)
+	}
+}
+
+func TestNewBackendWarnsOnceWithoutFsync(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	b := pipeBackend(t)
+	nb := newBackend(b.client, nil, Config{Host: "nas", Path: "/repo"})
+	if nb.fsync {
+		t.Fatal("in-process server announced fsync@openssh.com; test needs a server without it")
+	}
+	if n := strings.Count(logs.String(), "level=WARN"); n != 1 || !strings.Contains(logs.String(), "host=nas") {
+		t.Errorf("want one warning naming the host:\n%s", logs.String())
+	}
+	if err := nb.Sync(context.Background()); err != nil {
+		t.Errorf("Sync without fsync = %v, want nil", err)
 	}
 }

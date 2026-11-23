@@ -18,12 +18,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/alexjoedt/ark"
@@ -91,6 +93,10 @@ type Backend struct {
 	// Put needs to flush a temp file before renaming it into place and
 	// Put and Delete need to flush the directories they change.
 	fsync bool
+	// noDirSync is set once the server refused to open a directory for
+	// fsync; directory syncs are then skipped for the rest of the backend's
+	// life.
+	noDirSync atomic.Bool
 	// durable holds directories whose entries up to the root this process
 	// has fsynced, so Put pays the parent syncs once per directory.
 	durable sync.Map
@@ -123,8 +129,18 @@ func New(cfg Config) (*Backend, error) {
 		return nil, fmt.Errorf("arksftp: open sftp subsystem: %w", err)
 	}
 
+	return newBackend(client, conn, cfg), nil
+}
+
+// newBackend wraps a connected client, recording the extensions the server
+// announced and warning once when it has no fsync.
+func newBackend(client *sftp.Client, conn *ssh.Client, cfg Config) *Backend {
 	_, posixRename := client.HasExtension("posix-rename@openssh.com")
 	_, fsync := client.HasExtension("fsync@openssh.com")
+	if !fsync {
+		slog.Warn("arksftp: the server has no fsync@openssh.com, Sync is no durability barrier "+
+			"and a power loss on the server can drop objects Put returned", "host", cfg.Host)
+	}
 
 	return &Backend{
 		client:      client,
@@ -132,7 +148,7 @@ func New(cfg Config) (*Backend, error) {
 		basePath:    cfg.Path,
 		posixRename: posixRename,
 		fsync:       fsync,
-	}, nil
+	}
 }
 
 // Close closes the SFTP client and the underlying SSH connection.
@@ -234,20 +250,33 @@ func (b *Backend) mkdirDurable(dir string) error {
 
 // syncDir fsyncs dir on the server so a rename, create or remove inside it
 // survives a server power loss. It is a no-op without fsync@openssh.com. A
-// server that will not open or flush a directory, or an ancestor the user may
-// not read, answers with a status; that counts as unsupported, not as a
-// failure. Transport errors still fail.
+// server that refuses to open a directory (or an ancestor the user may not
+// read) with a status does not support directory syncs: that warns once and
+// turns them off for this backend. A directory that is gone has nothing to
+// flush. A failed fsync on a directory that opened is an error.
 func (b *Backend) syncDir(dir string) error {
-	if !b.fsync {
+	if !b.fsync || b.noDirSync.Load() {
 		return nil
 	}
 	d, err := b.client.Open(dir)
-	if err == nil {
-		err = syncFile(d)
-		_ = d.Close()
+	if err != nil {
+		var status *sftp.StatusError
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			return nil
+		case errors.As(err, &status) || errors.Is(err, os.ErrPermission):
+			if b.noDirSync.CompareAndSwap(false, true) {
+				slog.Warn("arksftp: the server refuses to open a directory for fsync, "+
+					"directory syncs are off and renames are not durable on a power loss",
+					"dir", dir, "err", err)
+			}
+			return nil
+		}
+		return fmt.Errorf("arksftp: sync dir %s: %w", dir, err)
 	}
-	var status *sftp.StatusError
-	if err != nil && !errors.As(err, &status) && !errors.Is(err, os.ErrPermission) {
+	err = syncFile(d)
+	_ = d.Close()
+	if err != nil {
 		return fmt.Errorf("arksftp: sync dir %s: %w", dir, err)
 	}
 	return nil
@@ -411,6 +440,7 @@ func (b *Backend) Exists(ctx context.Context, h ark.Handle) (bool, error) {
 // Sync is a no-op: Put and Delete already fsync every object and directory
 // they touch on the server (with fsync@openssh.com). A deferred flush would
 // cost an open, fsync and close round trip per object, more than it saves.
+// Without the extension it still returns nil; New warns about that once.
 func (b *Backend) Sync(ctx context.Context) error { return ctx.Err() }
 
 // Delete removes the object identified by h. Removing a non-existent object
