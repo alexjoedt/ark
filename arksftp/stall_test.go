@@ -357,11 +357,13 @@ func TestPutLeavesItsSourceAloneOnceItReturned(t *testing.T) {
 	}
 }
 
-// sftpRecorder is an in-memory sftp server that tells the test which renames and
-// removes it was asked for and whether it was sent a byte of marker.
+// sftpRecorder is an in-memory sftp server that tells the test which renames of
+// files and which removes it was asked for and whether it was sent a byte of
+// marker. Renames of the directories Put creates are not recorded.
 type sftpRecorder struct {
 	sftp.FileCmder
 	sftp.FileWriter
+	list   sftp.FileLister
 	cmds   chan string
 	marked atomic.Bool
 }
@@ -369,7 +371,7 @@ type sftpRecorder struct {
 const marker = 0xbb
 
 func (r *sftpRecorder) Filecmd(req *sftp.Request) error {
-	if req.Method == "Rename" || req.Method == "Remove" {
+	if req.Method == "Rename" && !isDir(r.list, req.Filepath) || req.Method == "Remove" {
 		r.cmds <- req.Method
 	}
 	return r.FileCmder.Filecmd(req)
@@ -397,7 +399,7 @@ func recordedBackend(t *testing.T) (*Backend, *stallConn, *sftpRecorder) {
 	t.Helper()
 	srvConn, cliConn := net.Pipe()
 	hs := sftp.InMemHandler()
-	rec := &sftpRecorder{FileCmder: hs.FileCmd, FileWriter: hs.FilePut, cmds: make(chan string, 64)}
+	rec := &sftpRecorder{FileCmder: hs.FileCmd, FileWriter: hs.FilePut, list: hs.FileList, cmds: make(chan string, 64)}
 	hs.FileCmd, hs.FilePut = rec, rec
 	b, link := stallOver(t, sftp.NewRequestServer(srvConn, hs), srvConn, cliConn, "/repo")
 	return b, link, rec

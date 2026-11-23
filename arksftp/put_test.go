@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -109,10 +110,11 @@ func TestPutAndDeleteSyncOnlyWhenAnnounced(t *testing.T) {
 }
 
 // cmdRecorder wraps the in-memory command handler: it records the remove
-// requests the server receives and can fail renames with a status that rename
-// does not retry.
+// requests the server receives and can fail renames of files with a status that
+// rename does not retry.
 type cmdRecorder struct {
 	sftp.FileCmder
+	list       sftp.FileLister
 	mu         sync.Mutex
 	removed    []string
 	failRename bool
@@ -125,11 +127,22 @@ func (c *cmdRecorder) Filecmd(r *sftp.Request) error {
 	case "Remove":
 		c.removed = append(c.removed, r.Filepath)
 	case "Rename", "PosixRename":
-		if c.failRename {
+		if c.failRename && !isDir(c.list, r.Filepath) {
 			return sftp.ErrSSHFxPermissionDenied
 		}
 	}
 	return c.FileCmder.Filecmd(r)
+}
+
+// isDir reports whether p is a directory on the in-memory server of l.
+func isDir(l sftp.FileLister, p string) bool {
+	la, err := l.Filelist(sftp.NewRequest("Stat", p))
+	if err != nil {
+		return false
+	}
+	fi := make([]os.FileInfo, 1)
+	n, _ := la.ListAt(fi, 0)
+	return n == 1 && fi[0].IsDir()
 }
 
 func (c *cmdRecorder) takeRemoved() []string {
@@ -148,7 +161,7 @@ func TestPutRemovesTheTempFileOnlyOnFailure(t *testing.T) {
 		t.Helper()
 		srvConn, cliConn := net.Pipe()
 		hs := sftp.InMemHandler()
-		rec := &cmdRecorder{FileCmder: hs.FileCmd}
+		rec := &cmdRecorder{FileCmder: hs.FileCmd, list: hs.FileList}
 		hs.FileCmd = rec
 		srv := sftp.NewRequestServer(srvConn, hs)
 		go func() { _ = srv.Serve() }()
@@ -310,38 +323,144 @@ func TestNewBackendWarnsOnceWithoutFsync(t *testing.T) {
 func TestPutCreatesPrivateDirs(t *testing.T) {
 	ctx := context.Background()
 	b := pipeBackend(t)
-	parent := filepath.Join(b.basePath, "new", "repo")
-	b.basePath = parent
-	if err := os.Chmod(path.Dir(path.Dir(parent)), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	old := filepath.Join(parent, "locks")
-	if err := os.MkdirAll(old, 0o755); err != nil {
+	top := b.basePath
+	b.basePath = filepath.Join(top, "new", "repo")
+	// The in-process server makes a directory 0755 under the umask.
+	ref := filepath.Join(top, "ref")
+	if err := os.Mkdir(ref, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, h := range []ark.Handle{
 		{Type: ark.KeyFile, Name: "k1"},
 		{Type: ark.DataPackFile, Name: "abcdef0123456789"},
-		{Type: ark.LockFile, Name: "l1"},
 	} {
 		if err := b.Put(ctx, h, strings.NewReader("x")); err != nil {
 			t.Fatalf("Put %v: %v", h, err)
 		}
 	}
-	for _, d := range []string{"keys", "datapacks", "datapacks/ab"} {
-		fi, err := os.Stat(filepath.Join(parent, d))
+	mode := func(p string) os.FileMode {
+		t.Helper()
+		fi, err := os.Stat(p)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := fi.Mode().Perm(); got != 0o700 {
+		return fi.Mode().Perm()
+	}
+	if got, want := mode(filepath.Join(top, "new")), mode(ref); got != want {
+		t.Errorf("parent above the repository mode %o, want %o from the umask", got, want)
+	}
+	for _, d := range []string{".", "keys", "datapacks", "datapacks/ab"} {
+		if got := mode(filepath.Join(b.basePath, d)); got != 0o700 {
 			t.Errorf("%s mode %o, want 700", d, got)
 		}
 	}
-	fi, err := os.Stat(old)
+	for _, d := range []string{"new", "new/repo", "new/repo/datapacks"} {
+		if temps, _ := filepath.Glob(filepath.Join(top, d, tmpPrefix+"*")); len(temps) > 0 {
+			t.Errorf("temporary dirs left in %s: %v", d, temps)
+		}
+	}
+	old := filepath.Join(b.basePath, "locks")
+	if err := os.Mkdir(old, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(old, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Put(ctx, ark.Handle{Type: ark.LockFile, Name: "l1"}, strings.NewReader("x")); err != nil {
+		t.Fatalf("Put lock: %v", err)
+	}
+	if got := mode(old); got != 0o755 {
+		t.Errorf("existing locks dir mode %o, want 755 untouched", got)
+	}
+}
+
+type cmdFunc func(*sftp.Request) error
+
+func (f cmdFunc) Filecmd(r *sftp.Request) error { return f(r) }
+
+type listFunc func(*sftp.Request) (sftp.ListerAt, error)
+
+func (f listFunc) Filelist(r *sftp.Request) (sftp.ListerAt, error) { return f(r) }
+
+// memBackend serves the in-memory handlers hs at /repo.
+func memBackend(t *testing.T, hs sftp.Handlers) *Backend {
+	t.Helper()
+	srvConn, cliConn := net.Pipe()
+	b, _ := stallOver(t, sftp.NewRequestServer(srvConn, hs), srvConn, cliConn, "/repo")
+	return b
+}
+
+// TestPutOnARestrictedServer pins a server that refuses chmod with
+// PERMISSION_DENIED, which pkg/sftp turns into [os.ErrPermission], and reports a
+// missing path with SSH_FX_FAILURE instead of NO_SUCH_FILE: Put creates the
+// directories anyway and warns once.
+func TestPutOnARestrictedServer(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	hs := sftp.InMemHandler()
+	cmd, list := hs.FileCmd, hs.FileList
+	hs.FileCmd = cmdFunc(func(r *sftp.Request) error {
+		if r.Method == "Setstat" {
+			return os.ErrPermission
+		}
+		return cmd.Filecmd(r)
+	})
+	hs.FileList = listFunc(func(r *sftp.Request) (sftp.ListerAt, error) {
+		l, err := list.Filelist(r)
+		if r.Method == "Stat" && errors.Is(err, os.ErrNotExist) {
+			return nil, errors.New("failure")
+		}
+		return l, err
+	})
+	b := memBackend(t, hs)
+	for _, name := range []string{"aa01", "bb01"} {
+		h := ark.Handle{Type: ark.DataPackFile, Name: name}
+		if err := b.Put(t.Context(), h, strings.NewReader("x")); err != nil {
+			t.Fatalf("Put %s: %v", name, err)
+		}
+	}
+	if n := strings.Count(logs.String(), "level=WARN"); n != 1 {
+		t.Errorf("%d warnings, want 1:\n%s", n, logs.String())
+	}
+}
+
+// TestPutMakesADirAnotherPutCreatedPrivate pins that a Put losing the race to
+// create a directory still chmods it: the winner may be an older ark.
+func TestPutMakesADirAnotherPutCreatedPrivate(t *testing.T) {
+	hs := sftp.InMemHandler()
+	cmd := hs.FileCmd
+	var chmodded []string
+	hs.FileCmd = cmdFunc(func(r *sftp.Request) error {
+		switch {
+		case r.Method == "Setstat":
+			chmodded = append(chmodded, r.Filepath)
+			return nil
+		case r.Method == "Rename" && r.Target == "/repo/datapacks":
+			for _, d := range []string{"/repo/datapacks", "/repo/datapacks/zz"} {
+				if err := cmd.Filecmd(sftp.NewRequest("Mkdir", d)); err != nil {
+					return err
+				}
+			}
+		}
+		return cmd.Filecmd(r)
+	})
+	b := memBackend(t, hs)
+	if err := b.Put(t.Context(), ark.Handle{Type: ark.DataPackFile, Name: "aa01"}, strings.NewReader("x")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if !slices.Contains(chmodded, "/repo/datapacks") {
+		t.Errorf("chmodded %v, want /repo/datapacks among them", chmodded)
+	}
+	entries, err := b.client.ReadDir("/repo")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := fi.Mode().Perm(); got != 0o755 {
-		t.Errorf("existing locks dir mode %o, want 755 untouched", got)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), tmpPrefix) {
+			t.Errorf("temporary dir %s left in /repo", e.Name())
+		}
 	}
 }

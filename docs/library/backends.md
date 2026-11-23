@@ -69,6 +69,10 @@ chmod -R go-rwx /srv/ark
 
 A server that refuses to set the mode makes `arksftp` log a warning once and keep the default.
 
+The mode is owner-only, also for a repository shared through a group: under a base directory with
+mode `2770`, new directories still get `0700`, so other members of the group cannot open them. The
+`chmod` line above drops group access too.
+
 ## SFTP on a link that stops answering
 
 Every `arksftp` call returns when its context ends, also when the server no longer answers. The

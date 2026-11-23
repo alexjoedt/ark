@@ -517,11 +517,14 @@ func (b *Backend) mkdirDurable(dir string) error {
 	return nil
 }
 
-// mkdirPrivate creates dir and its missing parents like MkdirAll. A directory
-// it created inside the repository gets mode 0700, because the server applies
-// its umask to the plain Mkdir and other users of the server could read the
-// key files. Parents above the repository and directories that already exist
-// keep their mode.
+// mkdirPrivate creates dir and its missing parents like MkdirAll, walking up
+// past any Stat error and leaving the real failure to Mkdir. A directory of
+// the repository is made private with [Backend.mkdirRepo], because the server
+// applies its umask to the plain Mkdir and other users of the server could
+// read the key files. One that a concurrent Put created first is made private
+// too, since its creator may be an older ark or have had its chmod refused.
+// Parents above the repository and directories that already exist keep their
+// mode.
 func (b *Backend) mkdirPrivate(dir string) error {
 	var missing []string
 	for d := dir; ; d = path.Dir(d) {
@@ -532,36 +535,70 @@ func (b *Backend) mkdirPrivate(dir string) error {
 			}
 			break
 		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
 		missing = append(missing, d)
 		if d == path.Dir(d) {
 			break
 		}
 	}
 	for _, d := range slices.Backward(missing) {
-		if err := b.client.Mkdir(d); err != nil {
-			if fi, serr := b.client.Stat(d); serr == nil && fi.IsDir() {
-				continue // a concurrent Put created it and chmods it
-			}
-			return err
-		}
+		mkdir := b.client.Mkdir
 		if b.inRepo(d) {
-			err := b.client.Chmod(d, 0o700)
-			var status *sftp.StatusError
-			switch {
-			case err == nil:
-			case errors.As(err, &status):
-				if b.noChmod.CompareAndSwap(false, true) {
-					slog.Warn("arksftp: the server refuses to set a directory mode, "+
-						"so new directories keep its default mode; chmod go-rwx the repository",
-						"dir", d, "err", err)
+			mkdir = b.mkdirRepo
+		}
+		if err := mkdir(d); err != nil {
+			if fi, serr := b.client.Stat(d); serr != nil || !fi.IsDir() {
+				return err
+			}
+			if b.inRepo(d) {
+				if err := b.chmodPrivate(d); err != nil {
+					return err
 				}
-			default:
-				return fmt.Errorf("chmod %s: %w", d, err)
 			}
 		}
+	}
+	return nil
+}
+
+// mkdirRepo creates the repository directory d with mode 0700. It makes the
+// directory under a temporary name and renames it into place once private,
+// so d never exists with the server's default mode, not even when the link
+// or the process dies between the calls. A temporary directory left behind
+// is skipped by List like a temporary object.
+func (b *Backend) mkdirRepo(d string) error {
+	tmp, err := tempName(path.Dir(d))
+	if err != nil {
+		return err
+	}
+	if err := b.client.Mkdir(tmp); err != nil {
+		return err
+	}
+	err = b.chmodPrivate(tmp)
+	if err == nil {
+		err = b.client.Rename(tmp, d)
+	}
+	if err != nil {
+		_ = b.client.RemoveDirectory(tmp)
+	}
+	return err
+}
+
+// chmodPrivate sets mode 0700 on d. A server that refuses with a status, which
+// pkg/sftp hands over as [os.ErrPermission] for PERMISSION_DENIED, warns once
+// and keeps its default mode. A directory that is gone or a failed transport
+// is an error.
+func (b *Backend) chmodPrivate(d string) error {
+	err := b.client.Chmod(d, 0o700)
+	var status *sftp.StatusError
+	switch {
+	case err == nil:
+	case errors.As(err, &status) || errors.Is(err, os.ErrPermission):
+		if b.noChmod.CompareAndSwap(false, true) {
+			slog.Warn("arksftp: the server refuses to set a directory mode, "+
+				"so new directories keep its default mode; chmod go-rwx the repository",
+				"dir", d, "err", err)
+		}
+	default:
+		return fmt.Errorf("chmod %s: %w", d, err)
 	}
 	return nil
 }
@@ -618,12 +655,11 @@ func (b *Backend) inRepo(dir string) bool {
 // Puts of the same object would otherwise share a temp file, and the second
 // rename would find it already moved away.
 func (b *Backend) createTemp(dir string) (*sftp.File, string, error) {
-	var name [8]byte
 	for range 10 {
-		if _, err := rand.Read(name[:]); err != nil {
-			return nil, "", fmt.Errorf("arksftp: temp name: %w", err)
+		p, err := tempName(dir)
+		if err != nil {
+			return nil, "", err
 		}
-		p := path.Join(dir, tmpPrefix+hex.EncodeToString(name[:]))
 		f, err := b.client.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
 		if err == nil {
 			return f, p, nil
@@ -633,6 +669,15 @@ func (b *Backend) createTemp(dir string) (*sftp.File, string, error) {
 		}
 	}
 	return nil, "", fmt.Errorf("arksftp: no free temporary name in %s", dir)
+}
+
+// tempName returns a random temporary path in dir.
+func tempName(dir string) (string, error) {
+	var name [8]byte
+	if _, err := rand.Read(name[:]); err != nil {
+		return "", fmt.Errorf("arksftp: temp name: %w", err)
+	}
+	return path.Join(dir, tmpPrefix+hex.EncodeToString(name[:])), nil
 }
 
 // renameAttempts bounds the remove-and-rename retries of [Backend.rename]. A
