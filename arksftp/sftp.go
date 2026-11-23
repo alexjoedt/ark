@@ -138,6 +138,9 @@ type Backend struct {
 	// posixRename records whether the server announced
 	// posix-rename@openssh.com. See [Backend.rename].
 	posixRename bool
+	// asideMu lets one Put at a time replace an object without posix-rename.
+	// See [Backend.rename].
+	asideMu sync.Mutex
 	// fsync records whether the server announced fsync@openssh.com, which
 	// Put needs to flush a temp file before renaming it into place and
 	// Put and Delete need to flush the directories they change.
@@ -696,16 +699,27 @@ const renameAttempts = 16
 // replacement is in place, except p when a stale aside file may not be
 // removed, and every nil return means our bytes landed at p.
 //
+// Every Put of p uses the same aside name, and a rename back that succeeds
+// or finds no aside file looks the same whether the target was free or
+// another Put moved p aside in between. The replacements of one Backend
+// therefore run one at a time; only the first rename runs beside them.
+//
 // ponytail: without the extension a reader sees p missing between the two
 // renames, and a crash or a dropped link there leaves the old object only in
 // the aside file, which Check reports. SFTP v3 has no atomic replace; a
-// server with posix-rename closes the window.
+// server with posix-rename closes the window. The lock is per Backend: three
+// clients replacing p at the same moment can still fail a Put, with a whole
+// object left at p. SFTP v3 cannot tell them apart; posix-rename can.
 func (b *Backend) rename(tmp, p string) error {
 	if b.posixRename {
 		return b.client.PosixRename(tmp, p)
 	}
 	aside := path.Join(path.Dir(p), asidePrefix+path.Base(p))
 	err := b.client.Rename(tmp, p)
+	if isFailure(err) {
+		b.asideMu.Lock()
+		defer b.asideMu.Unlock()
+	}
 	for range renameAttempts {
 		if !isFailure(err) {
 			return err

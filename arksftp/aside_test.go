@@ -5,7 +5,9 @@ import (
 	"io"
 	"os"
 	"path"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/alexjoedt/ark"
@@ -25,7 +27,10 @@ func v3Backend(t *testing.T, failSecond error, lockedAside bool) (*Backend, *[]s
 		return err == nil
 	}
 	var calls []string
+	var mu sync.Mutex
 	hs.FileCmd = cmdFunc(func(r *sftp.Request) error {
+		mu.Lock()
+		defer mu.Unlock()
 		switch r.Method {
 		case "Rename":
 			calls = append(calls, "rename "+path.Base(r.Filepath)+" "+path.Base(r.Target))
@@ -166,6 +171,31 @@ func TestPutWithoutPosixRenameStopsWhenTheOldObjectGoesBack(t *testing.T) {
 	want := "rename tmp k1, rename k1 .ark-old-k1, rename tmp k1, rename .ark-old-k1 k1, remove tmp"
 	if got := strings.Join(normTemp(*calls), ", "); got != want {
 		t.Errorf("calls %q, want %q", got, want)
+	}
+}
+
+// TestPutWithoutPosixRenameTakesConcurrentPutsOfOneName pins that Puts of one
+// name do not undo each other's aside files: every one of them succeeds.
+func TestPutWithoutPosixRenameTakesConcurrentPutsOfOneName(t *testing.T) {
+	ctx := t.Context()
+	b, _ := v3Backend(t, nil, false)
+	for round := range 30 {
+		h := ark.Handle{Type: ark.KeyFile, Name: "k" + strconv.Itoa(round)}
+		var wg sync.WaitGroup
+		errs := make([]error, 8)
+		for i := range errs {
+			wg.Go(func() { errs[i] = b.Put(ctx, h, strings.NewReader("new")) })
+		}
+		wg.Wait()
+		if err := errors.Join(errs...); err != nil {
+			t.Fatalf("round %d: Put: %v", round, err)
+		}
+		if got := readObject(t, b, h); got != "new" {
+			t.Fatalf("round %d: %s reads %q, want new", round, h.Name, got)
+		}
+	}
+	if got := asides(t, b); len(got) != 0 {
+		t.Errorf("aside files %v after the Puts, want none", got)
 	}
 }
 
