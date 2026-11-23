@@ -1,6 +1,7 @@
 package arksftp
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
@@ -57,8 +58,11 @@ func hostKeys(cfg Config) (ssh.HostKeyCallback, error) {
 // cfg's host name, in file order, for ssh.ClientConfig.HostKeyAlgorithms.
 // Without it x/crypto offers ECDSA and RSA before Ed25519, and a server that
 // signs with the first one it is offered fails against a file that holds only
-// its ed25519 key. nil means no line matches (or verification is off), and the
-// default order applies.
+// its ed25519 key. When an @cert-authority line covers the host too, the
+// certificate algorithms come first, as in the default order, so a server
+// that presents a certificate is still checked against the authority. nil
+// means no plain line matches (or verification is off), and the default order
+// applies.
 func hostKeyAlgorithms(verify ssh.HostKeyCallback, cfg Config) []string {
 	port := cfg.Port
 	if port == 0 {
@@ -81,7 +85,12 @@ func hostKeyAlgorithms(verify ssh.HostKeyCallback, cfg Config) []string {
 
 	var algs []string
 	seen := map[string]bool{}
+	authority := false
 	for _, k := range keyErr.Want {
+		if isCertAuthority(k) {
+			authority = true
+			continue
+		}
 		next := []string{k.Key.Type()}
 		if k.Key.Type() == ssh.KeyAlgoRSA {
 			next = []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA}
@@ -93,7 +102,30 @@ func hostKeyAlgorithms(verify ssh.HostKeyCallback, cfg Config) []string {
 			}
 		}
 	}
+	if authority && len(algs) > 0 {
+		algs = append([]string{
+			ssh.CertAlgoED25519v01,
+			ssh.CertAlgoECDSA256v01, ssh.CertAlgoECDSA384v01, ssh.CertAlgoECDSA521v01,
+			ssh.CertAlgoRSASHA512v01, ssh.CertAlgoRSASHA256v01,
+		}, algs...)
+	}
 	return algs
+}
+
+// isCertAuthority reports whether k is the key of an @cert-authority line.
+// The callback lists those among the lines of a host without marking them,
+// so the marker is read from the file.
+func isCertAuthority(k knownhosts.KnownKey) bool {
+	data, err := os.ReadFile(k.Filename)
+	if err != nil {
+		return false
+	}
+	lines := bytes.Split(data, []byte("\n"))
+	if k.Line < 1 || k.Line > len(lines) {
+		return false
+	}
+	marker, _, _, _, _, _ := ssh.ParseKnownHosts(lines[k.Line-1])
+	return marker == "cert-authority"
 }
 
 // unknownHostError reports a host that has no entry in the known_hosts file,

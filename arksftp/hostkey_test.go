@@ -308,6 +308,44 @@ func TestHandshakeAcceptsAnEd25519OnlyKnownHost(t *testing.T) {
 	}
 }
 
+// TestHandshakeAcceptsAHostCertificateBesideAStalePlainLine pins that a plain
+// known_hosts line does not hide the certificate algorithms from a host an
+// @cert-authority line covers.
+func TestHandshakeAcceptsAHostCertificateBesideAStalePlainLine(t *testing.T) {
+	ca, host := newSigner(t), newSigner(t)
+	cert := &ssh.Certificate{
+		Key:             host.PublicKey(),
+		CertType:        ssh.HostCert,
+		ValidPrincipals: []string{"127.0.0.1"},
+		ValidBefore:     ssh.CertTimeInfinity,
+	}
+	if err := cert.SignCert(rand.Reader, ca); err != nil {
+		t.Fatal(err)
+	}
+	certSigner, err := ssh.NewCertSigner(cert, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := serveSSH(t, certSigner, acceptAnyKey())
+
+	file := writeKnownHosts(t, addr, newSigner(t).PublicKey())
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := knownhosts.Line([]string{knownhosts.Normalize(addr)}, ca.PublicKey())
+	_, err = f.WriteString("@cert-authority " + line + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := dial(t, addr, file); err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+}
+
 func TestHostKeyAlgorithms(t *testing.T) {
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -321,7 +359,10 @@ func TestHostKeyAlgorithms(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "known_hosts")
 	lines := knownhosts.Line([]string{"[rsa.example]:22"}, rsaPub) + "\n" +
 		knownhosts.Line([]string{"rsa.example", "both.example"}, ed) + "\n" +
-		knownhosts.Line([]string{"both.example"}, rsaPub) + "\n"
+		knownhosts.Line([]string{"both.example"}, rsaPub) + "\n" +
+		"# a comment and a blank line, so line numbers differ from entry numbers\n\n" +
+		"@cert-authority ca.example,caonly.example " + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(rsaPub))) + "\n" +
+		knownhosts.Line([]string{"ca.example"}, ed) + "\n"
 	if err := os.WriteFile(file, []byte(lines), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -334,6 +375,16 @@ func TestHostKeyAlgorithms(t *testing.T) {
 		"rsa.example":  {"rsa-sha2-512", "rsa-sha2-256", "ssh-rsa", "ssh-ed25519"},
 		"both.example": {"ssh-ed25519", "rsa-sha2-512", "rsa-sha2-256", "ssh-rsa"},
 		"none.example": nil,
+		"ca.example": {
+			"ssh-ed25519-cert-v01@openssh.com",
+			"ecdsa-sha2-nistp256-cert-v01@openssh.com",
+			"ecdsa-sha2-nistp384-cert-v01@openssh.com",
+			"ecdsa-sha2-nistp521-cert-v01@openssh.com",
+			"rsa-sha2-512-cert-v01@openssh.com",
+			"rsa-sha2-256-cert-v01@openssh.com",
+			"ssh-ed25519",
+		},
+		"caonly.example": nil,
 	} {
 		got := hostKeyAlgorithms(verify, Config{Host: host, Port: 22})
 		if !slices.Equal(got, want) {
