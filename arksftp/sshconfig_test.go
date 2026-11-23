@@ -122,3 +122,46 @@ func TestLoadSSHConfigSurvivesMissingFiles(t *testing.T) {
 		t.Errorf("Get returned %q from a config that does not exist", got)
 	}
 }
+
+func TestMatchBlocksAreSkippedAndTheRestApplies(t *testing.T) {
+	sc := fixture(t, `
+Host before
+  User one
+
+Match host a user b
+  User matched
+  Port 9
+
+match all
+  User matched2
+
+Host after
+  User two
+  IdentityFile "Match me"
+  # Match comment
+  Port 2200
+`)
+	if got := sc.Get("before", "User"); got != "one" {
+		t.Errorf("before User = %q, want one", got)
+	}
+	if got := sc.Get("after", "User"); got != "two" {
+		t.Errorf("after User = %q, want two", got)
+	}
+	if got := sc.Get("after", "Port"); got != "2200" {
+		t.Errorf("after Port = %q, want 2200 (a Match in a comment is no block)", got)
+	}
+	if got := sc.Get("after", "IdentityFile"); got != "Match me" {
+		t.Errorf("after IdentityFile = %q, want a value that contains Match kept", got)
+	}
+}
+
+func TestStripMatchBlocksReportsRemoval(t *testing.T) {
+	if _, stripped := stripMatchBlocks("Host a\n  User x\n"); stripped {
+		t.Error("stripped = true for a file without Match")
+	}
+	text := "Host a\n  User x\nMatch all\n  User y\nHost b\n  User z\n"
+	got, stripped := stripMatchBlocks(text)
+	if !stripped || strings.Contains(got, "User y") || !strings.Contains(got, "User z") {
+		t.Errorf("got %q, stripped %v", got, stripped)
+	}
+}

@@ -53,7 +53,7 @@ Options that aren't secret go into the URI as query parameters:
 
 A user, port, or identity that the URI leaves out comes from the host's entry in `~/.ssh/config`,
 then from `/etc/ssh/ssh_config`. ark reads `User`, `Port`, `IdentityFile`, and `HostName` there; a
-`HostName` replaces the host. Without an entry, the user is the current user and the port is 22.
+`HostName` replaces the host. `Match` blocks are ignored with a warning. Without an entry, the user is the current user and the port is 22.
 
 ark tries these ways to authenticate, in order:
 

@@ -37,6 +37,9 @@ func (f sshFiles) Get(alias, key string) string {
 	return ""
 }
 
+// maxSSHConfigSize bounds how much of one ssh_config file is read.
+const maxSSHConfigSize = 1 << 20
+
 // loadSSHConfig parses the user and system ssh_config files. A file that is
 // missing or unparsable is skipped: ssh_config is a convenience, and failing
 // the connect over a stray line in an unrelated stanza would be wrong.
@@ -51,10 +54,18 @@ func loadSSHConfig() sshConfig {
 			}
 			continue
 		}
-		cfg, err := ssh_config.Decode(f)
+		text, err := io.ReadAll(io.LimitReader(f, maxSSHConfigSize))
 		_ = f.Close()
 		if err != nil {
-			slog.Debug("arksftp: skipping unparsable ssh_config", "path", path, "err", err)
+			slog.Warn("arksftp: skipping unreadable ssh_config", "path", path, "err", err)
+			continue
+		}
+		cfg, stripped, err := parseSSHConfig(string(text))
+		if stripped {
+			slog.Warn("arksftp: ignoring Match blocks in ssh_config", "path", path)
+		}
+		if err != nil {
+			slog.Warn("arksftp: skipping unparsable ssh_config", "path", path, "err", err)
 			continue
 		}
 		files = append(files, cfg)
@@ -134,10 +145,55 @@ func expandHome(s string) string {
 	return filepath.Join(home, strings.TrimPrefix(s, "~"))
 }
 
+// parseSSHConfig decodes text after removing its Match blocks, which
+// ssh_config.Decode cannot parse. stripped reports whether any were removed.
+func parseSSHConfig(text string) (cfg *ssh_config.Config, stripped bool, err error) {
+	text, stripped = stripMatchBlocks(text)
+	cfg, err = ssh_config.Decode(strings.NewReader(text))
+	return cfg, stripped, err
+}
+
+// stripMatchBlocks removes every Match line and the lines after it up to the
+// next Host or Match keyword. Only a line whose first word is Match starts a
+// block, so a Match inside a comment or a value does not.
+func stripMatchBlocks(text string) (string, bool) {
+	var out strings.Builder
+	inMatch, stripped := false, false
+	for _, line := range strings.SplitAfter(text, "\n") {
+		switch firstKeyword(line) {
+		case "match":
+			inMatch, stripped = true, true
+		case "host":
+			inMatch = false
+		}
+		if !inMatch {
+			out.WriteString(line)
+		}
+	}
+	return out.String(), stripped
+}
+
+// firstKeyword returns the lowercased first word of an ssh_config line, the
+// keyword, or "" for blank and comment lines. A word ends at white space or =.
+func firstKeyword(line string) string {
+	line = strings.TrimLeft(line, " \t")
+	if strings.HasPrefix(line, "#") {
+		return ""
+	}
+	if i := strings.IndexAny(line, " \t=\r\n"); i >= 0 {
+		line = line[:i]
+	}
+	return strings.ToLower(line)
+}
+
 // decodeSSHConfig parses one ssh_config from r. Used by tests to stay off the
 // developer's own ~/.ssh/config.
 func decodeSSHConfig(r io.Reader) (sshConfig, error) {
-	cfg, err := ssh_config.Decode(r)
+	text, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	cfg, _, err := parseSSHConfig(string(text))
 	if err != nil {
 		return nil, err
 	}
