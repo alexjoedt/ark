@@ -116,9 +116,9 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 
 // Sync flushes the filesystem holding the backend root, which makes every
 // Put and Delete that returned before the call durable. On Linux that is
-// syncfs on the root directory; when it fails for any reason, the global
-// sync takes over, so Sync never skips the flush silently. On macOS it is the
-// global sync from the start.
+// syncfs on the root directory, whose error is returned; only a kernel
+// without syncfs falls back to the global sync. On macOS it is the global
+// sync.
 func (b *Backend) Sync(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
