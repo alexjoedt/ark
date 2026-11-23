@@ -361,7 +361,7 @@ func TestHostKeyAlgorithms(t *testing.T) {
 		knownhosts.Line([]string{"rsa.example", "both.example"}, ed) + "\n" +
 		knownhosts.Line([]string{"both.example"}, rsaPub) + "\n" +
 		"# a comment and a blank line, so line numbers differ from entry numbers\n\n" +
-		"@cert-authority ca.example,caonly.example " + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(rsaPub))) + "\n" +
+		"@cert-authority " + knownhosts.Line([]string{"ca.example", "caonly.example"}, rsaPub) + "\n" +
 		knownhosts.Line([]string{"ca.example"}, ed) + "\n"
 	if err := os.WriteFile(file, []byte(lines), 0o600); err != nil {
 		t.Fatal(err)
@@ -396,7 +396,8 @@ func TestHostKeyAlgorithms(t *testing.T) {
 func TestHostKeysExpandsHomeInTheFile(t *testing.T) {
 	isolate(t)
 	home := os.Getenv("HOME")
-	if err := os.WriteFile(filepath.Join(home, "kh"), []byte(knownhosts.Line([]string{"example.com"}, newSigner(t).PublicKey())+"\n"), 0o600); err != nil {
+	line := knownhosts.Line([]string{"example.com"}, newSigner(t).PublicKey()) + "\n"
+	if err := os.WriteFile(filepath.Join(home, "kh"), []byte(line), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := hostKeys(Config{Host: "example.com", KnownHostsFile: "~/kh"}); err != nil {
