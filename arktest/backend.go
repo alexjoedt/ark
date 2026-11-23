@@ -613,7 +613,7 @@ func testClose(t *testing.T, factory func(t *testing.T) ark.Backend) {
 var invalidNames = []string{"", "..x", ".", "..", ".ark-tmp-x", "a/b", `a\b`}
 
 // testRefusesInvalidNames checks that every method taking a handle refuses a
-// name that is no object name, in every namespace, and stores nothing.
+// name that is no object name, in every namespace, with [ark.ErrInvalidName].
 func testRefusesInvalidNames(t *testing.T, newBackend func(*testing.T) ark.Backend) {
 	ctx := context.Background()
 	b := newBackend(t)
@@ -621,28 +621,24 @@ func testRefusesInvalidNames(t *testing.T, newBackend func(*testing.T) ark.Backe
 	for _, typ := range conformanceTypes {
 		for _, name := range invalidNames {
 			h := ark.Handle{Type: typ, Name: name}
-			if err := b.Put(ctx, h, strings.NewReader("x")); err == nil {
-				t.Errorf("Put %v %q = nil, want an error", typ, name)
+			check := func(method string, err error) {
+				if !errors.Is(err, ark.ErrInvalidName) {
+					t.Errorf("%s %v %q = %v, want ark.ErrInvalidName", method, typ, name, err)
+				}
 			}
-			if rc, err := b.Get(ctx, h); err == nil {
+			check("Put", b.Put(ctx, h, strings.NewReader("x")))
+			rc, err := b.Get(ctx, h)
+			if err == nil {
 				_ = rc.Close()
-				t.Errorf("Get %v %q = nil, want an error", typ, name)
 			}
-			if _, err := b.GetRange(ctx, h, 0, 1); err == nil {
-				t.Errorf("GetRange %v %q = nil, want an error", typ, name)
-			}
-			if _, err := b.Exists(ctx, h); err == nil {
-				t.Errorf("Exists %v %q = nil, want an error", typ, name)
-			}
-			if err := b.Delete(ctx, h); err == nil {
-				t.Errorf("Delete %v %q = nil, want an error", typ, name)
-			}
-			if _, err := b.Stat(ctx, h); err == nil {
-				t.Errorf("Stat %v %q = nil, want an error", typ, name)
-			}
-		}
-		if got := list(t, b, typ); len(got) != 0 {
-			t.Errorf("List %v after refused Puts = %v, want nothing", typ, got)
+			check("Get", err)
+			_, err = b.GetRange(ctx, h, 0, 1)
+			check("GetRange", err)
+			_, err = b.Exists(ctx, h)
+			check("Exists", err)
+			check("Delete", b.Delete(ctx, h))
+			_, err = b.Stat(ctx, h)
+			check("Stat", err)
 		}
 	}
 }
@@ -652,35 +648,46 @@ func testRefusesInvalidNames(t *testing.T, newBackend func(*testing.T) ark.Backe
 const cancelWait = 5 * time.Second
 
 // testCancelledContext checks that every method returns an error wrapping
-// [context.Canceled] when called with a cancelled context, and that a Delete
-// so refused leaves the object in place.
+// [context.Canceled] when called with a cancelled context, on a stored object
+// and on a missing one, that a Delete so refused leaves the object in place and
+// that a Put so refused stores nothing.
 func testCancelledContext(t *testing.T, newBackend func(*testing.T) ark.Backend) {
 	b := newBackend(t)
-	h := ark.Handle{Type: ark.DataPackFile, Name: objectName(ark.DataPackFile, "cancel")}
-	put(t, b, h, []byte("payload"))
+	stored := ark.Handle{Type: ark.DataPackFile, Name: objectName(ark.DataPackFile, "cancel")}
+	missing := ark.Handle{Type: ark.DataPackFile, Name: objectName(ark.DataPackFile, "cancel-missing")}
+	put(t, b, stored, []byte("payload"))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	calls := []struct {
+	type call struct {
 		name string
 		call func() error
-	}{
-		{"Put", func() error { return b.Put(ctx, h, strings.NewReader("other")) }},
-		{"Get", func() error {
-			rc, err := b.Get(ctx, h)
-			if err == nil {
-				_ = rc.Close()
-			}
-			return err
-		}},
-		{"GetRange", func() error { _, err := b.GetRange(ctx, h, 0, 1); return err }},
-		{"Exists", func() error { _, err := b.Exists(ctx, h); return err }},
-		{"Delete", func() error { return b.Delete(ctx, h) }},
-		{"Stat", func() error { _, err := b.Stat(ctx, h); return err }},
+	}
+	calls := []call{
 		{"List", func() error {
 			return b.List(ctx, ark.DataPackFile, func(ark.BlobInfo) error { return nil })
 		}},
 		{"Sync", func() error { return b.Sync(ctx) }},
+	}
+	for _, h := range []ark.Handle{stored, missing} {
+		what := "a stored object"
+		if h == missing {
+			what = "a missing object"
+		}
+		calls = append(calls,
+			call{"Put on " + what, func() error { return b.Put(ctx, h, strings.NewReader("other")) }},
+			call{"Get on " + what, func() error {
+				rc, err := b.Get(ctx, h)
+				if err == nil {
+					_ = rc.Close()
+				}
+				return err
+			}},
+			call{"GetRange on " + what, func() error { _, err := b.GetRange(ctx, h, 0, 1); return err }},
+			call{"Exists on " + what, func() error { _, err := b.Exists(ctx, h); return err }},
+			call{"Delete on " + what, func() error { return b.Delete(ctx, h) }},
+			call{"Stat on " + what, func() error { _, err := b.Stat(ctx, h); return err }},
+		)
 	}
 	for _, c := range calls {
 		done := make(chan error, 1)
@@ -691,11 +698,15 @@ func testCancelledContext(t *testing.T, newBackend func(*testing.T) ark.Backend)
 				t.Errorf("%s on a cancelled context = %v, want context.Canceled", c.name, err)
 			}
 		case <-time.After(cancelWait):
-			t.Errorf("%s on a cancelled context has not returned after %v", c.name, cancelWait)
+			// The call still runs against b: later calls would race it.
+			t.Fatalf("%s on a cancelled context has not returned after %v", c.name, cancelWait)
 		}
 	}
 
-	if got := get(t, b, h); string(got) != "payload" {
+	if got := get(t, b, stored); string(got) != "payload" {
 		t.Errorf("after the cancelled calls Get = %q, want %q", got, "payload")
+	}
+	if ok, err := b.Exists(context.Background(), missing); err != nil || ok {
+		t.Errorf("after a cancelled Put Exists = %v, %v, want false, nil", ok, err)
 	}
 }

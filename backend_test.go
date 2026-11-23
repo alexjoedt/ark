@@ -1,6 +1,9 @@
 package ark
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestHandleTypeString(t *testing.T) {
 	cases := map[HandleType]string{
@@ -44,8 +47,12 @@ func TestCheckName(t *testing.T) {
 		"3f9a0c":     true,
 	}
 	for name, ok := range cases {
-		if err := CheckName(name); (err == nil) != ok {
+		err := CheckName(name)
+		if (err == nil) != ok {
 			t.Errorf("CheckName(%q) = %v, want ok %v", name, err, ok)
+		}
+		if err != nil && !errors.Is(err, ErrInvalidName) {
+			t.Errorf("CheckName(%q) = %v, want ErrInvalidName", name, err)
 		}
 	}
 }

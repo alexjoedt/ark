@@ -82,6 +82,10 @@ var (
 	// ErrMissingTree is ErrMissingChunk for a tree object.
 	ErrMissingTree error = missingError("ark: missing tree")
 
+	// ErrInvalidName is wrapped by CheckName, and so by every backend method
+	// that takes a handle, for a name that cannot be an object name.
+	ErrInvalidName = errors.New("ark: invalid object name")
+
 	// ErrRepoLocked is returned when a repo-level lock cannot be acquired.
 	ErrRepoLocked = errors.New("ark: repository is locked by another operation")
 

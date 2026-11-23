@@ -34,7 +34,8 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// tmpPrefix marks in-flight objects written by Put. List skips them.
+// tmpPrefix marks in-flight objects written by Put. List skips them, as it
+// skips every name ark.CheckName refuses.
 const tmpPrefix = ".ark-tmp-"
 
 // Compile-time check that *Backend satisfies ark.Backend.
@@ -508,7 +509,9 @@ func (b *Backend) List(ctx context.Context, t ark.HandleType, fn func(ark.BlobIn
 			return fmt.Errorf("arksftp: walk %s: %w", dir, err)
 		}
 		st := walker.Stat()
-		if st.IsDir() || strings.HasPrefix(st.Name(), tmpPrefix) {
+		// Temporary objects and files another tool leaves, such as a
+		// .DS_Store, are no objects: a caller could not read or delete them.
+		if st.IsDir() || ark.CheckName(st.Name()) != nil {
 			continue
 		}
 		if err := fn(ark.BlobInfo{Name: st.Name(), Size: st.Size()}); err != nil {
@@ -579,7 +582,7 @@ func (b *Backend) remotePath(h ark.Handle) (string, error) {
 		return "", err
 	}
 	if err := ark.CheckName(h.Name); err != nil {
-		return "", err
+		return "", fmt.Errorf("arksftp: %s: %w", h.Type, err)
 	}
 	if (h.Type == ark.DataPackFile || h.Type == ark.TreePackFile) && len(h.Name) >= 2 {
 		return path.Join(dir, h.Name[:2], h.Name), nil

@@ -36,8 +36,11 @@ Rejected options:
 
 ## Consequences
 
-- A leading `.` stays free for a backend's own files: temporary objects now, and the names a
-  backend sets aside, which its listing passes over.
+- A leading `.` stays free for a backend's own files and for files other tools leave in the
+  repository directory, such as `.DS_Store` or `.nfs*`: a backend's List passes over every name
+  `CheckName` refuses, so the core never gets a name back that it could not read or delete.
+- `CheckName` wraps `ark.ErrInvalidName` and each backend adds its name and the namespace, so a
+  caller tells a refused name apart from an I/O error.
 - A backend written against ark gets the rule from one call and the suite tells it when it is
   missing. The method set of `Backend` is unchanged.
 - The arktest names for chunks and packs are SHA-256 hashes, so they spread over the shards of a

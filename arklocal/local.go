@@ -14,13 +14,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/internal/rangeread"
 )
 
-// tmpPrefix marks in-flight objects written by Put. List skips them.
+// tmpPrefix marks in-flight objects written by Put. List skips them, as it
+// skips every name ark.CheckName refuses.
 const tmpPrefix = ".ark-tmp-"
 
 // Compile-time check that *Backend satisfies ark.Backend.
@@ -80,7 +80,7 @@ func (b *Backend) path(h ark.Handle) (string, error) {
 		return "", err
 	}
 	if err := ark.CheckName(h.Name); err != nil {
-		return "", err
+		return "", fmt.Errorf("arklocal: %s: %w", h.Type, err)
 	}
 	if (h.Type == ark.DataPackFile || h.Type == ark.TreePackFile) && len(h.Name) >= 2 {
 		return filepath.Join(dir, h.Name[:2], h.Name), nil
@@ -262,8 +262,10 @@ func (b *Backend) List(ctx context.Context, t ark.HandleType, fn func(ark.BlobIn
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if d.IsDir() || strings.HasPrefix(d.Name(), tmpPrefix) {
-			return nil
+		// Temporary objects and files another tool leaves, such as a
+		// .DS_Store, are no objects: a caller could not read or delete them.
+		if d.IsDir() || ark.CheckName(d.Name()) != nil {
+			return nil //nolint:nilerr // a refused name is skipped, not an error
 		}
 		info, statErr := d.Info()
 		if statErr != nil {

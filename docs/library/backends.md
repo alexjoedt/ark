@@ -89,7 +89,7 @@ func key(h ark.Handle) (string, error) {
 		return "", fmt.Errorf("kv: unknown handle type %d", h.Type)
 	}
 	if err := ark.CheckName(h.Name); err != nil {
-		return "", err
+		return "", fmt.Errorf("kv: %s: %w", ns, err)
 	}
 	return ns + "/" + h.Name, nil
 }
@@ -143,14 +143,14 @@ The core relies on these rules. The documentation of
 | Method | Rule |
 |---|---|
 | all | safe for concurrent use |
-| all with a handle | refuse a name that `ark.CheckName` refuses: empty, starting with `.`, or holding `/` or `\` |
+| all with a handle | refuse a name that `ark.CheckName` refuses (empty, starting with `.`, or holding `/` or `\`) with an error that wraps `ark.ErrInvalidName` |
 | all with a context | return an error that wraps `ctx.Err()` when called with a done context |
 | `Put` | atomic: a reader never sees a partial object; an existing object is replaced; `r` isn't read after `Put` returns |
 | `Get`, `Stat` | a missing object returns an error that wraps `ark.ErrNotFound` |
 | `GetRange` | returns exactly `length` bytes without reading the bytes before `offset`; a range past the end wraps `io.ErrUnexpectedEOF`; a missing object wraps `ark.ErrNotFound`; a negative offset or length is an error |
 | `Delete` | removing a missing object isn't an error |
 | `Sync` | when it returns, a power loss can't undo any `Put` or `Delete` that returned before the call |
-| `List` | calls `fn` once per object of the type; stops and returns the error when `fn` returns one |
+| `List` | calls `fn` once per object of the type and never with a name `ark.CheckName` refuses, such as a temporary file or a `.DS_Store`; stops and returns the error when `fn` returns one |
 
 Three more points:
 

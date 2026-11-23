@@ -43,7 +43,7 @@ func key(h ark.Handle) (string, error) {
 		return "", fmt.Errorf("kv: unknown handle type %d", h.Type)
 	}
 	if err := ark.CheckName(h.Name); err != nil {
-		return "", err
+		return "", fmt.Errorf("kv: %s: %w", ns, err)
 	}
 	return ns + "/" + h.Name, nil
 }
