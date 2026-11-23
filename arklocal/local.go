@@ -36,6 +36,14 @@ type Backend struct {
 // New creates or opens a local backend rooted at dir.
 // The directory (and its parents) is created if it does not already exist.
 func New(dir string) (*Backend, error) {
+	// existing is the deepest ancestor of dir that is there before MkdirAll.
+	existing := dir
+	for trackWrites && existing != filepath.Dir(existing) {
+		if _, err := os.Lstat(existing); err == nil {
+			break
+		}
+		existing = filepath.Dir(existing)
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("arklocal: create backend directory %s: %w", dir, err)
 	}
@@ -43,7 +51,13 @@ func New(dir string) (*Backend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("arklocal: open backend directory %s: %w", dir, err)
 	}
-	return &Backend{basePath: dir, root: root}, nil
+	b := &Backend{basePath: dir, root: root}
+	if existing != dir {
+		// MkdirAll created dir, and maybe parents: the first Sync makes
+		// their entries durable too, or a power loss drops the repository.
+		b.written.record(existing, "", filepath.Dir(dir))
+	}
+	return b, nil
 }
 
 // BasePath returns the root directory of the local backend.
