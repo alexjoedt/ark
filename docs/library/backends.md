@@ -56,6 +56,19 @@ OpenSSH has it. A server without it has no durability barrier: `Sync` returns ni
 on the server can drop objects that `Put` returned. `arksftp.New` logs a warning once when the
 extension is missing.
 
+## SFTP directory modes
+
+`arksftp` creates every directory of the repository with mode `0700`, so other users on the server
+cannot list or read the key files. Files keep the mode the server's umask gives them. A repository
+created by an earlier version has directories under the server's default mode, usually `0755`.
+Restrict it once on the server:
+
+```sh
+chmod -R go-rwx /srv/ark
+```
+
+A server that refuses to set the mode makes `arksftp` log a warning once and keep the default.
+
 ## SFTP on a link that stops answering
 
 Every `arksftp` call returns when its context ends, also when the server no longer answers. The

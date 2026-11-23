@@ -306,3 +306,42 @@ func TestNewBackendWarnsOnceWithoutFsync(t *testing.T) {
 		t.Errorf("Sync without fsync = %v, want nil", err)
 	}
 }
+
+func TestPutCreatesPrivateDirs(t *testing.T) {
+	ctx := context.Background()
+	b := pipeBackend(t)
+	parent := filepath.Join(b.basePath, "new", "repo")
+	b.basePath = parent
+	if err := os.Chmod(path.Dir(path.Dir(parent)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(parent, "locks")
+	if err := os.MkdirAll(old, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []ark.Handle{
+		{Type: ark.KeyFile, Name: "k1"},
+		{Type: ark.DataPackFile, Name: "abcdef0123456789"},
+		{Type: ark.LockFile, Name: "l1"},
+	} {
+		if err := b.Put(ctx, h, strings.NewReader("x")); err != nil {
+			t.Fatalf("Put %v: %v", h, err)
+		}
+	}
+	for _, d := range []string{"keys", "datapacks", "datapacks/ab"} {
+		fi, err := os.Stat(filepath.Join(parent, d))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != 0o700 {
+			t.Errorf("%s mode %o, want 700", d, got)
+		}
+	}
+	fi, err := os.Stat(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o755 {
+		t.Errorf("existing locks dir mode %o, want 755 untouched", got)
+	}
+}

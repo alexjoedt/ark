@@ -26,6 +26,7 @@ import (
 	"net"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -145,6 +146,9 @@ type Backend struct {
 	// repository before it opened any; directory syncs are then skipped for
 	// the rest of the backend's life.
 	noDirSync atomic.Bool
+	// noChmod is set once the server refused to set a directory mode, so
+	// the warning shows once.
+	noChmod atomic.Bool
 	// dirOpened is set once a directory opened for fsync: the server
 	// supports that, and a later refusal is a failure.
 	dirOpened atomic.Bool
@@ -491,7 +495,7 @@ func (b *Backend) mkdirDurable(dir string) error {
 		}
 		b.durable.Clear() // removed behind our back; its parents may be gone too
 	}
-	if err := b.client.MkdirAll(dir); err != nil {
+	if err := b.mkdirPrivate(dir); err != nil {
 		return fmt.Errorf("arksftp: mkdirall %s: %w", dir, err)
 	}
 	if !b.fsync {
@@ -509,6 +513,55 @@ func (b *Backend) mkdirDurable(dir string) error {
 	}
 	for _, d := range synced {
 		b.durable.Store(d, struct{}{})
+	}
+	return nil
+}
+
+// mkdirPrivate creates dir and its missing parents like MkdirAll. A directory
+// it created inside the repository gets mode 0700, because the server applies
+// its umask to the plain Mkdir and other users of the server could read the
+// key files. Parents above the repository and directories that already exist
+// keep their mode.
+func (b *Backend) mkdirPrivate(dir string) error {
+	var missing []string
+	for d := dir; ; d = path.Dir(d) {
+		fi, err := b.client.Stat(d)
+		if err == nil {
+			if !fi.IsDir() {
+				return fmt.Errorf("%s is not a directory", d)
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		missing = append(missing, d)
+		if d == path.Dir(d) {
+			break
+		}
+	}
+	for _, d := range slices.Backward(missing) {
+		if err := b.client.Mkdir(d); err != nil {
+			if fi, serr := b.client.Stat(d); serr == nil && fi.IsDir() {
+				continue // a concurrent Put created it and chmods it
+			}
+			return err
+		}
+		if b.inRepo(d) {
+			err := b.client.Chmod(d, 0o700)
+			var status *sftp.StatusError
+			switch {
+			case err == nil:
+			case errors.As(err, &status):
+				if b.noChmod.CompareAndSwap(false, true) {
+					slog.Warn("arksftp: the server refuses to set a directory mode, "+
+						"so new directories keep its default mode; chmod go-rwx the repository",
+						"dir", d, "err", err)
+				}
+			default:
+				return fmt.Errorf("chmod %s: %w", d, err)
+			}
+		}
 	}
 	return nil
 }
