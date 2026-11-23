@@ -244,9 +244,10 @@ func (b *Backend) Delete(ctx context.Context, h ark.Handle) error {
 
 // List reads the namespace of t and calls fn for every object it holds: the
 // files of a flat namespace, or the files in each shard dir of a pack
-// namespace. Symlinks to a namespace, a shard or an object are followed.
-// Entries outside that layout are skipped. An absent namespace is empty; a dir
-// or an entry that cannot be read fails the listing, so it is never partial.
+// namespace. Symlinks and Windows junctions to a namespace, a shard or an
+// object are followed. Entries outside that layout are skipped. An absent
+// namespace is empty while the repository root is there; a dir or an entry
+// that cannot be read fails the listing, so it is never partial.
 func (b *Backend) List(ctx context.Context, t ark.HandleType, fn func(ark.BlobInfo) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -257,7 +258,11 @@ func (b *Backend) List(ctx context.Context, t ark.HandleType, fn func(ark.BlobIn
 	}
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) && !dangling(dir) {
-		return nil // the namespace was never written
+		// The namespace was never written, unless the root is gone with it,
+		// as behind a link to a disk that is not mounted.
+		if _, err = os.Stat(b.basePath); err == nil {
+			return nil
+		}
 	}
 	if err == nil {
 		err = listDir(ctx, dir, entries, t == ark.DataPackFile || t == ark.TreePackFile, "", fn)
@@ -290,10 +295,10 @@ func listDir(ctx context.Context, dir string, entries []fs.DirEntry, sharded boo
 		switch {
 		case err != nil:
 			return err
-		case info == nil && sharded:
+		case info == nil && sharded && len(name) == 2:
 			// A shard that vanished mid-listing leaves it partial: a caller
 			// would take the objects it held as not stored.
-			return fmt.Errorf("%s vanished while listing", filepath.Join(dir, name))
+			return fmt.Errorf("%s vanished while listing: %w", filepath.Join(dir, name), fs.ErrNotExist)
 		case info == nil:
 			// deleted since the dir was read
 		case info.IsDir() && sharded && len(name) == 2:
@@ -316,14 +321,14 @@ func listDir(ctx context.Context, dir string, entries []fs.DirEntry, sharded boo
 	return nil
 }
 
-// follow returns the file info of e in dir, through a symlink, or nil when the
-// entry is gone. A link whose target is gone fails: it may lead to a disk that
+// follow returns the file info of e in dir, through a symlink or a Windows
+// junction (ModeIrregular since Go 1.23), or nil when the entry is gone. A link whose target is gone fails: it may lead to a disk that
 // is not mounted, whose objects are stored all the same.
 func follow(dir string, e fs.DirEntry) (fs.FileInfo, error) {
 	p := filepath.Join(dir, e.Name())
 	var info fs.FileInfo
 	var err error
-	if e.Type()&fs.ModeSymlink != 0 {
+	if e.Type()&linkMode != 0 {
 		info, err = os.Stat(p)
 	} else {
 		info, err = e.Info()
@@ -332,15 +337,18 @@ func follow(dir string, e fs.DirEntry) (fs.FileInfo, error) {
 		return nil, nil //nolint:nilnil // a nil info is the entry that is gone
 	}
 	if err != nil {
-		return nil, fmt.Errorf("stat %s: %w", e.Name(), err)
+		return nil, err // a PathError names the full path
 	}
 	return info, nil
 }
 
-// dangling reports whether p is a symlink whose target is gone.
+// linkMode marks an entry List follows: a symlink, or a Windows junction.
+const linkMode = fs.ModeSymlink | fs.ModeIrregular
+
+// dangling reports whether p is a link whose target is gone.
 func dangling(p string) bool {
 	fi, err := os.Lstat(p)
-	return err == nil && fi.Mode()&fs.ModeSymlink != 0
+	return err == nil && fi.Mode()&linkMode != 0
 }
 
 // skip logs an entry List passes over because it is outside the layout.

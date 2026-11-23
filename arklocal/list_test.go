@@ -213,3 +213,55 @@ func TestListSkipsAnObjectDeletedWhileListing(t *testing.T) {
 		t.Errorf("List = %v, want [l1]", names)
 	}
 }
+
+// TestListSkipsAPackObjectDeletedWhileListing removes a short pack object,
+// which sits next to the shards, while List runs: only a vanished shard fails.
+func TestListSkipsAPackObjectDeletedWhileListing(t *testing.T) {
+	ctx := context.Background()
+	b := newBackend(t)
+	putAll(t, b,
+		ark.Handle{Type: ark.DataPackFile, Name: "a"},
+		ark.Handle{Type: ark.DataPackFile, Name: "aa01"},
+		ark.Handle{Type: ark.DataPackFile, Name: "b"},
+	)
+	var names []string
+	err := b.List(ctx, ark.DataPackFile, func(i ark.BlobInfo) error {
+		names = append(names, i.Name)
+		return b.Delete(ctx, ark.Handle{Type: ark.DataPackFile, Name: "b"})
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if !slices.Equal(names, []string{"a", "aa01"}) {
+		t.Errorf("List = %v, want [a aa01]", names)
+	}
+}
+
+// TestListFailsWhenTheRootIsGone lists a namespace never written of a
+// repository behind a link to a disk that is no longer mounted: no object is
+// stored there as far as List can tell, but an empty listing would be a lie.
+func TestListFailsWhenTheRootIsGone(t *testing.T) {
+	disk := filepath.Join(t.TempDir(), "repo")
+	link := filepath.Join(t.TempDir(), "repo")
+	if err := os.Mkdir(disk, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(disk, link); err != nil {
+		t.Fatal(err)
+	}
+	b, err := New(link)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = b.Close() })
+	if got := listNames(t, b, ark.DataPackFile); len(got) != 0 {
+		t.Fatalf("List = %v, want none", got)
+	}
+	if err := os.Rename(disk, disk+".unmounted"); err != nil {
+		t.Fatal(err)
+	}
+	err = b.List(context.Background(), ark.DataPackFile, func(ark.BlobInfo) error { return nil })
+	if err == nil {
+		t.Error("List = nil, want an error")
+	}
+}

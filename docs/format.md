@@ -79,8 +79,8 @@ The listings of both backends skip every name that starts with `.`, and so does 
 layout. They also skip every entry outside the layout: a directory in a flat namespace, a file next
 to the shards, a directory in a shard, a shard directory whose name isn't two characters, and a file
 in a shard whose name doesn't start with the shard's name. That covers what other tools leave, such
-as `@eaDir`, `.DS_Store`, or `lost+found`. A listing follows symbolic links, so a namespace or a
-shard can live on another disk.
+as `@eaDir`, `.DS_Store`, or `lost+found`. A listing follows symbolic links and Windows junctions,
+so a namespace or a shard can live on another disk.
 
 ## Sealed objects
 
