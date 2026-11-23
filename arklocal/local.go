@@ -120,7 +120,7 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 
 // Sync makes every Put and Delete that returned before the call durable and
 // returns the first failure. On Linux that is syncfs on the root directory,
-// whose error is returned; only a kernel without syncfs falls back to the
+// whose error is returned; only a filesystem without syncfs falls back to the
 // global sync. On macOS it fsyncs every file and directory written since the
 // last Sync, then issues one F_FULLFSYNC on the root; after a failure the next
 // Sync flushes them again.

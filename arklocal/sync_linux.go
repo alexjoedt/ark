@@ -15,11 +15,13 @@ var (
 )
 
 // syncFS flushes the filesystem that holds root. Tests swap it to observe the
-// calls. Only a kernel without syncfs (ENOSYS) falls back to the global
-// sync; any other error, EIO at writeback included, is returned.
+// calls. A filesystem without syncfs falls back to the global sync: ENOSYS
+// from an old kernel, EOPNOTSUPP or EINVAL from a FUSE or network filesystem
+// that answers its sync hook that way. Any other error, EIO at writeback
+// included, is returned.
 var syncFS = func(root *os.File) error {
 	err := syncfs(int(root.Fd()))
-	if errors.Is(err, unix.ENOSYS) {
+	if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.EINVAL) {
 		syncAll()
 		return nil
 	}

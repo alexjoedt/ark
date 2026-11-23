@@ -27,11 +27,13 @@ func TestSyncFSReportsSyncfsErrors(t *testing.T) {
 		t.Fatalf("sync() ran %d times after EIO, want 0", all)
 	}
 
-	syncfs = func(int) error { return unix.ENOSYS }
-	if err := syncFS(root); err != nil {
-		t.Fatalf("syncFS with ENOSYS = %v, want nil", err)
-	}
-	if all != 1 {
-		t.Fatalf("sync() ran %d times after ENOSYS, want 1", all)
+	for i, errno := range []unix.Errno{unix.ENOSYS, unix.EOPNOTSUPP, unix.EINVAL} {
+		syncfs = func(int) error { return errno }
+		if err := syncFS(root); err != nil {
+			t.Fatalf("syncFS with %v = %v, want nil", errno, err)
+		}
+		if all != i+1 {
+			t.Fatalf("sync() ran %d times after %v, want %d", all, errno, i+1)
+		}
 	}
 }
