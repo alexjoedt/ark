@@ -1551,3 +1551,26 @@ func TestLsJSONKeepsSpecialBits(t *testing.T) {
 	}
 	t.Fatalf("passwd not listed: %q", out)
 }
+
+// TestCreateRepoDirFlushesEveryDirectoryItAddsTo pins that init leaves a new
+// repository directory durable: every directory that gained an entry is synced.
+func TestCreateRepoDirFlushesEveryDirectoryItAddsTo(t *testing.T) {
+	orig := syncDir
+	t.Cleanup(func() { syncDir = orig })
+	var synced []string
+	syncDir = func(p string) error { synced = append(synced, p); return orig(p) }
+
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "a", "repo")
+	if err := createRepoDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{filepath.Join(parent, "a"), parent}; !slices.Equal(synced, want) {
+		t.Fatalf("synced %v, want %v", synced, want)
+	}
+
+	synced = nil
+	if err := createRepoDir(dir); err != nil || len(synced) != 0 {
+		t.Fatalf("createRepoDir on an existing dir = %v with %v synced, want nothing to sync", err, synced)
+	}
+}

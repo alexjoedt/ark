@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/internal/rangeread"
@@ -38,9 +39,17 @@ type Backend struct {
 // New opens the local backend rooted at dir. A missing dir is an error
 // wrapping [fs.ErrNotExist]: the caller creates a new repository directory
 // (os.MkdirAll), so a path on an unmounted volume never fills the root disk.
+// A dir that is no directory is an error too.
 func New(dir string) (*Backend, error) {
 	root, err := os.Open(dir)
 	if err != nil {
+		return nil, fmt.Errorf("arklocal: open backend directory %s: %w", dir, err)
+	}
+	if fi, err := root.Stat(); err != nil || !fi.IsDir() {
+		_ = root.Close()
+		if err == nil {
+			err = syscall.ENOTDIR
+		}
 		return nil, fmt.Errorf("arklocal: open backend directory %s: %w", dir, err)
 	}
 	return &Backend{basePath: dir, root: root}, nil

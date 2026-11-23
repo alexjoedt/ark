@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 
 	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/arksftp"
@@ -53,8 +54,8 @@ func initCommand() *cli.Command {
 				if err := requireEmptyDir(dir); err != nil {
 					return err
 				}
-				if err := os.MkdirAll(dir, 0o700); err != nil {
-					return fmt.Errorf("create repository path %s: %w", dir, err)
+				if err := createRepoDir(dir); err != nil {
+					return err
 				}
 			}
 
@@ -114,6 +115,39 @@ func requireEmptyDir(dir string) error {
 		return fmt.Errorf("check repository path %s: %w", dir, err)
 	}
 	return fmt.Errorf("repository path %s exists and is not empty", dir)
+}
+
+// syncDir flushes the entries of the directory at p; tests swap it.
+var syncDir = func(p string) error {
+	d, err := os.Open(p)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+
+// createRepoDir creates dir with its missing parents and flushes every
+// directory that gained an entry. The backend syncs what it writes inside
+// dir; without this a power loss after init could still drop dir itself.
+func createRepoDir(dir string) error {
+	existing := dir
+	for existing != filepath.Dir(existing) {
+		if _, err := os.Lstat(existing); err == nil {
+			break
+		}
+		existing = filepath.Dir(existing)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create repository path %s: %w", dir, err)
+	}
+	for p := dir; p != existing; {
+		p = filepath.Dir(p)
+		if err := syncDir(p); err != nil {
+			return fmt.Errorf("sync repository path %s: %w", p, err)
+		}
+	}
+	return nil
 }
 
 // chunkerConfig parses the three --chunk-* flags. Sizes the library would

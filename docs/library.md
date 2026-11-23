@@ -69,8 +69,15 @@ Three steps:
 
 - `Init` on an existing repository fails with `ark.ErrAlreadyInitialized`. A program that runs
   every day can call `Init` each time, as above, and let the first run create the repository.
-- `Open` never creates a repository. A mistyped path fails with `ark.ErrNotInitialized` instead of
-  quietly starting a second repository.
+- `Open` never creates a repository, and `arklocal.New` never creates a directory. A mistyped path
+  fails instead of quietly starting a second repository: `arklocal.New` returns an error that wraps
+  `fs.ErrNotExist` for a missing directory, and `Open` returns `ark.ErrNotInitialized` for a
+  directory without a repository.
+
+Creating the directory and calling `Init` on every run, as above, gives that protection up. With
+the volume for `/srv/ark` not mounted, the program starts a new repository on the disk underneath.
+For a repository on a mounted volume, call `os.MkdirAll` and `Init` once at setup, and leave both
+out of the program that runs every day.
 
 `arkfs.Backup` and `arkfs.Restore` are shortcuts. Underneath, a backup is
 `repo.Backup(ctx, source)` and a restore is `repo.Restore(ctx, snapshotID, sink)`, with a

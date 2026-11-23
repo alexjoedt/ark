@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"strings"
@@ -72,7 +73,7 @@ func run(ctx context.Context, p *arkprofile.Profile) error {
 		return err
 	}
 	repo, err := p.Open(ctx, pw)
-	if errors.Is(err, ark.ErrNotInitialized) {
+	if errors.Is(err, ark.ErrNotInitialized) || errors.Is(err, fs.ErrNotExist) {
 		if err := initRepo(ctx, p.Repo, pw); err != nil {
 			return err
 		}
@@ -111,6 +112,12 @@ func run(ctx context.Context, p *arkprofile.Profile) error {
 }
 
 func initRepo(ctx context.Context, uri string, pw ark.Password) error {
+	// A local backend opens a directory, it does not create one.
+	if dir, ok := arkuri.LocalPath(uri); ok {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+	}
 	b, err := arkuri.Open(ctx, uri)
 	if err != nil {
 		return err

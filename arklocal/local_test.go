@@ -300,3 +300,13 @@ func TestNewRefusesAMissingDirectory(t *testing.T) {
 		t.Errorf("New created %s: %v", filepath.Dir(dir), err)
 	}
 }
+
+func TestNewRefusesAFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "ark.tar")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := New(file); !errors.Is(err, syscall.ENOTDIR) {
+		t.Fatalf("New on a regular file = %v, %v, want ENOTDIR", b, err)
+	}
+}
