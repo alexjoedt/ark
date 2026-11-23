@@ -487,9 +487,10 @@ func (b *Backend) Delete(ctx context.Context, h ark.Handle) error {
 // List reads the namespace of t and calls fn for every object it holds: the
 // files of a flat namespace, or the files in each shard dir of a pack
 // namespace. Symlinks to a namespace, a shard or an object are followed.
-// Entries outside that layout are skipped. An absent namespace is empty while
-// the repository root is no dangling link; a dir or an entry that cannot be read fails
-// the listing, so it is never partial.
+// Entries outside that layout are skipped. An absent namespace is empty, as is
+// an absent root, which the first Put creates, unless a dangling link is in the
+// way (see absent); a dir or an entry that cannot be read fails the listing,
+// so it is never partial.
 func (b *Backend) List(ctx context.Context, t ark.HandleType, fn func(ark.BlobInfo) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -501,13 +502,16 @@ func (b *Backend) List(ctx context.Context, t ark.HandleType, fn func(ark.BlobIn
 	}
 
 	entries, err := b.client.ReadDir(dir)
-	if os.IsNotExist(err) && !b.dangling(dir) && !b.dangling(b.basePath) {
-		// The namespace was never written, and so is the root until the
-		// first Put: only a link to a disk that is not mounted is not that.
-		return nil
-	}
-	if err == nil {
+	switch {
+	case err == nil:
 		err = b.listDir(ctx, dir, entries, t == ark.DataPackFile || t == ark.TreePackFile, "", fn)
+	case os.IsNotExist(err):
+		// The namespace was never written, nor the root before the first Put.
+		if gone, aerr := b.absent(dir); aerr != nil {
+			err = aerr
+		} else if gone {
+			return nil
+		}
 	}
 	if err != nil {
 		return fmt.Errorf("arksftp: list %s: %w", t, err)
@@ -571,8 +575,11 @@ func (b *Backend) follow(p string, e os.FileInfo) (os.FileInfo, error) {
 		return e, nil
 	}
 	info, err := b.client.Stat(p)
-	if os.IsNotExist(err) && !b.dangling(p) {
-		return nil, nil //nolint:nilnil // a nil info is the entry that is gone
+	if os.IsNotExist(err) {
+		gone, err := b.absent(p)
+		if err != nil || gone {
+			return nil, err
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("stat %s: %w", p, err)
@@ -580,10 +587,30 @@ func (b *Backend) follow(p string, e os.FileInfo) (os.FileInfo, error) {
 	return info, nil
 }
 
-// dangling reports whether p is a link whose target is gone.
-func (b *Backend) dangling(p string) bool {
-	fi, err := b.client.Lstat(p)
-	return err == nil && fi.Mode()&os.ModeSymlink != 0
+// absent reports whether p, which a call just found missing, is plainly not
+// there: the deepest part of it that is there, p or an ancestor, is no link
+// whose target is gone. Such a link may lead to a disk that is not mounted,
+// whose objects are stored all the same. Any other error is returned.
+func (b *Backend) absent(p string) (bool, error) {
+	for {
+		fi, err := b.client.Lstat(p)
+		switch {
+		case err == nil && fi.Mode()&os.ModeSymlink == 0:
+			return true, nil
+		case err == nil:
+			if _, err := b.client.Stat(p); os.IsNotExist(err) {
+				return false, nil
+			} else if err != nil {
+				return false, fmt.Errorf("stat %s: %w", p, err)
+			}
+			return true, nil
+		case !os.IsNotExist(err):
+			return false, fmt.Errorf("lstat %s: %w", p, err)
+		case path.Dir(p) == p:
+			return true, nil
+		}
+		p = path.Dir(p)
+	}
 }
 
 // skip logs an entry List passes over because it is outside the layout.
@@ -592,14 +619,19 @@ func skip(dir, name string) {
 }
 
 // Empty reports whether the repository directory is missing or holds no
-// entries at all, so a caller can refuse to initialize over existing data.
+// entries at all, so a caller can refuse to initialize over existing data. A
+// root behind a dangling link is not missing (see absent): Empty fails.
 func (b *Backend) Empty(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
 	entries, err := b.client.ReadDir(b.basePath)
 	if os.IsNotExist(err) {
-		return true, nil
+		if gone, aerr := b.absent(b.basePath); aerr != nil {
+			err = aerr
+		} else if gone {
+			return true, nil
+		}
 	}
 	if err != nil {
 		return false, fmt.Errorf("arksftp: read %s: %w", b.basePath, err)

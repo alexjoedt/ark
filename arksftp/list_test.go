@@ -225,16 +225,43 @@ func TestListFailsWhenAnEntryCannotBeRead(t *testing.T) {
 // TestListFailsWhenTheRootIsADanglingLink is a repository root that is a link
 // to an unmounted disk: the namespace is absent, but not because it was never
 // written.
+// A link above the root fails the same way, and Empty fails with List.
 func TestListFailsWhenTheRootIsADanglingLink(t *testing.T) {
+	for _, tc := range []struct{ name, root string }{
+		{"root", "repo"},
+		{"parent of root", "repo/ark"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := pipeBackend(t)
+			link := filepath.Join(b.basePath, "repo")
+			if err := os.Symlink(filepath.Join(b.basePath, "unmounted"), link); err != nil {
+				t.Fatal(err)
+			}
+			b.basePath = filepath.Join(b.basePath, tc.root)
+			err := b.List(context.Background(), ark.DataPackFile, func(ark.BlobInfo) error { return nil })
+			if err == nil {
+				t.Error("List = nil, want an error")
+			}
+			if empty, err := b.Empty(context.Background()); err == nil {
+				t.Errorf("Empty = %v, nil; want an error", empty)
+			}
+		})
+	}
+}
+
+// TestListOfAMissingRootIsEmpty is a repository before its first Put, under a
+// parent that is a link to a dir that is there.
+func TestListOfAMissingRootIsEmpty(t *testing.T) {
 	b := pipeBackend(t)
-	root := filepath.Join(b.basePath, "repo")
-	if err := os.Symlink(filepath.Join(b.basePath, "unmounted"), root); err != nil {
+	if err := os.Symlink(t.TempDir(), filepath.Join(b.basePath, "link")); err != nil {
 		t.Fatal(err)
 	}
-	b.basePath = root
-	err := b.List(context.Background(), ark.DataPackFile, func(ark.BlobInfo) error { return nil })
-	if err == nil {
-		t.Error("List = nil, want an error")
+	b.basePath = filepath.Join(b.basePath, "link", "new", "ark")
+	if err := b.List(context.Background(), ark.DataPackFile, func(ark.BlobInfo) error { return nil }); err != nil {
+		t.Errorf("List = %v, want nil", err)
+	}
+	if empty, err := b.Empty(context.Background()); err != nil || !empty {
+		t.Errorf("Empty = %v, %v; want true, nil", empty, err)
 	}
 }
 
