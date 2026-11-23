@@ -578,9 +578,8 @@ func (b *Backend) remotePath(h ark.Handle) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if h.Name == "" || h.Name == "." || h.Name == ".." ||
-		strings.ContainsAny(h.Name, `/\`) || strings.HasPrefix(h.Name, tmpPrefix) {
-		return "", fmt.Errorf("arksftp: invalid object name %q", h.Name)
+	if err := ark.CheckName(h.Name); err != nil {
+		return "", err
 	}
 	if (h.Type == ark.DataPackFile || h.Type == ark.TreePackFile) && len(h.Name) >= 2 {
 		return path.Join(dir, h.Name[:2], h.Name), nil

@@ -2,7 +2,9 @@ package ark
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"strings"
 )
 
 // HandleType identifies the category of an object stored in a Backend.
@@ -86,6 +88,18 @@ type Handle struct {
 	Name string
 }
 
+// CheckName returns an error if name cannot be an object name: an empty name,
+// one that starts with "." or one that holds a slash or a backslash. Every
+// object of the format passes it, so a backend calls it on each handle before
+// it maps the name to a path or key; what it refuses could leave the
+// namespace or collide with a backend's temporary files.
+func CheckName(name string) error {
+	if name == "" || strings.HasPrefix(name, ".") || strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("ark: invalid object name %q", name)
+	}
+	return nil
+}
+
 // BlobInfo describes a stored object.
 type BlobInfo struct {
 	Name string
@@ -102,7 +116,9 @@ type BlobInfo struct {
 // that stores objects as files shards DataPackFile and TreePackFile one level
 // deep by the first two characters of the name, 256 directories created on
 // first use, and nothing else. An unknown type maps to the namespace
-// "unknown"; implementations may reject it instead.
+// "unknown"; implementations may reject it instead. Every method that takes a
+// Handle refuses a name [CheckName] refuses, and a method called with a done
+// ctx returns an error wrapping ctx.Err().
 type Backend interface {
 	// Put stores r under h atomically: a reader never observes a partial
 	// object. Implementations write to a temporary name in the same

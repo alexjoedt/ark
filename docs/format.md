@@ -72,7 +72,8 @@ implementation of `ark.Backend` store the same names.
 The same two backends write an object to a temporary file in its directory and rename it into
 place. The temporary file's name starts with `.ark-tmp-`, and a write that was cut off leaves it
 behind. Their listings pass over such names, and so does a reader of their layout. No object of the
-format has a name that starts with `.`.
+format has a name that starts with `.`, and no name is empty or holds `/` or `\`. A backend refuses
+such a name, so none can reach outside its namespace or shard (`ark.CheckName`).
 
 ## Sealed objects
 

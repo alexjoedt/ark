@@ -81,11 +81,15 @@ under the key `<namespace>/<name>`, the layout an object store uses:
 ```go
 // key maps a handle to its key. The namespace comes from Type.String() and not
 // from a switch on the constants, so a handle type that a later version of ark
-// adds needs no change here.
+// adds needs no change here. ark.CheckName refuses a name that is no object
+// name, such as one with a "/" that would reach into another key.
 func key(h ark.Handle) (string, error) {
 	ns := h.Type.String()
-	if ns == ark.UnknownNamespace || h.Name == "" {
-		return "", fmt.Errorf("kv: invalid handle %s/%q", ns, h.Name)
+	if ns == ark.UnknownNamespace {
+		return "", fmt.Errorf("kv: unknown handle type %d", h.Type)
+	}
+	if err := ark.CheckName(h.Name); err != nil {
+		return "", err
 	}
 	return ns + "/" + h.Name, nil
 }
@@ -139,6 +143,8 @@ The core relies on these rules. The documentation of
 | Method | Rule |
 |---|---|
 | all | safe for concurrent use |
+| all with a handle | refuse a name that `ark.CheckName` refuses: empty, starting with `.`, or holding `/` or `\` |
+| all with a context | return an error that wraps `ctx.Err()` when called with a done context |
 | `Put` | atomic: a reader never sees a partial object; an existing object is replaced; `r` isn't read after `Put` returns |
 | `Get`, `Stat` | a missing object returns an error that wraps `ark.ErrNotFound` |
 | `GetRange` | returns exactly `length` bytes without reading the bytes before `offset`; a range past the end wraps `io.ErrUnexpectedEOF`; a missing object wraps `ark.ErrNotFound`; a negative offset or length is an error |

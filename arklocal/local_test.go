@@ -200,18 +200,12 @@ func TestListFailsWhenAShardVanishesMidWalk(t *testing.T) {
 	}
 }
 
-func TestRejectsUnknownTypeAndEscapingNames(t *testing.T) {
+func TestRejectsUnknownType(t *testing.T) {
 	ctx := context.Background()
 	b := newBackend(t)
 
 	if err := b.Put(ctx, ark.Handle{Type: ark.HandleType(200), Name: "x"}, strings.NewReader("x")); err == nil {
 		t.Error("Put with an unknown handle type: want error, got nil")
-	}
-	for _, name := range []string{"", ".", "..", "../escape", "sub/dir", tmpPrefix + "x"} {
-		h := ark.Handle{Type: ark.SnapshotFile, Name: name}
-		if err := b.Put(ctx, h, strings.NewReader("x")); err == nil {
-			t.Errorf("Put with name %q: want error, got nil", name)
-		}
 	}
 }
 

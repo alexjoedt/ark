@@ -32,15 +32,15 @@ func New() *Backend {
 	return &Backend{objects: make(map[string][]byte)}
 }
 
-// key maps a handle to its map key. Names are opaque object names, never
-// paths, so the same names arklocal rejects are rejected here.
+// key maps a handle to its map key. It refuses the names [ark.CheckName]
+// refuses, as every backend does.
 func key(h ark.Handle) (string, error) {
 	ns := h.Type.String()
 	if ns == ark.UnknownNamespace {
 		return "", fmt.Errorf("arkmem: unknown handle type %d", h.Type)
 	}
-	if h.Name == "" {
-		return "", fmt.Errorf("arkmem: invalid object name %q", h.Name)
+	if err := ark.CheckName(h.Name); err != nil {
+		return "", err
 	}
 	return ns + "/" + h.Name, nil
 }

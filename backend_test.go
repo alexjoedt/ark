@@ -24,3 +24,28 @@ func TestHandleTypeString(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckName(t *testing.T) {
+	cases := map[string]bool{
+		"":           false,
+		".":          false,
+		"..":         false,
+		"..x":        false,
+		".ark-tmp-x": false,
+		".DS_Store":  false,
+		"a/b":        false,
+		`a\b`:        false,
+		"/a":         false,
+		"a/":         false,
+		"config":     true,
+		"a":          true,
+		"a.b":        true,
+		"a..":        true,
+		"3f9a0c":     true,
+	}
+	for name, ok := range cases {
+		if err := CheckName(name); (err == nil) != ok {
+			t.Errorf("CheckName(%q) = %v, want ok %v", name, err, ok)
+		}
+	}
+}
