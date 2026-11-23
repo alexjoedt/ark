@@ -9,6 +9,10 @@ storage that ark doesn't cover, such as S3 or the API of a NAS.
 Create a backend and hand it to `ark.Init` and `ark.Open`:
 
 ```go
+// arklocal.New opens an existing directory; create a new one first
+if err := os.MkdirAll("/srv/ark", 0o700); err != nil {
+	return err
+}
 b, err := arklocal.New("/srv/ark")
 
 b, err := arksftp.New(arksftp.Config{Host: "nas", User: "backup", Path: "/srv/ark"})
@@ -18,7 +22,7 @@ b := arkmem.New()
 
 | Package | Stores objects in | Notes |
 |---|---|---|
-| `arklocal` | a local directory | writes through a temporary file and a rename, so no reader sees a partial object |
+| `arklocal` | an existing local directory | writes through a temporary file and a rename, so no reader sees a partial object |
 | `arksftp` | a directory over SFTP | checks the host key against `known_hosts` by default |
 | `arkmem` | memory | for tests; its objects are gone on `Close` |
 

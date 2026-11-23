@@ -8,6 +8,7 @@
 //
 // Basic usage:
 //
+//	os.MkdirAll("/path/to/repo", 0o700) // New opens a directory, it does not create one
 //	b, _ := arklocal.New("/path/to/repo")
 //	ark.Init(ctx, b, ark.NewPassword(pw)) // once, per repository
 //

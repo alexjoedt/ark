@@ -190,6 +190,11 @@ func copyRepo(t *testing.T, from, to string) {
 	t.Helper()
 	ctx := t.Context()
 	open := func(uri string) ark.Backend {
+		if dir, ok := arkuri.LocalPath(uri); ok {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
 		b, err := arkuri.Open(ctx, uri)
 		if err != nil {
 			t.Fatalf("open repository: %v", err)

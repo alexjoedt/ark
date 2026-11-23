@@ -35,6 +35,9 @@ ark ships as three modules, so the Docker SDK stays out of programs that don't n
 ## Back up and restore a directory
 
 ```go
+if err := os.MkdirAll("/srv/ark", 0o700); err != nil {
+	return err
+}
 b, err := arklocal.New("/srv/ark")
 if err != nil {
 	return err

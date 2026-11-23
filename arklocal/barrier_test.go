@@ -142,38 +142,3 @@ func TestSyncKeepsAPutMadeDuringTheFlush(t *testing.T) {
 		t.Errorf("the next Sync flushed the first object again: %v", steps)
 	}
 }
-
-// TestSyncFlushesTheDirectoriesNewCreated pins that the entries of the root
-// and of every parent New created are flushed by the first Sync.
-func TestSyncFlushesTheDirectoriesNewCreated(t *testing.T) {
-	origTrack, origPath, origFS := trackWrites, fsyncPath, syncFS
-	t.Cleanup(func() { trackWrites, fsyncPath, syncFS = origTrack, origPath, origFS })
-	trackWrites = true
-	syncFS = func(*os.File) error { return nil }
-	var steps []string
-	fsyncPath = func(p string) error { steps = append(steps, p); return origPath(p) }
-
-	parent := t.TempDir()
-	b, err := New(filepath.Join(parent, "a", "repo"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = b.Close() })
-	if err := b.Sync(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	slices.Sort(steps)
-	if want := []string{parent, filepath.Join(parent, "a")}; !slices.Equal(steps, want) {
-		t.Fatalf("first Sync flushed %v, want %v", steps, want)
-	}
-
-	steps = nil
-	again, err := New(b.basePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = again.Close() })
-	if err := again.Sync(context.Background()); err != nil || len(steps) != 0 {
-		t.Fatalf("Sync on an existing root = %v with %v, want nothing to flush", err, steps)
-	}
-}

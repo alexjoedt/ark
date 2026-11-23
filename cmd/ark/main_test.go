@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1416,8 +1417,23 @@ func TestInitRefusesNonEmptyDir(t *testing.T) {
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("dir changed: %v %v", entries, err)
 	}
-	if code, _ := runCapture(t, "-r", filepath.Join(dir, "new"), "init"); code != 0 {
+	deep := filepath.Join(dir, "new", "deeper")
+	if code, _ := runCapture(t, "-r", deep, "init"); code != 0 {
 		t.Fatalf("init into a missing dir: exit %d", code)
+	}
+	if fi, err := os.Stat(deep); err != nil || !fi.IsDir() {
+		t.Fatalf("init did not create %s: %v", deep, err)
+	}
+}
+
+func TestSnapshotsOnAMissingRepoCreatesNothing(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "mnt", "ark")
+	if code, out := runCapture(t, "-r", missing, "snapshots"); code == 0 {
+		t.Fatalf("snapshots on a missing repo: exit 0, %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "mnt")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("snapshots created the repository path: %v", err)
 	}
 }
 

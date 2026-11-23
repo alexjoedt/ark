@@ -2,6 +2,8 @@ package arkuri
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"strings"
 	"testing"
@@ -13,6 +15,9 @@ import (
 // openLocal opens s and asserts it produced a local backend rooted at want.
 func openLocal(t *testing.T, s, want string) {
 	t.Helper()
+	if err := os.MkdirAll(want, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	b, err := Open(t.Context(), s)
 	if err != nil {
 		t.Fatalf("Open(%q): %v", s, err)
@@ -194,5 +199,19 @@ func TestOpenNeverEchoesAPassword(t *testing.T) {
 		if strings.Contains(err.Error(), "hunter2") {
 			t.Errorf("Open(%q) error quotes the password:\n%v", uri, err)
 		}
+	}
+}
+
+func TestOpenMissingLocalDirectoryCreatesNothing(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if b, err := Open(t.Context(), "repo"); !errors.Is(err, fs.ErrNotExist) {
+		if err == nil {
+			_ = b.Close()
+		}
+		t.Fatalf("Open of a missing dir = %v, want fs.ErrNotExist", err)
+	}
+	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+		t.Errorf("working directory = %v, %v; want empty", entries, err)
 	}
 }

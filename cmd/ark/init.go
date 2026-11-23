@@ -53,6 +53,9 @@ func initCommand() *cli.Command {
 				if err := requireEmptyDir(dir); err != nil {
 					return err
 				}
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					return fmt.Errorf("create repository path %s: %w", dir, err)
+				}
 			}
 
 			b, err := arkuri.Open(ctx, uri)
