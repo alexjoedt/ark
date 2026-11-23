@@ -475,6 +475,7 @@ func TestKillHarnessChild(t *testing.T) {
 	ready := os.NewFile(3, "ready")
 	left, ok := b.(ark.Leftovers)
 	if !ok {
+		_ = b.Close()
 		t.Fatalf("%T does not implement ark.Leftovers", b)
 	}
 	repo, err := ark.Open(ctx, killProbe{b, left, ready}, testPassword)

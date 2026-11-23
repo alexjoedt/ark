@@ -448,7 +448,7 @@ func (b *Backend) commit(ctx context.Context, f *sftp.File, tmp, p string) error
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := b.rename(tmp, p); err != nil {
+	if err := b.rename(ctx, tmp, p); err != nil {
 		return fmt.Errorf("arksftp: rename %s: %w", p, err)
 	}
 	return nil
@@ -685,8 +685,10 @@ func tempName(dir string) (string, error) {
 
 // renameAttempts bounds the rounds of [Backend.rename] without posix-rename. A
 // further round is only needed when another Put of the same name landed in
-// between, and each such Put lands once, so this is the number of concurrent
-// writers of one name the plain-rename path tolerates.
+// between. Each such Put of this Backend lands once and costs two rounds, the
+// one it lands in and the one that removes the aside file it made stale, so
+// the plain-rename path tolerates renameAttempts/2 concurrent writers of one
+// name.
 const renameAttempts = 16
 
 // rename moves tmp onto p. It prefers posix-rename@openssh.com, which replaces
@@ -702,15 +704,20 @@ const renameAttempts = 16
 // Every Put of p uses the same aside name, and a rename back that succeeds
 // or finds no aside file looks the same whether the target was free or
 // another Put moved p aside in between. The replacements of one Backend
-// therefore run one at a time; only the first rename runs beside them.
+// therefore run one at a time; only the first rename runs beside them. A Put
+// whose ctx ends while it waits its turn, or between two rounds, moves
+// nothing more: it has returned, and its object must not appear after that.
 //
 // ponytail: without the extension a reader sees p missing between the two
 // renames, and a crash or a dropped link there leaves the old object only in
 // the aside file, which Check reports. SFTP v3 has no atomic replace; a
 // server with posix-rename closes the window. The lock is per Backend: three
 // clients replacing p at the same moment can still fail a Put, with a whole
-// object left at p. SFTP v3 cannot tell them apart; posix-rename can.
-func (b *Backend) rename(tmp, p string) error {
+// object left at p. SFTP v3 cannot tell them apart; posix-rename can. The lock
+// is also one for all names: a replacement that waits on a slow server holds
+// up every other one, the refresh of a repository lock included, until its
+// context ends. A lock per path lifts that when replacements stop being rare.
+func (b *Backend) rename(ctx context.Context, tmp, p string) error {
 	if b.posixRename {
 		return b.client.PosixRename(tmp, p)
 	}
@@ -723,6 +730,12 @@ func (b *Backend) rename(tmp, p string) error {
 	for range renameAttempts {
 		if !isFailure(err) {
 			return err
+		}
+		// Nothing of this Put is in flight here: tmp is still tmp, and an
+		// aside file left by a round before is stale beside the object that
+		// another Put landed.
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
 		}
 		err = b.client.Rename(p, aside)
 		switch {
@@ -748,7 +761,7 @@ func (b *Backend) rename(tmp, p string) error {
 				}
 				// Another user's leftover we may not remove: replace p the
 				// unsafe way rather than fail every Put of it.
-				slog.Warn("arksftp: cannot remove an aside file, removing the object before replacing it",
+				slog.WarnContext(ctx, "arksftp: cannot remove an aside file, removing the object before replacing it",
 					"path", aside, "err", rerr)
 				if rerr := b.client.Remove(p); rerr != nil && !os.IsNotExist(rerr) {
 					return rerr
@@ -763,7 +776,7 @@ func (b *Backend) rename(tmp, p string) error {
 		if err == nil {
 			// A copy left behind here is reported by Check and harmless.
 			if rerr := b.client.Remove(aside); rerr != nil {
-				slog.Warn("arksftp: cannot remove an aside file", "path", aside, "err", rerr)
+				slog.WarnContext(ctx, "arksftp: cannot remove an aside file", "path", aside, "err", rerr)
 			}
 			return nil
 		}

@@ -1,6 +1,7 @@
 package arksftp
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -175,14 +176,15 @@ func TestPutWithoutPosixRenameStopsWhenTheOldObjectGoesBack(t *testing.T) {
 }
 
 // TestPutWithoutPosixRenameTakesConcurrentPutsOfOneName pins that Puts of one
-// name do not undo each other's aside files: every one of them succeeds.
+// name do not undo each other's aside files: every one of them succeeds, for
+// as many writers as renameAttempts is documented to take.
 func TestPutWithoutPosixRenameTakesConcurrentPutsOfOneName(t *testing.T) {
 	ctx := t.Context()
 	b, _ := v3Backend(t, nil, false)
 	for round := range 30 {
 		h := ark.Handle{Type: ark.KeyFile, Name: "k" + strconv.Itoa(round)}
 		var wg sync.WaitGroup
-		errs := make([]error, 8)
+		errs := make([]error, renameAttempts/2)
 		for i := range errs {
 			wg.Go(func() { errs[i] = b.Put(ctx, h, strings.NewReader("new")) })
 		}
@@ -196,6 +198,39 @@ func TestPutWithoutPosixRenameTakesConcurrentPutsOfOneName(t *testing.T) {
 	}
 	if got := asides(t, b); len(got) != 0 {
 		t.Errorf("aside files %v after the Puts, want none", got)
+	}
+}
+
+// TestRenameWithoutPosixRenameKeepsTheObjectOfAPutThatIsOver pins that a Put
+// whose context ended before its turn to replace the object moves nothing:
+// it has reported the object as not stored.
+func TestRenameWithoutPosixRenameKeepsTheObjectOfAPutThatIsOver(t *testing.T) {
+	h := ark.Handle{Type: ark.KeyFile, Name: "k1"}
+	b, calls := v3Backend(t, nil, false)
+	if err := b.Put(t.Context(), h, strings.NewReader("old")); err != nil {
+		t.Fatal(err)
+	}
+	p, err := b.remotePath(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := path.Join(path.Dir(p), tmpPrefix+"new")
+	f, err := b.client.Create(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	*calls = nil
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := b.rename(ctx, tmp, p); !errors.Is(err, context.Canceled) {
+		t.Fatalf("rename after the context ended: %v, want context.Canceled", err)
+	}
+	if got := readObject(t, b, h); got != "old" {
+		t.Errorf("k1 reads %q, want old", got)
+	}
+	if got := strings.Join(normTemp(*calls), ", "); got != "rename tmp k1" {
+		t.Errorf("calls %q, want only the first rename", got)
 	}
 }
 
