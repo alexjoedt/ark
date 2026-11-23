@@ -424,6 +424,19 @@ func TestVerifyAndCheckExit5(t *testing.T) {
 	}
 }
 
+// TestCheckPrintsTheMvThatRestoresAnAsideFile plants what a failed Put over
+// an object leaves without posix-rename and pins the restoring mv.
+func TestCheckPrintsTheMvThatRestoresAnAsideFile(t *testing.T) {
+	repo := initRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "keys", ".ark-old-k1"), []byte("junk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, logs := runCaptureAll(t, "-r", repo, "check")
+	if code != 0 || !strings.Contains(logs, "mv keys/.ark-old-k1 keys/k1") {
+		t.Fatalf("check: exit %d, stdout %q, stderr %q", code, out, logs)
+	}
+}
+
 func TestExportImportRoundTrip(t *testing.T) {
 	repo := initRepo(t)
 	t.Setenv("ARK_REPOSITORY", "")

@@ -819,8 +819,8 @@ listing and a read see the old object or the new one, never a missing, empty, or
 Otherwise a claimant can list `locks/` while a held lock is missing and take a conflicting one.
 ark's local and in-memory backends replace in one step, and so does its SFTP backend on a server
 that offers the `posix-rename@openssh.com` extension. On a server without it, the SFTP backend
-deletes the old object before it renames the new one into place, so a lock is missing for a round
-trip at every refresh. Don't run a prune, repair index, or key passwd there while another
+renames the old object aside before it renames the new one into place, so a lock is missing for a
+round trip at every refresh. Don't run a prune, repair index, or key passwd there while another
 operation runs.
 
 ## Prune

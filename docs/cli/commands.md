@@ -429,6 +429,12 @@ Verifies every snapshot and reports missing or corrupt objects. Exits 5 when it 
 Two findings are warnings and don't change the exit code: a pack that no index lists, which an
 unfinished backup leaves behind, and an index object that doesn't open. Prune removes both.
 
+An aside file is a warning too. On an SFTP server without `posix-rename@openssh.com`, a write over
+an object renames the old one to a name that starts with `.ark-old-` first, and a write that fails
+midway can leave it behind. The warning names the `mv`, run in the repository, that puts it back.
+Run it only when the object it names is missing; otherwise the aside file is an older copy you can
+delete.
+
 ## export
 
 ```

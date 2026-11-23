@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path"
 	"runtime"
 	"slices"
 	"sort"
@@ -722,6 +723,18 @@ func (r *Repository) Check(ctx context.Context) (*CheckResult, error) {
 	for _, name := range unreadable {
 		result.Warnings = append(result.Warnings,
 			fmt.Sprintf("lock %s does not open and is ignored, Unlock with WithForce removes it", name))
+	}
+	if l, ok := r.backend.(Leftovers); ok {
+		err := l.ListAside(ctx, func(p string) error {
+			orig := path.Join(path.Dir(p), strings.TrimPrefix(path.Base(p), ".ark-old-"))
+			result.Warnings = append(result.Warnings, fmt.Sprintf(
+				"aside file %s holds an earlier copy of %s; if %s is missing, restore it in the repository: mv %s %s",
+				p, orig, orig, p, orig))
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("check: list aside files: %w", err)
+		}
 	}
 	// One pair of stores for the check: the indexes load once and a tree pack
 	// several snapshots share is fetched once.

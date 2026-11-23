@@ -680,39 +680,81 @@ func tempName(dir string) (string, error) {
 	return path.Join(dir, tmpPrefix+hex.EncodeToString(name[:])), nil
 }
 
-// renameAttempts bounds the remove-and-rename retries of [Backend.rename]. A
-// retry is only needed when another Put of the same name landed in between,
-// and each such Put lands once, so this is the number of concurrent writers of
-// one name the plain-rename path tolerates.
+// renameAttempts bounds the rounds of [Backend.rename] without posix-rename. A
+// further round is only needed when another Put of the same name landed in
+// between, and each such Put lands once, so this is the number of concurrent
+// writers of one name the plain-rename path tolerates.
 const renameAttempts = 16
 
 // rename moves tmp onto p. It prefers posix-rename@openssh.com, which replaces
 // an existing target atomically as the Backend contract requires. A server
 // that does not announce the extension gets a plain SFTP v3 rename, which
-// fails with SSH_FX_FAILURE when the target exists. The rename is tried first,
-// so storing a new object never removes anything; only that failure removes p
-// and tries again, and every nil return means our bytes landed at p.
+// fails with SSH_FX_FAILURE when the target exists. The rename is tried first;
+// only that failure renames p aside to its aside name (see [ark.Leftovers]),
+// renames tmp into place and then removes the aside file. When the second
+// rename fails, the aside file is renamed back. Nothing is removed before its
+// replacement is in place, and every nil return means our bytes landed at p.
 //
-// ponytail: replacing an existing object without the extension removes it
-// first, so a reader sees it missing for one round trip, and a crash or a
-// dropped link in that round trip loses it. SFTP v3 has no atomic replace;
-// a server with posix-rename closes the window.
+// ponytail: without the extension a reader sees p missing between the two
+// renames, and a crash or a dropped link there leaves the old object only in
+// the aside file, which Check reports. SFTP v3 has no atomic replace; a
+// server with posix-rename closes the window.
 func (b *Backend) rename(tmp, p string) error {
 	if b.posixRename {
 		return b.client.PosixRename(tmp, p)
 	}
+	aside := path.Join(path.Dir(p), asidePrefix+path.Base(p))
 	err := b.client.Rename(tmp, p)
 	for range renameAttempts {
-		var status *sftp.StatusError
-		if err == nil || !errors.As(err, &status) || status.FxCode() != sftp.ErrSSHFxFailure {
+		if !isFailure(err) {
 			return err
 		}
-		if rerr := b.client.Remove(p); rerr != nil && !os.IsNotExist(rerr) {
-			return rerr
+		err = b.client.Rename(p, aside)
+		switch {
+		case err == nil:
+		case os.IsNotExist(err):
+			// p went away in between: rename onto the free name.
+			err = b.client.Rename(tmp, p)
+			continue
+		case isFailure(err):
+			// The aside name is taken. An aside file beside an object in
+			// place is a copy the Put that left it replaced; it is the only
+			// copy only while its object is missing, and some servers
+			// report a missing p with this status as well.
+			if _, serr := b.client.Lstat(p); os.IsNotExist(serr) {
+				err = b.client.Rename(tmp, p)
+				continue
+			} else if serr != nil {
+				return serr
+			}
+			if rerr := b.client.Remove(aside); rerr != nil && !os.IsNotExist(rerr) {
+				return rerr
+			}
+			err = b.client.Rename(tmp, p)
+			continue
+		default:
+			return err
 		}
 		err = b.client.Rename(tmp, p)
+		if err == nil {
+			// A copy left behind here is reported by Check and harmless.
+			_ = b.client.Remove(aside)
+			return nil
+		}
+		// Another Put of p may have landed in between; then the old object
+		// is replaced and the next round removes the stale aside file.
+		if berr := b.client.Rename(aside, p); berr != nil && !isFailure(err) {
+			return errors.Join(err, fmt.Errorf("rename %s back: %w", aside, berr))
+		}
 	}
 	return err
+}
+
+// isFailure reports whether err is the SSH_FX_FAILURE status a plain SFTP v3
+// rename returns when its target exists.
+func isFailure(err error) bool {
+	var status *sftp.StatusError
+	return errors.As(err, &status) && status.FxCode() == sftp.ErrSSHFxFailure
 }
 
 // Get returns a ReadCloser for the object stored under h.

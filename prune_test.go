@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/alexjoedt/ark"
@@ -146,6 +147,14 @@ func TestPruneRemovesTempFiles(t *testing.T) {
 			}
 			if _, err := os.Stat(aside); err != nil {
 				t.Errorf("aside file after prune: %v, want kept", err)
+			}
+			res, err := repo.Check(ctx)
+			if err != nil {
+				t.Fatalf("Check: %v", err)
+			}
+			want := "mv keys/.ark-old-k1 keys/k1"
+			if !slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.HasSuffix(w, want) }) {
+				t.Errorf("Check warnings %q, want one ending in %q", res.Warnings, want)
 			}
 		})
 	}
