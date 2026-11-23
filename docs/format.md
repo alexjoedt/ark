@@ -71,9 +71,16 @@ implementation of `ark.Backend` store the same names.
 
 The same two backends write an object to a temporary file in its directory and rename it into
 place. The temporary file's name starts with `.ark-tmp-`, and a write that was cut off leaves it
-behind. Their listings pass over such names, and so does a reader of their layout. No object of the
-format has a name that starts with `.`, and no name is empty or holds `/` or `\`. A backend refuses
-such a name, so none can reach outside its namespace or shard (`ark.CheckName`).
+behind. No object of the format has a name that starts with `.`, and no name is empty or holds `/`
+or `\`. A backend refuses such a name, so none can reach outside its namespace or shard
+(`ark.CheckName`).
+
+The listings of both backends skip every name that starts with `.`, and so does a reader of their
+layout. They also skip every entry outside the layout: a directory in a flat namespace, a file next
+to the shards, a directory in a shard, a shard directory whose name isn't two characters, and a file
+in a shard whose name doesn't start with the shard's name. That covers what other tools leave, such
+as `@eaDir`, `.DS_Store`, or `lost+found`. A listing follows symbolic links, so a namespace or a
+shard can live on another disk.
 
 ## Sealed objects
 

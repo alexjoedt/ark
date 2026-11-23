@@ -12,8 +12,10 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/alexjoedt/ark"
 	"github.com/alexjoedt/ark/internal/rangeread"
@@ -240,8 +242,11 @@ func (b *Backend) Delete(ctx context.Context, h ark.Handle) error {
 	return nil
 }
 
-// List walks the namespace of t and calls fn for every object it holds.
-// An absent namespace is empty, not an error.
+// List reads the namespace of t and calls fn for every object it holds: the
+// files of a flat namespace, or the files in each shard dir of a pack
+// namespace. Symlinks to a namespace, a shard or an object are followed.
+// Entries outside that layout are skipped. An absent namespace is empty; a dir
+// or an entry that cannot be read fails the listing, so it is never partial.
 func (b *Backend) List(ctx context.Context, t ark.HandleType, fn func(ark.BlobInfo) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -250,36 +255,97 @@ func (b *Backend) List(ctx context.Context, t ark.HandleType, fn func(ark.BlobIn
 	if err != nil {
 		return err
 	}
-	err = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if d == nil && errors.Is(err, fs.ErrNotExist) {
-				return nil // the namespace was never written
-			}
-			// A directory that vanished mid-walk leaves the listing partial:
-			// a caller would take the objects it held as not stored.
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		// Temporary objects and files another tool leaves, such as a
-		// .DS_Store, are no objects: a caller could not read or delete them.
-		if d.IsDir() || ark.CheckName(d.Name()) != nil {
-			return nil //nolint:nilerr // a refused name is skipped, not an error
-		}
-		info, statErr := d.Info()
-		if statErr != nil {
-			if errors.Is(statErr, fs.ErrNotExist) {
-				return nil // deleted while walking
-			}
-			return fmt.Errorf("arklocal: stat %s: %w", d.Name(), statErr)
-		}
-		return fn(ark.BlobInfo{Name: d.Name(), Size: info.Size()})
-	})
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) && !dangling(dir) {
+		return nil // the namespace was never written
+	}
+	if err == nil {
+		err = listDir(ctx, dir, entries, t == ark.DataPackFile || t == ark.TreePackFile, "", fn)
+	}
 	if err != nil {
 		return fmt.Errorf("arklocal: list %s: %w", t, err)
 	}
 	return nil
+}
+
+// listDir calls fn for every object among the entries of dir. With sharded,
+// dir is a pack namespace: its two-character dirs are shards, listed in turn,
+// and only a name shorter than a shard is an object there (see path). An
+// object in a shard starts with the shard's name.
+func listDir(ctx context.Context, dir string, entries []fs.DirEntry, sharded bool, shard string,
+	fn func(ark.BlobInfo) error,
+) error {
+	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		name := e.Name()
+		// Temporary objects and files another tool leaves, such as a
+		// .DS_Store, are no objects: a caller could not read or delete them.
+		if ark.CheckName(name) != nil {
+			skip(dir, name)
+			continue
+		}
+		info, err := follow(dir, e)
+		switch {
+		case err != nil:
+			return err
+		case info == nil && sharded:
+			// A shard that vanished mid-listing leaves it partial: a caller
+			// would take the objects it held as not stored.
+			return fmt.Errorf("%s vanished while listing", filepath.Join(dir, name))
+		case info == nil:
+			// deleted since the dir was read
+		case info.IsDir() && sharded && len(name) == 2:
+			sub := filepath.Join(dir, name)
+			objects, err := os.ReadDir(sub)
+			if err != nil {
+				return err
+			}
+			if err := listDir(ctx, sub, objects, false, name, fn); err != nil {
+				return err
+			}
+		case info.Mode().IsRegular() && strings.HasPrefix(name, shard) && (!sharded || len(name) < 2):
+			if err := fn(ark.BlobInfo{Name: name, Size: info.Size()}); err != nil {
+				return err
+			}
+		default:
+			skip(dir, name)
+		}
+	}
+	return nil
+}
+
+// follow returns the file info of e in dir, through a symlink, or nil when the
+// entry is gone. A link whose target is gone fails: it may lead to a disk that
+// is not mounted, whose objects are stored all the same.
+func follow(dir string, e fs.DirEntry) (fs.FileInfo, error) {
+	p := filepath.Join(dir, e.Name())
+	var info fs.FileInfo
+	var err error
+	if e.Type()&fs.ModeSymlink != 0 {
+		info, err = os.Stat(p)
+	} else {
+		info, err = e.Info()
+	}
+	if errors.Is(err, fs.ErrNotExist) && !dangling(p) {
+		return nil, nil //nolint:nilnil // a nil info is the entry that is gone
+	}
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", e.Name(), err)
+	}
+	return info, nil
+}
+
+// dangling reports whether p is a symlink whose target is gone.
+func dangling(p string) bool {
+	fi, err := os.Lstat(p)
+	return err == nil && fi.Mode()&fs.ModeSymlink != 0
+}
+
+// skip logs an entry List passes over because it is outside the layout.
+func skip(dir, name string) {
+	slog.Debug("arklocal: skipping an entry outside the repository layout", "dir", dir, "name", name)
 }
 
 // Stat returns metadata for the object stored under h.
