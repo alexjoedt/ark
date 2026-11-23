@@ -30,6 +30,7 @@ var _ ark.Backend = (*Backend)(nil)
 type Backend struct {
 	basePath string
 	root     *os.File // the root directory, open for Sync
+	written  written  // what Put and Delete touched since the last Sync, with trackWrites
 }
 
 // New creates or opens a local backend rooted at dir.
@@ -111,19 +112,31 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 	if err := os.Rename(tmp, p); err != nil {
 		return fmt.Errorf("arklocal: rename %s: %w", h.Name, err)
 	}
+	if trackWrites {
+		b.written.record(b.basePath, p, dir)
+	}
 	return nil
 }
 
-// Sync flushes the filesystem holding the backend root, which makes every
-// Put and Delete that returned before the call durable. On Linux that is
-// syncfs on the root directory, whose error is returned; only a kernel
-// without syncfs falls back to the global sync. On macOS it is the global
-// sync.
+// Sync makes every Put and Delete that returned before the call durable and
+// returns the first failure. On Linux that is syncfs on the root directory,
+// whose error is returned; only a kernel without syncfs falls back to the
+// global sync. On macOS it fsyncs every file and directory written since the
+// last Sync, then issues one F_FULLFSYNC on the root; after a failure the next
+// Sync flushes them again.
 func (b *Backend) Sync(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return syncFS(b.root)
+	files, dirs, err := b.written.flush()
+	if err != nil {
+		return err
+	}
+	if err := syncFS(b.root); err != nil {
+		return err
+	}
+	b.written.forget(files, dirs)
+	return nil
 }
 
 // Get opens the object stored under h.
@@ -207,6 +220,9 @@ func (b *Backend) Delete(ctx context.Context, h ark.Handle) error {
 	}
 	if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("arklocal: remove %s: %w", h.Name, err)
+	}
+	if trackWrites {
+		b.written.record(b.basePath, "", filepath.Dir(p))
 	}
 	return nil
 }
