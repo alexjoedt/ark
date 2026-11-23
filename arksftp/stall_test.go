@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
@@ -280,6 +282,43 @@ func TestPutAndGetMoveAnObjectOfSeveralPieces(t *testing.T) {
 	if !errors.Is(err, io.ErrUnexpectedEOF) || !bytes.Equal(got[:n], want) {
 		t.Errorf("read %d bytes, %v; want the %d bytes stored", n, err, len(want))
 	}
+
+	// io.Copy takes the reader's WriteTo, which reads whole pieces.
+	rc, err = b.Get(t.Context(), stalledObject)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer rc.Close()
+	var copied bytes.Buffer
+	if _, ok := rc.(io.WriterTo); !ok {
+		t.Error("the reader of a Get has no WriteTo")
+	}
+	if n, err := io.Copy(&copied, rc); err != nil || !bytes.Equal(copied.Bytes(), want) {
+		t.Errorf("copied %d bytes, %v; want the %d bytes stored", n, err, len(want))
+	}
+}
+
+// TestGetReaderReadToItsEndClosesWithoutErrorAfterItsContext pins that a
+// context that ends after the last byte arrived does not fail the Close.
+func TestGetReaderReadToItsEndClosesWithoutErrorAfterItsContext(t *testing.T) {
+	b, _ := stalledBackend(t)
+	for _, read := range []func(io.Reader) error{
+		func(r io.Reader) error { _, err := io.ReadAll(r); return err },
+		func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err },
+	} {
+		ctx, cancel := context.WithCancel(t.Context())
+		rc, err := b.Get(ctx, stalledObject)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if err := read(rc); err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		cancel()
+		if err := rc.Close(); err != nil {
+			t.Errorf("Close after the context ended = %v, want nil", err)
+		}
+	}
 }
 
 // TestPutLeavesItsSourceAloneOnceItReturned pins that a Put cancelled while it
@@ -410,7 +449,33 @@ func TestPutCancelledBeforeItsRenameStoresNothingLater(t *testing.T) {
 		if ok, err := b.Exists(t.Context(), h); err != nil || ok {
 			t.Fatalf("stalled after %d reads: Exists = %v, %v, want false, nil", reads, ok, err)
 		}
+		// Also when the answer the link held back was the one that created it.
+		for start := time.Now(); len(tempFiles(t, b, h)) > 0; time.Sleep(time.Millisecond) {
+			if time.Since(start) > cancelWait {
+				t.Fatalf("stalled after %d reads: the cancelled Put left %v", reads, tempFiles(t, b, h))
+			}
+		}
 	}
+}
+
+// tempFiles returns the temp files of a Put in the directory of h.
+func tempFiles(t *testing.T, b *Backend, h ark.Handle) []string {
+	t.Helper()
+	p, err := b.remotePath(h)
+	if err != nil {
+		t.Fatalf("remotePath: %v", err)
+	}
+	entries, err := b.client.ReadDir(path.Dir(p))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	var temps []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), tmpPrefix) {
+			temps = append(temps, e.Name())
+		}
+	}
+	return temps
 }
 
 // TestPutSendsNothingItsCallerWroteAfterItReturned pins that a Put cancelled
@@ -445,30 +510,39 @@ func TestPutSendsNothingItsCallerWroteAfterItReturned(t *testing.T) {
 
 // TestKeepaliveGivesUpAfterThreeMissedTicks drives the keepalive by hand: an
 // answered ping keeps the connection, a ping unanswered three ticks later
-// closes it, an answer in between starts the count again, and every call
-// fails from then on.
+// closes it, an answer or anything else from the server in between starts the
+// count again, and every call fails from then on.
 func TestKeepaliveGivesUpAfterThreeMissedTicks(t *testing.T) {
 	b, link := stalledBackend(t)
 	tick := make(chan time.Time)
 	pinged := make(chan chan error)
 	ended := make(chan struct{})
+	// received is what the keepalive reads at a tick, once per tick.
+	received := make(chan int64)
 	go func() {
 		defer close(ended)
 		b.keepalive(func() error {
 			answer := make(chan error)
 			pinged <- answer
 			return <-answer
-		}, tick)
+		}, func() int64 { return <-received }, tick)
 	}()
-	// send ticks once and reports whether the keepalive took the tick.
-	send := func() bool {
+	// tickOnce ticks once, with or without bytes arrived from the server since
+	// the last tick, and reports whether the keepalive took the tick.
+	var count int64
+	tickOnce := func(arrived bool) bool {
 		select {
 		case tick <- time.Time{}:
-			return true
 		case <-ended:
 			return false
 		}
+		if arrived {
+			count++
+		}
+		received <- count
+		return true
 	}
+	send := func() bool { return tickOnce(false) }
 	ping := func() chan error {
 		t.Helper()
 		send()
@@ -506,6 +580,18 @@ func TestKeepaliveGivesUpAfterThreeMissedTicks(t *testing.T) {
 	}
 
 	unanswered := ping()
+	// A ping that waits behind an upload: the server's answers to the writes
+	// still arrive.
+	for range 2 * keepaliveMisses {
+		for range keepaliveMisses - 1 {
+			if !send() {
+				t.Fatal("gave up before the last missed tick")
+			}
+		}
+		if !tickOnce(true) {
+			t.Fatal("gave up on a server it still hears from")
+		}
+	}
 	misses := 0
 	for send() {
 		misses++
@@ -522,9 +608,70 @@ func TestKeepaliveGivesUpAfterThreeMissedTicks(t *testing.T) {
 
 	for _, c := range calls {
 		err := c.call(t.Context(), b)
-		if !errors.Is(err, errLost) || !strings.Contains(err.Error(), "connection lost") {
+		if !errors.Is(err, errLost) || !strings.Contains(err.Error(), "the server stopped answering") {
 			t.Errorf("%s after the connection was given up = %v, want errLost", c.name, err)
 		}
+	}
+	if err := b.Close(); err != nil {
+		t.Errorf("Close after the connection was given up = %v, want nil", err)
+	}
+}
+
+// TestKeepaliveGivesUpAtOnceWhenThePingFails pins that a connection that
+// fails its ping is lost without the wait for missed ticks, and that the
+// error names the failure, not a silent server.
+func TestKeepaliveGivesUpAtOnceWhenThePingFails(t *testing.T) {
+	b, link := stalledBackend(t)
+	tick := make(chan time.Time)
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		b.keepalive(func() error { return io.ErrClosedPipe }, func() int64 { return 0 }, tick)
+	}()
+	tick <- time.Time{}
+	select {
+	case <-ended:
+	case <-time.After(cancelWait):
+		t.Fatal("a failed ping did not end the keepalive")
+	}
+	select {
+	case <-link.closed:
+	default:
+		t.Error("the transport is still open")
+	}
+	_, err := b.Stat(t.Context(), stalledObject)
+	if !errors.Is(err, errLost) || !errors.Is(err, io.ErrClosedPipe) || errors.Is(err, errSilent) {
+		t.Errorf("Stat after a failed ping = %v, want errLost with the ping's error", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Errorf("Close after the connection was given up = %v, want nil", err)
+	}
+}
+
+// TestKeepaliveLeavesAClosedBackendAlone pins that the ping Close fails does
+// not mark the backend lost.
+func TestKeepaliveLeavesAClosedBackendAlone(t *testing.T) {
+	b, _ := stalledBackend(t)
+	tick := make(chan time.Time)
+	pinged, failed := make(chan struct{}), make(chan struct{})
+	go b.keepalive(func() error {
+		close(pinged)
+		<-b.closed
+		defer close(failed)
+		return io.ErrClosedPipe
+	}, func() int64 { return 0 }, tick)
+	tick <- time.Time{}
+	<-pinged
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	<-failed
+	// The ping's goroutine has nothing left to do but to give up or not.
+	time.Sleep(10 * time.Millisecond)
+	select {
+	case <-b.lost:
+		t.Error("the ping that Close failed marked the backend lost")
+	default:
 	}
 }
 

@@ -63,9 +63,11 @@ request it waited on stays behind until the server answers it or the connection 
 cancelled `Delete` may still remove its object and a cancelled `Put` may leave a temporary
 `.ark-tmp-` object, which no listing shows.
 
-The backend pings the server every 15 seconds. A ping that is still unanswered three intervals
-later closes the connection, and every call fails from then on with an error that says the
-connection is lost. `arksftp` does not reconnect: call `arksftp.New` again.
+The backend pings the server every 15 seconds. It closes the connection after three intervals in
+a row with a ping unanswered and nothing else arriving from the server. A ping that fails because
+the connection is gone closes it at once. Every call fails from then on with an error that says
+the connection is lost and why. `Close` then returns no error. `arksftp` does not reconnect: call
+`arksftp.New` again.
 
 ## Write your own backend
 

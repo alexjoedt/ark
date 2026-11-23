@@ -7,8 +7,8 @@
 // on that one connection.
 //
 // Every call returns when its context ends, also on a link that stopped
-// answering, and a keepalive closes a connection the server no longer answers
-// on. See [Backend].
+// answering, and a keepalive closes a connection nothing arrives on any more.
+// See [Backend].
 //
 // Secrets never live in Config or in a URI. The password comes from
 // ARK_SFTP_PASSWORD and a key passphrase from ARK_SFTP_KEY_PASSPHRASE; see
@@ -84,8 +84,9 @@ const (
 	defaultPort = 22
 	// keepaliveInterval is how often the backend pings the server.
 	keepaliveInterval = 15 * time.Second
-	// keepaliveMisses is how many intervals a ping may stay unanswered before
-	// the connection counts as lost.
+	// keepaliveMisses is how many intervals in a row a ping may stay
+	// unanswered, with nothing else arriving from the server, before the
+	// connection counts as lost.
 	keepaliveMisses = 3
 	// closeWait bounds how long Close waits for the server to end the session.
 	closeWait = 2 * time.Second
@@ -94,9 +95,12 @@ const (
 	pieceSize = 2 << 20
 )
 
-// errLost is what every call returns once the keepalive has closed the
-// connection.
-var errLost = errors.New("arksftp: connection lost: the server stopped answering")
+// errLost is in the error of every call once the keepalive has closed the
+// connection, with the reason behind it.
+var errLost = errors.New("arksftp: connection lost")
+
+// errSilent is the reason of a connection given up after keepaliveMisses.
+var errSilent = fmt.Errorf("%w: the server stopped answering", errLost)
 
 // Backend implements ark.Backend backed by an SFTP server.
 // All methods are safe for concurrent use via the underlying SSH/SFTP
@@ -110,17 +114,21 @@ var errLost = errors.New("arksftp: connection lost: the server stopped answering
 // error stores nothing later, unless the context ended while it renamed the
 // object into place.
 //
-// The backend pings the server every 15 s. A ping that is still unanswered
-// three intervals later closes the connection: the calls in flight and every
-// later call fail with an error that names the lost connection. The backend
-// never reconnects.
+// The backend pings the server every 15 s. Three intervals in a row with a
+// ping unanswered and nothing else arriving from the server close the
+// connection, and so does a ping the connection fails: the calls in flight and
+// every later call fail with an error that names the lost connection. The
+// backend never reconnects.
 type Backend struct {
 	client *sftp.Client
 	// conn is the transport under client, an *ssh.Client outside tests.
 	conn     io.Closer
 	basePath string
-	// lost is closed when the keepalive gave the connection up.
-	lost chan struct{}
+	// lost is closed when the keepalive gave the connection up, with lostErr
+	// set before.
+	lost     chan struct{}
+	lostErr  error
+	lostOnce sync.Once
 	// closed is closed by Close and ends the keepalive.
 	closed    chan struct{}
 	closeOnce sync.Once
@@ -161,11 +169,18 @@ func connect(cfg Config, interval time.Duration) (*Backend, error) {
 	// completes before it returns.
 	defer chain.close()
 
+	// ssh.Dial, with the bytes that arrive counted for the keepalive.
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
-	conn, err := ssh.Dial("tcp", addr, sshCfg)
+	tcp, err := net.DialTimeout("tcp", addr, sshCfg.Timeout)
 	if err != nil {
 		return nil, fmt.Errorf("arksftp: dial %s (%s): %w", addr, chain.describe(), err)
 	}
+	link := &countConn{Conn: tcp}
+	sshConn, chans, reqs, err := ssh.NewClientConn(link, addr, sshCfg)
+	if err != nil {
+		return nil, fmt.Errorf("arksftp: dial %s (%s): %w", addr, chain.describe(), err)
+	}
+	conn := ssh.NewClient(sshConn, chans, reqs)
 
 	// Concurrent writes let a single Put stream ahead instead of waiting for
 	// one round trip per packet. Safe here because Put owns its temp file.
@@ -184,9 +199,21 @@ func connect(cfg Config, interval time.Duration) (*Backend, error) {
 			// an answer all the same.
 			_, _, err := conn.SendRequest("keepalive@openssh.com", true, nil)
 			return err
-		}, tick.C)
+		}, link.n.Load, tick.C)
 	}()
 	return b, nil
+}
+
+// countConn counts the bytes that arrive on a connection.
+type countConn struct {
+	net.Conn
+	n atomic.Int64
+}
+
+func (c *countConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	c.n.Add(int64(n))
+	return n, err
 }
 
 // newBackend wraps a connected client, recording the extensions the server
@@ -211,37 +238,66 @@ func newBackend(client *sftp.Client, conn io.Closer, cfg Config) *Backend {
 }
 
 // keepalive pings the server at every tick, one ping at a time, and gives the
-// connection up when a ping is still unanswered keepaliveMisses ticks later:
-// it marks the backend lost and closes the transport, which ends every request
-// in flight. An answer of any kind counts; ping returns an error only when the
-// connection is gone. It returns when the backend closes.
-func (b *Backend) keepalive(ping func() error, tick <-chan time.Time) {
+// connection up after keepaliveMisses ticks in a row at which a ping was still
+// unanswered and received had not moved. received is the count of bytes that
+// arrived from the server: the ping waits behind every write queued on the
+// connection, which on a slow uplink takes longer than the misses allow, while
+// the server's answers to those writes show that it is there. An answer of
+// any kind counts; ping returns an error only when the connection is gone,
+// which gives it up at once. It returns when the backend closes or is lost.
+func (b *Backend) keepalive(ping func() error, received func() int64, tick <-chan time.Time) {
+	var seen int64
 	missed := 0
 	for {
 		select {
 		case <-b.closed:
 			return
+		case <-b.lost:
+			return
 		case <-tick:
 		}
-		if b.pinging.CompareAndSwap(false, true) {
+		n := received()
+		arrived := n != seen
+		seen = n
+		switch {
+		case b.pinging.CompareAndSwap(false, true):
 			missed = 0
 			go func() {
-				if ping() == nil {
+				err := ping()
+				if err == nil {
 					b.pinging.Store(false)
+					return
+				}
+				select {
+				case <-b.closed:
+					// Close took the connection away.
+				default:
+					b.giveUp(fmt.Errorf("%w: the connection closed: %w", errLost, err))
 				}
 			}()
-			continue
-		}
-		if missed++; missed == keepaliveMisses {
-			close(b.lost)
-			_ = b.conn.Close()
-			return
+		case arrived:
+			missed = 0
+		default:
+			if missed++; missed == keepaliveMisses {
+				b.giveUp(errSilent)
+				return
+			}
 		}
 	}
 }
 
+// giveUp marks the backend lost for the reason cause, which wraps errLost, and
+// closes the transport, which ends every request in flight.
+func (b *Backend) giveUp(cause error) {
+	b.lostOnce.Do(func() {
+		b.lostErr = cause
+		close(b.lost)
+		_ = b.conn.Close()
+	})
+}
+
 // await runs call and returns its result, or ctx's error as soon as ctx ends,
-// or errLost once the keepalive gave the connection up. The sftp client cannot
+// or the reason once the keepalive gave the connection up. The sftp client cannot
 // abort a request in flight, so a call left behind that way ends on its own or
 // with the connection, and whatever it opened stays open until then. call may
 // outlive the wait, so it must not touch what the caller of the backend owns,
@@ -249,10 +305,10 @@ func (b *Backend) keepalive(ping func() error, tick <-chan time.Time) {
 func await[T any](ctx context.Context, b *Backend, call func() (T, error)) (T, error) {
 	var zero T
 	// Checked first: on a connection given up call fails at once, and the
-	// select below might return that failure in place of errLost.
+	// select below might return that failure in place of the reason.
 	select {
 	case <-b.lost:
-		return zero, errLost
+		return zero, b.lostErr
 	default:
 	}
 	type result struct {
@@ -270,7 +326,7 @@ func await[T any](ctx context.Context, b *Backend, call func() (T, error)) (T, e
 	case <-ctx.Done():
 		return zero, ctx.Err()
 	case <-b.lost:
-		return zero, errLost
+		return zero, b.lostErr
 	}
 }
 
@@ -282,13 +338,23 @@ func (b *Backend) do(ctx context.Context, call func() error) error {
 
 // Close closes the SFTP client and the underlying SSH connection. The client
 // waits for the server to end the session; on a link that stopped answering
-// that wait ends after closeWait, when the connection closes under it.
+// that wait ends after closeWait, when the connection closes under it. A
+// backend whose connection the keepalive gave up closes without an error:
+// every call has reported the loss.
 func (b *Backend) Close() error {
 	b.closeOnce.Do(func() {
 		if b.closed != nil {
 			close(b.closed)
 		}
 	})
+	select {
+	case <-b.lost:
+		// The transport is closed, so the client ends without the server.
+		_ = b.client.Close()
+		_ = b.conn.Close()
+		return nil
+	default:
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), closeWait)
 	defer cancel()
 	clientErr := b.do(ctx, b.client.Close)
@@ -326,6 +392,12 @@ func (b *Backend) Put(ctx context.Context, h ark.Handle, r io.Reader) error {
 			return temp{}, err
 		}
 		f, tmp, err := b.createTemp(dir)
+		if err == nil && ctx.Err() != nil {
+			// Put has returned and nothing else would take the file away.
+			_ = f.Close()
+			_ = b.client.Remove(tmp)
+			return temp{}, ctx.Err()
+		}
 		return temp{f, tmp}, err
 	})
 	if err != nil {
@@ -567,6 +639,8 @@ type reader struct {
 	b   *Backend
 	f   *sftp.File
 	buf []byte
+	// eof is set once the object was read to its end.
+	eof bool
 }
 
 func (r *reader) Read(p []byte) (int, error) {
@@ -580,12 +654,56 @@ func (r *reader) Read(p []byte) (int, error) {
 	}
 	buf := r.buf[:n]
 	n, err := await(r.ctx, r.b, func() (int, error) { return r.f.Read(buf) })
+	r.eof = errors.Is(err, io.EOF)
 	return copy(p, buf[:n]), err
 }
 
-// Close closes the handle on the server. With ctx over it does not wait for
-// the server's answer.
-func (r *reader) Close() error { return r.b.do(r.ctx, r.f.Close) }
+// WriteTo is the path of [io.Copy], which would otherwise Read 32 KiB a round
+// trip. It reads pieces that double up to pieceSize, which the sftp client
+// fetches with that many requests in flight, so a small object stays at one
+// request.
+func (r *reader) WriteTo(w io.Writer) (int64, error) {
+	var total int64
+	for size := 32 << 10; ; size = min(2*size, pieceSize) {
+		// As in Read: after a read was left behind buf is never used again.
+		if err := r.ctx.Err(); err != nil {
+			return total, err
+		}
+		if cap(r.buf) < size {
+			r.buf = make([]byte, size)
+		}
+		buf := r.buf[:size]
+		n, err := await(r.ctx, r.b, func() (int, error) { return r.f.Read(buf) })
+		if n > 0 {
+			m, werr := w.Write(buf[:n])
+			total += int64(m)
+			if werr != nil {
+				return total, werr
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			r.eof = true
+			return total, nil
+		}
+		if err != nil {
+			return total, err
+		}
+	}
+}
+
+// Close closes the handle on the server. It ends with ctx like every call,
+// with one exception: a reader that was read to its end waits up to closeWait
+// for the server when ctx is over, so it does not fail because its context
+// ended after the last byte arrived.
+func (r *reader) Close() error {
+	ctx := r.ctx
+	if r.eof && ctx.Err() != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), closeWait)
+		defer cancel()
+	}
+	return r.b.do(ctx, r.f.Close)
+}
 
 // GetRange reads length bytes of the object stored under h at offset with
 // ReadAt on one handle, so the bytes before offset never cross the wire.
